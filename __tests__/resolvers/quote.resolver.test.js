@@ -834,4 +834,53 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     expect(stored.cachedPdf?.url).toBeUndefined();
     expect(stored.cachedPdf?.key).toBeUndefined();
   });
+
+  it("recalcule les champs client affichés sur un devis en attente modifié", async () => {
+    const db = mongoose.connection.db;
+    const { insertedId: fieldId } = await db
+      .collection("clientcustomfields")
+      .insertOne({
+        workspaceId: organizationId,
+        name: "Code client",
+        fieldType: "TEXT",
+        showOnDocuments: true,
+        isActive: true,
+        order: 0,
+      });
+    const { insertedId: clientId } = await db.collection("clients").insertOne({
+      workspaceId: organizationId,
+      name: "Acme",
+      email: "acme@test.fr",
+      type: "COMPANY",
+      customFields: [{ fieldId, value: "C-042" }],
+    });
+
+    const base = finalizableDraftData();
+    const { insertedId } = await insertQuote({
+      ...base,
+      status: "PENDING",
+      number: "0013",
+      prefix: "D-102026",
+      client: {
+        ...base.client,
+        id: clientId.toString(),
+        documentFields: [{ label: "Code client", value: "C-042" }],
+      },
+    });
+
+    // ClientInput (desktop et mobile) ne porte pas documentFields
+    const clientInput = { ...base.client, id: clientId.toString() };
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { client: clientInput } },
+      ctx(),
+    );
+
+    expect(
+      result.client.documentFields.map(({ label, value }) => ({
+        label,
+        value,
+      })),
+    ).toEqual([{ label: "Code client", value: "C-042" }]);
+  });
 });

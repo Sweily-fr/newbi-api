@@ -622,6 +622,59 @@ describe("PurchaseOrder Resolver — updatePurchaseOrder (bon de commande modifi
     const stored = await PurchaseOrder.collection.findOne({ _id: po._id });
     expect(stored.cachedPdf?.url).toBeUndefined();
   });
+
+  it("fige les champs client affichés quand l'éditeur renvoie le client", async () => {
+    const db = mongoose.connection.db;
+    const { insertedId: fieldId } = await db
+      .collection("clientcustomfields")
+      .insertOne({
+        workspaceId: organizationId,
+        name: "Code client",
+        fieldType: "TEXT",
+        showOnDocuments: true,
+        isActive: true,
+        order: 0,
+      });
+    const { insertedId: clientId } = await db.collection("clients").insertOne({
+      workspaceId: organizationId,
+      name: "Fournisseur Test",
+      email: "fournisseur@test.fr",
+      type: "COMPANY",
+      customFields: [{ fieldId, value: "F-007" }],
+    });
+    const clientInput = {
+      ...buildPOInput().client,
+      id: clientId.toString(),
+    };
+
+    // Brouillon finalisé par l'éditeur avec le client dans l'input
+    const draft = await create(
+      null,
+      { input: buildPOInput({ client: clientInput }) },
+      ctx(),
+    );
+    const confirmed = await update(
+      null,
+      {
+        id: draft._id.toString(),
+        input: { status: "CONFIRMED", client: clientInput },
+      },
+      ctx(),
+    );
+    const fields = (doc) =>
+      doc.client.documentFields.map(({ label, value }) => ({ label, value }));
+    expect(fields(confirmed)).toEqual([
+      { label: "Code client", value: "F-007" },
+    ]);
+
+    // Puis modification du bon de commande confirmé
+    const edited = await update(
+      null,
+      { id: draft._id.toString(), input: { client: clientInput } },
+      ctx(),
+    );
+    expect(fields(edited)).toEqual([{ label: "Code client", value: "F-007" }]);
+  });
 });
 
 // ---------------------------------------------------------------------------

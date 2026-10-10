@@ -14,6 +14,7 @@ import {
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import Quote from "../models/Quote.js";
@@ -1360,6 +1361,27 @@ const quoteResolvers = {
               ERROR_CODES.INTERNAL_ERROR,
             );
           }
+        }
+
+        // Devis non brouillon (ou finalisé par cette modification) dont
+        // l'input renvoie le client : ClientInput ne porte pas les champs
+        // personnalisés affichés sur le document. Les recalculer au lieu de
+        // les effacer en remplaçant le client figé.
+        const statusAfterUpdate = updateData.status || quote.status;
+        if (
+          statusAfterUpdate !== "DRAFT" &&
+          updateData.client &&
+          !Array.isArray(updateData.client.documentFields)
+        ) {
+          updateData.client = {
+            ...updateData.client,
+            documentFields: await documentFieldsForEditedClient(
+              updateData.client,
+              quote.client,
+              quote.workspaceId,
+              context,
+            ),
+          };
         }
 
         const statusBeforeUpdate = quote.status;

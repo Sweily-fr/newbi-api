@@ -33,6 +33,7 @@ import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import {
@@ -2378,6 +2379,15 @@ const invoiceResolvers = {
                   ...updatedInput.client.shippingAddress,
                 };
               }
+              // Champs personnalisés affichés sur le document : la fusion
+              // gardait ceux de l'ancien client même quand il est remplacé.
+              updateData.client.documentFields =
+                await documentFieldsForEditedClient(
+                  updateData.client,
+                  invoiceData.client,
+                  workspaceId,
+                  context,
+                );
             }
           }
 

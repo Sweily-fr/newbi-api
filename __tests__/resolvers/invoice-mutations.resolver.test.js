@@ -461,4 +461,79 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     expect(stored.cachedPdf?.url ?? null).toBeNull();
     expect(stored.cachedPdf?.key ?? null).toBeNull();
   });
+
+  it("ne garde pas les champs client de l'ancien client quand il est remplacé", async () => {
+    const { insertedId } = await insertInvoice({
+      client: {
+        id: "client-1",
+        name: "Acme",
+        email: "client@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+        documentFields: [{ label: "Code client", value: "ACME-1" }],
+      },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          client: {
+            id: "client-2",
+            name: "Beta",
+            email: "beta@test.fr",
+            address: {
+              street: "2 rue Test",
+              city: "Paris",
+              postalCode: "75002",
+              country: "France",
+            },
+          },
+        },
+      },
+      ctx(),
+    );
+
+    expect(result.client.name).toBe("Beta");
+    expect(result.client.documentFields).toHaveLength(0);
+  });
+
+  it("garde les champs client figés quand le même client est renvoyé sans eux", async () => {
+    const { insertedId } = await insertInvoice({
+      client: {
+        id: "client-1",
+        name: "Acme",
+        email: "client@test.fr",
+        address: {
+          street: "1 rue Test",
+          city: "Paris",
+          postalCode: "75001",
+          country: "France",
+        },
+        documentFields: [{ label: "Code client", value: "ACME-1" }],
+      },
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { client: { id: "client-1", name: "Acme SAS" } },
+      },
+      ctx(),
+    );
+
+    expect(result.client.name).toBe("Acme SAS");
+    expect(
+      result.client.documentFields.map(({ label, value }) => ({
+        label,
+        value,
+      })),
+    ).toEqual([{ label: "Code client", value: "ACME-1" }]);
+  });
 });

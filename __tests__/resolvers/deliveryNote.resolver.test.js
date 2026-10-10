@@ -223,6 +223,46 @@ describe("DeliveryNote Resolver — updateDeliveryNote (BL finalisé modifié)",
     const stored = await DeliveryNote.collection.findOne({ _id: dn._id });
     expect(stored.cachedPdf?.url).toBeUndefined();
   });
+
+  it("garde les champs client affichés quand l'éditeur renvoie le client", async () => {
+    const db = mongoose.connection.db;
+    const { insertedId: fieldId } = await db
+      .collection("clientcustomfields")
+      .insertOne({
+        workspaceId: organizationId,
+        name: "Code client",
+        fieldType: "TEXT",
+        showOnDocuments: true,
+        isActive: true,
+        order: 0,
+      });
+    const { insertedId: clientId } = await db.collection("clients").insertOne({
+      workspaceId: organizationId,
+      ...buildClient(),
+      customFields: [{ fieldId, value: "L-001" }],
+    });
+    const clientInput = { ...buildClient(), id: clientId.toString() };
+
+    const dn = await Mutation.createDeliveryNote(
+      null,
+      { input: buildDNInput({ status: "PENDING", client: clientInput }) },
+      ctx(),
+    );
+
+    // L'éditeur renvoie le client (ClientInput, sans documentFields)
+    const updated = await Mutation.updateDeliveryNote(
+      null,
+      { id: dn._id.toString(), input: { client: clientInput } },
+      ctx(),
+    );
+
+    expect(
+      updated.client.documentFields.map(({ label, value }) => ({
+        label,
+        value,
+      })),
+    ).toEqual([{ label: "Code client", value: "L-001" }]);
+  });
 });
 
 // ---------------------------------------------------------------------------

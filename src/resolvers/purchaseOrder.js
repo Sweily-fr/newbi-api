@@ -13,6 +13,7 @@ import {
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
+  documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import mongoose from "mongoose";
 import PurchaseOrder from "../models/PurchaseOrder.js";
@@ -964,6 +965,27 @@ const purchaseOrderResolvers = {
                 error.message,
               );
             }
+          }
+
+          // Bon de commande non brouillon (ou finalisé par cette modification)
+          // dont l'input renvoie le client : ClientInput ne porte pas les
+          // champs personnalisés affichés sur le document. Les recalculer au
+          // lieu de les effacer en remplaçant le client figé.
+          const statusAfterUpdate = updateData.status || po.status;
+          if (
+            statusAfterUpdate !== "DRAFT" &&
+            updateData.client &&
+            !Array.isArray(updateData.client.documentFields)
+          ) {
+            updateData.client = {
+              ...updateData.client,
+              documentFields: await documentFieldsForEditedClient(
+                updateData.client,
+                po.client,
+                po.workspaceId,
+                context,
+              ),
+            };
           }
 
           const statusBeforeUpdate = po.status;
