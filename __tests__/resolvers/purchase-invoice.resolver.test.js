@@ -204,6 +204,31 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoices", () => {
 
     expect(result.totalCount).toBe(1);
   });
+
+  it("cherche une saisie avec parenthèses sans planter", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "Acme (UK)",
+      invoiceNumber: "X1",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Acme Co",
+      invoiceNumber: "Y1",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "(UK",
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0].supplierName).toBe("Acme (UK)");
+  });
 });
 
 describe("PurchaseInvoice Resolver - Mutation.deletePurchaseInvoice", () => {
@@ -776,5 +801,23 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoiceDuplicates", () => {
       ctx(),
     );
     expect(result.map((r) => r.id)).toEqual([insertedId.toString()]);
+  });
+});
+
+describe("PurchaseInvoice Resolver - Query.suppliers (recherche)", () => {
+  it("cherche une saisie avec parenthèses sans planter", async () => {
+    await Supplier.collection.insertMany([
+      { workspaceId: organizationId, name: "Orange (Business)" },
+      { workspaceId: organizationId, name: "Orange" },
+    ]);
+
+    const result = await purchaseInvoiceResolvers.Query.suppliers(
+      null,
+      { workspaceId: organizationId.toString(), search: "(Business" },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0].name).toBe("Orange (Business)");
   });
 });

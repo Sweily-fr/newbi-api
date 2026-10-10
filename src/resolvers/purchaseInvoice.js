@@ -1,6 +1,7 @@
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { resolveSupplier } from "../utils/supplierResolution.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import mongoose from "mongoose";
 import cloudflareService from "../services/cloudflareService.js";
 import superPdpService from "../services/superPdpService.js";
@@ -163,9 +164,11 @@ const purchaseInvoiceResolvers = {
       }
 
       if (search) {
+        // Saisie échappée : « ( » ou « + » faisaient planter la recherche
+        const safeSearch = escapeRegex(search);
         query.$or = [
-          { supplierName: { $regex: search, $options: "i" } },
-          { invoiceNumber: { $regex: search, $options: "i" } },
+          { supplierName: { $regex: safeSearch, $options: "i" } },
+          { invoiceNumber: { $regex: safeSearch, $options: "i" } },
         ];
         const numSearch = parseFloat(search);
         if (!isNaN(numSearch)) {
@@ -654,7 +657,7 @@ const purchaseInvoiceResolvers = {
         const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
 
         if (search) {
-          query.name = { $regex: search, $options: "i" };
+          query.name = { $regex: escapeRegex(search), $options: "i" };
         }
 
         const skip = (page - 1) * limit;

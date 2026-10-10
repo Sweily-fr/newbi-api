@@ -4,6 +4,7 @@
  */
 
 import mongoose from "mongoose";
+import { escapeRegex } from "../utils/escapeRegex.js";
 
 const importedPurchaseOrderItemSchema = new mongoose.Schema(
   {
@@ -231,7 +232,7 @@ importedPurchaseOrderSchema.statics.findPotentialDuplicates = async function (
 
   if (vendorName && totalTTC) {
     query.$or.push({
-      "vendor.name": { $regex: new RegExp(vendorName, "i") },
+      "vendor.name": { $regex: new RegExp(escapeRegex(vendorName), "i") },
       totalTTC: totalTTC,
     });
   }
