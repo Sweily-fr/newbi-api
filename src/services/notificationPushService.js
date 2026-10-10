@@ -1,6 +1,7 @@
 import User from "../models/User.js";
 import { sendPushToUser } from "./pushNotificationService.js";
 import logger from "../utils/logger.js";
+import { documentNavigationIds } from "../utils/notificationDocumentIds.js";
 
 /**
  * Push mobile adossé à une notification in-app (modèle Notification) : même
@@ -19,16 +20,10 @@ import logger from "../utils/logger.js";
  *    Newbi, la fiche mobile factures/[id] ne l'ouvrirait pas)
  *  - url : lien de la notification (absolu ou relatif au front)
  *  - + les clés passées en `extra` (commentId, module, action…)
+ * Les clés de document sont aussi stockées dans le `data` de la notification
+ * in-app (voir utils/notificationDocumentIds.js) : cloche et push ouvrent le
+ * même écran.
  */
-
-// Clé d'identifiant propre au modèle du document importé
-const DOCUMENT_MODEL_ID_KEYS = {
-  Invoice: "invoiceId",
-  ImportedInvoice: "importedInvoiceId",
-  Quote: "quoteId",
-  ImportedQuote: "importedQuoteId",
-  PurchaseInvoice: "purchaseInvoiceId",
-};
 
 const toStringValue = (value) => {
   if (value === undefined || value === null || value === "") return undefined;
@@ -57,26 +52,26 @@ export function buildNotificationPushData(notification, extra = {}) {
     taskId: notifData.taskId,
     actorId: notifData.actorId,
     purchaseInvoiceId: notifData.purchaseInvoiceId,
+    invoiceId: notifData.invoiceId,
+    importedInvoiceId: notifData.importedInvoiceId,
+    quoteId: notifData.quoteId,
+    importedQuoteId: notifData.importedQuoteId,
     documentType: notifData.documentType,
     documentId: notifData.documentId,
+    documentModel: notifData.documentModel,
     source: notifData.source,
+    event: notifData.event,
     url: notifData.url,
     ...definedExtra,
   };
 
-  const modelKey = DOCUMENT_MODEL_ID_KEYS[data.documentModel];
-  if (modelKey && data.documentId && data[modelKey] === undefined) {
-    data[modelKey] = data.documentId;
-  }
-  // Facture d'achat importée : même clé que PURCHASE_INVOICE_RECEIVED, même
-  // sans modèle précisé (le type suffit, il n'existe qu'un modèle)
-  if (
-    data.documentType === "PURCHASE_INVOICE" &&
-    data.documentId &&
-    data.purchaseInvoiceId === undefined
-  ) {
-    data.purchaseInvoiceId = data.documentId;
-  }
+  // Clé propre au modèle du document (invoiceId, importedInvoiceId…) et
+  // purchaseInvoiceId d'une facture d'achat : déjà stockées par les
+  // notifications récentes, déduites ici pour les plus anciennes ou quand
+  // `extra` précise le modèle
+  Object.entries(documentNavigationIds(data)).forEach(([key, value]) => {
+    if (toStringValue(data[key]) === undefined) data[key] = value;
+  });
 
   return Object.fromEntries(
     Object.entries(data)
@@ -95,7 +90,8 @@ export function buildNotificationPushData(notification, extra = {}) {
 export function pushPreferenceKey(notification, extra = {}) {
   if (notification?.type !== "DOCUMENT_IMPORTED") return null;
   const documentType = notification.data?.documentType;
-  const event = extra?.event;
+  // Événement stocké dans la notification, sauf précision explicite
+  const event = extra?.event || notification.data?.event;
   // Facture client marquée payée dans Qonto / Abby = paiement reçu
   if (event === "PAID" && documentType === "INVOICE") {
     return "payment_received";

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { documentNavigationIds } from "../utils/notificationDocumentIds.js";
 
 const notificationSchema = new mongoose.Schema(
   {
@@ -67,6 +68,16 @@ const notificationSchema = new mongoose.Schema(
       documentId: { type: String },
       documentNumber: { type: String },
       source: { type: String }, // QONTO…
+      // Modèle du document (Invoice, ImportedInvoice, Quote, ImportedQuote,
+      // PurchaseInvoice) et événement (IMPORTED | PAID | ACCEPTED | REFUSED)
+      documentModel: { type: String },
+      event: { type: String },
+      // Identifiant propre au modèle (mêmes clés que le push) : une facture
+      // importée n'est pas une facture Newbi, ni le même écran à ouvrir
+      invoiceId: { type: String },
+      importedInvoiceId: { type: String },
+      quoteId: { type: String },
+      importedQuoteId: { type: String },
     },
     // Statut de lecture
     read: {
@@ -207,6 +218,7 @@ notificationSchema.statics.createPurchaseInvoiceReceivedNotification =
         purchaseInvoiceId: purchaseInvoiceId
           ? String(purchaseInvoiceId)
           : undefined,
+        documentModel: "PurchaseInvoice",
         supplierName,
         amountTTC,
         url: url || "/dashboard/outils/factures-achat",
@@ -246,6 +258,9 @@ notificationSchema.statics.createDocumentImportedNotification =
     amountTTC,
     url,
     event = "IMPORTED", // IMPORTED | PAID | ACCEPTED | REFUSED
+    // Modèle du document (Invoice, ImportedInvoice, Quote, ImportedQuote,
+    // PurchaseInvoice) : indique quelle fiche ouvrir
+    documentModel,
   }) {
     const labels = DOCUMENT_LABELS[documentType] || DOCUMENT_LABELS.INVOICE;
     const sourceLabel = SOURCE_LABELS[source] || source || "une plateforme";
@@ -273,6 +288,7 @@ notificationSchema.statics.createDocumentImportedNotification =
       },
     };
     const ev = EVENTS[event] || EVENTS.IMPORTED;
+    const storedDocumentId = documentId ? String(documentId) : undefined;
     return this.create({
       userId,
       workspaceId,
@@ -281,7 +297,16 @@ notificationSchema.statics.createDocumentImportedNotification =
       message: ev.message.replace(/\s+/g, " "),
       data: {
         documentType,
-        documentId: documentId ? String(documentId) : undefined,
+        documentId: storedDocumentId,
+        documentModel,
+        event,
+        // invoiceId / importedInvoiceId / quoteId / importedQuoteId /
+        // purchaseInvoiceId selon le modèle, comme le push
+        ...documentNavigationIds({
+          documentType,
+          documentModel,
+          documentId: storedDocumentId,
+        }),
         documentNumber,
         source,
         supplierName: counterpartName,

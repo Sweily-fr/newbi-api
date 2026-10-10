@@ -149,6 +149,7 @@ async function notifyImported({
   event = "IMPORTED",
   // Modèle du document (Invoice, ImportedInvoice, Quote, ImportedQuote,
   // PurchaseInvoice) : indique à l'app mobile quelle fiche ouvrir au tap
+  // (cloche et push)
   documentModel,
 }) {
   try {
@@ -163,10 +164,12 @@ async function notifyImported({
       amountTTC,
       url,
       event,
+      documentModel,
     });
     await publishNotification(notification);
-    // Push sur l'appareil (ne lève jamais d'erreur)
-    sendNotificationPush(notification, { data: { event, documentModel } });
+    // Push sur l'appareil (ne lève jamais d'erreur) : l'événement et le
+    // modèle du document sont stockés dans la notification
+    sendNotificationPush(notification);
   } catch (error) {
     logger.warn(
       `[ABBY-IMPORT] notification non envoyée (${documentType} ${documentNumber || documentId}): ${error.message}`,

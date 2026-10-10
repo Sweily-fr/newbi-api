@@ -17,6 +17,15 @@ type NotificationData {
   "Plateforme d'origine (QONTO…)"
   source: String
   amountTTC: Float
+  "Modèle du document : Invoice | ImportedInvoice | Quote | ImportedQuote | PurchaseInvoice"
+  documentModel: String
+  "Pour DOCUMENT_IMPORTED : IMPORTED | PAID | ACCEPTED | REFUSED"
+  event: String
+  "Identifiant propre au modèle du document (mêmes clés que le push)"
+  invoiceId: ID
+  importedInvoiceId: ID
+  quoteId: ID
+  importedQuoteId: ID
 }
 
 type Notification {
