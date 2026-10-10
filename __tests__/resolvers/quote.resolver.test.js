@@ -734,4 +734,79 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     expect(result.headerNotes).toBe("Note ajoutée");
     expect(result.footerNotes).toBe(longFooter);
   });
+
+  // --- Devis en attente modifié (audit 10/2026)
+
+  const shippingInput = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Jean Dupont",
+      street: "3 rue de la Livraison",
+      city: "Lyon",
+      postalCode: "69001",
+      country: "France",
+    },
+  };
+  const items1000 = [
+    { description: "Prestation", quantity: 1, unitPrice: 1000, vatRate: 20 },
+  ];
+
+  it("enregistre le TTC avec les frais de port, remise % hors port", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0010",
+        prefix: "D-102026",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: {
+          items: items1000,
+          discount: 10,
+          discountType: "PERCENTAGE",
+          shipping: shippingInput,
+        },
+      },
+      ctx(),
+    );
+
+    // Comme l'aperçu PDF : 1000 − 10 % = 900, + 50 de port ;
+    // TVA 180 + 10 ; le pre-save n'écrase plus le port
+    expect(result.discountAmount).toBe(100);
+    expect(result.finalTotalHT).toBe(950);
+    expect(result.finalTotalVAT).toBe(190);
+    expect(result.finalTotalTTC).toBe(1140);
+    const stored = await Quote.collection.findOne({ _id: insertedId });
+    expect(stored.finalTotalTTC).toBe(1140);
+  });
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const { insertedId } = await insertQuote(
+      finalizableDraftData({
+        status: "PENDING",
+        number: "0011",
+        prefix: "D-102026",
+        items: items1000,
+        discount: 15,
+        discountType: "PERCENTAGE",
+      }),
+    );
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { items: items1000, discount: 0 } },
+      ctx(),
+    );
+
+    expect(result.discount).toBe(0);
+    expect(result.discountAmount).toBe(0);
+    expect(result.finalTotalHT).toBe(1000);
+    expect(result.finalTotalTTC).toBe(1200);
+  });
 });

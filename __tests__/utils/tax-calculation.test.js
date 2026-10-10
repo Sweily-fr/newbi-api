@@ -1,87 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
+import { calculateInvoiceTotals } from '../../src/resolvers/invoice.js';
+
 /**
- * Tests for calculateInvoiceTotals from src/resolvers/invoice.js
- * We replicate the function here since it's not exported separately.
+ * Tests de calculateInvoiceTotals (src/resolvers/invoice.js). Ils portaient
+ * sur une copie locale de la fonction, qui ne suivait plus le code réel :
+ * on teste désormais la fonction exportée.
  */
-
-// Replicate the exact logic from invoice.js lines 46-134
-const calculateInvoiceTotals = (
-  items,
-  discount = 0,
-  discountType = "FIXED",
-  shipping = null,
-  isReverseCharge = false
-) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-
-  items.forEach((item) => {
-    let itemHT = item.quantity * item.unitPrice;
-
-    const progressPercentage =
-      item.progressPercentage !== undefined && item.progressPercentage !== null
-        ? item.progressPercentage
-        : 100;
-    itemHT = itemHT * (progressPercentage / 100);
-
-    if (item.discount) {
-      if (
-        item.discountType === "PERCENTAGE" ||
-        item.discountType === "percentage"
-      ) {
-        const discountPercent = Math.min(item.discount, 100);
-        itemHT = itemHT * (1 - discountPercent / 100);
-      } else {
-        itemHT = Math.max(0, itemHT - item.discount);
-      }
-    }
-
-    const itemVAT = isReverseCharge ? 0 : itemHT * (item.vatRate / 100);
-    totalHT += itemHT;
-    totalVAT += itemVAT;
-  });
-
-  if (shipping && shipping.billShipping) {
-    const shippingHT = shipping.shippingAmountHT || 0;
-    const shippingVAT = isReverseCharge
-      ? 0
-      : shippingHT * (shipping.shippingVatRate / 100);
-
-    totalHT += shippingHT;
-    totalVAT += shippingVAT;
-  }
-
-  const totalTTC = totalHT + totalVAT;
-
-  let discountAmount = 0;
-  if (discount) {
-    if (discountType === "PERCENTAGE" || discountType === "percentage") {
-      const discountPercent = Math.min(discount, 100);
-      discountAmount = (totalHT * discountPercent) / 100;
-    } else {
-      discountAmount = discount;
-    }
-  }
-
-  const finalTotalHT = totalHT - discountAmount;
-
-  let finalTotalVAT = 0;
-  if (!isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
-    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-  }
-  const finalTotalTTC = finalTotalHT + finalTotalVAT;
-
-  return {
-    totalHT,
-    totalVAT,
-    totalTTC,
-    finalTotalHT,
-    finalTotalVAT,
-    finalTotalTTC,
-    discountAmount,
-  };
-};
 
 describe('calculateInvoiceTotals', () => {
   describe('basic calculations', () => {
@@ -218,7 +143,9 @@ describe('calculateInvoiceTotals', () => {
 
       const result = calculateInvoiceTotals(items, 200, 'FIXED');
 
-      expect(result.finalTotalHT).toBe(-100);
+      // Remise fixe plafonnée au HT des articles, comme sur l'aperçu PDF
+      expect(result.discountAmount).toBe(100);
+      expect(result.finalTotalHT).toBe(0);
       expect(result.finalTotalVAT).toBe(0);
     });
   });

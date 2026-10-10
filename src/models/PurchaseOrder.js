@@ -12,6 +12,7 @@ import customFieldSchema from "./schemas/customField.js";
 import shippingSchema from "./schemas/shipping.js";
 import { PURCHASE_ORDER_STATUS, DISCOUNT_TYPE } from "./constants/enums.js";
 import { documentAnnexSchema } from "../utils/documentAnnex.js";
+import { computeDocumentTotals } from "../utils/documentTotals.js";
 
 /**
  * Schéma principal de bon de commande
@@ -345,54 +346,29 @@ purchaseOrderSchema.index({ workspaceId: 1, "client.id": 1 });
 purchaseOrderSchema.index({ createdBy: 1 });
 
 /**
- * Calcul automatique des totaux avant sauvegarde
+ * Calcul automatique des totaux avant sauvegarde, avec les règles communes
+ * aux documents de vente (utils/documentTotals.js) : remise globale sur les
+ * articles, puis frais de port facturés (HT + TVA), comme sur le PDF.
+ * Ignorer les frais de port ici écrasait le TTC calculé par le resolver.
  */
 purchaseOrderSchema.pre("save", function (next) {
   if (this.items && this.items.length > 0) {
-    let totalHT = 0;
-    let totalVAT = 0;
-
-    this.items.forEach((item) => {
-      let itemHT = item.quantity * item.unitPrice;
-
-      if (item.discount) {
-        if (item.discountType === "PERCENTAGE") {
-          itemHT = itemHT * (1 - item.discount / 100);
-        } else {
-          itemHT = Math.max(0, itemHT - item.discount);
-        }
-      }
-
-      const itemVAT = this.isReverseCharge ? 0 : itemHT * (item.vatRate / 100);
-      totalHT += itemHT;
-      totalVAT += itemVAT;
+    const totals = computeDocumentTotals({
+      items: this.items,
+      discount: this.discount,
+      discountType: this.discountType,
+      shipping: this.shipping,
+      isReverseCharge: this.isReverseCharge,
     });
+    const round2 = (value) => parseFloat(value.toFixed(2));
 
-    let discountAmount = 0;
-    if (this.discount) {
-      if (this.discountType === "PERCENTAGE") {
-        discountAmount = (totalHT * this.discount) / 100;
-      } else {
-        discountAmount = this.discount;
-      }
-    }
-
-    const finalTotalHT = Math.max(0, totalHT - discountAmount);
-
-    let finalTotalVAT = 0;
-    if (!this.isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
-      finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-    }
-
-    const finalTotalTTC = finalTotalHT + finalTotalVAT;
-
-    this.totalHT = parseFloat(totalHT.toFixed(2));
-    this.totalVAT = parseFloat(totalVAT.toFixed(2));
-    this.totalTTC = parseFloat((totalHT + totalVAT).toFixed(2));
-    this.finalTotalHT = parseFloat(finalTotalHT.toFixed(2));
-    this.finalTotalVAT = parseFloat(finalTotalVAT.toFixed(2));
-    this.finalTotalTTC = parseFloat(finalTotalTTC.toFixed(2));
-    this.discountAmount = parseFloat(discountAmount.toFixed(2));
+    this.totalHT = round2(totals.totalHT);
+    this.totalVAT = round2(totals.totalVAT);
+    this.totalTTC = round2(totals.totalTTC);
+    this.finalTotalHT = round2(totals.finalTotalHT);
+    this.finalTotalVAT = round2(totals.finalTotalVAT);
+    this.finalTotalTTC = round2(totals.finalTotalTTC);
+    this.discountAmount = round2(totals.discountAmount);
   }
 
   next();

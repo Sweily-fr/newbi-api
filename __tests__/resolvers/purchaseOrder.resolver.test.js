@@ -537,6 +537,69 @@ describe("PurchaseOrder Resolver — updatePurchaseOrder (numérotation)", () =>
 });
 
 // ---------------------------------------------------------------------------
+// Tests — updatePurchaseOrder (bon de commande modifié)
+// ---------------------------------------------------------------------------
+
+describe("PurchaseOrder Resolver — updatePurchaseOrder (bon de commande modifié)", () => {
+  const create = purchaseOrderResolvers.Mutation.createPurchaseOrder;
+  const update = purchaseOrderResolvers.Mutation.updatePurchaseOrder;
+  const shipping = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Dest",
+      street: "5 rue Livraison",
+      city: "Paris",
+      postalCode: "75001",
+      country: "France",
+    },
+  };
+
+  it("enregistre le TTC avec les frais de port, remise % hors port", async () => {
+    const po = await create(
+      null,
+      {
+        input: buildPOInput({
+          discount: 10,
+          discountType: "PERCENTAGE",
+          shipping,
+        }),
+      },
+      ctx(),
+    );
+
+    // 2 × 500 = 1000 − 10 % = 900, + 50 de port ; TVA 180 + 10
+    expect(po.discountAmount).toBe(100);
+    expect(po.finalTotalHT).toBe(950);
+    expect(po.finalTotalVAT).toBe(190);
+    expect(po.finalTotalTTC).toBe(1140);
+  });
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const po = await create(
+      null,
+      { input: buildPOInput({ discount: 10, discountType: "PERCENTAGE" }) },
+      ctx(),
+    );
+    expect(po.finalTotalHT).toBe(900);
+
+    const updated = await update(
+      null,
+      {
+        id: po._id.toString(),
+        input: { items: buildPOInput().items, discount: 0 },
+      },
+      ctx(),
+    );
+
+    expect(updated.discount).toBe(0);
+    expect(updated.finalTotalHT).toBe(1000);
+    expect(updated.finalTotalTTC).toBe(1200);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — deletePurchaseOrder
 // ---------------------------------------------------------------------------
 

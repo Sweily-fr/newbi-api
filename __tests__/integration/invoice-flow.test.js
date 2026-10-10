@@ -149,8 +149,10 @@ describe("Invoice totals — real calculator edge cases", () => {
     const totals = calculateInvoiceTotals(items, 5, "PERCENTAGE", shipping);
 
     expect(totals.totalHT).toBe(10250);
-    expect(totals.discountAmount).toBe(512.5);
-    expect(totals.finalTotalHT).toBe(9737.5);
+    // Remise sur les articles seulement, les frais de port ne sont pas
+    // remisés (comme sur l'aperçu PDF) : 5 % de 10000, puis + 250 de port
+    expect(totals.discountAmount).toBe(500);
+    expect(totals.finalTotalHT).toBe(9750);
   });
 
   it("zeroes VAT when reverse charge is on", () => {

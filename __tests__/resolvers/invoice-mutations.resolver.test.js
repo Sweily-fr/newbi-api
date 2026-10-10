@@ -370,3 +370,75 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     expect(untouched.status).toBe("PENDING");
   });
 });
+
+describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifiée)", () => {
+  const resolver = invoiceResolvers.Mutation.updateInvoice;
+  const items = [
+    { description: "Service", quantity: 1, unitPrice: 1000, vatRate: 20 },
+  ];
+  const shipping = {
+    billShipping: true,
+    shippingAmountHT: 50,
+    shippingVatRate: 20,
+    shippingAddress: {
+      fullName: "Jean Dupont",
+      street: "3 rue de la Livraison",
+      city: "Lyon",
+      postalCode: "69001",
+      country: "France",
+    },
+  };
+
+  it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
+    const { insertedId } = await insertInvoice({
+      discount: 10,
+      discountType: "PERCENTAGE",
+      finalTotalHT: 900,
+      finalTotalVAT: 180,
+      finalTotalTTC: 1080,
+    });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { items, discount: 0 } },
+      ctx(),
+    );
+
+    expect(result.discount).toBe(0);
+    expect(result.finalTotalHT).toBe(1000);
+    expect(result.finalTotalTTC).toBe(1200);
+  });
+
+  it("recalcule les totaux quand seule la remise change", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { discount: 10, discountType: "PERCENTAGE" },
+      },
+      ctx(),
+    );
+
+    expect(result.finalTotalHT).toBe(900);
+    expect(result.finalTotalTTC).toBe(1080);
+  });
+
+  it("n'applique pas la remise en % aux frais de port", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { items, discount: 10, discountType: "PERCENTAGE", shipping },
+      },
+      ctx(),
+    );
+
+    expect(result.finalTotalHT).toBe(950);
+    expect(result.finalTotalVAT).toBeCloseTo(190, 10);
+    expect(result.finalTotalTTC).toBeCloseTo(1140, 10);
+  });
+});
