@@ -133,6 +133,45 @@ describe("buildNotificationPushData", () => {
     ).toBe(documentId);
   });
 
+  it("DOCUMENT_IMPORTED : reprend le modèle, l'événement et l'id stockés dans la notification", () => {
+    const documentId = new ObjectId().toString();
+    const notification = makeNotification("DOCUMENT_IMPORTED", {
+      documentType: "QUOTE",
+      documentId,
+      documentModel: "ImportedQuote",
+      event: "ACCEPTED",
+      importedQuoteId: documentId,
+      source: "ABBY",
+      url: "/dashboard/outils/devis",
+    });
+
+    // Sans `extra` : mêmes données qu'avant le stockage (modèle passé en extra)
+    expect(buildNotificationPushData(notification)).toEqual({
+      type: "DOCUMENT_IMPORTED",
+      workspaceId: workspaceId.toString(),
+      notificationId: notification._id.toString(),
+      documentType: "QUOTE",
+      documentId,
+      documentModel: "ImportedQuote",
+      importedQuoteId: documentId,
+      source: "ABBY",
+      event: "ACCEPTED",
+      url: "/dashboard/outils/devis",
+    });
+    expect(pushPreferenceKey(notification)).toBe("quote_response");
+  });
+
+  it("ancienne notification sans modèle stocké : id déduit du modèle passé en extra", () => {
+    const documentId = new ObjectId().toString();
+    const legacy = makeNotification("DOCUMENT_IMPORTED", {
+      documentType: "QUOTE",
+      documentId,
+    });
+    const data = buildNotificationPushData(legacy, { documentModel: "Quote" });
+    expect(data.quoteId).toBe(documentId);
+    expect(data.importedQuoteId).toBeUndefined();
+  });
+
   it("une clé extra vide n'écrase pas la valeur de la notification", () => {
     const purchaseInvoiceId = new ObjectId().toString();
     const notification = makeNotification("PURCHASE_INVOICE_RECEIVED", {
@@ -232,6 +271,15 @@ describe("sendNotificationPush", () => {
     // Simple import : pas de préférence, envoyé même si payment_received est coupé
     storedPreferences = { payment_received: { push: false } };
     await sendNotificationPush(paid, { data: { event: "IMPORTED" } });
+    expect(sendPushToUser).toHaveBeenCalledTimes(2);
+
+    // Événement stocké dans la notification (sans `extra`) : même filtrage
+    const storedPaid = makeNotification("DOCUMENT_IMPORTED", {
+      documentType: "INVOICE",
+      documentId: "x",
+      event: "PAID",
+    });
+    await sendNotificationPush(storedPaid);
     expect(sendPushToUser).toHaveBeenCalledTimes(2);
   });
 

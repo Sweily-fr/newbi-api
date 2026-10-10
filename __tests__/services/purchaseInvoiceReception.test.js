@@ -197,6 +197,7 @@ describe("importReceivedInvoices — notification d'arrivée", () => {
     expect(notif).toBeTruthy();
     expect(notif.data.supplierName).toBe("Acme Telecom");
     expect(notif.data.purchaseInvoiceId).toBe(pi._id.toString());
+    expect(notif.data.documentModel).toBe("PurchaseInvoice");
     expect(publishNotification).toHaveBeenCalledTimes(1);
 
     // Push : même titre et message que la notification, ids de navigation
@@ -209,6 +210,7 @@ describe("importReceivedInvoices — notification d'arrivée", () => {
         workspaceId: workspaceId.toString(),
         notificationId: notif._id.toString(),
         purchaseInvoiceId: pi._id.toString(),
+        documentModel: "PurchaseInvoice",
         url: `/dashboard/outils/factures-achat?invoice=${pi._id}`,
       },
     });

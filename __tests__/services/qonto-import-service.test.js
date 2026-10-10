@@ -240,6 +240,11 @@ describe("importClientInvoices (Qonto → factures importées)", () => {
     expect(notif.data.documentType).toBe("INVOICE");
     expect(notif.data.source).toBe("QONTO");
     expect(notif.data.documentNumber).toBe("Q-2026-001");
+    // Données de navigation stockées comme dans le push : facture importée
+    expect(notif.data.documentModel).toBe("ImportedInvoice");
+    expect(notif.data.event).toBe("IMPORTED");
+    expect(notif.data.importedInvoiceId).toBe(String(doc._id));
+    expect(notif.data.invoiceId).toBeUndefined();
     expect(publishNotificationMock).toHaveBeenCalledTimes(1);
   });
 
@@ -365,6 +370,10 @@ describe("importClientInvoices (Qonto → factures importées)", () => {
     expect(await ImportedInvoice.countDocuments()).toBe(0);
     const notif = await Notification.findOne({ type: "DOCUMENT_IMPORTED" });
     expect(notif.title).toBe("Facture payée");
+    // Facture Newbi : la fiche facture peut s'ouvrir
+    expect(notif.data.documentModel).toBe("Invoice");
+    expect(notif.data.event).toBe("PAID");
+    expect(notif.data.invoiceId).toBe(String(pushed._id));
 
     // Rejeu : déjà payée, rien ne bouge
     applyInvoicePaidMock.mockClear();
@@ -547,6 +556,8 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     expect(await PurchaseInvoice.countDocuments()).toBe(1);
     const notif = await Notification.findOne({ type: "DOCUMENT_IMPORTED" });
     expect(notif.title).toBe("Facture d'achat payée");
+    expect(notif.data.documentModel).toBe("PurchaseInvoice");
+    expect(notif.data.purchaseInvoiceId).toBe(String(pushed._id));
   });
 
   it("ignore les factures rejetées et sans pièce jointe", async () => {
