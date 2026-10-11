@@ -167,12 +167,3 @@ type Mutation {
     newbiUserId: ID!
   ): UserInvited!
 }
-
-# Subscriptions
-type Subscription {
-  # Notification quand un utilisateur invité se connecte à un board
-  invitedUserConnected(boardId: ID!): UserInvited!
-  
-  # Notification quand un utilisateur invité est banni
-  invitedUserBanned(boardId: ID!): UserInvited!
-}

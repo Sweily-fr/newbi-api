@@ -184,6 +184,11 @@ type PublicAccessResult {
   share: PublicBoardShare
   visitorEmail: String
   isBanned: Boolean
+  # Partage protégé : mot de passe absent, incorrect ou jeton expiré
+  requiresPassword: Boolean
+  # Partage protégé : jeton (12 h) à renvoyer à getPublicBoard et à
+  # publicTaskUpdated à la place du mot de passe
+  accessToken: String
 }
 
 # Résultat de l'ajout de commentaire externe
@@ -191,6 +196,9 @@ type ExternalCommentResult {
   success: Boolean!
   message: String
   task: PublicTask
+  # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
+  # d'essais
+  requiresPassword: Boolean
 }
 
 # Input pour mettre à jour le profil d'un visiteur externe
@@ -205,6 +213,9 @@ type UpdateVisitorProfileResult {
   success: Boolean!
   message: String
   visitor: ExternalVisitor
+  # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
+  # d'essais
+  requiresPassword: Boolean
 }
 
 # Input pour les images de commentaire déjà uploadées
@@ -221,6 +232,9 @@ type VisitorImageUploadResult {
   success: Boolean!
   message: String
   imageUrl: String
+  # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
+  # d'essais
+  requiresPassword: Boolean
 }
 
 # Résultat de l'upload d'image externe
@@ -228,6 +242,9 @@ type ExternalImageUploadResult {
   success: Boolean!
   message: String
   image: PublicTaskImage
+  # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
+  # d'essais
+  requiresPassword: Boolean
 }
 
 # Résultat de la demande d'accès
@@ -235,6 +252,9 @@ type RequestAccessResult {
   success: Boolean!
   message: String
   alreadyRequested: Boolean
+  # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
+  # d'essais
+  requiresPassword: Boolean
 }
 
 # Queries pour le partage public
@@ -243,7 +263,12 @@ extend type Query {
   getPublicShares(boardId: ID!, workspaceId: ID): [PublicBoardShare!]!
   
   # Pour les visiteurs externes - accéder au tableau via le token
-  getPublicBoard(token: String!, email: String!, password: String): PublicAccessResult!
+  getPublicBoard(
+    token: String!
+    email: String!
+    password: String
+    accessToken: String
+  ): PublicAccessResult!
   
   # Vérifier si un token est valide (sans email) - retourne le nom du lien si valide, null sinon
   validatePublicToken(token: String!): String
@@ -264,8 +289,16 @@ extend type Mutation {
   # Débannir un visiteur
   unbanVisitor(shareId: ID!, visitorEmail: String!, workspaceId: ID): PublicBoardShare!
   
-  # Demander l'accès (pour les visiteurs bannis)
-  requestAccess(token: String!, email: String!, name: String, message: String): RequestAccessResult!
+  # Demander l'accès (pour les visiteurs bannis). Partage protégé :
+  # password ou accessToken, comme pour getPublicBoard
+  requestAccess(
+    token: String!
+    email: String!
+    name: String
+    message: String
+    password: String
+    accessToken: String
+  ): RequestAccessResult!
   
   # Approuver une demande d'accès
   approveAccessRequest(shareId: ID!, requestId: ID!, workspaceId: ID): PublicBoardShare!
@@ -273,6 +306,9 @@ extend type Mutation {
   # Rejeter une demande d'accès
   rejectAccessRequest(shareId: ID!, requestId: ID!, workspaceId: ID): PublicBoardShare!
   
+  # Actions des visiteurs externes ci-dessous : pour un partage protégé,
+  # accessToken remis par getPublicBoard (ou password, essais limités)
+
   # Pour les visiteurs externes - ajouter un commentaire
   addExternalComment(
     token: String!
@@ -280,6 +316,8 @@ extend type Mutation {
     content: String
     visitorEmail: String!
     images: [CommentImageInput!]
+    password: String
+    accessToken: String
   ): ExternalCommentResult!
   
   # Pour les visiteurs externes - mettre à jour leur profil
@@ -287,6 +325,8 @@ extend type Mutation {
     token: String!
     email: String!
     input: UpdateVisitorProfileInput!
+    password: String
+    accessToken: String
   ): UpdateVisitorProfileResult!
   
   # Pour les visiteurs externes - uploader leur photo de profil sur Cloudflare
@@ -294,6 +334,8 @@ extend type Mutation {
     token: String!
     email: String!
     file: Upload!
+    password: String
+    accessToken: String
   ): VisitorImageUploadResult!
   
   # Pour les visiteurs externes - uploader une image pour un commentaire
@@ -302,6 +344,8 @@ extend type Mutation {
     taskId: ID!
     file: Upload!
     visitorEmail: String!
+    password: String
+    accessToken: String
   ): ExternalImageUploadResult!
 }
 
@@ -357,8 +401,16 @@ type VisitorPresencePayload {
 }
 
 extend type Subscription {
-  # Subscription pour les mises à jour de tâches sur un board public
-  publicTaskUpdated(token: String!, boardId: ID!): PublicTaskUpdatePayload
+  # Subscription pour les mises à jour de tâches sur un board public.
+  # Partage protégé : accessToken remis par getPublicBoard. email : visiteur
+  # (refusé s'il est banni). Le flux s'arrête si le partage est révoqué ou
+  # expiré, si son mot de passe change ou si le visiteur est banni.
+  publicTaskUpdated(
+    token: String!
+    boardId: ID!
+    accessToken: String
+    email: String
+  ): PublicTaskUpdatePayload
   
   # Subscription pour notifier quand un accès est approuvé (pour les visiteurs en attente)
   accessApproved(token: String!, email: String!): AccessApprovedPayload

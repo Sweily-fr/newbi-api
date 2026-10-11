@@ -41,6 +41,10 @@ vi.mock("../../src/resolvers/clientAutomation.js", () => ({
     executeAutomations: vi.fn().mockResolvedValue(undefined),
   },
 }));
+// Archivage Factur-X (Puppeteer côté NewbiV2) : on vérifie seulement l'appel
+vi.mock("../../src/services/invoiceFacturXArchiveService.js", () => ({
+  triggerInvoiceFacturXArchive: vi.fn(),
+}));
 vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
   autoPushEventToConnections: vi.fn().mockResolvedValue(undefined),
   updateEventInExternalCalendars: vi.fn().mockResolvedValue(undefined),
@@ -54,6 +58,7 @@ vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Invoice from "../../src/models/Invoice.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
+import { triggerInvoiceFacturXArchive } from "../../src/services/invoiceFacturXArchiveService.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -170,6 +175,42 @@ describe("Invoice Resolver - Mutation.deleteInvoice", () => {
 
   it("deletes a PENDING invoice", async () => {
     const { insertedId } = await insertInvoice({ status: "PENDING" });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), workspaceId: organizationId.toString() },
+      ctx(),
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it("refuse de supprimer une facture transmise en e-facturation", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      superPdpInvoiceId: "spdp-789",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      "Cette facture a été transmise en facturation électronique : elle ne peut pas être supprimée. Créez un avoir pour l'annuler.",
+    );
+    expect(
+      await Invoice.collection.findOne({ _id: insertedId }),
+    ).not.toBeNull();
+  });
+
+  it("supprime une facture en attente dont l'envoi e-invoicing a échoué", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      eInvoiceStatus: "ERROR",
+    });
 
     const result = await resolver(
       null,
@@ -460,6 +501,121 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     const stored = await Invoice.collection.findOne({ _id: insertedId });
     expect(stored.cachedPdf?.url ?? null).toBeNull();
     expect(stored.cachedPdf?.key ?? null).toBeNull();
+  });
+
+  it("réarchive une facture en attente modifiée, non transmise", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      archivedPdfKey: "invoices/ws/2026/10/old.pdf",
+      archivedPdfStoredAt: new Date("2026-10-01"),
+      archivedPdfSource: "NEWBI",
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { items, discount: 5 } },
+      ctx(),
+    );
+
+    // Ancienne archive oubliée : aperçu et envois ne la servent plus
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.archivedPdfKey ?? null).toBeNull();
+    expect(stored.archivedPdfStoredAt ?? null).toBeNull();
+    expect(stored.archivedPdfSource ?? null).toBeNull();
+
+    // Nouvelle archive générée depuis la facture modifiée
+    expect(triggerInvoiceFacturXArchive).toHaveBeenCalledTimes(1);
+    const [archived, workspaceId] = triggerInvoiceFacturXArchive.mock.calls[0];
+    expect(archived._id.toString()).toBe(insertedId.toString());
+    expect(archived.finalTotalHT).toBe(995);
+    expect(workspaceId.toString()).toBe(organizationId.toString());
+  });
+
+  it("refuse la modification d'une facture transmise en e-facturation", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      superPdpInvoiceId: "spdp-123",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+      archivedPdfKey: "invoices/ws/2026/10/transmise.pdf",
+      archivedPdfSource: "NEWBI",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      "Cette facture a été transmise en facturation électronique : elle ne peut plus être modifiée. Créez un avoir pour la corriger.",
+    );
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.headerNotes).toBeUndefined();
+    expect(stored.archivedPdfKey).toBe("invoices/ws/2026/10/transmise.pdf");
+    expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
+  });
+
+  it("refuse aussi sur un statut e-invoicing transmis sans identifiant", async () => {
+    const { insertedId } = await insertInvoice({ eInvoiceStatus: "ACCEPTED" });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
+  });
+
+  it("laisse modifier une facture dont l'envoi e-invoicing a échoué avant dépôt", async () => {
+    const { insertedId } = await insertInvoice({
+      eInvoiceStatus: "ERROR",
+      eInvoiceError: "SIREN destinataire inconnu",
+    });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Corrigée" } },
+      ctx(),
+    );
+
+    expect(result.headerNotes).toBe("Corrigée");
+  });
+
+  it("laisse marquer payée une facture transmise (autre chemin)", async () => {
+    const { insertedId } = await insertInvoice({
+      superPdpInvoiceId: "spdp-456",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+    });
+
+    const result = await invoiceResolvers.Mutation.markInvoiceAsPaid(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        paymentDate: "2026-10-10",
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("COMPLETED");
+  });
+
+  it("n'archive pas un brouillon qui reste brouillon", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      status: "DRAFT",
+      number: "DRAFT-0001",
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Brouillon" } },
+      ctx(),
+    );
+
+    expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
   });
 
   it("ne garde pas les champs client de l'ancien client quand il est remplacé", async () => {

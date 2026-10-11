@@ -96,8 +96,29 @@ describe("Envoi multipart de gros fichiers", () => {
       size: 1024,
       etag: "etag",
     });
+    vi.spyOn(
+      cloudflareTransferService,
+      "startMultipartUpload",
+    ).mockResolvedValue({
+      uploadId: "upload-1",
+      key: "prod/2026/10/10/t_transfer-1/f_file-1_video.mp4",
+      presignedUrls: [],
+    });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
+    // L'envoi doit avoir été démarré par le même utilisateur pour être finalisé
+    await Mutation.startMultipartUpload(
+      {},
+      {
+        transferId: "transfer-1",
+        fileId: "file-1",
+        fileName: "video.mp4",
+        fileSize: 1024,
+        mimeType: "video/mp4",
+        totalParts: 1,
+      },
+      ctx,
+    );
     await Mutation.completeMultipartUpload(
       {},
       {
