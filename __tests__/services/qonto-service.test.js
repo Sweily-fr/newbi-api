@@ -11,6 +11,7 @@ import qontoService, {
   mapUnit,
   normalizeName,
 } from "../../src/services/qontoService.js";
+import { computeDocumentTotals } from "../../src/utils/documentTotals.js";
 
 const credentials = {
   login: "acme-1234",
@@ -867,6 +868,157 @@ describe("qontoService.syncCustomerInvoice", () => {
     expect(body.discount).toBeUndefined();
   });
 
+  describe("remise globale et frais de port", () => {
+    // Totaux tels que Qonto les calcule depuis le payload : HT de ligne
+    // (quantité × PU − remise de ligne), TVA de ligne, remise globale du
+    // document appliquée à la somme de TOUTES les lignes (port compris)
+    const qontoTotalTTC = (body) => {
+      const lines = body.items.map((line) => {
+        const gross = Number(line.quantity) * Number(line.unit_price.value);
+        const discount = !line.discount
+          ? 0
+          : line.discount.type === "percentage"
+            ? gross * Number(line.discount.value)
+            : Number(line.discount.value);
+        return { ht: gross - discount, rate: Number(line.vat_rate) };
+      });
+      const totalHT = lines.reduce((sum, l) => sum + l.ht, 0);
+      const globalRatio = !body.discount
+        ? 1
+        : body.discount.type === "percentage"
+          ? 1 - Number(body.discount.value)
+          : 1 - Number(body.discount.value) / totalHT;
+      return lines.reduce(
+        (sum, l) => sum + l.ht * globalRatio * (1 + l.rate),
+        0,
+      );
+    };
+
+    const shippedInvoice = {
+      ...invoice,
+      items: [
+        {
+          description: "Prestation de conseil",
+          quantity: 2,
+          unitPrice: 100,
+          vatRate: 20,
+        },
+        {
+          description: "Remisé",
+          quantity: 1,
+          unitPrice: 50,
+          vatRate: 10,
+          discount: 10,
+          discountType: "PERCENTAGE",
+        },
+      ],
+      discount: 5,
+      discountType: "PERCENTAGE",
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 30,
+        shippingVatRate: 5.5,
+      },
+    };
+
+    const send = async (doc) => {
+      const calls = stubRouter({
+        "GET /v2/clients": jsonResponse({
+          clients: [{ id: "c-1", name: "Client SA" }],
+        }),
+        "POST /v2/client_invoices": jsonResponse(
+          { client_invoice: { id: "ci-5" } },
+          201,
+        ),
+      });
+      const out = await qontoService.syncCustomerInvoice(credentials, doc, {
+        iban: "FR7630006000011234567890189",
+      });
+      expect(out.success).toBe(true);
+      return JSON.parse(calls.at(-1).options.body);
+    };
+
+    it("répartit une remise en % sur les articles, jamais sur le port", async () => {
+      const body = await send(shippedInvoice);
+
+      // Plus de remise de document : Qonto la répartirait sur le port
+      expect(body.discount).toBeUndefined();
+      // 245 HT d'articles − 5 % = 12,25 € répartis : 10,00 et 2,25
+      expect(body.items[0].discount).toEqual({
+        type: "absolute",
+        value: "10.00",
+      });
+      // Remise de ligne (5 €) + part de remise globale (2,25 €)
+      expect(body.items[1].discount).toEqual({
+        type: "absolute",
+        value: "7.25",
+      });
+      expect(body.items[2]).toMatchObject({
+        title: "Frais de livraison",
+        unit_price: { value: "30.00", currency: "EUR" },
+        vat_rate: "0.055",
+      });
+      expect(body.items[2].discount).toBeUndefined();
+
+      const newbi = computeDocumentTotals(shippedInvoice);
+      expect(qontoTotalTTC(body)).toBeCloseTo(newbi.finalTotalTTC, 2);
+    });
+
+    it("répartit une remise fixe, avancement partiel compris", async () => {
+      const doc = {
+        ...shippedInvoice,
+        items: [
+          {
+            description: "Lot 1",
+            quantity: 1,
+            unitPrice: 1000,
+            vatRate: 20,
+            progressPercentage: 50,
+          },
+          {
+            description: "Lot 2",
+            quantity: 3,
+            unitPrice: 33.33,
+            vatRate: 10,
+          },
+        ],
+        discount: 100,
+        discountType: "FIXED",
+      };
+
+      const body = await send(doc);
+
+      expect(body.discount).toBeUndefined();
+      // Ligne à avancement : quantité 1 au HT réel, remise fixe = sa part
+      expect(body.items[0]).toMatchObject({
+        quantity: "1",
+        unit_price: { value: "500.00", currency: "EUR" },
+        discount: { type: "absolute" },
+      });
+      const shares =
+        Number(body.items[0].discount.value) +
+        Number(body.items[1].discount.value);
+      expect(shares).toBeCloseTo(100, 2);
+
+      const newbi = computeDocumentTotals(doc);
+      expect(qontoTotalTTC(body)).toBeCloseTo(newbi.finalTotalTTC, 2);
+    });
+
+    it("garde la remise de document quand aucun port n'est facturé", async () => {
+      const body = await send({
+        ...shippedInvoice,
+        shipping: { billShipping: false, shippingAmountHT: 30 },
+      });
+
+      expect(body.discount).toEqual({ type: "percentage", value: "0.05" });
+      expect(body.items[0].discount).toBeUndefined();
+      expect(body.items[1].discount).toEqual({
+        type: "percentage",
+        value: "0.1",
+      });
+    });
+  });
+
   it("échec si le client ne peut pas être créé", async () => {
     stubRouter({
       "GET /v2/clients": jsonResponse({ clients: [] }),
@@ -967,6 +1119,42 @@ describe("qontoService.syncQuote", () => {
     const body = JSON.parse(calls.at(-1).options.body);
     expect(body.expiry_date).toBe("2026-10-01");
     expect(body.terms_and_conditions).toBe("Acompte de 30 % à la commande.");
+  });
+
+  it("répartit la remise globale sur les articles quand le port est facturé", async () => {
+    const calls = stubRouter({
+      "GET /v2/clients": jsonResponse({
+        clients: [
+          {
+            id: "c-1",
+            kind: "company",
+            name: "Client SA",
+            tax_identification_number: "1",
+          },
+        ],
+      }),
+      "POST /v2/quotes": jsonResponse({ quote: { id: "qq-3" } }, 201),
+    });
+    await qontoService.syncQuote(credentials, {
+      ...quote,
+      discount: 10,
+      discountType: "PERCENTAGE",
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 20,
+        shippingVatRate: 20,
+      },
+    });
+    const body = JSON.parse(calls.at(-1).options.body);
+
+    expect(body.discount).toBeUndefined();
+    // 300 HT − 10 % = 30 € sur la ligne d'articles, port intact
+    expect(body.items[0].discount).toEqual({
+      type: "absolute",
+      value: "30.00",
+    });
+    expect(body.items[1].discount).toBeUndefined();
+    expect(body.items[1].currency).toBe("EUR");
   });
 
   it("409 → succès 'existing'", async () => {

@@ -161,6 +161,123 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoices", () => {
     expect(result.totalCount).toBe(1);
   });
 
+  it("filtre sur plusieurs statuts à la fois (statuses)", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "OVERDUE" });
+    await insertPurchaseInvoice({ status: "PAID" });
+    await insertPurchaseInvoice({ status: "ARCHIVED" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.status).sort()).toEqual([
+      "OVERDUE",
+      "TO_PAY",
+    ]);
+  });
+
+  it("combine status et statuses en ET", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "PAID" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        status: "PAID",
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(0);
+  });
+
+  it("filtre sur plusieurs sous-catégories, catégorie large à défaut", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF",
+      category: "TRANSPORT",
+      subcategory: "train",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Restaurant",
+      category: "MEALS",
+      subcategory: "restaurant",
+    });
+    // Ancienne facture sans sous-catégorie : comparée sur sa catégorie
+    await insertPurchaseInvoice({
+      supplierName: "EDF",
+      category: "ENERGY",
+      subcategory: null,
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Free",
+      category: "TELECOMMUNICATIONS",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        subcategories: ["train", "ENERGY"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.supplierName).sort()).toEqual([
+      "EDF",
+      "SNCF",
+    ]);
+  });
+
+  it("combine sous-catégories, statuts et recherche", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Voyageurs",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Connect",
+      subcategory: "train",
+      status: "PAID",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Air France",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "SNCF",
+        statuses: ["TO_PAY"],
+        subcategories: ["train"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0].supplierName).toBe("SNCF Voyageurs");
+  });
+
   it("filters by amount range", async () => {
     await insertPurchaseInvoice({ amountTTC: 100 });
     await insertPurchaseInvoice({ amountTTC: 500 });
@@ -801,6 +918,69 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoiceDuplicates", () => {
       ctx(),
     );
     expect(result.map((r) => r.id)).toEqual([insertedId.toString()]);
+  });
+
+  it("renvoie la devise du doublon (EUR à défaut)", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-10",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+    await PurchaseInvoice.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      supplierName: "Ancienne",
+      invoiceNumber: "OLD-0001",
+      amountTTC: 50,
+      status: "TO_PAY",
+      files: [],
+    });
+
+    const [usd] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "AWS-2026-10", amountTTC: 120 },
+      },
+      ctx(),
+    );
+    expect(usd.currency).toBe("USD");
+
+    const [old] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "OLD-0001", amountTTC: 50 },
+      },
+      ctx(),
+    );
+    expect(old.currency).toBe("EUR");
+  });
+
+  it("le refus de création affiche le montant du doublon dans sa devise", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-11",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+
+    await expect(
+      purchaseInvoiceResolvers.Mutation.createPurchaseInvoice(
+        null,
+        {
+          input: {
+            workspaceId: organizationId.toString(),
+            supplierName: "Amazon Web Services",
+            invoiceNumber: "AWS-2026-11",
+            issueDate: "2026-10-01",
+            amountTTC: 120,
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/\$US/);
   });
 });
 

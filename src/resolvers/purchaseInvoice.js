@@ -44,10 +44,21 @@ import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconci
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 
-const formatEuros = (value) =>
-  new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
-    value || 0,
-  );
+// Montant dans la devise de la facture (EUR par défaut ou si le code est
+// invalide) : une facture en dollars n'est pas affichée en euros.
+const formatAmount = (value, currency) => {
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: currency || "EUR",
+    }).format(value || 0);
+  } catch {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: "EUR",
+    }).format(value || 0);
+  }
+};
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -120,7 +131,9 @@ const purchaseInvoiceResolvers = {
         limit = 20,
         search,
         status,
+        statuses,
         category,
+        subcategories,
         supplierId,
         startDate,
         endDate,
@@ -134,9 +147,28 @@ const purchaseInvoiceResolvers = {
       } = args;
 
       const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
+      // Conditions combinées en ET (la recherche occupe déjà query.$or)
+      const and = [];
 
       if (status) query.status = status;
+      // Filtres multiples de l'app mobile : en plus de status / category
+      if (Array.isArray(statuses) && statuses.length > 0) {
+        and.push({ status: { $in: statuses } });
+      }
       if (category) query.category = category;
+      if (Array.isArray(subcategories) && subcategories.length > 0) {
+        // Code affiché = sous-catégorie, sinon catégorie large (même règle
+        // que le filtre Catégorie de la page web)
+        and.push({
+          $or: [
+            { subcategory: { $in: subcategories } },
+            {
+              subcategory: { $in: [null, ""] },
+              category: { $in: subcategories },
+            },
+          ],
+        });
+      }
       if (supplierId)
         query.supplierId = new mongoose.Types.ObjectId(supplierId);
 
@@ -176,6 +208,8 @@ const purchaseInvoiceResolvers = {
           query.$or.push({ amountTTC: numSearch });
         }
       }
+
+      if (and.length > 0) query.$and = and;
 
       const sort = {};
       sort[sortField] = sortOrder === "ASC" ? 1 : -1;
@@ -627,6 +661,7 @@ const purchaseInvoiceResolvers = {
           invoiceNumber: inv.invoiceNumber,
           supplierName: inv.supplierName,
           amountTTC: inv.amountTTC,
+          currency: inv.currency || "EUR",
           issueDate: inv.issueDate,
           status: inv.status,
         }));
@@ -706,7 +741,7 @@ const purchaseInvoiceResolvers = {
           if (duplicates.length > 0) {
             const d = duplicates[0];
             throw new AppError(
-              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatEuros(d.amountTTC)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
+              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatAmount(d.amountTTC, d.currency)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
               ERROR_CODES.VALIDATION_ERROR,
             );
           }

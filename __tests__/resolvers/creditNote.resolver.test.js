@@ -28,9 +28,15 @@ vi.mock("../../src/models/Event.js", () => ({
   },
 }));
 
+// Archivage R2 (Puppeteer côté NewbiV2) : on vérifie seulement l'appel
+vi.mock("../../src/services/creditNoteFacturXArchiveService.js", () => ({
+  triggerCreditNoteFacturXArchive: vi.fn(),
+}));
+
 import CreditNote from "../../src/models/CreditNote.js";
 import Invoice from "../../src/models/Invoice.js";
 import creditNoteResolvers from "../../src/resolvers/creditNote.js";
+import { triggerCreditNoteFacturXArchive } from "../../src/services/creditNoteFacturXArchiveService.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,6 +71,15 @@ async function insertInvoice(overrides = {}) {
   await Invoice.collection.insertOne(doc);
   return doc;
 }
+
+// Adresse exigée par le modèle dès que le port est facturé
+const SHIPPING_ADDRESS = {
+  fullName: "Client Test",
+  street: "1 rue",
+  city: "Paris",
+  postalCode: "75001",
+  country: "France",
+};
 
 function buildCreditNoteInput(invoiceId, overrides = {}) {
   return {
@@ -175,6 +190,83 @@ describe("CreditNote Resolver — createCreditNote", () => {
     expect(result.finalTotalHT).toBeCloseTo(-450, 0);
     expect(result.finalTotalVAT).toBeCloseTo(-90, 0);
     expect(result.finalTotalTTC).toBeCloseTo(-540, 0);
+  });
+
+  it("reprend les frais de port de la facture d'origine, sans remise globale", async () => {
+    // Facture : 1000 HT à 20 % + port 50 HT à 5,5 % = 1252,75 TTC
+    const inv = await insertInvoice({
+      shipping: {
+        billShipping: true,
+        shippingAddress: SHIPPING_ADDRESS,
+        shippingAmountHT: 50,
+        shippingVatRate: 5.5,
+      },
+      finalTotalTTC: 1252.75,
+    });
+    const input = buildCreditNoteInput(inv._id, {
+      // Convention de stockage des avoirs : quantité et PU négatifs
+      items: [
+        { description: "Retour", quantity: -1, unitPrice: -500, vatRate: 20 },
+      ],
+      discount: 10,
+      discountType: "PERCENTAGE",
+    });
+
+    const result = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input },
+      ctx(),
+    );
+
+    // Articles : 500 − 10 % = 450 HT, TVA 90 ; port 50 HT, TVA 2,75
+    expect(result.totalHT).toBeCloseTo(-550, 2);
+    expect(result.finalTotalHT).toBeCloseTo(-500, 2);
+    expect(result.finalTotalVAT).toBeCloseTo(-92.75, 2);
+    expect(result.finalTotalTTC).toBeCloseTo(-592.75, 2);
+  });
+
+  it("plafonne une remise fixe au HT des articles", async () => {
+    const inv = await insertInvoice();
+    const input = buildCreditNoteInput(inv._id, {
+      discount: 800,
+      discountType: "FIXED",
+    });
+
+    const result = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input },
+      ctx(),
+    );
+
+    // 500 HT, remise fixe plafonnée à 500 : rien à rembourser
+    expect(result.finalTotalHT).toBeCloseTo(0, 2);
+    expect(result.finalTotalTTC).toBeCloseTo(0, 2);
+  });
+
+  it("applique la remise de ligne fixe sur des articles stockés en négatif", async () => {
+    const inv = await insertInvoice();
+    const input = buildCreditNoteInput(inv._id, {
+      items: [
+        {
+          description: "Retour",
+          quantity: -2,
+          unitPrice: -100,
+          vatRate: 20,
+          discount: 50,
+          discountType: "FIXED",
+        },
+      ],
+    });
+
+    const result = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input },
+      ctx(),
+    );
+
+    // 2 × 100 − 50 = 150 HT → 180 TTC
+    expect(result.finalTotalHT).toBeCloseTo(-150, 2);
+    expect(result.finalTotalTTC).toBeCloseTo(-180, 2);
   });
 
   it("sets VAT to 0 for reverse-charge invoice", async () => {
@@ -405,6 +497,38 @@ describe("CreditNote Resolver — updateCreditNote", () => {
     expect(updated.finalTotalTTC).toBeCloseTo(-600, 2);
   });
 
+  it("recalcule les totaux quand seule la remise change, port compris", async () => {
+    const inv = await insertInvoice({
+      shipping: {
+        billShipping: true,
+        shippingAddress: SHIPPING_ADDRESS,
+        shippingAmountHT: 100,
+        shippingVatRate: 0,
+      },
+      finalTotalTTC: 1300,
+    });
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    // 500 HT à 20 % (600 TTC) + port 100 HT à 0 % (taux conservé)
+    expect(cn.finalTotalTTC).toBeCloseTo(-700, 2);
+
+    const updated = await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      {
+        id: cn._id.toString(),
+        input: { discount: 100, discountType: "FIXED" },
+      },
+      ctx(),
+    );
+
+    // 400 HT à 20 % (480 TTC) + port 100 HT non remisé
+    expect(updated.finalTotalHT).toBeCloseTo(-500, 2);
+    expect(updated.finalTotalTTC).toBeCloseTo(-580, 2);
+  });
+
   it("oublie le PDF en cache des envois quand l'avoir est modifié", async () => {
     const inv = await insertInvoice();
     const cn = await creditNoteResolvers.Mutation.createCreditNote(
@@ -433,6 +557,96 @@ describe("CreditNote Resolver — updateCreditNote", () => {
 
     const stored = await CreditNote.collection.findOne({ _id: cn._id });
     expect(stored.cachedPdf?.url).toBeUndefined();
+  });
+});
+
+describe("CreditNote Resolver — updateCreditNote (archive)", () => {
+  it("régénère l'archive PDF de l'avoir modifié", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          archivedPdfKey: "credit-notes/ws/old.pdf",
+          archivedPdfStoredAt: new Date("2026-10-01"),
+          archivedPdfSource: "NEWBI",
+        },
+      },
+    );
+    triggerCreditNoteFacturXArchive.mockClear();
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.archivedPdfKey).toBeUndefined();
+    expect(triggerCreditNoteFacturXArchive).toHaveBeenCalledTimes(1);
+    const [archived] = triggerCreditNoteFacturXArchive.mock.calls[0];
+    expect(archived._id.toString()).toBe(cn._id.toString());
+    expect(archived.headerNotes).toBe("Modifié");
+  });
+});
+
+describe("CreditNote Resolver — updateCreditNote (e-facturation)", () => {
+  it("refuse la modification d'un avoir transmis en facturation électronique", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          superPdpInvoiceId: "spdp-cn-1",
+          eInvoiceStatus: "SENT_TO_RECIPIENT",
+        },
+      },
+    );
+
+    await expect(
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/transmis en facturation électronique/);
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.headerNotes).not.toBe("Modifié");
+  });
+
+  it("refuse la suppression d'un avoir transmis en facturation électronique", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      { $set: { superPdpInvoiceId: "spdp-cn-2" } },
+    );
+
+    await expect(
+      creditNoteResolvers.Mutation.deleteCreditNote(
+        null,
+        { id: cn._id.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      "Cet avoir a été transmis en facturation électronique : il ne peut pas être supprimé.",
+    );
+    expect(await CreditNote.collection.findOne({ _id: cn._id })).not.toBeNull();
   });
 });
 
