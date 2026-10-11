@@ -153,8 +153,6 @@ const OPEN_TO_ANY_MEMBER = {
   ],
   // Simples lectures
   readOnly: ["checkRecipientEInvoicing", "previewInvoiceRouting"],
-  // Failles connues hors du périmètre « Voir » (signalées, à traiter à part)
-  knownGaps: ["updatePartnerStatus"],
 };
 
 // Arguments minimaux pour atteindre le contrôle de droit
