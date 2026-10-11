@@ -23,6 +23,10 @@ import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 import crypto from "crypto";
 import { getPubSub } from "../config/redis.js";
+import {
+  canAccessFolder,
+  getEffectiveVisibility,
+} from "../services/sharedFolderAccess.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -119,33 +123,8 @@ export function publishSharedDocsChanged(
   }
 }
 
-// === Visibility helpers ===
-
-function getEffectiveVisibility(folder, folderMap) {
-  if (folder.visibility) {
-    return {
-      visibility: folder.visibility,
-      allowedUserIds: (folder.allowedUserIds || []).map((id) => id.toString()),
-      createdBy: folder.createdBy?.toString(),
-    };
-  }
-  if (folder.parentId) {
-    const parent = folderMap.get(folder.parentId.toString());
-    if (parent) return getEffectiveVisibility(parent, folderMap);
-  }
-  return {
-    visibility: "public",
-    allowedUserIds: [],
-    createdBy: folder.createdBy?.toString(),
-  };
-}
-
-function canAccessFolder(userId, folder, effectiveVis) {
-  if (effectiveVis.visibility === "public") return true;
-  if (folder.createdBy?.toString() === userId) return true;
-  if (effectiveVis.createdBy === userId) return true;
-  return effectiveVis.allowedUserIds.includes(userId);
-}
+// Visibilité des dossiers : services/sharedFolderAccess.js (partagée avec les
+// routes REST de téléchargement, les ZIP et les transferts)
 
 // === Registre de tags ===
 

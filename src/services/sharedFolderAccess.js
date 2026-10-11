@@ -1,0 +1,70 @@
+/**
+ * Visibilité des dossiers des documents partagés (`visibility` /
+ * `allowedUserIds`), source unique pour les queries GraphQL du module, les
+ * routes REST de téléchargement et d'aperçu, les ZIP et les transferts
+ * créés depuis les documents partagés.
+ *
+ * Règle (inchangée, reprise du resolver) : un dossier sans visibilité
+ * propre hérite de celle de son parent ; un dossier public est ouvert à tout
+ * membre qui a « Voir » ; un dossier privé n'est ouvert qu'à son créateur, à
+ * celui du dossier qui porte la visibilité et aux membres autorisés.
+ */
+import SharedFolder from "../models/SharedFolder.js";
+
+export function getEffectiveVisibility(folder, folderMap) {
+  if (folder.visibility) {
+    return {
+      visibility: folder.visibility,
+      allowedUserIds: (folder.allowedUserIds || []).map((id) => id.toString()),
+      createdBy: folder.createdBy?.toString(),
+    };
+  }
+  if (folder.parentId) {
+    const parent = folderMap.get(folder.parentId.toString());
+    if (parent) return getEffectiveVisibility(parent, folderMap);
+  }
+  return {
+    visibility: "public",
+    allowedUserIds: [],
+    createdBy: folder.createdBy?.toString(),
+  };
+}
+
+export function canAccessFolder(userId, folder, effectiveVis) {
+  if (effectiveVis.visibility === "public") return true;
+  if (folder.createdBy?.toString() === userId) return true;
+  if (effectiveVis.createdBy === userId) return true;
+  return effectiveVis.allowedUserIds.includes(userId);
+}
+
+/**
+ * Accès d'un utilisateur aux dossiers d'un espace (tous les dossiers lus en
+ * une fois, corbeille comprise : un document d'un dossier privé mis à la
+ * corbeille reste protégé).
+ *
+ * `canAccess(folderId)` : true pour la racine (« Documents à classer »,
+ * folderId null) et pour un dossier introuvable (document dont le dossier a
+ * disparu, que la liste GraphQL affiche aussi) ; sinon la règle ci-dessus.
+ */
+export async function loadSharedFolderAccess(workspaceId, userId) {
+  const folders = await SharedFolder.find({ workspaceId });
+  const folderMap = new Map(folders.map((f) => [f._id.toString(), f]));
+  const uid = String(userId);
+  const memo = new Map();
+
+  const canAccess = (folderId) => {
+    if (!folderId) return true;
+    const key = String(folderId);
+    const folder = folderMap.get(key);
+    if (!folder) return true;
+    if (!memo.has(key)) {
+      memo.set(
+        key,
+        canAccessFolder(uid, folder, getEffectiveVisibility(folder, folderMap)),
+      );
+    }
+    return memo.get(key);
+  };
+
+  return { canAccess };
+}
