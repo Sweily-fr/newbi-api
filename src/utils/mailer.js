@@ -1848,7 +1848,62 @@ const sendAccessRequestEmail = async (ownerEmail, requestData) => {
   }
 };
 
+/**
+ * Code de vérification envoyé à un visiteur d'un tableau kanban partagé :
+ * il prouve son adresse avant de recevoir une session visiteur.
+ */
+const sendBoardVisitorCodeEmail = async (
+  recipientEmail,
+  { code, boardTitle },
+) => {
+  const safeBoard = escapeHtml(boardTitle || "le tableau");
+  const safeCode = escapeHtml(code);
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: recipientEmail,
+    subject: `Votre code d'accès : ${code}`,
+    text: `Votre code pour accéder au tableau "${boardTitle || "le tableau"}" : ${code}\n\nIl est valable 10 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="fr">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Code d'accès</title>
+      </head>
+      <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
+        <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
+          <div style="text-align:center;padding:40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height:32px;width:auto;" />
+          </div>
+          <div style="background-color:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 24px;margin-bottom:32px;">
+            <h1 style="font-size:20px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${safeBoard}</h1>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">Voici votre code pour accéder à ce tableau Kanban partagé :</p>
+            <p style="text-align:center;font-size:32px;font-weight:600;letter-spacing:8px;color:#1a1a1a;margin:0 0 24px 0;">${safeCode}</p>
+            <p style="font-size:13px;color:#6b7280;margin:0;line-height:1.5;">Il est valable 10 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.</p>
+          </div>
+          <p style="text-align:center;color:#9ca3af;font-size:11px;padding-bottom:32px;">© ${new Date().getFullYear()} Newbi · Email automatique, merci de ne pas répondre</p>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    logger.error(
+      `Erreur lors de l'envoi du code d'accès visiteur : ${error.message}`,
+    );
+    return false;
+  }
+};
+
 export {
+  sendBoardVisitorCodeEmail,
   sendSignatureTestEmail,
   sendPasswordResetEmail,
   sendVerificationEmail,

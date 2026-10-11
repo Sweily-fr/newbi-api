@@ -189,6 +189,9 @@ type PublicAccessResult {
   # Partage protégé : jeton (12 h) à renvoyer à getPublicBoard et à
   # publicTaskUpdated à la place du mot de passe
   accessToken: String
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Résultat de l'ajout de commentaire externe
@@ -199,6 +202,9 @@ type ExternalCommentResult {
   # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
   # d'essais
   requiresPassword: Boolean
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Input pour mettre à jour le profil d'un visiteur externe
@@ -216,6 +222,9 @@ type UpdateVisitorProfileResult {
   # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
   # d'essais
   requiresPassword: Boolean
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Input pour les images de commentaire déjà uploadées
@@ -235,6 +244,9 @@ type VisitorImageUploadResult {
   # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
   # d'essais
   requiresPassword: Boolean
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Résultat de l'upload d'image externe
@@ -245,6 +257,9 @@ type ExternalImageUploadResult {
   # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
   # d'essais
   requiresPassword: Boolean
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Résultat de la demande d'accès
@@ -255,6 +270,9 @@ type RequestAccessResult {
   # Partage protégé : mot de passe absent, incorrect, jeton expiré ou trop
   # d'essais
   requiresPassword: Boolean
+  # Session visiteur absente, invalide ou expirée : prouver son adresse
+  # (requestInvitedEmailCode puis authenticateInvitedUser)
+  requiresVisitorSession: Boolean
 }
 
 # Queries pour le partage public
@@ -262,12 +280,16 @@ extend type Query {
   # Pour les utilisateurs connectés - récupérer les liens de partage d'un tableau
   getPublicShares(boardId: ID!, workspaceId: ID): [PublicBoardShare!]!
   
-  # Pour les visiteurs externes - accéder au tableau via le token
+  # Pour les visiteurs externes - accéder au tableau via le token.
+  # Identité : sessionToken (session visiteur remise par
+  # authenticateInvitedUser) ou membre connecté de l'espace ; email est
+  # ignoré (gardé pour les anciens clients)
   getPublicBoard(
     token: String!
-    email: String!
+    email: String
     password: String
     accessToken: String
+    sessionToken: String
   ): PublicAccessResult!
   
   # Vérifier si un token est valide (sans email) - retourne le nom du lien si valide, null sinon
@@ -290,14 +312,16 @@ extend type Mutation {
   unbanVisitor(shareId: ID!, visitorEmail: String!, workspaceId: ID): PublicBoardShare!
   
   # Demander l'accès (pour les visiteurs bannis). Partage protégé :
-  # password ou accessToken, comme pour getPublicBoard
+  # password ou accessToken, comme pour getPublicBoard. Identité :
+  # sessionToken (email ignoré)
   requestAccess(
     token: String!
-    email: String!
+    email: String
     name: String
     message: String
     password: String
     accessToken: String
+    sessionToken: String
   ): RequestAccessResult!
   
   # Approuver une demande d'accès
@@ -307,35 +331,40 @@ extend type Mutation {
   rejectAccessRequest(shareId: ID!, requestId: ID!, workspaceId: ID): PublicBoardShare!
   
   # Actions des visiteurs externes ci-dessous : pour un partage protégé,
-  # accessToken remis par getPublicBoard (ou password, essais limités)
+  # accessToken remis par getPublicBoard (ou password, essais limités).
+  # Identité : sessionToken (session visiteur), ou membre connecté de
+  # l'espace pour les commentaires ; email et visitorEmail sont ignorés
 
   # Pour les visiteurs externes - ajouter un commentaire
   addExternalComment(
     token: String!
     taskId: ID!
     content: String
-    visitorEmail: String!
+    visitorEmail: String
     images: [CommentImageInput!]
     password: String
     accessToken: String
+    sessionToken: String
   ): ExternalCommentResult!
   
   # Pour les visiteurs externes - mettre à jour leur profil
   updateVisitorProfile(
     token: String!
-    email: String!
+    email: String
     input: UpdateVisitorProfileInput!
     password: String
     accessToken: String
+    sessionToken: String
   ): UpdateVisitorProfileResult!
   
   # Pour les visiteurs externes - uploader leur photo de profil sur Cloudflare
   uploadVisitorImage(
     token: String!
-    email: String!
+    email: String
     file: Upload!
     password: String
     accessToken: String
+    sessionToken: String
   ): VisitorImageUploadResult!
   
   # Pour les visiteurs externes - uploader une image pour un commentaire
@@ -343,9 +372,10 @@ extend type Mutation {
     token: String!
     taskId: ID!
     file: Upload!
-    visitorEmail: String!
+    visitorEmail: String
     password: String
     accessToken: String
+    sessionToken: String
   ): ExternalImageUploadResult!
 }
 
@@ -402,14 +432,16 @@ type VisitorPresencePayload {
 
 extend type Subscription {
   # Subscription pour les mises à jour de tâches sur un board public.
-  # Partage protégé : accessToken remis par getPublicBoard. email : visiteur
-  # (refusé s'il est banni). Le flux s'arrête si le partage est révoqué ou
-  # expiré, si son mot de passe change ou si le visiteur est banni.
+  # Partage protégé : accessToken remis par getPublicBoard. Identité :
+  # sessionToken (session visiteur) ou membre connecté ; email est ignoré.
+  # Le flux s'arrête si le partage est révoqué ou expiré, si son mot de
+  # passe change, si la session prend fin ou si le visiteur est banni.
   publicTaskUpdated(
     token: String!
     boardId: ID!
     accessToken: String
     email: String
+    sessionToken: String
   ): PublicTaskUpdatePayload
   
   # Subscription pour notifier quand un accès est approuvé (pour les visiteurs en attente)

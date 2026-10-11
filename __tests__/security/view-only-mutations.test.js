@@ -107,6 +107,8 @@ const OPEN_TO_ANY_MEMBER = {
     "deleteCompanyLogo",
     "setStripeCustomerId",
     "connectStripe",
+    // Lier son propre compte à l'invité de la même adresse (refus sinon)
+    "linkInvitedUserToNewbi",
   ],
   // Suggestions de la communauté Newbi (hors espace)
   community: [
@@ -130,8 +132,9 @@ const OPEN_TO_ANY_MEMBER = {
     "updateInvitedUserProfile",
     "logoutInvitedUser",
     "createPaymentSessionForFileTransfer",
-    "generateFileTransferPaymentLink",
     "consumePaymentReturnToken",
+    // Code de vérification de l'adresse d'un visiteur (lien de partage)
+    "requestInvitedEmailCode",
   ],
   // Réglages personnels dans une page, sans effet pour les autres membres
   personal: [
@@ -150,8 +153,6 @@ const OPEN_TO_ANY_MEMBER = {
   ],
   // Simples lectures
   readOnly: ["checkRecipientEInvoicing", "previewInvoiceRouting"],
-  // Failles connues hors du périmètre « Voir » (signalées, à traiter à part)
-  knownGaps: ["linkInvitedUserToNewbi", "updatePartnerStatus"],
 };
 
 // Arguments minimaux pour atteindre le contrôle de droit
