@@ -141,22 +141,30 @@ describe("Invoice Resolver - Query.invoices", () => {
     expect(result.invoices).toHaveLength(10);
   });
 
-  it("filters by status (and groups COMPLETED with CANCELED)", async () => {
+  it("filtre par statut strict : COMPLETED ne renvoie que les payées", async () => {
     await insertInvoice({ status: "COMPLETED", number: "1" });
     await insertInvoice({ status: "CANCELED", number: "2" });
     await insertInvoice({ status: "PENDING", number: "3" });
 
-    const result = await resolver(
-      null,
-      {
-        workspaceId: organizationId.toString(),
-        status: "COMPLETED",
-        page: 1,
-        limit: 10,
-      },
-      ctx(),
-    );
-    expect(result.totalCount).toBe(2);
+    const byStatus = (status) =>
+      resolver(
+        null,
+        {
+          workspaceId: organizationId.toString(),
+          status,
+          page: 1,
+          limit: 10,
+        },
+        ctx(),
+      );
+
+    const paid = await byStatus("COMPLETED");
+    expect(paid.totalCount).toBe(1);
+    expect(paid.invoices.map((i) => i.status)).toEqual(["COMPLETED"]);
+
+    const canceled = await byStatus("CANCELED");
+    expect(canceled.totalCount).toBe(1);
+    expect(canceled.invoices[0].status).toBe("CANCELED");
   });
 
   it("supports text search", async () => {

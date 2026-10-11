@@ -543,13 +543,11 @@ const invoiceResolvers = {
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
 
+        // Statut strict : COMPLETED ne renvoie que les factures payées (il
+        // renvoyait aussi les annulées, affichées dans l'onglet « Payées »
+        // de l'app mobile). Les annulées se filtrent avec CANCELED.
         if (status) {
-          // Si on filtre par COMPLETED, inclure aussi les factures CANCELED
-          if (status === "COMPLETED") {
-            query.status = { $in: ["COMPLETED", "CANCELED"] };
-          } else {
-            query.status = status;
-          }
+          query.status = status;
         }
 
         if (search) {
