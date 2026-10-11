@@ -560,8 +560,31 @@ export const requireActiveSubscription = (
 };
 
 /**
+ * Espace dont l'abonnement est contrôlé : exactement celui que lira le
+ * handler.
+ *   1. `req.workspaceId`, posé par requireWorkspaceMembership /
+ *      requireWorkspace(Action)Permission (espace validé, en-tête
+ *      x-workspace-id réécrit) : routes banking, banking-cache,
+ *      banking-sync, banking-connect ;
+ *   2. sinon, l'ordre des handlers sans ce middleware (reconciliation :
+ *      x-workspace-id puis ?workspaceId), le corps en dernier.
+ * L'ancien ordre (x-workspace-id puis corps) contrôlait l'abonnement d'un
+ * espace choisi dans le corps quand le handler lisait ?workspaceId : un
+ * espace sans abonnement passait en citant celui d'un autre.
+ */
+export function subscriptionWorkspaceIdOf(req) {
+  return (
+    req.workspaceId ||
+    req.headers["x-workspace-id"] ||
+    req.query?.workspaceId ||
+    req.body?.workspaceId
+  );
+}
+
+/**
  * Middleware Express pour les routes REST qui nécessitent un abonnement actif.
- * À placer APRÈS betterAuthJWTMiddleware (qui set req.headers["x-workspace-id"]).
+ * Espace contrôlé : voir subscriptionWorkspaceIdOf (placer
+ * requireWorkspaceMembership avant quand la route l'utilise).
  *
  * Usage: router.post("/route", requireActiveSubscriptionREST(), handler)
  * Usage fail-closed: router.post("/route", requireActiveSubscriptionREST({ failClosed: true }), handler)
@@ -569,7 +592,7 @@ export const requireActiveSubscription = (
 export const requireActiveSubscriptionREST = ({ failClosed = false } = {}) => {
   return async (req, res, next) => {
     try {
-      const orgId = req.headers["x-workspace-id"] || req.body?.workspaceId;
+      const orgId = subscriptionWorkspaceIdOf(req);
       if (!orgId) {
         return res.status(400).json({ error: "Workspace ID requis" });
       }
