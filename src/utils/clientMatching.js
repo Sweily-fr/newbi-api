@@ -252,7 +252,7 @@ const normalizeCompanyName = (s) =>
  * noms, SIREN, n° de TVA, e-mail, pour reconnaître son propre bloc dans les
  * données OCR. Pas de modèle mongoose "Organization" : collection brute.
  */
-async function loadOwnCompany(workspaceId) {
+export async function loadOwnCompany(workspaceId) {
   const org = await mongoose.connection.db.collection("organization").findOne(
     { _id: new mongoose.Types.ObjectId(String(workspaceId)) },
     {

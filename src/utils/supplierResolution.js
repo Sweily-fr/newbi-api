@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import Supplier from "../models/Supplier.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Transaction from "../models/Transaction.js";
+import { loadOwnCompany, siretDigits } from "./clientMatching.js";
+import logger from "./logger.js";
 
 /**
  * Résolution du fournisseur d'une facture d'achat à partir de ce que l'OCR
@@ -26,6 +28,13 @@ import Transaction from "../models/Transaction.js";
  * Quand une fiche existante est retenue, l'appelant doit reprendre son nom
  * (`supplier.name`) sur la facture : c'est ce qui unifie l'affichage. La
  * fiche est enrichie du SIRET / n° TVA lus si elle ne les avait pas.
+ *
+ * Deux exceptions :
+ *  - un SIRET ou n° de TVA de l'organisation elle-même est ignoré (cf.
+ *    withoutOwnIdentifiers) ;
+ *  - un nom saisi par l'utilisateur (`nameIsExplicit`) n'est jamais remplacé
+ *    par celui d'une fiche, et une fiche dont le nom n'a rien de commun avec
+ *    lui n'est pas retenue.
  */
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -102,6 +111,58 @@ const normalizeIdentifier = (v) =>
   String(v || "")
     .replace(/[\s.-]/g, "")
     .toUpperCase();
+
+// N° de TVA français : FR, clé à 2 caractères, puis le SIREN.
+const sirenOfVatNumber = (vatNumber) => {
+  const match = normalizeIdentifier(vatNumber).match(/^FR[0-9A-Z]{2}(\d{9})$/);
+  return match ? match[1] : null;
+};
+
+/**
+ * Retire les identifiants lus qui sont ceux de l'organisation (`own`, cf.
+ * loadOwnCompany) et non du fournisseur. Les factures étrangères impriment
+ * le n° de TVA du client (autoliquidation) et l'OCR le prend pour celui de
+ * l'émetteur : retenu, il rattachait toutes ces factures à une même fiche
+ * (11/10/2026 : Hostinger et MongoDB enregistrées « Celonis Inc. », fiche
+ * créée plus tôt avec ce numéro).
+ */
+export function withoutOwnIdentifiers({ siret = null, vatNumber = null }, own) {
+  if (!own?.siren && !own?.vat) return { siret, vatNumber };
+  const siretSiren = siretDigits(siret).slice(0, 9);
+  const ownSiret = Boolean(
+    own.siren && siretSiren.length === 9 && siretSiren === own.siren,
+  );
+  const vat = normalizeIdentifier(vatNumber);
+  const ownVat = Boolean(
+    vat &&
+    ((own.vat && vat === normalizeIdentifier(own.vat)) ||
+      (own.siren && sirenOfVatNumber(vat) === own.siren)),
+  );
+  return {
+    siret: ownSiret ? null : siret,
+    vatNumber: ownVat ? null : vatNumber,
+  };
+}
+
+/**
+ * withoutOwnIdentifiers en chargeant l'organisation du workspace. Une
+ * organisation illisible laisse les identifiants tels quels.
+ */
+export async function withoutWorkspaceIdentifiers(
+  workspaceId,
+  { siret = null, vatNumber = null },
+) {
+  if (!siret && !vatNumber) return { siret, vatNumber };
+  try {
+    const own = await loadOwnCompany(workspaceId);
+    return withoutOwnIdentifiers({ siret, vatNumber }, own);
+  } catch (error) {
+    logger.warn(
+      `⚠️ [SUPPLIER] Organisation ${workspaceId} illisible, identifiants lus gardés : ${error.message}`,
+    );
+    return { siret, vatNumber };
+  }
+}
 
 /**
  * Libellé bancaire réduit à sa partie stable : sans « * », sans les
@@ -316,6 +377,10 @@ async function enrichSupplier(supplier, { siret, vatNumber }) {
  * @param {string|ObjectId} [params.userId] pour la création
  * @param {string} [params.category] catégorie par défaut à la création
  * @param {boolean} [params.create=true] créer la fiche si rien ne correspond
+ * @param {boolean} [params.nameIsExplicit=false] nom saisi par l'utilisateur
+ *   (correction à la confirmation d'un justificatif, modification d'une
+ *   facture) : l'appelant le garde sur la facture, et une fiche trouvée par
+ *   identifiant n'est retenue que si son nom partage un mot avec lui.
  * @returns {Promise<{supplier: Object|null, matchedBy: string}>}
  *   matchedBy ∈ identifier | name | recurrence | prefix | created | none
  */
@@ -328,12 +393,19 @@ export async function resolveSupplier({
   userId = null,
   category = null,
   create = true,
+  nameIsExplicit = false,
 }) {
   const wsId = new mongoose.Types.ObjectId(String(workspaceId));
   const cleanName = String(name || "").trim();
-  const ids = { siret, vatNumber };
+  let ids = await withoutWorkspaceIdentifiers(wsId, { siret, vatNumber });
 
   let supplier = await findByIdentifiers(wsId, ids);
+  if (supplier && nameIsExplicit && !shareToken(cleanName, supplier.name)) {
+    // L'utilisateur désigne un autre fournisseur que la fiche qui porte ces
+    // identifiants : on ne les recopie pas sur une autre fiche.
+    supplier = null;
+    ids = { siret: null, vatNumber: null };
+  }
   if (supplier) {
     await enrichSupplier(supplier, ids);
     return { supplier, matchedBy: "identifier" };
@@ -366,8 +438,8 @@ export async function resolveSupplier({
     workspaceId: wsId,
     createdBy: userId || undefined,
     defaultCategory: category || "OTHER",
-    siret: siret ? String(siret).trim() : undefined,
-    vatNumber: vatNumber ? String(vatNumber).trim() : undefined,
+    siret: ids.siret ? String(ids.siret).trim() : undefined,
+    vatNumber: ids.vatNumber ? String(ids.vatNumber).trim() : undefined,
   });
   return { supplier, matchedBy: "created" };
 }
