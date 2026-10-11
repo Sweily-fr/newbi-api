@@ -83,6 +83,29 @@ const multipartCacheKey = (uploadId) => `multipart:${uploadId}`;
 const userIdOf = (user) => String(user?._id || user?.id || "");
 
 /**
+ * Envoi multipart démarré par cet utilisateur, dans cet espace, pour cette
+ * clé : FORBIDDEN sinon. Utilisé par completeMultipartUpload ;
+ * abortMultipartUpload renvoie false pour un envoi inconnu au lieu de
+ * l'erreur.
+ * @returns {Promise<object|null>} l'entrée, null si l'envoi est inconnu
+ */
+async function findOwnedMultipartUpload(uploadId, key, user, workspaceId) {
+  const entry = await getCacheEntry(multipartCacheKey(uploadId));
+  if (!entry) return null;
+  if (
+    entry.key !== key ||
+    entry.userId !== userIdOf(user) ||
+    (entry.workspaceId || null) !== (workspaceId ? String(workspaceId) : null)
+  ) {
+    throw new AppError(
+      "Cet envoi n'existe pas ou ne vous appartient pas.",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+  return entry;
+}
+
+/**
  * Supprime de R2 les fichiers déjà finalisés d'un lot dont le transfert n'a
  * pas pu être créé : sans transfert, rien ne les référence ni ne les purge.
  * Seuls les fichiers envoyés par cet utilisateur (métadonnées en cache) et
@@ -120,25 +143,33 @@ async function discardUploadedFiles(fileIds, user) {
   }
 }
 
-const getFileInfoByTransferId = async (fileId) => {
-  // 1) Cache mémoire local (L1)
-  if (fileMetadataCache.has(fileId)) {
-    const cachedInfo = fileMetadataCache.get(fileId);
+// 🔐 Fichier envoyé par cet utilisateur uniquement. Le fileId figure dans
+// les fichiers d'un transfert remis à ses destinataires : la recherche de
+// repli dans tous les transferts permettait à un destinataire de recréer à
+// son nom un transfert avec les fichiers d'un autre, sans mot de passe ni
+// paiement. Une entrée de cache sans uploadedBy (écrite avant cette
+// version, 24 h au plus) reste acceptée.
+const getFileInfoByTransferId = async (fileId, user) => {
+  const uploaderId = userIdOf(user);
+  if (!uploaderId) {
+    throw new Error("Utilisateur requis pour retrouver un fichier envoyé");
+  }
+
+  // 1) Cache mémoire local (L1), puis 2) Redis partagé (L2) : couvre le cas
+  //    cluster où l'upload a été traité par une autre instance que la
+  //    création du transfert.
+  const cachedInfo = await getCacheEntry(fileId);
+  if (cachedInfo) {
+    if (cachedInfo.uploadedBy && cachedInfo.uploadedBy !== uploaderId) {
+      throw new Error(`Fichier ${fileId} envoyé par un autre utilisateur`);
+    }
     return cachedInfo;
   }
 
-  // 2) Cache Redis partagé (L2) — couvre le cas cluster où l'upload a été
-  //    traité par une autre instance que la création du transfert.
-  const redisInfo = await cacheGet(redisMetaKey(fileId));
-  if (redisInfo) {
-    // Réamorcer le cache L1 local pour les accès suivants
-    fileMetadataCache.set(fileId, redisInfo);
-    return redisInfo;
-  }
-
-  // 3) Repli : rechercher par fileId dans les fichiers existants
+  // 3) Repli : rechercher par fileId dans les transferts de cet utilisateur
   //    (storageType est porté par le sous-document `files`, pas la racine).
   let fileTransfer = await FileTransfer.findOne({
+    userId: uploaderId,
     "files.fileId": fileId,
     uploadMethod: "chunk",
     "files.storageType": "r2",
@@ -147,6 +178,7 @@ const getFileInfoByTransferId = async (fileId) => {
   if (!fileTransfer) {
     // Fallback: rechercher par originalName (compatibilité)
     fileTransfer = await FileTransfer.findOne({
+      userId: uploaderId,
       "files.originalName": fileId,
       uploadMethod: "chunk",
     });
@@ -257,14 +289,36 @@ const chunkUploadR2Resolvers = {
 
     // Compléter un multipart upload
     completeMultipartUpload: requireTransferCreate(
-      async (_, { uploadId, key, parts, transferId, fileId }, { user }) => {
-        try {
-          if (!uploadId || !key || !parts || parts.length === 0) {
-            throw new UserInputError(
-              "Paramètres manquants: uploadId, key ou parts",
-            );
-          }
+      async (
+        _,
+        { uploadId, key, parts, transferId, fileId },
+        { user, workspaceId },
+      ) => {
+        if (!uploadId || !key || !parts || parts.length === 0) {
+          throw new UserInputError(
+            "Paramètres manquants: uploadId, key ou parts",
+          );
+        }
 
+        // 🔐 Envoi démarré par l'appelant (mêmes règles que
+        // abortMultipartUpload). Contrôlé hors du try : un refus ne doit
+        // surtout pas déclencher l'annulation de l'envoi d'un autre.
+        // Envoi inconnu (plus de 24 h, ou démarré avant cette version) :
+        // refusé aussi, l'application relance l'envoi.
+        const ownedUpload = await findOwnedMultipartUpload(
+          uploadId,
+          key,
+          user,
+          workspaceId,
+        );
+        if (!ownedUpload) {
+          throw new AppError(
+            "Cet envoi a expiré ou n'existe pas. Relancez l'envoi.",
+            ERROR_CODES.FORBIDDEN,
+          );
+        }
+
+        try {
           logger.debug(
             `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`,
           );
@@ -350,20 +404,13 @@ const chunkUploadR2Resolvers = {
           throw new UserInputError("Paramètres manquants: uploadId ou key");
         }
 
-        const entry = await getCacheEntry(multipartCacheKey(uploadId));
+        const entry = await findOwnedMultipartUpload(
+          uploadId,
+          key,
+          user,
+          workspaceId,
+        );
         if (!entry) return false;
-
-        if (
-          entry.key !== key ||
-          entry.userId !== userIdOf(user) ||
-          (entry.workspaceId || null) !==
-            (workspaceId ? String(workspaceId) : null)
-        ) {
-          throw new AppError(
-            "Cet envoi n'existe pas ou ne vous appartient pas.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
 
         try {
           await cloudflareTransferService.abortMultipartUpload(uploadId, key);
@@ -708,7 +755,7 @@ const chunkUploadR2Resolvers = {
           for (const fileId of fileIds) {
             try {
               // Récupérer les informations du fichier à partir du transfert temporaire
-              const fileInfo = await getFileInfoByTransferId(fileId);
+              const fileInfo = await getFileInfoByTransferId(fileId, user);
 
               // Ajouter les informations du fichier à la liste
               filesInfo.push({

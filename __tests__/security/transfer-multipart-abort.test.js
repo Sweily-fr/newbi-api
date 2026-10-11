@@ -223,6 +223,124 @@ describe("abortMultipartUpload", () => {
   });
 });
 
+describe("completeMultipartUpload : envoi de l'appelant uniquement", () => {
+  it("finalise l'envoi démarré par le même utilisateur dans le même espace", async () => {
+    const upload = await start();
+    const result = await complete(upload);
+    expect(result.success).toBe(true);
+    expect(r2.completeMultipartUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuse l'envoi d'un autre membre, sans le finaliser ni l'annuler", async () => {
+    const upload = await start();
+    const error = await errorOf(() =>
+      complete(
+        upload,
+        buildContext({ userId: colleague, organizationId: workspaceId }),
+      ),
+    );
+    expect(codeOf(error)).toBe("FORBIDDEN");
+    expect(r2.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(r2.abortMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("refuse depuis un autre espace ou avec une autre clé", async () => {
+    const upload = await start();
+    const other = await start();
+    expect(
+      codeOf(
+        await errorOf(() =>
+          complete(
+            upload,
+            buildContext({ userId, organizationId: otherWorkspaceId }),
+          ),
+        ),
+      ),
+    ).toBe("FORBIDDEN");
+    expect(
+      codeOf(
+        await errorOf(() =>
+          complete({ ...upload, key: other.key, fileId: upload.fileId }),
+        ),
+      ),
+    ).toBe("FORBIDDEN");
+    expect(r2.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(r2.abortMultipartUpload).not.toHaveBeenCalled();
+  });
+
+  it("refuse un envoi inconnu", async () => {
+    const error = await errorOf(() =>
+      complete({
+        uploadId: "inconnu",
+        key: "prod/x/f_y_z.mp4",
+        fileId: "file-x",
+      }),
+    );
+    expect(codeOf(error)).toBe("FORBIDDEN");
+    expect(r2.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(r2.abortMultipartUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFileTransferWithIdsR2 : fichiers de l'utilisateur uniquement", () => {
+  const createWith = (fileIds, context = ctx) =>
+    Mutation.createFileTransferWithIdsR2(
+      {},
+      { fileIds, input: { workspaceId: workspaceId.toString() } },
+      context,
+    );
+
+  const transferOf = (ownerId, fileId) =>
+    FileTransfer.create({
+      userId: ownerId,
+      workspaceId: workspaceId.toString(),
+      uploadMethod: "chunk",
+      files: [
+        {
+          originalName: "contrat.pdf",
+          fileName: "contrat.pdf",
+          filePath: "https://r2/contrat.pdf",
+          r2Key: `prod/2026/10/11/t_z/f_${fileId}_contrat.pdf`,
+          mimeType: "application/pdf",
+          size: 2048,
+          storageType: "r2",
+          fileId,
+        },
+      ],
+      totalSize: 2048,
+      shareLink: "i".repeat(32),
+      accessKey: "j".repeat(32),
+      expiryDate: new Date(Date.now() + 86400000),
+      passwordProtected: true,
+      password: "MotDePasse!2026",
+    });
+
+  it("refuse le fichier envoyé par un autre utilisateur (cache)", async () => {
+    const colleagueCtx = buildContext({
+      userId: colleague,
+      organizationId: workspaceId,
+    });
+    const theirs = await start(colleagueCtx);
+    await complete(theirs, colleagueCtx);
+    const error = await errorOf(() => createWith([theirs.fileId]));
+    expect(error).not.toBeNull();
+    expect(await FileTransfer.countDocuments({ userId })).toBe(0);
+  });
+
+  it("ne reprend pas le fichier du transfert d'un autre (destinataire)", async () => {
+    await transferOf(colleague, "fichier-protege");
+    const error = await errorOf(() => createWith(["fichier-protege"]));
+    expect(error).not.toBeNull();
+    expect(await FileTransfer.countDocuments({ userId })).toBe(0);
+  });
+
+  it("reprend toujours un fichier de ses propres transferts", async () => {
+    await transferOf(userId, "mon-fichier");
+    const result = await createWith(["mon-fichier"]);
+    expect(result.fileTransfer.files[0].fileId).toBe("mon-fichier");
+  });
+});
+
 describe("createFileTransferWithIdsR2 : nettoyage d'un lot sans transfert", () => {
   const create = (fileIds, context = ctx) =>
     Mutation.createFileTransferWithIdsR2(
