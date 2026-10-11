@@ -10,6 +10,8 @@ import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { isObjectIdString } from "../utils/objectIdString.js";
+import { levelsAllowAction } from "../config/rolePermissions.js";
+import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import {
   streamFolderAsZip,
   streamSelectionAsZip,
@@ -56,10 +58,19 @@ const s3Client = new S3Client({
 
 const router = express.Router();
 
+const NOT_MEMBER_MESSAGE = "Accès non autorisé à cet espace de travail";
+const NO_RIGHT_MESSAGE =
+  "Vous n'avez pas la permission d'effectuer cette action.";
+
 /**
- * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé.
- * Sans ce contrôle, le workspaceId fourni par le client suffisait à télécharger
- * les documents partagés de n'importe quelle organisation (IDOR).
+ * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé
+ * ET que son rôle a « Voir » sur les documents partagés (grille des rôles,
+ * comme les queries GraphQL du module : requireRead("sharedDocuments")).
+ * Sans le premier contrôle, le workspaceId fourni par le client suffisait à
+ * télécharger les documents partagés de n'importe quelle organisation
+ * (IDOR) ; sans le second, un rôle sans accès aux documents partagés (page
+ * masquée, queries refusées) téléchargeait et prévisualisait quand même
+ * leurs fichiers par ces routes.
  *
  * Seule une chaîne d'ObjectId est acceptée : un objet `{ "$ne": … }` (corps
  * JSON, ou query `?workspaceId[$ne]=…`) passait le contrôle d'appartenance
@@ -68,20 +79,25 @@ const router = express.Router();
  * Renvoie l'identifiant d'espace validé (à utiliser dans les filtres), sinon
  * répond 403 et renvoie null.
  */
-async function ensureWorkspaceMember(user, workspaceId, res) {
-  const deny = () => {
-    res.status(403).json({
-      success: false,
-      message: "Accès non autorisé à cet espace de travail",
-    });
+async function ensureSharedDocumentsView(user, workspaceId, res) {
+  const deny = (message) => {
+    res.status(403).json({ success: false, message });
     return null;
   };
-  if (!isObjectIdString(workspaceId)) return deny();
+  if (!isObjectIdString(workspaceId)) return deny(NOT_MEMBER_MESSAGE);
   try {
     const org = await getActiveOrganization(String(user._id), workspaceId);
-    return org ? org.id : deny();
+    if (!org) return deny(NOT_MEMBER_MESSAGE);
+    const grid = await getEffectiveLevelsFor(org.id, org.memberRole);
+    if (!levelsAllowAction(grid, "sharedDocuments", "view")) {
+      logger.warn(
+        `Documents partagés (REST) : refus user=${user._id} workspace=${org.id} (${org.memberRole}) sans « Voir »`,
+      );
+      return deny(NO_RIGHT_MESSAGE);
+    }
+    return org.id;
   } catch {
-    return deny();
+    return deny(NOT_MEMBER_MESSAGE);
   }
 }
 
@@ -111,7 +127,7 @@ router.get("/download-folder", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
@@ -174,7 +190,7 @@ router.get("/folder-info", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
@@ -249,7 +265,7 @@ router.post("/download-selection", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
@@ -333,7 +349,7 @@ router.post("/selection-info", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
@@ -396,7 +412,7 @@ router.get("/download-file/:documentId", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
@@ -487,7 +503,7 @@ router.get("/preview-file/:documentId", async (req, res) => {
       });
     }
 
-    const workspaceId = await ensureWorkspaceMember(
+    const workspaceId = await ensureSharedDocumentsView(
       user,
       requestedWorkspaceId,
       res,
