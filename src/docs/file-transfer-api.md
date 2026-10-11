@@ -82,8 +82,6 @@ createFileTransfer(
 # Supprimer un transfert de fichiers
 deleteFileTransfer(id: ID!): Boolean!
 
-# Générer un lien de paiement pour un transfert de fichiers
-generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
 ```
 
 ## Endpoints REST
@@ -144,7 +142,8 @@ const CREATE_FILE_TRANSFER = gql`
 `;
 
 // Utilisation avec Apollo Client
-const [createFileTransfer, { loading, error, data }] = useMutation(CREATE_FILE_TRANSFER);
+const [createFileTransfer, { loading, error, data }] =
+  useMutation(CREATE_FILE_TRANSFER);
 
 // Exemple d'appel
 createFileTransfer({
@@ -153,8 +152,8 @@ createFileTransfer({
     expiryDays: 7,
     requiresPayment: true,
     paymentAmount: 5.99,
-    paymentCurrency: "EUR"
-  }
+    paymentCurrency: "EUR",
+  },
 });
 ```
 
@@ -188,8 +187,8 @@ const GET_FILE_TRANSFER = gql`
 const { loading, error, data } = useQuery(GET_FILE_TRANSFER, {
   variables: {
     shareLink: "lien-partage-unique",
-    accessKey: "cle-acces-secrete"
-  }
+    accessKey: "cle-acces-secrete",
+  },
 });
 ```
 

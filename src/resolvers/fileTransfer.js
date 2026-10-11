@@ -31,10 +31,6 @@ import cloudflareTransferService from "../services/cloudflareTransferService.js"
 import crypto from "crypto";
 import archiver from "archiver";
 import { PassThrough } from "stream";
-import Stripe from "stripe";
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-import constants from "../utils/constants.js";
-const { BASE_URL } = constants;
 import mongoose from "mongoose";
 
 // Taille maximale par défaut (5 GB en octets)
@@ -602,85 +598,6 @@ const fileTransferResolvers = {
       },
     ),
 
-    // Générer un lien de paiement pour un transfert de fichiers
-    generateFileTransferPaymentLink: async (_, { shareLink, accessKey }) => {
-      try {
-        const fileTransfer = await FileTransfer.findOne({
-          shareLink,
-          accessKey,
-          status: "active",
-          isPaymentRequired: true,
-          isPaid: false,
-        });
-
-        if (!fileTransfer) {
-          return {
-            success: false,
-            message: "Transfert de fichiers non trouvé ou paiement non requis",
-            checkoutUrl: null,
-          };
-        }
-
-        // Vérifier si le transfert est expiré
-        if (fileTransfer.isExpired()) {
-          return {
-            success: false,
-            message: "Ce lien de partage a expiré",
-            checkoutUrl: null,
-          };
-        }
-
-        // Créer une session de paiement Stripe
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ["card"],
-          line_items: [
-            {
-              price_data: {
-                currency: fileTransfer.paymentCurrency.toLowerCase(),
-                product_data: {
-                  name: "Accès aux fichiers partagés",
-                  description: `Accès à ${fileTransfer.files.length} fichier(s) partagé(s)`,
-                },
-                unit_amount: Math.round(fileTransfer.paymentAmount * 100), // Stripe utilise les centimes
-              },
-              quantity: 1,
-            },
-          ],
-          mode: "payment",
-          // Créer un customer Stripe et envoyer le reçu à l'email saisi
-          customer_creation: "always",
-          invoice_creation: {
-            enabled: true,
-            invoice_data: {
-              description: `Accès aux fichiers partagés - ${fileTransfer.files.length} fichier(s)`,
-            },
-          },
-          success_url: `${BASE_URL}/file-transfer/success?share=${shareLink}&key=${accessKey}&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${BASE_URL}/file-transfer/cancel?share=${shareLink}&key=${accessKey}`,
-          metadata: {
-            fileTransferId: fileTransfer.id,
-            shareLink,
-            accessKey,
-          },
-        });
-
-        return {
-          success: true,
-          message: "Lien de paiement généré avec succès",
-          checkoutUrl: session.url,
-        };
-      } catch (error) {
-        console.error(
-          "Erreur lors de la génération du lien de paiement:",
-          error,
-        );
-        throw new ApolloError(
-          "Une erreur est survenue lors de la génération du lien de paiement.",
-          "PAYMENT_LINK_GENERATION_ERROR",
-        );
-      }
-    },
-
     // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
     createFileTransferFromSharedDocuments: requireTransferAction("create")(
       async (
@@ -975,11 +892,10 @@ const fileTransferResolvers = {
   },
 };
 
-// Wrap mutations with subscription check (except generateFileTransferPaymentLink which is public)
+// Wrap mutations with subscription check
 const _origMutFT = fileTransferResolvers.Mutation;
 fileTransferResolvers.Mutation = Object.fromEntries(
   Object.entries(_origMutFT).map(([name, fn]) => {
-    if (name === "generateFileTransferPaymentLink") return [name, fn];
     return [
       name,
       async (parent, args, context, info) => {

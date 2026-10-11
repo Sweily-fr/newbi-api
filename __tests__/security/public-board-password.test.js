@@ -39,6 +39,8 @@ import {
 } from "../../src/utils/boardShareAccessToken.js";
 import { resetMemoryAttempts } from "../../src/utils/attemptLimiter.js";
 import publicBoardShareResolvers from "../../src/resolvers/publicBoardShare.js";
+import UserInvited from "../../src/models/UserInvited.js";
+import { createVisitorSessionToken } from "../../src/utils/boardVisitorSession.js";
 
 const PASSWORD = "Tableau!2026";
 const VISITOR = "visiteur@exemple.fr";
@@ -72,6 +74,8 @@ const subscribeError = async (args) => {
 
 let board;
 let share;
+// Session visiteur (adresse prouvée) : l'identité ne se déclare plus
+let visitorSession;
 
 beforeAll(async () => {
   await startMongo();
@@ -100,6 +104,11 @@ beforeEach(async () => {
   });
   await share.setPassword(PASSWORD);
   await share.save();
+  const visitor = await UserInvited.create({
+    email: VISITOR,
+    emailVerifiedAt: new Date(),
+  });
+  visitorSession = createVisitorSessionToken(visitor, share);
 });
 
 describe("Jeton d'accès d'un tableau partagé", () => {
@@ -132,7 +141,7 @@ describe("getPublicBoard sur un partage protégé", () => {
   it("demande le mot de passe sans le divulguer", async () => {
     const result = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
     });
     expect(result.success).toBe(false);
     expect(result.requiresPassword).toBe(true);
@@ -142,7 +151,7 @@ describe("getPublicBoard sur un partage protégé", () => {
   it("refuse un mot de passe incorrect", async () => {
     const result = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       password: "mauvais",
     });
     expect(result.success).toBe(false);
@@ -153,7 +162,7 @@ describe("getPublicBoard sur un partage protégé", () => {
   it("remet un jeton avec le bon mot de passe, accepté ensuite seul", async () => {
     const first = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       password: PASSWORD,
     });
     expect(first.success).toBe(true);
@@ -161,7 +170,7 @@ describe("getPublicBoard sur un partage protégé", () => {
 
     const reload = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       accessToken: first.accessToken,
     });
     expect(reload.success).toBe(true);
@@ -170,7 +179,10 @@ describe("getPublicBoard sur un partage protégé", () => {
   it("ne remet pas de jeton pour un partage sans mot de passe", async () => {
     await share.setPassword(null);
     await share.save();
-    const result = await getPublicBoard({ token: share.token, email: VISITOR });
+    const result = await getPublicBoard({
+      token: share.token,
+      sessionToken: visitorSession,
+    });
     expect(result.success).toBe(true);
     expect(result.accessToken).toBeNull();
   });
@@ -210,7 +222,7 @@ describe("publicTaskUpdated sur un partage protégé", () => {
   it("accepte le jeton remis par getPublicBoard", async () => {
     const { accessToken } = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       password: PASSWORD,
     });
     expect(
@@ -218,17 +230,19 @@ describe("publicTaskUpdated sur un partage protégé", () => {
         token: share.token,
         boardId: board._id.toString(),
         accessToken,
+        sessionToken: visitorSession,
       }),
     ).toBeNull();
   });
 
-  it("reste ouverte avec le seul lien pour un partage sans mot de passe", async () => {
+  it("reste ouverte sans mot de passe pour un partage sans mot de passe (session visiteur)", async () => {
     await share.setPassword(null);
     await share.save();
     expect(
       await subscribeError({
         token: share.token,
         boardId: board._id.toString(),
+        sessionToken: visitorSession,
       }),
     ).toBeNull();
   });
@@ -257,7 +271,7 @@ describe("publicTaskUpdated : bannissement et flux déjà ouvert", () => {
       token: share.token,
       boardId: board._id.toString(),
       accessToken: createBoardShareAccessToken(share),
-      email: VISITOR,
+      sessionToken: visitorSession,
     });
 
   it("refuse un visiteur banni", async () => {
@@ -267,7 +281,7 @@ describe("publicTaskUpdated : bannissement et flux déjà ouvert", () => {
       token: share.token,
       boardId: board._id.toString(),
       accessToken: createBoardShareAccessToken(share),
-      email: "Visiteur@Exemple.fr",
+      sessionToken: visitorSession,
     });
     expect(error?.extensions?.code || error?.code).toBe("FORBIDDEN");
   });
@@ -316,7 +330,10 @@ describe("publicTaskUpdated : bannissement et flux déjà ouvert", () => {
 
 describe("getPublicBoard : essais de mot de passe limités", () => {
   const attempt = (password, ip) =>
-    getPublicBoard({ token: share.token, email: VISITOR, password }, ip);
+    getPublicBoard(
+      { token: share.token, sessionToken: visitorSession, password },
+      ip,
+    );
 
   it("bloque une adresse IP après trop d'échecs, même avec le bon mot de passe", async () => {
     const verify = vi
@@ -350,7 +367,7 @@ describe("getPublicBoard : essais de mot de passe limités", () => {
     // Le jeton déjà remis reste valable
     const token = createBoardShareAccessToken(share);
     const withToken = await getPublicBoard(
-      { token: share.token, email: VISITOR, accessToken: token },
+      { token: share.token, sessionToken: visitorSession, accessToken: token },
       "192.0.2.251",
     );
     expect(withToken.success).toBe(true);
@@ -378,7 +395,7 @@ describe("Actions des visiteurs sur un partage protégé", () => {
       token: share.token,
       taskId: task._id.toString(),
       content: "Bonjour",
-      visitorEmail: VISITOR,
+      sessionToken: visitorSession,
       ...extra,
     });
 
@@ -387,18 +404,18 @@ describe("Actions des visiteurs sur un partage protégé", () => {
       comment(),
       mutate("updateVisitorProfile", {
         token: share.token,
-        email: VISITOR,
+        sessionToken: visitorSession,
         input: { firstName: "Jean" },
       }),
       mutate("uploadVisitorImage", {
         token: share.token,
-        email: VISITOR,
+        sessionToken: visitorSession,
         file: null,
       }),
       mutate("uploadExternalCommentImage", {
         token: share.token,
         taskId: task._id.toString(),
-        visitorEmail: VISITOR,
+        sessionToken: visitorSession,
         file: null,
       }),
     ]);
@@ -413,7 +430,7 @@ describe("Actions des visiteurs sur un partage protégé", () => {
   it("acceptent le jeton remis par getPublicBoard", async () => {
     const { accessToken } = await getPublicBoard({
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       password: PASSWORD,
     });
     const result = await comment({ accessToken });
@@ -436,14 +453,14 @@ describe("Actions des visiteurs sur un partage protégé", () => {
     await share.save();
     const denied = await mutate("requestAccess", {
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
     });
     expect(denied.success).toBe(false);
     expect(denied.requiresPassword).toBe(true);
 
     const accepted = await mutate("requestAccess", {
       token: share.token,
-      email: VISITOR,
+      sessionToken: visitorSession,
       password: PASSWORD,
     });
     expect(accepted.success).toBe(true);

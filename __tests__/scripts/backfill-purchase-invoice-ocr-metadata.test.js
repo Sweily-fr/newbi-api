@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import mongoose from "mongoose";
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
@@ -8,10 +11,15 @@ import {
   backfillPurchaseInvoiceOcrMetadata,
   ocrMetadataFromFiles,
 } from "../../scripts/backfill-purchase-invoice-ocr-metadata.js";
+import { readBackup, restoreBackup } from "../../scripts/lib/remise-en-etat.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
 const silent = () => {};
+// Sauvegardes écrites hors du dépôt
+const backupDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "backfill-ocr-metadata-"),
+);
 
 // JSON brut de l'analyse OCR envoyé par le desktop (processDocumentOcr)
 const RAW_OCR = {
@@ -68,6 +76,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopMongo();
+  fs.rmSync(backupDir, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -97,13 +106,17 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
   it("n'écrit rien sans --apply (aperçu par défaut)", async () => {
     const id = await insert();
 
-    const stats = await backfillPurchaseInvoiceOcrMetadata({ log: silent });
+    const stats = await backfillPurchaseInvoiceOcrMetadata({
+      log: silent,
+      backupDir,
+    });
 
     expect(stats).toEqual({
       scanned: 1,
       fillable: 1,
       updated: 0,
       unreadable: 0,
+      backupFile: null,
     });
     expect((await stored(id)).ocrMetadata).toEqual({});
   });
@@ -117,6 +130,7 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
     const stats = await backfillPurchaseInvoiceOcrMetadata({
       apply: true,
       log: silent,
+      backupDir,
     });
 
     expect(stats.updated).toBe(1);
@@ -148,6 +162,7 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
     const stats = await backfillPurchaseInvoiceOcrMetadata({
       apply: true,
       log: silent,
+      backupDir,
     });
 
     expect(stats.scanned).toBe(0);
@@ -172,7 +187,11 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
       ],
     });
 
-    await backfillPurchaseInvoiceOcrMetadata({ apply: true, log: silent });
+    await backfillPurchaseInvoiceOcrMetadata({
+      apply: true,
+      log: silent,
+      backupDir,
+    });
 
     expect((await stored(missing)).ocrMetadata.amountTTC).toBe(120);
     expect((await stored(nul)).ocrMetadata).toMatchObject({
@@ -190,6 +209,7 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
     const stats = await backfillPurchaseInvoiceOcrMetadata({
       apply: true,
       log: silent,
+      backupDir,
     });
 
     expect(stats).toEqual({
@@ -197,6 +217,7 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
       fillable: 0,
       updated: 0,
       unreadable: 1,
+      backupFile: null,
     });
     for (const id of [noOcr, noFile, unreadable]) {
       expect((await stored(id)).ocrMetadata).toEqual({});
@@ -210,10 +231,12 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
     const first = await backfillPurchaseInvoiceOcrMetadata({
       apply: true,
       log: silent,
+      backupDir,
     });
     const second = await backfillPurchaseInvoiceOcrMetadata({
       apply: true,
       log: silent,
+      backupDir,
     });
 
     expect(first.updated).toBe(2);
@@ -222,6 +245,7 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
       fillable: 0,
       updated: 0,
       unreadable: 0,
+      backupFile: null,
     });
   });
 
@@ -233,9 +257,64 @@ describe("backfillPurchaseInvoiceOcrMetadata", () => {
       apply: true,
       workspaceId: organizationId.toString(),
       log: silent,
+      backupDir,
     });
 
     expect((await stored(mine)).ocrMetadata.amountTTC).toBe(120);
     expect((await stored(other)).ocrMetadata).toEqual({});
+  });
+
+  it("sauvegarde l'ancien ocrMetadata et le retour arrière le remet", async () => {
+    const id = await insert({ ocrMetadata: { provider: "claude-vision" } });
+
+    const stats = await backfillPurchaseInvoiceOcrMetadata({
+      apply: true,
+      log: silent,
+      backupDir,
+    });
+
+    expect(stats.updated).toBe(1);
+    expect(stats.backupFile.startsWith(backupDir)).toBe(true);
+    const backup = readBackup(stats.backupFile);
+    expect(backup.entries).toHaveLength(1);
+    expect(backup.entries[0].before).toEqual({
+      ocrMetadata: { provider: "claude-vision" },
+    });
+
+    // Aperçu du retour arrière : rien n'est écrit
+    const preview = await restoreBackup(stats.backupFile, { log: silent });
+    expect(preview.restorable).toBe(1);
+    expect((await stored(id)).ocrMetadata.amountTTC).toBe(120);
+
+    const restored = await restoreBackup(stats.backupFile, {
+      apply: true,
+      log: silent,
+    });
+    expect(restored.restored).toBe(1);
+    const invoice = await stored(id);
+    expect(invoice.ocrMetadata).toEqual({ provider: "claude-vision" });
+    expect(invoice.updatedAt.toISOString()).toBe("2026-09-15T00:00:00.000Z");
+  });
+
+  it("le retour arrière laisse une facture dont l'OCR a changé depuis", async () => {
+    const id = await insert();
+    const { backupFile } = await backfillPurchaseInvoiceOcrMetadata({
+      apply: true,
+      log: silent,
+      backupDir,
+    });
+    // Correction faite dans l'appli après le script
+    await PurchaseInvoice.collection.updateOne(
+      { _id: id },
+      { $set: { "ocrMetadata.amountTTC": 125 } },
+    );
+
+    const restored = await restoreBackup(backupFile, {
+      apply: true,
+      log: silent,
+    });
+
+    expect(restored).toMatchObject({ restored: 0, skipped: 1 });
+    expect((await stored(id)).ocrMetadata.amountTTC).toBe(125);
   });
 });

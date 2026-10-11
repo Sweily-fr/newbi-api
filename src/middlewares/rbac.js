@@ -700,6 +700,37 @@ export const requireAction =
   };
 
 /**
+ * Plusieurs droits exigés ENSEMBLE, sur des pages différentes : liste de
+ * couples [page, action], tous requis. Ex. transformer un devis en facture :
+ * « Transformer » sur les devis ET « Créer » sur les factures, comme l'écran
+ * qui n'affiche l'action qu'avec les deux. Tous les droits sont vérifiés
+ * avant l'abonnement (même contrôle que requireAction pour une écriture).
+ * Options : skipSubscriptionCheck, preferArgsWorkspace.
+ */
+export const requireAllActions =
+  (checks, options = {}) =>
+  (resolver) => {
+    const [[resource, action], ...others] = checks;
+    const readOnly = checks.every(([, a]) => READ_ACTIONS.has(a));
+    return withRBAC(
+      async (parent, args, context, info) => {
+        for (const [otherResource, otherAction] of others) {
+          assertPermissionAction(context, otherResource, otherAction);
+        }
+        if (!readOnly && !options.skipSubscriptionCheck) {
+          await checkSubscriptionActive(context);
+        }
+        return resolver(parent, args, context, info);
+      },
+      {
+        resource,
+        action: [action],
+        preferArgsWorkspace: options.preferArgsWorkspace,
+      },
+    );
+  };
+
+/**
  * Comme requireWorkspaceLevel (remplaçant de withWorkspace : argument
  * workspaceId d'abord, erreurs non réécrites, pas de contrôle d'abonnement)
  * mais pour une action précise.

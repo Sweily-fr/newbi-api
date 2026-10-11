@@ -1,5 +1,8 @@
 import { isAuthenticated } from "../middlewares/better-auth.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
 import User from "../models/User.js";
 import EmailLog from "../models/EmailLog.js";
 import emailReminderService from "../services/emailReminderService.js";
@@ -41,12 +44,26 @@ const emailReminderResolvers = {
     }),
 
     /**
-     * Récupère les logs d'emails pour une organisation
+     * Récupère les logs des rappels e-mail de l'utilisateur dans un espace.
+     * 🔐 Il suffisait d'être connecté : n'importe quel workspaceId renvoyait
+     * les rappels de cet espace (titres et descriptions des événements,
+     * e-mails des destinataires). Désormais : membre de l'espace demandé
+     * avec la lecture du calendrier, et seulement ses propres rappels (les
+     * événements privés des autres membres restent privés).
      */
-    getEmailLogs: isAuthenticated(
-      async (_, { workspaceId, status, limit = 30, offset = 0 }, { user }) => {
+    getEmailLogs: requireWorkspaceLevel(
+      "calendar",
+      "read",
+    )(
+      async (
+        _,
+        { status, limit: rawLimit, offset: rawOffset },
+        { user, workspaceId },
+      ) => {
         try {
-          const query = { workspaceId };
+          const query = { workspaceId, recipientUserId: user._id };
+          const limit = Math.min(Math.max(Number(rawLimit) || 30, 1), 100);
+          const offset = Math.max(Number(rawOffset) || 0, 0);
 
           if (status) {
             query.status = status;
@@ -67,7 +84,9 @@ const emailReminderResolvers = {
               eventId: log.eventId?._id.toString(),
               workspaceId: log.workspaceId.toString(),
               recipientEmail: log.recipientEmail,
-              recipientUserId: log.recipientUserId._id.toString(),
+              recipientUserId: (
+                log.recipientUserId?._id || log.recipientUserId
+              )?.toString(),
               reminderType: log.reminderType,
               anticipation: log.anticipation,
               status: log.status,

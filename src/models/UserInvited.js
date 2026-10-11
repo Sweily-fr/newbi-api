@@ -136,7 +136,22 @@ const userInvitedSchema = new mongoose.Schema(
       },
     },
 
-    // Token de session (pour maintenir la connexion)
+    // Adresse e-mail prouvée (code reçu par e-mail) : sans elle, l'e-mail
+    // n'est qu'une déclaration et la connexion par mot de passe est refusée
+    emailVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Version des sessions visiteur signées (boardVisitorSession.js) :
+    // l'incrémenter invalide toutes les sessions déjà remises
+    sessionVersion: {
+      type: Number,
+      default: 0,
+    },
+
+    // Ancien jeton de session aléatoire (remis sans vérification de l'e-mail,
+    // n'est plus accepté)
     sessionToken: {
       type: String,
       default: null,
