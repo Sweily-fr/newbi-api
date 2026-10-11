@@ -12,6 +12,20 @@ import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
+// Réglages de la facturation électronique (Paramètres > Facturation
+// électronique) : droit de gérer les applications, comme l'écran, sur
+// l'espace passé en argument (validé : il n'était pas contrôlé). Le régime
+// de TVA est aussi repris à l'enregistrement des informations légales :
+// « Modifier » les informations de l'entreprise suffit alors.
+const requireManageEInvoicing = requireAction("integrations", "manage", {
+  preferArgsWorkspace: true,
+});
+const requireEInvoicingVatRegime = requireAction(
+  ["integrations", "orgSettings"],
+  "manage",
+  { preferArgsWorkspace: true },
+);
+
 const eInvoicingResolvers = {
   Query: {
     /**
@@ -229,7 +243,7 @@ const eInvoicingResolvers = {
      * Activer la facturation électronique pour une organisation
      * Teste la connexion à SuperPDP avant d'activer
      */
-    enableEInvoicing: requireWrite("invoices")(
+    enableEInvoicing: requireManageEInvoicing(
       async (_, { workspaceId, environment }, context) => {
         try {
           // Activer l'e-invoicing : module « Applications et banques »
@@ -288,7 +302,7 @@ const eInvoicingResolvers = {
     /**
      * Désactiver la facturation électronique pour une organisation
      */
-    disableEInvoicing: requireWrite("invoices")(
+    disableEInvoicing: requireManageEInvoicing(
       async (_, { workspaceId }, context) => {
         try {
           if (!context.permissions?.canWrite("integrations")) {
@@ -324,7 +338,7 @@ const eInvoicingResolvers = {
     /**
      * Tester la connexion à SuperPDP
      */
-    testSuperPdpConnection: requireWrite("invoices")(
+    testSuperPdpConnection: requireManageEInvoicing(
       async (_, { workspaceId }, context) => {
         try {
           const result = await superPdpService.testConnection(workspaceId);
@@ -581,7 +595,7 @@ const eInvoicingResolvers = {
      * Inscrit l'entreprise dans les annuaires Peppol + PPF (pour recevoir des factures).
      * Idempotent : ignore les annuaires où une entrée "created" existe déjà.
      */
-    registerEInvoicingDirectory: requireWrite("invoices")(
+    registerEInvoicingDirectory: requireManageEInvoicing(
       async (_, { workspaceId }) => {
         const isEnabled =
           await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
@@ -669,7 +683,7 @@ const eInvoicingResolvers = {
     /**
      * Met à jour le régime TVA SuperPDP (pilote le calendrier d'envoi e-reporting au PPF).
      */
-    updateEInvoicingVatRegime: requireWrite("invoices")(
+    updateEInvoicingVatRegime: requireEInvoicingVatRegime(
       async (_, { workspaceId, vatRegime }) => {
         const allowed = ["monthly", "quarterly", "simplified", "vat_exemption"];
         if (!allowed.includes(vatRegime)) {

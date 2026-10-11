@@ -93,7 +93,11 @@ const abbyResolvers = {
     /**
      * Connecte Abby à l'organisation
      */
-    connectAbby: async (_, { apiKey }, { user, organizationId, permissionLevels }) => {
+    connectAbby: async (
+      _,
+      { apiKey },
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
@@ -152,7 +156,11 @@ const abbyResolvers = {
     /**
      * Déconnecte Abby de l'organisation
      */
-    disconnectAbby: async (_, args, { user, organizationId, permissionLevels }) => {
+    disconnectAbby: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
@@ -337,7 +345,11 @@ const abbyResolvers = {
     /**
      * Importe maintenant les documents finalisés dans Abby vers Newbi
      */
-    importFromAbby: async (_, args, { user, organizationId, permissionLevels }) => {
+    importFromAbby: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
@@ -375,7 +387,11 @@ const abbyResolvers = {
     /**
      * Lance une synchronisation complète vers Abby
      */
-    syncAllToAbby: async (_, args, { user, organizationId, permissionLevels }) => {
+    syncAllToAbby: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
       requireUser(user);
       if (!organizationId) {
         return { success: false, message: "Aucune organisation active" };
@@ -405,6 +421,26 @@ const abbyResolvers = {
     },
   },
 };
+
+// Envoyer un document vers Abby : droit de gérer les applications,
+// comme la synchronisation complète (ces envois unitaires ne vérifiaient
+// que l'appartenance à l'espace). Enveloppe interne : withOrganization,
+// posé plus bas, fournit les droits du rôle.
+const ABBY_UNIT_SYNCS = ["syncInvoiceToAbby", "syncQuoteToAbby"];
+ABBY_UNIT_SYNCS.forEach((name) => {
+  const original = abbyResolvers.Mutation[name];
+  if (original) {
+    abbyResolvers.Mutation[name] = async (parent, args, context, info) => {
+      if (!canManageIntegrations(context.permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de synchroniser ce document",
+        };
+      }
+      return original(parent, args, context, info);
+    };
+  }
+});
 
 // Abonnement actif requis (fail-closed) sur toutes les mutations sauf la déconnexion
 const ABBY_BLOCK = [

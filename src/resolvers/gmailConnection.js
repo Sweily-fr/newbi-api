@@ -5,6 +5,7 @@ import { scanGmailConnection } from "../services/gmail/GmailScannerService.js";
 import logger from "../utils/logger.js";
 import {
   checkSubscriptionActive,
+  requireWorkspaceAction,
   withOrganization,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
@@ -169,6 +170,31 @@ const gmailConnectionResolvers = {
     ),
   },
 };
+
+// Lancer l'analyse de la boîte Gmail (elle crée des factures d'achat à
+// valider) ou en régler la période : droit « Ajouter » des factures d'achat
+// dans l'espace de la connexion. La déconnexion reste ouverte : chacun peut
+// toujours retirer l'accès à sa propre boîte.
+const GMAIL_CREATE = ["triggerGmailSync", "updateGmailScanPeriod"];
+GMAIL_CREATE.forEach((name) => {
+  const original = gmailConnectionResolvers.Mutation[name];
+  if (original) {
+    gmailConnectionResolvers.Mutation[name] = requireWorkspaceAction(
+      "purchaseInvoices",
+      "create",
+    )(async (parent, args, context, info) => {
+      const connection = await GmailConnection.exists({
+        _id: args.connectionId,
+        userId: context.user.id || context.user._id,
+        workspaceId: context.workspaceId,
+      });
+      if (!connection) {
+        throw new Error("Connexion Gmail introuvable");
+      }
+      return original(parent, args, context, info);
+    });
+  }
+});
 
 // ✅ Phase A.4 — Subscription check on Gmail mutations (exclude disconnectGmail)
 const GMAIL_BLOCK = ["triggerGmailSync", "updateGmailScanPeriod"];

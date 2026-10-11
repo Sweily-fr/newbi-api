@@ -5,7 +5,10 @@ import logger from "../utils/logger.js";
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import mongoose from "mongoose";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
@@ -519,6 +522,25 @@ const ocrResolvers = {
     ),
   },
 };
+
+// Analyser un justificatif sert à ajouter une facture d'achat (écran
+// Factures d'achat, application mobile) : droit « Ajouter » des factures
+// d'achat dans l'espace demandé, qui remplace l'espace fourni par le client
+// (l'analyse est enregistrée dans cet espace et compte dans son quota)
+Object.keys(ocrResolvers.Mutation).forEach((name) => {
+  const original = ocrResolvers.Mutation[name];
+  ocrResolvers.Mutation[name] = requireWorkspaceAction(
+    "purchaseInvoices",
+    "create",
+  )((parent, args, context, info) =>
+    original(
+      parent,
+      { ...args, workspaceId: context.workspaceId },
+      context,
+      info,
+    ),
+  );
+});
 
 // ✅ Phase A.1 — Subscription check sur toutes les mutations OCR (fail-closed: coûts Claude Vision / Mistral AI)
 const originalOcrMutations = ocrResolvers.Mutation;

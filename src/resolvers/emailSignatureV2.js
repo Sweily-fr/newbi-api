@@ -413,6 +413,13 @@ function templateDefaults(t) {
 // Création, duplication et modèles enregistrés : action « create » de la
 // page Signature de mail
 const requireCreateSignatures = requireAction("signatures", "create");
+// E-mail de test envoyé depuis l'éditeur : droit de créer ou modifier une
+// signature (« Voir » seul ne permet aucune action sur la page)
+const requireSignatureEditRights = requireAction(
+  "signatures",
+  ["create", "edit"],
+  { skipSubscriptionCheck: true },
+);
 
 const emailSignatureV2Resolvers = {
   // Mongoose retire les objets vides : on garantit la présence du champ
@@ -577,7 +584,7 @@ const emailSignatureV2Resolvers = {
   },
 
   Mutation: {
-    sendEmailSignatureV2Test: requireRead("signatures")(
+    sendEmailSignatureV2Test: requireSignatureEditRights(
       async (_, { id }, ctx) => {
         const email = ctx.user?.email;
         if (!email) {

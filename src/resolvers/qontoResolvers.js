@@ -590,6 +590,30 @@ const qontoResolvers = {
   },
 };
 
+// Envoyer un document vers Qonto : droit de gérer les applications,
+// comme la synchronisation complète (ces envois unitaires ne vérifiaient
+// que l'appartenance à l'espace). Enveloppe interne : withOrganization,
+// posé plus bas, fournit les droits du rôle.
+const QONTO_UNIT_SYNCS = [
+  "syncInvoiceToQonto",
+  "syncPurchaseInvoiceToQonto",
+  "syncQuoteToQonto",
+];
+QONTO_UNIT_SYNCS.forEach((name) => {
+  const original = qontoResolvers.Mutation[name];
+  if (original) {
+    qontoResolvers.Mutation[name] = async (parent, args, context, info) => {
+      if (!canManageIntegrations(context.permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de synchroniser ce document",
+        };
+      }
+      return original(parent, args, context, info);
+    };
+  }
+});
+
 // Abonnement actif requis (fail-closed) sur toutes les mutations sauf la déconnexion
 const QONTO_BLOCK = [
   "testQontoConnection",
