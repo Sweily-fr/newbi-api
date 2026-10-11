@@ -391,8 +391,10 @@ const resolvers = {
           };
         }
 
-        // Enregistrer la visite
-        await share.recordVisit(emailLower);
+        // Enregistrer la visite (un membre de l'espace n'est pas un visiteur
+        // du lien : ni fiche, ni présence côté propriétaire)
+        const isVisitor = identity.kind === "visitor";
+        if (isVisitor) await share.recordVisit(emailLower);
 
         // Récupérer le tableau
         const board = await Board.findById(share.boardId);
@@ -720,23 +722,24 @@ const resolvers = {
 
         // Publier la présence du visiteur (connecté)
         const visitorInfo = share.visitors?.find((v) => v.email === emailLower);
-        safePublish(
-          "VISITOR_PRESENCE",
-          {
-            visitorPresence: {
-              email: emailLower,
-              name:
-                visitorInfo?.name ||
-                visitorInfo?.firstName ||
-                identity.name ||
-                emailLower.split("@")[0],
-              image: visitorInfo?.image || null,
-              boardId: board._id.toString(),
-              isConnected: true,
+        if (isVisitor)
+          safePublish(
+            "VISITOR_PRESENCE",
+            {
+              visitorPresence: {
+                email: emailLower,
+                name:
+                  visitorInfo?.name ||
+                  visitorInfo?.firstName ||
+                  identity.name ||
+                  emailLower.split("@")[0],
+                image: visitorInfo?.image || null,
+                boardId: board._id.toString(),
+                isConnected: true,
+              },
             },
-          },
-          `Visiteur ${emailLower} connecté`,
-        );
+            `Visiteur ${emailLower} connecté`,
+          );
 
         return {
           success: true,

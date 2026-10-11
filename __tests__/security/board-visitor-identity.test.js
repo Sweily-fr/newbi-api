@@ -461,6 +461,9 @@ describe("Membre connecté de l'espace", () => {
 
     expect(result.success).toBe(true);
     expect(result.visitorEmail).toBe("membre@entreprise.fr");
+    // Pas de fiche de visiteur pour un membre de l'espace
+    const updated = await PublicBoardShare.findById(share._id).lean();
+    expect(updated.visitors).toHaveLength(0);
   });
 
   it("refuse un utilisateur connecté qui n'est pas membre de l'espace", async () => {
