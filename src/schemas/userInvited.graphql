@@ -67,9 +67,21 @@ type AuthInvitedResult {
   linkedUser: LinkedUserInfo
   isBanned: Boolean
   banReason: String
+  # Adresse à prouver : code envoyé par requestInvitedEmailCode, à renvoyer
+  # dans emailCode
+  requiresEmailCode: Boolean
 }
 
-# Résultat de la vérification d'un email
+# Résultat de l'envoi d'un code de vérification
+type RequestInvitedCodeResult {
+  success: Boolean!
+  message: String
+}
+
+# Résultat de la vérification d'un email. Avant toute preuve de l'adresse,
+# linkedUser et userInvited sont toujours null et hasLinkedNewbiAccount faux ;
+# requiresPassword n'est vrai que si la connexion par mot de passe est
+# possible (adresse déjà vérifiée)
 type CheckEmailResult {
   exists: Boolean!
   requiresPassword: Boolean!
@@ -78,7 +90,9 @@ type CheckEmailResult {
   userInvited: UserInvited
 }
 
-# Input pour l'authentification
+# Input pour l'authentification : l'adresse est prouvée par emailCode (code
+# reçu par e-mail), ou par password pour un compte dont l'adresse a déjà été
+# vérifiée. skipPassword n'a plus d'effet.
 input AuthInvitedInput {
   token: String!
   email: String!
@@ -86,6 +100,7 @@ input AuthInvitedInput {
   skipPassword: Boolean
   firstName: String
   lastName: String
+  emailCode: String
 }
 
 # Input pour la mise à jour du profil
@@ -100,6 +115,8 @@ input SetPasswordInput {
   email: String!
   currentPassword: String
   newPassword: String!
+  # Session visiteur du compte (obligatoire)
+  sessionToken: String
 }
 
 # Queries
@@ -107,21 +124,25 @@ type Query {
   # Vérifier si un email existe et ses caractéristiques
   checkInvitedEmail(email: String!, token: String!): CheckEmailResult!
   
-  # Récupérer un utilisateur invité par son ID
+  # Récupérer un utilisateur invité par son ID (membres d'un espace où il a
+  # accès à un tableau, lecture du kanban ; null sinon)
   getInvitedUser(id: ID!): UserInvited
   
-  # Récupérer un utilisateur invité par son email
+  # Récupérer un utilisateur invité par son email (mêmes règles)
   getInvitedUserByEmail(email: String!): UserInvited
   
   # Récupérer tous les utilisateurs invités ayant accès à un board
   getInvitedUsersForBoard(boardId: ID!, workspaceId: ID): [UserInvited!]!
   
-  # Valider un token de session d'utilisateur invité
+  # Valider une session visiteur (jeton remis par authenticateInvitedUser)
   validateInvitedSession(sessionToken: String!): UserInvited
 }
 
 # Mutations
 type Mutation {
+  # Envoyer un code de vérification à l'adresse d'un visiteur (10 min)
+  requestInvitedEmailCode(token: String!, email: String!): RequestInvitedCodeResult!
+
   # Authentifier ou créer un utilisateur invité
   authenticateInvitedUser(input: AuthInvitedInput!): AuthInvitedResult!
   
@@ -131,10 +152,14 @@ type Mutation {
   # Supprimer le mot de passe (passer en mode sans mot de passe)
   removeInvitedUserPassword(email: String!, currentPassword: String!): AuthInvitedResult!
   
-  # Mettre à jour le profil d'un utilisateur invité
+  # Mettre à jour le profil d'un utilisateur invité : l'invité lui-même
+  # (sessionToken) ou un membre ayant le droit de partager un tableau dans un
+  # espace où l'invité a accès (workspaceId pour cibler cet espace)
   updateInvitedUserProfile(
     email: String!
     input: UpdateInvitedProfileInput!
+    sessionToken: String
+    workspaceId: ID
   ): UserInvited!
   
   # Uploader une image de profil pour un utilisateur invité
@@ -161,7 +186,8 @@ type Mutation {
   # Déconnecter un utilisateur invité (invalider la session)
   logoutInvitedUser(sessionToken: String!): Boolean!
   
-  # Lier manuellement un compte Newbi à un utilisateur invité
+  # Lier son propre compte Newbi à l'invité de la même adresse e-mail
+  # (ou administrateur du back-office)
   linkInvitedUserToNewbi(
     userInvitedId: ID!
     newbiUserId: ID!
