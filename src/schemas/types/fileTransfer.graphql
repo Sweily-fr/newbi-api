@@ -78,12 +78,6 @@ type FileTransferResponse {
   accessKey: String!
 }
 
-# Type pour la réponse de génération d'un lien de paiement
-type FileTransferPaymentResponse {
-  fileTransfer: FileTransfer!
-  paymentSessionUrl: String!
-}
-
 # Type pour la réponse d'accès à un transfert de fichiers
 type FileTransferAccessResponse {
   success: Boolean!
@@ -159,8 +153,11 @@ extend type Mutation {
   # Renommer un transfert de fichiers (titre personnalisé)
   renameFileTransfer(id: ID!, title: String!): FileTransfer!
 
-  # Générer un lien de paiement pour un transfert de fichiers
-  generateFileTransferPaymentLink(id: ID!): FileTransferPaymentResponse!
+  # generateFileTransferPaymentLink retirée : schéma (id) et resolver
+  # (shareLink/accessKey) ne correspondaient pas, aucun client ne l'appelait,
+  # et elle créait sans aucun contrôle une session Stripe pour un transfert
+  # payant pris au hasard. Le paiement des transferts passe par Stripe
+  # Connect (stripeConnectService), désactivé côté interface.
 
   # Créer un transfert de fichiers à partir de documents partagés (copie cross-bucket)
   createFileTransferFromSharedDocuments(
