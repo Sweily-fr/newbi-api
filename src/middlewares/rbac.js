@@ -13,6 +13,7 @@ import {
   levelsAllowLevel,
 } from "../config/rolePermissions.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
+import { isObjectIdString, toObjectIdOrNull } from "../utils/objectIdString.js";
 
 /**
  * ========================================
@@ -49,15 +50,11 @@ async function getMemberRole(organizationId, userId) {
   try {
     const db = mongoose.connection.db;
     const memberCollection = db.collection("member");
-    const { ObjectId } = mongoose.Types;
 
-    // Convertir les IDs en ObjectId si nécessaire
-    const orgObjectId =
-      typeof organizationId === "string"
-        ? new ObjectId(organizationId)
-        : organizationId;
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
+    // Identifiants d'ObjectId seulement (un objet serait un opérateur)
+    const orgObjectId = toObjectIdOrNull(organizationId);
+    const userObjectId = toObjectIdOrNull(userId);
+    if (!orgObjectId || !userObjectId) return null;
 
     const member = await memberCollection.findOne({
       organizationId: orgObjectId,
@@ -575,6 +572,11 @@ export const requireActiveSubscriptionREST = ({ failClosed = false } = {}) => {
       const orgId = req.headers["x-workspace-id"] || req.body?.workspaceId;
       if (!orgId) {
         return res.status(400).json({ error: "Workspace ID requis" });
+      }
+      // Un objet ({ "$ne": null }) trouvait l'abonnement actif d'un autre
+      // espace (filtre referenceId) : identifiant d'ObjectId exigé
+      if (!isObjectIdString(orgId)) {
+        return res.status(400).json({ error: "Identifiant d'espace invalide" });
       }
       // Build a minimal context object compatible with checkSubscriptionActive
       await checkSubscriptionActive({ workspaceId: orgId }, { failClosed });

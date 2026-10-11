@@ -9,6 +9,7 @@ import convert from "heic-convert";
 import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
+import { isObjectIdString } from "../utils/objectIdString.js";
 import {
   streamFolderAsZip,
   streamSelectionAsZip,
@@ -59,25 +60,28 @@ const router = express.Router();
  * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé.
  * Sans ce contrôle, le workspaceId fourni par le client suffisait à télécharger
  * les documents partagés de n'importe quelle organisation (IDOR).
- * Renvoie true si l'accès est autorisé, sinon répond 403 et renvoie false.
+ *
+ * Seule une chaîne d'ObjectId est acceptée : un objet `{ "$ne": … }` (corps
+ * JSON, ou query `?workspaceId[$ne]=…`) passait le contrôle d'appartenance
+ * et, réutilisé dans les filtres, ouvrait les documents de tous les espaces.
+ *
+ * Renvoie l'identifiant d'espace validé (à utiliser dans les filtres), sinon
+ * répond 403 et renvoie null.
  */
 async function ensureWorkspaceMember(user, workspaceId, res) {
-  try {
-    const org = await getActiveOrganization(String(user._id), workspaceId);
-    if (!org) {
-      res.status(403).json({
-        success: false,
-        message: "Accès non autorisé à cet espace de travail",
-      });
-      return false;
-    }
-    return true;
-  } catch {
+  const deny = () => {
     res.status(403).json({
       success: false,
       message: "Accès non autorisé à cet espace de travail",
     });
-    return false;
+    return null;
+  };
+  if (!isObjectIdString(workspaceId)) return deny();
+  try {
+    const org = await getActiveOrganization(String(user._id), workspaceId);
+    return org ? org.id : deny();
+  } catch {
+    return deny();
   }
 }
 
@@ -97,17 +101,22 @@ router.get("/download-folder", async (req, res) => {
       });
     }
 
-    const { folderId, workspaceId } = req.query;
+    const { folderId, workspaceId: requestedWorkspaceId } = req.query;
 
     // Validation des paramètres
-    if (!folderId || !workspaceId) {
+    if (!folderId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "folderId et workspaceId sont requis",
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     logger.info("📥 Demande téléchargement dossier ZIP", {
       folderId,
@@ -155,17 +164,22 @@ router.get("/folder-info", async (req, res) => {
       });
     }
 
-    const { folderId, workspaceId } = req.query;
+    const { folderId, workspaceId: requestedWorkspaceId } = req.query;
 
     // Validation des paramètres
-    if (!folderId || !workspaceId) {
+    if (!folderId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "folderId et workspaceId sont requis",
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     // Vérifier l'accès au dossier
     const folder = await verifyFolderAccess(folderId, workspaceId);
@@ -218,10 +232,10 @@ router.post("/download-selection", async (req, res) => {
       folderIds = [],
       documentIds = [],
       excludedFolderIds = [],
-      workspaceId,
+      workspaceId: requestedWorkspaceId,
     } = req.body;
 
-    if (!workspaceId) {
+    if (!requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "workspaceId est requis",
@@ -235,7 +249,12 @@ router.post("/download-selection", async (req, res) => {
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     logger.info("📥 Demande téléchargement sélection ZIP", {
       folderIds,
@@ -301,16 +320,25 @@ router.post("/selection-info", async (req, res) => {
       });
     }
 
-    const { folderIds = [], documentIds = [], workspaceId } = req.body;
+    const {
+      folderIds = [],
+      documentIds = [],
+      workspaceId: requestedWorkspaceId,
+    } = req.body;
 
-    if (!workspaceId) {
+    if (!requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "workspaceId est requis",
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     // Verify access
     for (const folderId of folderIds) {
@@ -359,16 +387,21 @@ router.get("/download-file/:documentId", async (req, res) => {
     }
 
     const { documentId } = req.params;
-    const { workspaceId } = req.query;
+    const { workspaceId: requestedWorkspaceId } = req.query;
 
-    if (!documentId || !workspaceId) {
+    if (!documentId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "documentId et workspaceId sont requis",
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     const document = await SharedDocument.findOne({
       _id: documentId,
@@ -445,16 +478,21 @@ router.get("/preview-file/:documentId", async (req, res) => {
     }
 
     const { documentId } = req.params;
-    const { workspaceId } = req.query;
+    const { workspaceId: requestedWorkspaceId } = req.query;
 
-    if (!documentId || !workspaceId) {
+    if (!documentId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "documentId et workspaceId sont requis",
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const workspaceId = await ensureWorkspaceMember(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!workspaceId) return;
 
     const document = await SharedDocument.findOne({
       _id: documentId,
