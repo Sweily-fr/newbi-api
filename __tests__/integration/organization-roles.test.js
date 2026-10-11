@@ -420,9 +420,14 @@ describe("Rôles d'un espace", () => {
     invalidateOrganizationRoles();
     const roles = await Query.organizationRoles(null, {}, ctx(owner));
     const legacy = roles.find((r) => r.key === "role_ancien");
-    // Grille par niveaux convertie en actions
+    // Grille par niveaux convertie en actions (« lire » donnait l'export)
     expect(legacy.actions.overview).toEqual(["view"]);
-    expect(legacy.actions.forecast).toEqual(["view", "create", "edit"]);
+    expect(legacy.actions.forecast).toEqual([
+      "view",
+      "create",
+      "edit",
+      "export",
+    ]);
     expect(legacy.actions.clientSegments).toEqual(["view"]);
     expect(legacy.actions.clientCustomFields).toContain("delete");
   });
@@ -461,6 +466,81 @@ describe("Rôles d'un espace", () => {
 
     const mine = await Query.myPermissions(null, {}, ctx(editor));
     expect(mine.actions.invoices).toEqual(["view", "create", "send"]);
+  });
+
+  it("propose l'export du kanban et des prévisions, sans l'accorder au Membre", async () => {
+    const catalog = await Query.roleCatalog(null, {}, ctx(viewer));
+    for (const key of ["kanban", "forecast"]) {
+      const module = catalog.modules.find((m) => m.key === key);
+      expect(module.actions.map((a) => a.key)).toContain("export");
+    }
+    const roles = await Query.organizationRoles(null, {}, ctx(owner));
+    const byKey = Object.fromEntries(roles.map((r) => [r.key, r.actions]));
+    // Administrateur et Éditeur : exportent ce qu'ils voient
+    expect(byKey.admin.kanban).toContain("export");
+    expect(byKey.admin.forecast).toContain("export");
+    expect(byKey.member.kanban).toContain("export");
+    expect(byKey.member.forecast).toContain("export");
+    // Membre : « Voir » seulement
+    expect(byKey.viewer.kanban).toEqual(["view"]);
+    expect(byKey.viewer.forecast).toEqual(["view"]);
+    // Comptable inchangé : prévisions en lecture (export compris, comme ses
+    // autres pages en lecture), kanban fermé
+    expect(byKey.accountant.forecast).toEqual(["view", "export"]);
+    expect(byKey.accountant.kanban).toEqual([]);
+  });
+
+  it("donne l'export aux grilles enregistrées avant son ajout, sauf en « Voir » seul", async () => {
+    const db = mongoose.connection.db;
+    // Rôle personnalisé enregistré avant l'ajout (pas de catalogVersion)
+    await db.collection("organizationRole").insertOne({
+      organizationId,
+      role: "role_avant_export",
+      name: "Chef de projet",
+      permission: "{}",
+      actions: { kanban: ["view", "edit"], forecast: ["view"] },
+      createdAt: new Date(),
+    });
+    // Rôles prédéfinis ajustés avant l'ajout : suivent leurs droits par défaut
+    await db.collection("organizationRole").insertMany([
+      {
+        organizationId,
+        role: "accountant",
+        permission: "{}",
+        actions: { forecast: ["view"], invoices: ["view"] },
+        createdAt: new Date(),
+      },
+      {
+        organizationId,
+        role: "viewer",
+        permission: "{}",
+        actions: { kanban: ["view"], forecast: ["view"] },
+        createdAt: new Date(),
+      },
+    ]);
+    invalidateOrganizationRoles();
+    const roles = await Query.organizationRoles(null, {}, ctx(owner));
+    const byKey = Object.fromEntries(roles.map((r) => [r.key, r.actions]));
+    expect(byKey.role_avant_export.kanban).toEqual(["view", "edit", "export"]);
+    expect(byKey.role_avant_export.forecast).toEqual(["view"]);
+    expect(byKey.accountant.forecast).toEqual(["view", "export"]);
+    expect(byKey.viewer.kanban).toEqual(["view"]);
+    expect(byKey.viewer.forecast).toEqual(["view"]);
+
+    // Enregistrée depuis l'éditeur : la case décochée reste décochée
+    const saved = await Mutation.updateOrganizationRole(
+      null,
+      {
+        key: "role_avant_export",
+        input: { actions: { kanban: ["view", "edit"], forecast: ["view"] } },
+      },
+      ctx(owner),
+    );
+    expect(saved.actions.kanban).toEqual(["view", "edit"]);
+    const stored = await db
+      .collection("organizationRole")
+      .findOne({ organizationId, role: "role_avant_export" });
+    expect(stored.catalogVersion).toBeGreaterThanOrEqual(2);
   });
 
   it("vide les parties d'une page sans « Voir »", async () => {

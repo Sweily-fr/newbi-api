@@ -3,6 +3,7 @@ import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
   MODULES,
+  CATALOG_VERSION,
   CUSTOM_ROLE_PREFIX,
   PREDEFINED_ROLES,
   PREDEFINED_ROLE_KEYS,
@@ -23,8 +24,9 @@ import {
  *
  * Document : { organizationId, role, permission (JSON Better Auth),
  *   actions (grille Newbi : module → actions permises ; les documents
- *   antérieurs ont `levels`, converti à la lecture), name, description,
- *   createdBy, createdAt, updatedAt }
+ *   antérieurs ont `levels`, converti à la lecture), catalogVersion (version
+ *   du catalogue connue de la grille), name, description, createdBy,
+ *   createdAt, updatedAt }
  */
 
 const COLLECTION = "organizationRole";
@@ -263,6 +265,8 @@ export async function createOrganizationRole(
       role: key,
       permission: JSON.stringify(toBetterAuthPermission(normalized)),
       actions: normalized,
+      // Version du catalogue que la grille a connue (actions ajoutées ensuite)
+      catalogVersion: CATALOG_VERSION,
       name: roleName,
       description: cleanDescription(description),
       createdBy: userId ? toObjectId(userId) : null,
@@ -304,6 +308,7 @@ export async function updateOrganizationRole(
   const normalized = inputActions({ actions, levels }, base);
   if (normalized) {
     set.actions = normalized;
+    set.catalogVersion = CATALOG_VERSION;
     set.permission = JSON.stringify(toBetterAuthPermission(normalized));
     unset.levels = "";
   }
@@ -327,6 +332,7 @@ export async function updateOrganizationRole(
     };
     if (!set.actions) {
       set.actions = predefined.actions;
+      set.catalogVersion = CATALOG_VERSION;
       set.permission = JSON.stringify(
         toBetterAuthPermission(predefined.actions),
       );

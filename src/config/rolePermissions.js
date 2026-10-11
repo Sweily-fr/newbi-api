@@ -100,6 +100,7 @@ export const MODULES = [
       action("create", "Ajouter des prévisions et des scénarios"),
       action("edit", "Modifier les prévisions et les récurrences"),
       DELETE,
+      EXPORT,
     ],
   },
   {
@@ -298,6 +299,7 @@ export const MODULES = [
       DELETE,
       action("comment", "Commenter"),
       action("share", "Partager un tableau par lien public"),
+      EXPORT,
     ],
   },
   // Documents
@@ -637,6 +639,46 @@ export function resolveModule(resource) {
 }
 
 /**
+ * Version du catalogue des actions, enregistrée avec chaque grille
+ * (`catalogVersion` du document `organizationRole`). Une grille enregistrée
+ * avant l'ajout d'une action ne l'a jamais proposée : l'action absente n'est
+ * pas une case décochée, elle est accordée selon la règle ci-dessous.
+ */
+export const CATALOG_VERSION = 2;
+
+// Actions ajoutées après la mise en service des grilles par actions
+const ADDED_ACTIONS = [
+  // Exports du kanban et des prévisions : permis à quiconque voyait la page
+  { version: 2, module: "kanban", action: "export" },
+  { version: 2, module: "forecast", action: "export" },
+];
+
+/**
+ * Grille enregistrée avant une action ajoutée au catalogue : rôle prédéfini
+ * ajusté, l'action suit ses droits par défaut (comme une page absente) ;
+ * rôle personnalisé, elle est accordée s'il pouvait déjà agir sur la page
+ * (une action autre que « Voir »). Une page en « Voir » seul ne la reçoit
+ * pas.
+ */
+function withAddedActions(grid, storedVersion, defaults) {
+  const version = Number(storedVersion) || 1;
+  for (const added of ADDED_ACTIONS) {
+    if (version >= added.version) continue;
+    const current = grid[added.module] || [];
+    if (!current.includes("view") || current.includes(added.action)) continue;
+    const granted = defaults
+      ? (defaults.actions?.[added.module] || []).includes(added.action)
+      : current.some((a) => a !== "view");
+    if (granted) {
+      grid[added.module] = moduleActions(added.module).filter(
+        (a) => a === added.action || current.includes(a),
+      );
+    }
+  }
+  return grid;
+}
+
+/**
  * Grille d'actions d'un document `organizationRole` : champ `actions`, ou
  * ancien champ `levels` converti. Rôle prédéfini ajusté : `defaults` (ses
  * droits par défaut) complète les modules absents.
@@ -644,7 +686,11 @@ export function resolveModule(resource) {
 export function storedRoleActions(stored, defaults = null) {
   if (!stored) return null;
   if (stored.actions) {
-    return normalizeActions(stored.actions, defaults?.actions);
+    return withAddedActions(
+      normalizeActions(stored.actions, defaults?.actions),
+      stored.catalogVersion,
+      defaults,
+    );
   }
   if (stored.levels) {
     // Seules les pages présentes dans l'ancienne grille sont converties ;
