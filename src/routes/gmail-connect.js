@@ -9,10 +9,10 @@ import logger from "../utils/logger.js";
 import { requireWorkspaceActionPermission } from "../middlewares/require-workspace-membership.js";
 import { userHasWorkspaceAction } from "../utils/workspace-membership.js";
 import {
+  consumeSignedStateOnce,
   createSignedState,
   verifySignedState,
 } from "../utils/signedOAuthState.js";
-import { cacheGet, cacheSet } from "../config/redis.js";
 
 // 🔐 State OAuth signé (HMAC, secret serveur), lié à l'utilisateur et à
 // l'espace, valable 10 minutes et à usage unique : voir signedOAuthState.js
@@ -38,11 +38,9 @@ router.get(
       // Espace validé par requireWorkspaceActionPermission
       const organizationId = req.workspaceId || null;
       if (!organizationId) {
-        return res
-          .status(400)
-          .json({
-            error: "Organization ID manquant (header x-organization-id)",
-          });
+        return res.status(400).json({
+          error: "Organization ID manquant (header x-organization-id)",
+        });
       }
 
       const scanPeriodMonths = parseInt(req.query.scanPeriodMonths) || 3;
@@ -106,20 +104,29 @@ router.get("/callback", async (req, res) => {
     }
     const stateData = verified.data;
 
-    // Usage unique (Redis partagé entre instances, au mieux si indisponible)
-    if (await cacheGet(usedStateKey(stateData.nonce))) {
+    // Usage unique, atomique (Redis partagé entre instances ; sans Redis,
+    // refus : voir consumeSignedStateOnce)
+    const consumed =
+      typeof stateData.nonce === "string" && stateData.nonce
+        ? await consumeSignedStateOnce(
+            usedStateKey(stateData.nonce),
+            GMAIL_STATE_TTL_MS,
+          )
+        : "used";
+    if (consumed !== "ok") {
       logger.warn(
-        `[Gmail OAuth] State déjà utilisé pour userId ${stateData.userId}`,
+        `[Gmail OAuth] State refusé (${consumed}) pour userId ${stateData.userId}`,
       );
+      const code =
+        consumed === "unavailable"
+          ? encodeURIComponent(
+              "Service momentanément indisponible, veuillez réessayer",
+            )
+          : "invalid_state";
       return res.redirect(
-        `${process.env.FRONTEND_URL}/dashboard/outils/factures-achat?gmail_error=invalid_state`,
+        `${process.env.FRONTEND_URL}/dashboard/outils/factures-achat?gmail_error=${code}`,
       );
     }
-    await cacheSet(
-      usedStateKey(stateData.nonce),
-      true,
-      Math.ceil(GMAIL_STATE_TTL_MS / 1000),
-    );
 
     // Droit toujours présent au retour (retiré entre-temps : refus)
     const stillAllowed = await userHasWorkspaceAction(

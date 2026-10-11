@@ -9,10 +9,10 @@ import { translateMicrosoftError } from "../services/calendar/providers/Microsof
 import { requireWorkspaceActionPermission } from "../middlewares/require-workspace-membership.js";
 import { userHasWorkspaceAction } from "../utils/workspace-membership.js";
 import {
+  consumeSignedStateOnce,
   createSignedState,
   verifySignedState,
 } from "../utils/signedOAuthState.js";
-import { cacheGet, cacheSet } from "../config/redis.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -83,17 +83,28 @@ async function checkCalendarCallback(provider, state, req) {
   }
   const stateData = verified.data;
 
-  if (!stateData.nonce || (await cacheGet(usedStateKey(stateData.nonce)))) {
+  // Usage unique, atomique (Redis partagé entre instances ; sans Redis,
+  // refus : voir consumeSignedStateOnce)
+  const consumed =
+    typeof stateData.nonce === "string" && stateData.nonce
+      ? await consumeSignedStateOnce(
+          usedStateKey(stateData.nonce),
+          CALENDAR_STATE_TTL_MS,
+        )
+      : "used";
+  if (consumed !== "ok") {
     logger.warn(
-      `[${label} OAuth] State déjà utilisé pour userId ${stateData.userId}`,
+      `[${label} OAuth] State refusé (${consumed}) pour userId ${stateData.userId}`,
     );
-    return { error: "invalid_state" };
+    return {
+      error:
+        consumed === "unavailable"
+          ? encodeURIComponent(
+              "Service momentanément indisponible, veuillez réessayer",
+            )
+          : "invalid_state",
+    };
   }
-  await cacheSet(
-    usedStateKey(stateData.nonce),
-    true,
-    Math.ceil(CALENDAR_STATE_TTL_MS / 1000),
-  );
 
   // Validate authenticated user matches state
   let callbackUser;
@@ -143,12 +154,10 @@ router.get("/google/authorize", requireCalendarEdit, async (req, res) => {
     res.json({ authUrl });
   } catch (error) {
     logger.error("Erreur génération URL Google Calendar:", error);
-    res
-      .status(500)
-      .json({
-        error: "Erreur lors de la génération de l'URL d'autorisation Google",
-        details: translateGoogleError(error),
-      });
+    res.status(500).json({
+      error: "Erreur lors de la génération de l'URL d'autorisation Google",
+      details: translateGoogleError(error),
+    });
   }
 });
 
@@ -284,12 +293,10 @@ router.get("/microsoft/authorize", requireCalendarEdit, async (req, res) => {
     res.json({ authUrl });
   } catch (error) {
     logger.error("Erreur génération URL Microsoft Calendar:", error);
-    res
-      .status(500)
-      .json({
-        error: "Erreur lors de la génération de l'URL d'autorisation Microsoft",
-        details: translateMicrosoftError(error),
-      });
+    res.status(500).json({
+      error: "Erreur lors de la génération de l'URL d'autorisation Microsoft",
+      details: translateMicrosoftError(error),
+    });
   }
 });
 

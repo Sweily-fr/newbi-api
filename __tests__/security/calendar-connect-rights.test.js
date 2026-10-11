@@ -20,6 +20,22 @@ vi.hoisted(() => {
   process.env.BETTER_AUTH_SECRET ||= "secret-de-test";
 });
 
+// Redis simulé : consommation atomique du state OAuth (SET … NX)
+const usedStates = new Set();
+vi.mock("../../src/config/redis.js", () => ({
+  getPubSub: () => ({ publish: async () => {} }),
+  cacheGet: async () => null,
+  cacheSet: async () => {},
+  cacheDel: async () => {},
+  getCacheClient: () => ({
+    set: async (key) => {
+      if (usedStates.has(key)) return null;
+      usedStates.add(key);
+      return "OK";
+    },
+  }),
+}));
+
 // Session simulée : l'utilisateur renvoyé par le middleware d'authentification
 const auth = vi.hoisted(() => ({ user: null }));
 vi.mock("../../src/middlewares/better-auth-jwt.js", () => ({

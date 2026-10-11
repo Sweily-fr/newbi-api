@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { getCacheClient } from "../config/redis.js";
+import logger from "./logger.js";
 
 /**
  * Paramètre `state` signé des parcours OAuth qui reviennent sur un callback
@@ -83,4 +85,35 @@ export function verifySignedState(purpose, state) {
     return { ok: false, reason: "expired" };
   }
   return { ok: true, data };
+}
+
+/**
+ * Consomme un state (usage unique) de façon atomique : SET NX dans Redis,
+ * partagé entre les instances PM2. Seul le premier retour qui présente ce
+ * nonce l'emporte ; l'ancien couple lecture puis écriture laissait passer
+ * deux retours simultanés avec le même state.
+ *
+ * Sans Redis (ou en cas d'erreur Redis), le state est refusé : l'usage
+ * unique ne peut pas être garanti entre les instances. Même choix que la
+ * connexion SuperPDP, dont le state n'existe que dans Redis.
+ *
+ * @param {string} key - clé Redis propre au parcours et au nonce
+ * @param {number} ttlMs - durée de conservation (durée de vie du state)
+ * @returns {Promise<"ok"|"used"|"unavailable">}
+ */
+export async function consumeSignedStateOnce(key, ttlMs) {
+  const client = getCacheClient();
+  if (!client) {
+    logger.warn(
+      "State OAuth refusé : Redis indisponible, usage unique non garanti",
+    );
+    return "unavailable";
+  }
+  try {
+    const result = await client.set(key, "1", "PX", ttlMs, "NX");
+    return result === "OK" ? "ok" : "used";
+  } catch (error) {
+    logger.warn(`State OAuth refusé : erreur Redis (${error.message})`);
+    return "unavailable";
+  }
 }
