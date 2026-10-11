@@ -3,6 +3,10 @@ import PublicBoardShare, {
   hasPasswordProtection,
 } from "../models/PublicBoardShare.js";
 import { timingSafeStringEqual } from "../utils/timing-safe.js";
+import {
+  createBoardShareAccessToken,
+  hasBoardShareAccess,
+} from "../utils/boardShareAccessToken.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
@@ -37,7 +41,11 @@ const PUBLIC_VISITOR_UPDATED = "PUBLIC_VISITOR_UPDATED";
  * membres de l'espace du tableau ayant la lecture du kanban, comme les
  * subscriptions de kanban.js. Les subscriptions des visiteurs
  * (publicTaskUpdated, accessApproved, accessRevoked) restent ouvertes aux
- * connexions anonymes : elles sont gardées par le jeton de partage.
+ * connexions anonymes : elles sont gardées par le jeton de partage, et
+ * publicTaskUpdated, qui diffuse le contenu des tâches, exige en plus le mot
+ * de passe d'un partage protégé (ou le jeton remis par getPublicBoard).
+ * accessApproved et accessRevoked ne renvoient que le lien et l'e-mail fournis
+ * par l'abonné, avec l'issue de sa propre demande : aucun contenu du tableau.
  */
 const subscribeAsBoardMember =
   (subscribe) => async (parent, args, context, info) => {
@@ -121,7 +129,7 @@ const resolvers = {
     ),
 
     // Accéder au tableau via le token (visiteurs externes)
-    getPublicBoard: async (_, { token, email, password }) => {
+    getPublicBoard: async (_, { token, email, password, accessToken }) => {
       try {
         logger.info(
           `🔓 [PublicShare] Accès demandé avec token: ${token.substring(0, 8)}...`,
@@ -145,11 +153,15 @@ const resolvers = {
           };
         }
 
-        // Vérifier le mot de passe si nécessaire
-        if (share.hasPasswordSet && !(await share.verifyPassword(password))) {
+        // Vérifier le mot de passe si nécessaire (ou le jeton remis lors
+        // d'une ouverture précédente)
+        if (!(await hasBoardShareAccess(share, { password, accessToken }))) {
           return {
             success: false,
-            message: "Mot de passe incorrect",
+            message: password
+              ? "Mot de passe incorrect"
+              : "Mot de passe requis",
+            requiresPassword: true,
           };
         }
 
@@ -529,6 +541,11 @@ const resolvers = {
             shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
           },
           visitorEmail: email,
+          // Preuve du mot de passe pour les rechargements et l'abonnement
+          // temps réel (publicTaskUpdated), sans garder le mot de passe
+          accessToken: share.hasPasswordSet
+            ? createBoardShareAccessToken(share)
+            : null,
         };
       } catch (error) {
         logger.error("❌ [PublicShare] Erreur accès public:", error);
@@ -1961,15 +1978,25 @@ const resolvers = {
   // Subscription pour les mises à jour en temps réel sur la page publique
   Subscription: {
     publicTaskUpdated: {
-      subscribe: async (_, { token, boardId }) => {
+      subscribe: async (_, { token, boardId, password, accessToken }) => {
         try {
-          // Vérifier que le token est valide
+          // Vérifier que le token est valide (actif et non expiré)
           const share = await PublicBoardShare.findOne({
             token,
             isActive: true,
           });
-          if (!share) {
+          if (!share || !share.isValid()) {
             throw new Error("Lien de partage invalide ou expiré");
+          }
+
+          // 🔐 Même preuve que getPublicBoard pour un partage protégé : sans
+          // elle, le lien seul suffisait à suivre tâches, commentaires et
+          // pièces jointes en temps réel
+          if (!(await hasBoardShareAccess(share, { password, accessToken }))) {
+            throw new AppError(
+              "Mot de passe requis pour suivre ce tableau",
+              ERROR_CODES.FORBIDDEN,
+            );
           }
 
           // Vérifier que le boardId correspond
