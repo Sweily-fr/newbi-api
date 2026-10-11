@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
+import { hasInternalSecret } from "../middlewares/internal-secret.js";
 import cloudflareService from "../services/cloudflareService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import { ANNEX_KEY_RE, buildAnnexKey } from "../utils/documentAnnex.js";
@@ -9,15 +10,10 @@ import logger from "../utils/logger.js";
 const router = express.Router();
 
 /**
- * Appel serveur-à-serveur des routes PDF du front (/api/<type>/generate-pdf),
- * qui ajoutent l'annexe au PDF : elles ont déjà vérifié l'accès au document
- * et que l'annexe appartient à son organisation.
+ * Secret interne : appel serveur-à-serveur des routes PDF du front
+ * (/api/<type>/generate-pdf), qui ajoutent l'annexe au PDF. Elles ont déjà
+ * vérifié l'accès au document et que l'annexe appartient à son organisation.
  */
-function hasInternalSecret(req) {
-  const expected = process.env.INTERNAL_API_SECRET;
-  return Boolean(expected) && req.headers["x-internal-secret"] === expected;
-}
-
 function authenticate(req, res, next) {
   if (hasInternalSecret(req)) {
     req.internalCall = true;
@@ -36,7 +32,10 @@ function authenticate(req, res, next) {
 router.get("/:workspaceId/:fileId", authenticate, async (req, res) => {
   try {
     const { workspaceId, fileId } = req.params;
-    const key = buildAnnexKey(workspaceId, String(fileId).replace(/\.pdf$/i, ""));
+    const key = buildAnnexKey(
+      workspaceId,
+      String(fileId).replace(/\.pdf$/i, ""),
+    );
     if (!ANNEX_KEY_RE.test(key)) {
       return res.status(400).json({ error: "Annexe invalide" });
     }
