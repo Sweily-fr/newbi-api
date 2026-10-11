@@ -15,6 +15,7 @@ import FileTransfer from "../models/FileTransfer.js";
 import { v4 as uuidv4 } from "uuid";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 // 🔐 Envoi des fichiers et création du transfert : même droit que
 // createFileTransfer (« Créer » du module Transferts dans l'espace du
@@ -63,6 +64,60 @@ function deleteCacheEntry(key) {
     cacheTimers.delete(key);
   }
   void cacheDel(redisMetaKey(key));
+}
+
+// Entrée du cache (mémoire puis Redis), sans la recherche de repli dans les
+// transferts existants de getFileInfoByTransferId
+async function getCacheEntry(key) {
+  if (fileMetadataCache.has(key)) return fileMetadataCache.get(key);
+  const redisInfo = await cacheGet(redisMetaKey(key));
+  if (redisInfo) fileMetadataCache.set(key, redisInfo);
+  return redisInfo || null;
+}
+
+// Envoi multipart démarré : clé R2, utilisateur et espace, gardés 24 h comme
+// les métadonnées des fichiers, pour n'autoriser son annulation
+// (abortMultipartUpload) qu'à celui qui l'a démarré
+const multipartCacheKey = (uploadId) => `multipart:${uploadId}`;
+
+const userIdOf = (user) => String(user?._id || user?.id || "");
+
+/**
+ * Supprime de R2 les fichiers déjà finalisés d'un lot dont le transfert n'a
+ * pas pu être créé : sans transfert, rien ne les référence ni ne les purge.
+ * Seuls les fichiers envoyés par cet utilisateur (métadonnées en cache) et
+ * absents de tout transfert enregistré sont supprimés.
+ */
+async function discardUploadedFiles(fileIds, user) {
+  try {
+    const uploaderId = userIdOf(user);
+    const candidates = [];
+    for (const fileId of fileIds || []) {
+      const entry = await getCacheEntry(fileId);
+      if (entry?.r2Key && uploaderId && entry.uploadedBy === uploaderId) {
+        candidates.push({ fileId, r2Key: entry.r2Key });
+      }
+    }
+    if (candidates.length === 0) return;
+
+    const referenced = new Set(
+      await FileTransfer.distinct("files.r2Key", {
+        "files.r2Key": { $in: candidates.map((c) => c.r2Key) },
+      }),
+    );
+    const orphans = candidates.filter((c) => !referenced.has(c.r2Key));
+    if (orphans.length === 0) return;
+
+    await cloudflareTransferService.deleteFiles(orphans.map((c) => c.r2Key));
+    for (const { fileId } of orphans) deleteCacheEntry(fileId);
+    logger.info(
+      `🧹 ${orphans.length} fichier(s) d'un lot sans transfert supprimé(s) de R2`,
+    );
+  } catch (error) {
+    logger.warn(
+      `Nettoyage des fichiers d'un lot sans transfert impossible : ${error.message}`,
+    );
+  }
 }
 
 const getFileInfoByTransferId = async (fileId) => {
@@ -123,7 +178,7 @@ const chunkUploadR2Resolvers = {
       async (
         _,
         { transferId, fileId, fileName, fileSize, mimeType, totalParts },
-        { user },
+        { user, workspaceId },
       ) => {
         try {
           if (!transferId || !fileId || !fileName || !fileSize || !totalParts) {
@@ -171,6 +226,14 @@ const chunkUploadR2Resolvers = {
             finalMimeType,
             totalParts,
           );
+
+          await setCacheEntry(multipartCacheKey(result.uploadId), {
+            key: result.key,
+            userId: userIdOf(user),
+            workspaceId: workspaceId ? String(workspaceId) : null,
+            fileId,
+            transferId,
+          });
 
           return {
             uploadId: result.uploadId,
@@ -233,9 +296,12 @@ const chunkUploadR2Resolvers = {
             storageType: "r2",
             fileId: fileId,
             uploadedAt: new Date(),
+            uploadedBy: userIdOf(user),
           };
 
           await setCacheEntry(fileId, fileMetadata);
+          // Envoi terminé : plus rien à annuler
+          deleteCacheEntry(multipartCacheKey(uploadId));
 
           return {
             success: true,
@@ -269,6 +335,55 @@ const chunkUploadR2Resolvers = {
             "MULTIPART_COMPLETE_ERROR",
           );
         }
+      },
+    ),
+
+    // Annuler un envoi multipart en cours (échec ou annulation côté client) :
+    // sans cela, les parts déjà envoyées restaient stockées sur R2.
+    // true : envoi annulé (R2 l'avait peut-être déjà purgé) ; false : envoi
+    // inconnu (déjà finalisé, métadonnées expirées après 24 h ou envoi
+    // démarré avant cette version) ; FORBIDDEN : envoi démarré par un autre
+    // utilisateur, dans un autre espace, ou clé différente.
+    abortMultipartUpload: requireTransferCreate(
+      async (_, { uploadId, key }, { user, workspaceId }) => {
+        if (!uploadId || !key) {
+          throw new UserInputError("Paramètres manquants: uploadId ou key");
+        }
+
+        const entry = await getCacheEntry(multipartCacheKey(uploadId));
+        if (!entry) return false;
+
+        if (
+          entry.key !== key ||
+          entry.userId !== userIdOf(user) ||
+          (entry.workspaceId || null) !==
+            (workspaceId ? String(workspaceId) : null)
+        ) {
+          throw new AppError(
+            "Cet envoi n'existe pas ou ne vous appartient pas.",
+            ERROR_CODES.FORBIDDEN,
+          );
+        }
+
+        try {
+          await cloudflareTransferService.abortMultipartUpload(uploadId, key);
+        } catch (error) {
+          // Déjà terminé ou déjà annulé : plus rien à annuler
+          const alreadyGone =
+            error?.name === "NoSuchUpload" || error?.Code === "NoSuchUpload";
+          if (!alreadyGone) {
+            logger.error(
+              `Erreur annulation multipart ${uploadId}: ${error.message}`,
+            );
+            throw new ApolloError(
+              "Une erreur est survenue lors de l'annulation de l'envoi.",
+              "MULTIPART_ABORT_ERROR",
+            );
+          }
+        }
+
+        deleteCacheEntry(multipartCacheKey(uploadId));
+        return true;
       },
     ),
 
@@ -415,6 +530,7 @@ const chunkUploadR2Resolvers = {
               storageType: "r2",
               fileId: fileId,
               uploadedAt: new Date(),
+              uploadedBy: userIdOf(user),
             };
 
             await setCacheEntry(fileId, fileMetadata);
@@ -542,6 +658,7 @@ const chunkUploadR2Resolvers = {
               storageType: "r2",
               fileId: fileId,
               uploadedAt: new Date(),
+              uploadedBy: userIdOf(user),
             };
 
             // Ajouter au cache temporaire pour la création du transfert
@@ -577,6 +694,7 @@ const chunkUploadR2Resolvers = {
     // Créer un transfert de fichier à partir des IDs de fichiers déjà uploadés en chunks sur R2
     createFileTransferWithIdsR2: requireTransferCreate(
       async (_, { fileIds, input }, { user }) => {
+        let transferSaved = false;
         try {
           // Vérifier que les IDs de fichiers sont fournis
           if (!fileIds || fileIds.length === 0) {
@@ -682,6 +800,7 @@ const chunkUploadR2Resolvers = {
 
           // Sauvegarder le transfert de fichier
           await fileTransfer.save();
+          transferSaved = true;
 
           // Les métadonnées temporaires ont été consommées : purger les caches
           // L1 (mémoire) et L2 (Redis) pour éviter toute réutilisation périmée.
@@ -758,6 +877,12 @@ const chunkUploadR2Resolvers = {
             "❌ Erreur lors de la création du transfert de fichier R2:",
             error,
           );
+
+          // Transfert non créé : les fichiers déjà envoyés du lot sont
+          // orphelins (l'application renvoie tout le lot pour réessayer)
+          if (!transferSaved) {
+            await discardUploadedFiles(fileIds, user);
+          }
 
           if (error instanceof UserInputError) {
             throw error;
@@ -864,7 +989,9 @@ const chunkUploadR2Resolvers = {
 };
 
 // ✅ Phase A.4 — Subscription check on all chunk upload R2 mutations
+// (sauf l'annulation : libérer un envoi entamé reste permis abonnement échu)
 Object.keys(chunkUploadR2Resolvers.Mutation).forEach((name) => {
+  if (name === "abortMultipartUpload") return;
   const original = chunkUploadR2Resolvers.Mutation[name];
   chunkUploadR2Resolvers.Mutation[name] = async (
     parent,

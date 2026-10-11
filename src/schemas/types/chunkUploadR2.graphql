@@ -83,6 +83,12 @@ extend type Mutation {
     fileId: String!
   ): CompleteMultipartUploadResponse!
 
+  # Annuler un multipart upload en cours (échec ou annulation de l'envoi).
+  # true : annulé ; false : envoi inconnu (déjà finalisé, ou démarré il y a
+  # plus de 24 h) ; erreur FORBIDDEN : envoi d'un autre utilisateur, d'un
+  # autre espace ou clé différente
+  abortMultipartUpload(uploadId: String!, key: String!): Boolean!
+
   # Générer des URLs signées pour upload direct vers R2
   generatePresignedUploadUrls(
     fileId: String!
