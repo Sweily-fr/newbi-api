@@ -495,7 +495,12 @@ extend type Query {
     limit: Int
     search: String
     status: PurchaseInvoiceStatus
+    # Plusieurs statuts à la fois (combiné avec status s'il est aussi fourni)
+    statuses: [PurchaseInvoiceStatus!]
     category: PurchaseInvoiceCategory
+    # Sous-catégories fines (référentiel Transactions) ; une facture sans
+    # sous-catégorie est comparée sur sa catégorie large, comme le filtre du web
+    subcategories: [String!]
     supplierId: ID
     startDate: String
     endDate: String

@@ -161,6 +161,123 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoices", () => {
     expect(result.totalCount).toBe(1);
   });
 
+  it("filtre sur plusieurs statuts à la fois (statuses)", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "OVERDUE" });
+    await insertPurchaseInvoice({ status: "PAID" });
+    await insertPurchaseInvoice({ status: "ARCHIVED" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.status).sort()).toEqual([
+      "OVERDUE",
+      "TO_PAY",
+    ]);
+  });
+
+  it("combine status et statuses en ET", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "PAID" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        status: "PAID",
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(0);
+  });
+
+  it("filtre sur plusieurs sous-catégories, catégorie large à défaut", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF",
+      category: "TRANSPORT",
+      subcategory: "train",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Restaurant",
+      category: "MEALS",
+      subcategory: "restaurant",
+    });
+    // Ancienne facture sans sous-catégorie : comparée sur sa catégorie
+    await insertPurchaseInvoice({
+      supplierName: "EDF",
+      category: "ENERGY",
+      subcategory: null,
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Free",
+      category: "TELECOMMUNICATIONS",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        subcategories: ["train", "ENERGY"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.supplierName).sort()).toEqual([
+      "EDF",
+      "SNCF",
+    ]);
+  });
+
+  it("combine sous-catégories, statuts et recherche", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Voyageurs",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Connect",
+      subcategory: "train",
+      status: "PAID",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Air France",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "SNCF",
+        statuses: ["TO_PAY"],
+        subcategories: ["train"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0].supplierName).toBe("SNCF Voyageurs");
+  });
+
   it("filters by amount range", async () => {
     await insertPurchaseInvoice({ amountTTC: 100 });
     await insertPurchaseInvoice({ amountTTC: 500 });

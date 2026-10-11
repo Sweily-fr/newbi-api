@@ -120,7 +120,9 @@ const purchaseInvoiceResolvers = {
         limit = 20,
         search,
         status,
+        statuses,
         category,
+        subcategories,
         supplierId,
         startDate,
         endDate,
@@ -134,9 +136,28 @@ const purchaseInvoiceResolvers = {
       } = args;
 
       const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
+      // Conditions combinées en ET (la recherche occupe déjà query.$or)
+      const and = [];
 
       if (status) query.status = status;
+      // Filtres multiples de l'app mobile : en plus de status / category
+      if (Array.isArray(statuses) && statuses.length > 0) {
+        and.push({ status: { $in: statuses } });
+      }
       if (category) query.category = category;
+      if (Array.isArray(subcategories) && subcategories.length > 0) {
+        // Code affiché = sous-catégorie, sinon catégorie large (même règle
+        // que le filtre Catégorie de la page web)
+        and.push({
+          $or: [
+            { subcategory: { $in: subcategories } },
+            {
+              subcategory: { $in: [null, ""] },
+              category: { $in: subcategories },
+            },
+          ],
+        });
+      }
       if (supplierId)
         query.supplierId = new mongoose.Types.ObjectId(supplierId);
 
@@ -176,6 +197,8 @@ const purchaseInvoiceResolvers = {
           query.$or.push({ amountTTC: numSearch });
         }
       }
+
+      if (and.length > 0) query.$and = and;
 
       const sort = {};
       sort[sortField] = sortOrder === "ASC" ? 1 : -1;
