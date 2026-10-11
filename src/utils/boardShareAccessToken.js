@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { hasPasswordProtection } from "../models/PublicBoardShare.js";
+import { getAttemptCount, recordAttempt } from "./attemptLimiter.js";
 
 /**
  * Jeton d'accès d'un visiteur à un tableau partagé protégé par mot de passe.
@@ -66,14 +67,22 @@ export function createBoardShareAccessToken(
 /**
  * Vérifie qu'un jeton a été remis pour ce partage, avec son mot de passe
  * actuel, et n'a pas expiré.
+ * @param {object} [options]
+ * @param {boolean} [options.allowExpired] - abonnement déjà ouvert : seul un
+ *   changement de mot de passe (ou de partage) l'interrompt
  */
-export function verifyBoardShareAccessToken(token, share) {
+export function verifyBoardShareAccessToken(
+  token,
+  share,
+  { allowExpired = false } = {},
+) {
   const shareId = share?._id || share?.id;
   if (typeof token !== "string" || !shareId) return false;
 
   const [rawExpiresAt, signature] = token.split(".");
   const expiresAt = Number(rawExpiresAt);
-  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false;
+  if (!Number.isFinite(expiresAt)) return false;
+  if (!allowExpired && expiresAt < Date.now()) return false;
   if (!signature) return false;
 
   try {
@@ -90,13 +99,63 @@ export function verifyBoardShareAccessToken(token, share) {
   }
 }
 
+// Essais de mot de passe en échec tolérés sur 15 min, comme
+// /api/transfers/verify-password : par adresse IP, et par partage pour
+// borner une attaque répartie sur plusieurs adresses
+export const BOARD_SHARE_PASSWORD_WINDOW_SECONDS = 15 * 60;
+export const BOARD_SHARE_PASSWORD_MAX_PER_IP = 20;
+export const BOARD_SHARE_PASSWORD_MAX_PER_SHARE = 50;
+
+const PROOF_MESSAGES = {
+  required: "Mot de passe requis",
+  incorrect: "Mot de passe incorrect",
+  rate_limited: "Trop de tentatives. Réessayez dans quelques minutes.",
+};
+
 /**
- * Preuve d'accès exigée d'un visiteur pour un partage protégé : le mot de
- * passe, ou un jeton remis par getPublicBoard. Toujours vraie pour un
- * partage sans mot de passe.
+ * Preuve d'accès exigée d'un visiteur pour un partage protégé : un jeton
+ * remis par getPublicBoard, ou le mot de passe (essais en échec limités par
+ * adresse IP et par partage). Toujours acquise pour un partage sans mot de
+ * passe.
+ * @param {object} share - document PublicBoardShare
+ * @param {object} proof
+ * @param {string} [proof.password]
+ * @param {string} [proof.accessToken]
+ * @param {string} [proof.ip] - adresse du client (compteur d'essais)
+ * @returns {Promise<{ok: true}|{ok: false, reason: string, message: string}>}
  */
-export async function hasBoardShareAccess(share, { password, accessToken }) {
-  if (!hasPasswordProtection(share)) return true;
-  if (verifyBoardShareAccessToken(accessToken, share)) return true;
-  return Boolean(password) && (await share.verifyPassword(password));
+export async function checkBoardShareProof(
+  share,
+  { password, accessToken, ip } = {},
+) {
+  if (!hasPasswordProtection(share)) return { ok: true };
+  if (verifyBoardShareAccessToken(accessToken, share)) return { ok: true };
+
+  const deny = (reason) => ({
+    ok: false,
+    reason,
+    message: PROOF_MESSAGES[reason],
+  });
+  if (!password) return deny("required");
+
+  const ipKey = `board-share-password:ip:${ip || "inconnue"}`;
+  const shareKey = `board-share-password:share:${share._id}`;
+  const [ipAttempts, shareAttempts] = await Promise.all([
+    getAttemptCount(ipKey),
+    getAttemptCount(shareKey),
+  ]);
+  if (
+    ipAttempts >= BOARD_SHARE_PASSWORD_MAX_PER_IP ||
+    shareAttempts >= BOARD_SHARE_PASSWORD_MAX_PER_SHARE
+  ) {
+    return deny("rate_limited");
+  }
+
+  if (await share.verifyPassword(password)) return { ok: true };
+
+  await Promise.all([
+    recordAttempt(ipKey, BOARD_SHARE_PASSWORD_WINDOW_SECONDS),
+    recordAttempt(shareKey, BOARD_SHARE_PASSWORD_WINDOW_SECONDS),
+  ]);
+  return deny("incorrect");
 }
