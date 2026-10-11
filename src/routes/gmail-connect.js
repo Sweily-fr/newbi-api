@@ -4,18 +4,22 @@ import GmailConnection from '../models/GmailConnection.js';
 import GmailOAuthProvider, { translateGmailError } from '../services/gmail/GmailOAuthProvider.js';
 import { scanGmailConnection } from '../services/gmail/GmailScannerService.js';
 import logger from '../utils/logger.js';
+import { requireWorkspaceActionPermission } from '../middlewares/require-workspace-membership.js';
 
 const router = express.Router();
 
 // GET /gmail-connect/authorize — generate OAuth URL
-router.get('/authorize', async (req, res) => {
+// Membre de l'espace (en-tête x-organization-id) avec le droit « Ajouter »
+// des factures d'achat : la boîte connectée crée des factures dans l'espace
+router.get('/authorize', requireWorkspaceActionPermission('purchaseInvoices', 'create'), async (req, res) => {
   try {
     const user = await betterAuthJWTMiddleware(req);
     if (!user) {
       return res.status(401).json({ error: 'Non authentifié' });
     }
 
-    const organizationId = req.headers['x-organization-id'] || null;
+    // Espace validé par requireWorkspaceActionPermission
+    const organizationId = req.workspaceId || null;
     if (!organizationId) {
       return res.status(400).json({ error: 'Organization ID manquant (header x-organization-id)' });
     }

@@ -4,6 +4,19 @@ import PublicBoardShare from '../models/PublicBoardShare.js';
 import logger from '../utils/logger.js';
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
+import { Board } from '../models/kanban.js';
+import { requireWorkspaceAction } from '../middlewares/rbac.js';
+
+// Bannir ou réintégrer un invité d'un tableau : droit « Partager un tableau
+// par lien public » du kanban, sur un tableau de l'espace (ces mutations
+// n'avaient aucun contrôle : n'importe qui pouvait bannir un invité)
+const assertSharedBoardInWorkspace = async (boardId, workspaceId) => {
+  if (!mongoose.Types.ObjectId.isValid(String(boardId))) {
+    throw new GraphQLError('Tableau non trouvé');
+  }
+  const exists = await Board.exists({ _id: boardId, workspaceId });
+  if (!exists) throw new GraphQLError('Tableau non trouvé');
+};
 
 // Helper pour obtenir les infos d'un utilisateur Newbi lié
 const getLinkedUserInfo = async (db, userId) => {
@@ -418,8 +431,9 @@ const userInvitedResolvers = {
     },
     
     // Bannir d'un board
-    banInvitedUserFromBoard: async (_, { userInvitedId, boardId, reason, workspaceId }, { user }) => {
+    banInvitedUserFromBoard: requireWorkspaceAction('kanban', 'share')(async (_, { userInvitedId, boardId, reason, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       try {
+        await assertSharedBoardInWorkspace(boardId, workspaceId || contextWorkspaceId);
         const userInvited = await UserInvited.findById(userInvitedId);
         
         if (!userInvited) {
@@ -453,11 +467,12 @@ const userInvitedResolvers = {
         logger.error('❌ [UserInvited] Erreur banInvitedUserFromBoard:', error);
         throw new GraphQLError(error.message || 'Erreur lors du bannissement');
       }
-    },
+    }),
     
     // Débannir d'un board
-    unbanInvitedUserFromBoard: async (_, { userInvitedId, boardId, workspaceId }, { user }) => {
+    unbanInvitedUserFromBoard: requireWorkspaceAction('kanban', 'share')(async (_, { userInvitedId, boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       try {
+        await assertSharedBoardInWorkspace(boardId, workspaceId || contextWorkspaceId);
         const userInvited = await UserInvited.findById(userInvitedId);
         
         if (!userInvited) {
@@ -483,7 +498,7 @@ const userInvitedResolvers = {
         logger.error('❌ [UserInvited] Erreur unbanInvitedUserFromBoard:', error);
         throw new GraphQLError(error.message || 'Erreur lors du débannissement');
       }
-    },
+    }),
     
     // Déconnecter
     logoutInvitedUser: async (_, { sessionToken }) => {

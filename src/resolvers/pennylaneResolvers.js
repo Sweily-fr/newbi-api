@@ -498,6 +498,30 @@ const pennylaneResolvers = {
   },
 };
 
+// Envoyer un document vers Pennylane : droit de gérer les applications,
+// comme la synchronisation complète (ces envois unitaires ne vérifiaient
+// que l'appartenance à l'espace). Enveloppe interne : withOrganization,
+// posé plus bas, fournit les droits du rôle.
+const PENNYLANE_UNIT_SYNCS = [
+  "syncInvoiceToPennylane",
+  "syncExpenseToPennylane",
+  "syncQuoteToPennylane",
+];
+PENNYLANE_UNIT_SYNCS.forEach((name) => {
+  const original = pennylaneResolvers.Mutation[name];
+  if (original) {
+    pennylaneResolvers.Mutation[name] = async (parent, args, context, info) => {
+      if (!canManageIntegrations(context.permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de synchroniser ce document",
+        };
+      }
+      return original(parent, args, context, info);
+    };
+  }
+});
+
 // ✅ Phase A.4 — Subscription check (fail-closed) on Pennylane mutations (exclude disconnectPennylane)
 const PENNYLANE_BLOCK = [
   "testPennylaneConnection",

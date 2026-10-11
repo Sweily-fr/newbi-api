@@ -5,7 +5,10 @@ import { bankingService } from "../services/banking/BankingService.js";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
-import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
+import {
+  requireWorkspaceMembership,
+  requireWorkspacePermission,
+} from "../middlewares/require-workspace-membership.js";
 
 const router = express.Router();
 
@@ -368,44 +371,51 @@ router.get("/transactions", async (req, res) => {
   }
 });
 
-// Endpoint pour supprimer l'utilisateur Bridge
-router.delete("/user", async (req, res) => {
-  try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: "Non authentifié" });
+// Endpoint pour supprimer l'utilisateur Bridge (et toutes les données
+// bancaires de l'espace) : droit de gérer les applications et banques,
+// comme la déconnexion d'une banque
+router.delete(
+  "/user",
+  requireWorkspacePermission("integrations", "write"),
+  async (req, res) => {
+    try {
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
+
+      // Espace validé par requireWorkspacePermission
+      const workspaceId = req.workspaceId;
+      if (!workspaceId) {
+        return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Initialiser le service banking avec Bridge
+      await bankingService.initialize("bridge");
+      const provider = bankingService.currentProvider;
+
+      // Supprimer l'utilisateur Bridge et toutes ses données
+      const result = await provider.deleteBridgeUser(workspaceId);
+
+      logger.info(
+        `Utilisateur Bridge supprimé pour workspace ${workspaceId}:`,
+        result,
+      );
+
+      res.json({
+        success: true,
+        message: "Utilisateur Bridge supprimé avec succès",
+        deletedAccounts: result.deletedAccounts,
+        deletedTransactions: result.deletedTransactions,
+      });
+    } catch (error) {
+      logger.error("Erreur suppression utilisateur Bridge:", error);
+      res.status(500).json({
+        error: "Erreur lors de la suppression de l'utilisateur Bridge",
+        details: error.message,
+      });
     }
-
-    const workspaceId = req.headers["x-workspace-id"];
-    if (!workspaceId) {
-      return res.status(400).json({ error: "WorkspaceId requis" });
-    }
-
-    // Initialiser le service banking avec Bridge
-    await bankingService.initialize("bridge");
-    const provider = bankingService.currentProvider;
-
-    // Supprimer l'utilisateur Bridge et toutes ses données
-    const result = await provider.deleteBridgeUser(workspaceId);
-
-    logger.info(
-      `Utilisateur Bridge supprimé pour workspace ${workspaceId}:`,
-      result,
-    );
-
-    res.json({
-      success: true,
-      message: "Utilisateur Bridge supprimé avec succès",
-      deletedAccounts: result.deletedAccounts,
-      deletedTransactions: result.deletedTransactions,
-    });
-  } catch (error) {
-    logger.error("Erreur suppression utilisateur Bridge:", error);
-    res.status(500).json({
-      error: "Erreur lors de la suppression de l'utilisateur Bridge",
-      details: error.message,
-    });
-  }
-});
+  },
+);
 
 export default router;
