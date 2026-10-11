@@ -42,9 +42,14 @@ export function canAccessFolder(userId, folder, effectiveVis) {
  * une fois, corbeille comprise : un document d'un dossier privé mis à la
  * corbeille reste protégé).
  *
- * `canAccess(folderId)` : true pour la racine (« Documents à classer »,
- * folderId null) et pour un dossier introuvable (document dont le dossier a
- * disparu, que la liste GraphQL affiche aussi) ; sinon la règle ci-dessus.
+ * - `canAccess(folderId)` : true pour la racine (« Documents à classer »,
+ *   folderId null) et pour un dossier introuvable (document dont le dossier
+ *   a disparu, que la liste GraphQL affiche aussi) ; sinon la règle
+ *   ci-dessus ;
+ * - `canAccessDocument(doc)` : dossier actuel et, pour un document mis à la
+ *   corbeille, dossier d'origine tous deux accessibles ;
+ * - `inaccessibleFolderIds` : ObjectId des dossiers inaccessibles, pour
+ *   exclure leurs éléments d'un filtre ($nin).
  */
 export async function loadSharedFolderAccess(workspaceId, userId) {
   const folders = await SharedFolder.find({ workspaceId });
@@ -66,5 +71,30 @@ export async function loadSharedFolderAccess(workspaceId, userId) {
     return memo.get(key);
   };
 
-  return { canAccess };
+  const canAccessDocument = (doc) =>
+    Boolean(doc) && canAccess(doc.folderId) && canAccess(doc.originalFolderId);
+
+  const inaccessibleFolderIds = folders
+    .filter((folder) => !canAccess(folder._id))
+    .map((folder) => folder._id);
+
+  return { canAccess, canAccessDocument, inaccessibleFolderIds };
+}
+
+/**
+ * Même chose, lue une seule fois par contexte de requête GraphQL et par
+ * espace (les resolvers de champs d'une liste la partagent).
+ */
+export function sharedFolderAccessFor(context, workspaceId) {
+  const user = context?.user;
+  const userId = String(user?._id || user?.id || "");
+  context._sharedFolderAccess ||= new Map();
+  const key = `${workspaceId}:${userId}`;
+  if (!context._sharedFolderAccess.has(key)) {
+    context._sharedFolderAccess.set(
+      key,
+      loadSharedFolderAccess(workspaceId, userId),
+    );
+  }
+  return context._sharedFolderAccess.get(key);
 }
