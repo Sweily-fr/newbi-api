@@ -372,6 +372,11 @@ const resolvers = {
             success: false,
             message: VISITOR_SESSION_MESSAGE,
             requiresVisitorSession: true,
+            // Mot de passe du partage déjà vérifié : la page le garde pour
+            // ne pas le redemander après la confirmation de l'adresse
+            accessToken: share.hasPasswordSet
+              ? createBoardShareAccessToken(share)
+              : null,
           };
         }
 

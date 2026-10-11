@@ -155,6 +155,24 @@ describe("Partage public : l'e-mail déclaré n'est plus une identité", () => {
     expect(result.board).toBeUndefined();
   });
 
+  it("partage protégé : le mot de passe vérifié reste acquis pendant la confirmation de l'adresse", async () => {
+    await share.setPassword("Tableau!2026");
+    await share.save();
+
+    const first = await getPublicBoard({ password: "Tableau!2026" });
+    expect(first.success).toBe(false);
+    expect(first.requiresVisitorSession).toBe(true);
+    expect(first.board).toBeUndefined();
+    expect(first.accessToken).toBeTruthy();
+
+    const { sessionToken } = await signIn(VISITOR);
+    const opened = await getPublicBoard({
+      sessionToken,
+      accessToken: first.accessToken,
+    });
+    expect(opened.success).toBe(true);
+  });
+
   it("un visiteur banni ne revient pas sous une autre adresse déclarée", async () => {
     share.bannedEmails.push({ email: VISITOR, reason: "Spam" });
     await share.save();
