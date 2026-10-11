@@ -1279,6 +1279,15 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
   }
 };
 
+// Échappe une valeur saisie par un utilisateur avant de l'insérer dans le HTML
+// d'un e-mail (titres de tâche et de tableau, noms, commentaires).
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
 /**
  * Envoyer une notification d'assignation de tâche Kanban
  */
@@ -1370,7 +1379,7 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
 
             <!-- Titre -->
             <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-              ${taskTitle}
+              ${escapeHtml(taskTitle)}
             </h1>
 
             <!-- Salutation -->
@@ -1380,14 +1389,14 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
 
             <!-- Message -->
             <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
-              <strong style="color: #1a1a1a;">${assignerName}</strong> vous a assigné une nouvelle tâche sur le tableau <strong style="color: #1a1a1a;">${boardName}</strong>.
+              <strong style="color: #1a1a1a;">${escapeHtml(assignerName)}</strong> vous a assigné une nouvelle tâche sur le tableau <strong style="color: #1a1a1a;">${escapeHtml(boardName)}</strong>.
             </p>
 
             ${
               taskDescription
                 ? `
             <!-- Description -->
-            <p style="font-size: 14px; color: #6b7280; margin: 0 0 24px 0; line-height: 1.6; white-space: pre-wrap;">${taskDescription.substring(0, 200)}${taskDescription.length > 200 ? "..." : ""}</p>
+            <p style="font-size: 14px; color: #6b7280; margin: 0 0 24px 0; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(taskDescription.substring(0, 200))}${taskDescription.length > 200 ? "..." : ""}</p>
             `
                 : ""
             }
@@ -1397,11 +1406,11 @@ const sendTaskAssignmentEmail = async (assigneeEmail, assignmentData) => {
               <table style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Tableau</td>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${boardName}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${escapeHtml(boardName)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Colonne</td>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${columnName || "Non spécifiée"}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${escapeHtml(columnName || "Non spécifiée")}</td>
                 </tr>
                 ${
                   dueDateFormatted
@@ -1521,7 +1530,7 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
 
             <!-- Titre -->
             <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-              ${taskTitle}
+              ${escapeHtml(taskTitle)}
             </h1>
 
             <!-- Salutation -->
@@ -1531,7 +1540,7 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
 
             <!-- Message -->
             <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
-              <strong style="color: #1a1a1a;">${actorName}</strong> vous a mentionné dans un commentaire sur le tableau <strong style="color: #1a1a1a;">${boardName}</strong>.
+              <strong style="color: #1a1a1a;">${escapeHtml(actorName)}</strong> vous a mentionné dans un commentaire sur le tableau <strong style="color: #1a1a1a;">${escapeHtml(boardName)}</strong>.
             </p>
 
             ${
@@ -1539,7 +1548,7 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
                 ? `
             <!-- Extrait du commentaire -->
             <div style="background-color: #fafafa; border-left: 3px solid #5a50ff; border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 24px;">
-              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${commentExcerpt.substring(0, 300)}${commentExcerpt.length > 300 ? "..." : ""}</p>
+              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${escapeHtml(commentExcerpt.substring(0, 300))}${commentExcerpt.length > 300 ? "..." : ""}</p>
             </div>
             `
                 : ""
@@ -1550,11 +1559,11 @@ const sendMentionEmail = async (recipientEmail, mentionData) => {
               <table style="width: 100%; border-collapse: collapse;">
                 <tr>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Tableau</td>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${boardName}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${escapeHtml(boardName)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Tâche</td>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${taskTitle}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${escapeHtml(taskTitle)}</td>
                 </tr>
               </table>
             </div>
@@ -1635,9 +1644,9 @@ const sendShareAccessApprovedEmail = async (
                 <span style="font-size:11px;font-weight:500;color:#166534;letter-spacing:0.3px;text-transform:uppercase;">Accès approuvé</span>
               </div>
             </div>
-            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${safeBoard}</h1>
-            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${safeName},</p>
-            <p style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${safeBoard}</strong> a été approuvée. Vous pouvez désormais y accéder.</p>
+            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${escapeHtml(safeBoard)}</h1>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${escapeHtml(safeName)},</p>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${escapeHtml(safeBoard)}</strong> a été approuvée. Vous pouvez désormais y accéder.</p>
             <div style="text-align:center;margin:32px 0;">
               <a href="${shareUrl}" style="display:inline-block;background-color:#5b50fb;color:#ffffff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">Accéder au tableau</a>
             </div>
@@ -1700,9 +1709,9 @@ const sendShareAccessRejectedEmail = async (
                 <span style="font-size:11px;font-weight:500;color:#991b1b;letter-spacing:0.3px;text-transform:uppercase;">Demande refusée</span>
               </div>
             </div>
-            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${safeBoard}</h1>
-            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${safeName},</p>
-            <p style="font-size:15px;color:#4b5563;margin:0 0 16px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${safeBoard}</strong> a été refusée par le propriétaire.</p>
+            <h1 style="font-size:24px;font-weight:500;color:#1a1a1a;margin:0 0 16px 0;line-height:1.3;">${escapeHtml(safeBoard)}</h1>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 12px 0;line-height:1.6;">Bonjour ${escapeHtml(safeName)},</p>
+            <p style="font-size:15px;color:#4b5563;margin:0 0 16px 0;line-height:1.6;">Votre demande d'accès au tableau Kanban <strong>${escapeHtml(safeBoard)}</strong> a été refusée par le propriétaire.</p>
             <p style="font-size:14px;color:#6b7280;margin:0;line-height:1.6;">Si vous pensez qu'il s'agit d'une erreur, contactez directement le propriétaire du tableau.</p>
           </div>
           <p style="text-align:center;color:#9ca3af;font-size:11px;padding-bottom:32px;">© ${new Date().getFullYear()} Newbi · Email automatique, merci de ne pas répondre</p>
@@ -1755,13 +1764,6 @@ const sendSignatureTestEmail = async (
  * Demande d'accès à une page : envoyée au super admin de l'espace quand un
  * membre tombe sur une page que son rôle ne permet pas.
  */
-const escapeHtml = (value) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
 const sendAccessRequestEmail = async (ownerEmail, requestData) => {
   const {
     requesterName,
