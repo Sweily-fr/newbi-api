@@ -26,7 +26,14 @@ vi.mock("../../src/config/redis.js", () => ({
   cacheDel: async (key) => {
     cache.delete(key);
   },
-  getCacheClient: () => null,
+  // Client brut : consommation atomique du state (SET … NX)
+  getCacheClient: () => ({
+    set: async (key, value, ...options) => {
+      if (options.includes("NX") && cache.has(key)) return null;
+      cache.set(key, value);
+      return "OK";
+    },
+  }),
 }));
 
 // Utilisateur de la requête /authorize (en-tête Authorization simulé)

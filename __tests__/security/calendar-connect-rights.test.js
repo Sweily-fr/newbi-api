@@ -17,7 +17,24 @@ vi.hoisted(() => {
   process.env.CALENDAR_ENCRYPTION_KEY =
     process.env.CALENDAR_ENCRYPTION_KEY || "a".repeat(64);
   process.env.FRONTEND_URL = "https://app.test";
+  process.env.BETTER_AUTH_SECRET ||= "secret-de-test";
 });
+
+// Redis simulé : consommation atomique du state OAuth (SET … NX)
+const usedStates = new Set();
+vi.mock("../../src/config/redis.js", () => ({
+  getPubSub: () => ({ publish: async () => {} }),
+  cacheGet: async () => null,
+  cacheSet: async () => {},
+  cacheDel: async () => {},
+  getCacheClient: () => ({
+    set: async (key) => {
+      if (usedStates.has(key)) return null;
+      usedStates.add(key);
+      return "OK";
+    },
+  }),
+}));
 
 // Session simulée : l'utilisateur renvoyé par le middleware d'authentification
 const auth = vi.hoisted(() => ({ user: null }));
@@ -62,7 +79,11 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import { invalidateOrganizationRoles } from "../../src/services/organizationRoleService.js";
 import CalendarConnection from "../../src/models/CalendarConnection.js";
-import calendarConnectRoutes from "../../src/routes/calendar-connect.js";
+import calendarConnectRoutes, {
+  CALENDAR_STATE_TTL_MS,
+  calendarStatePurpose,
+} from "../../src/routes/calendar-connect.js";
+import { createSignedState } from "../../src/utils/signedOAuthState.js";
 
 let server;
 let baseUrl;
@@ -77,10 +98,16 @@ const asUser = (userId) => {
 const authorize = (provider, headers = {}) =>
   fetch(`${baseUrl}/calendar-connect/${provider}/authorize`, { headers });
 
+// State signé comme celui de /authorize (voir calendar-oauth-state.test.js
+// pour les states fabriqués, modifiés, expirés ou rejoués)
 const callback = (provider, stateData) =>
   fetch(
     `${baseUrl}/calendar-connect/${provider}/callback?code=code-test&state=${encodeURIComponent(
-      Buffer.from(JSON.stringify(stateData)).toString("base64"),
+      createSignedState(
+        calendarStatePurpose(provider),
+        stateData,
+        CALENDAR_STATE_TTL_MS,
+      ),
     )}`,
     { redirect: "manual" },
   );
@@ -144,7 +171,9 @@ describe("Connexion d'un agenda Google ou Microsoft", () => {
       expect(res.status).toBe(200);
       const { authUrl } = await res.json();
       const state = new URL(authUrl).searchParams.get("state");
-      const decoded = JSON.parse(Buffer.from(state, "base64").toString());
+      const decoded = JSON.parse(
+        Buffer.from(state.split(".")[0], "base64url").toString(),
+      );
       expect(decoded).toMatchObject({
         userId: String(editor),
         workspaceId: String(workspaceId),
@@ -158,10 +187,7 @@ describe("Connexion d'un agenda Google ou Microsoft", () => {
         { userId: String(viewer), workspaceId: String(workspaceId) },
         { userId: String(editor) },
       ]) {
-        const res = await callback(provider, {
-          ...stateData,
-          issuedAt: Date.now(),
-        });
+        const res = await callback(provider, stateData);
         expect(res.status).toBe(302);
         expect(res.headers.get("location")).toContain(
           "calendar_error=forbidden",
@@ -175,7 +201,6 @@ describe("Connexion d'un agenda Google ou Microsoft", () => {
       const res = await callback(provider, {
         userId: String(editor),
         workspaceId: String(workspaceId),
-        issuedAt: Date.now(),
       });
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain(

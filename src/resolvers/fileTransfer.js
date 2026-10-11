@@ -26,6 +26,7 @@ import {
   sharedDocsS3Client,
   SHARED_DOCUMENTS_BUCKET,
 } from "../services/sharedDocumentZipService.js";
+import { loadSharedFolderAccess } from "../services/sharedFolderAccess.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -620,6 +621,14 @@ const fileTransferResolvers = {
             );
           }
 
+          // Dossiers privés : même visibilité que la page (un dossier ou un
+          // document inaccessible est ignoré comme s'il n'existait pas, un
+          // sous-dossier inaccessible n'entre pas dans le ZIP de son parent)
+          const { canAccess } = await loadSharedFolderAccess(
+            workspaceId,
+            user._id || user.id,
+          );
+
           // 1. Construire la liste de documents avec leurs chemins ZIP
           const allDocumentsToZip = []; // { document, zipPath }
           const includedDocIds = new Set(); // Éviter les doublons (docs déjà inclus via dossiers)
@@ -632,7 +641,9 @@ const fileTransferResolvers = {
             // fois (une fois imbriqué, une fois à la racine).
             const descendantOfSelected = new Set();
             for (const folderId of folderIds) {
-              const subs = await getAllSubfolders(folderId, workspaceId);
+              const subs = await getAllSubfolders(folderId, workspaceId, {
+                canAccess,
+              });
               for (const f of subs) {
                 const fid = f._id.toString();
                 if (fid !== String(folderId)) descendantOfSelected.add(fid);
@@ -643,7 +654,9 @@ const fileTransferResolvers = {
             );
 
             for (const folderId of topLevelFolderIds) {
-              const folders = await getAllSubfolders(folderId, workspaceId);
+              const folders = await getAllSubfolders(folderId, workspaceId, {
+                canAccess,
+              });
               if (folders.length === 0) continue;
 
               const filteredFolderIds = folders.map((f) => f._id);
@@ -687,6 +700,7 @@ const fileTransferResolvers = {
 
             for (const doc of individualDocs) {
               if (includedDocIds.has(doc._id.toString())) continue;
+              if (!canAccess(doc.folderId)) continue;
               const fileName = sanitizeFileName(doc.originalName || doc.name);
               allDocumentsToZip.push({ document: doc, zipPath: fileName });
             }

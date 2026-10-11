@@ -1,6 +1,7 @@
 import DocumentAutomation from "../models/DocumentAutomation.js";
 import DocumentAutomationLog from "../models/DocumentAutomationLog.js";
 import SharedFolder from "../models/SharedFolder.js";
+import { sharedFolderAccessFor } from "../services/sharedFolderAccess.js";
 import {
   requireRead,
   requireWrite,
@@ -125,14 +126,16 @@ const documentAutomationResolvers = {
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
 
-        // Vérifier que le dossier cible existe
+        // Vérifier que le dossier cible existe (et qu'il est visible : un
+        // dossier privé inaccessible est traité comme inexistant)
         const targetFolder = await SharedFolder.findOne({
           _id: input.actionConfig.targetFolderId,
           workspaceId,
           trashedAt: null,
         });
+        const { canAccess } = await sharedFolderAccessFor(context, workspaceId);
 
-        if (!targetFolder) {
+        if (!targetFolder || !canAccess(targetFolder._id)) {
           throw createValidationError("Le dossier cible n'existe pas", {
             targetFolderId: "Dossier cible invalide",
           });
@@ -172,7 +175,7 @@ const documentAutomationResolvers = {
     ),
 
     updateDocumentAutomation: scopedMutation(
-      async (_, { workspaceId, id, input }) => {
+      async (_, { workspaceId, id, input }, context) => {
         const automation = await DocumentAutomation.findOne({
           _id: id,
           workspaceId,
@@ -182,15 +185,20 @@ const documentAutomationResolvers = {
           throw createNotFoundError("Automatisation");
         }
 
-        // Vérifier le dossier cible si modifié
+        // Vérifier le dossier cible si modifié (dossier privé inaccessible :
+        // comme inexistant)
         if (input.actionConfig?.targetFolderId) {
           const targetFolder = await SharedFolder.findOne({
             _id: input.actionConfig.targetFolderId,
             workspaceId,
             trashedAt: null,
           });
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
 
-          if (!targetFolder) {
+          if (!targetFolder || !canAccess(targetFolder._id)) {
             throw createValidationError("Le dossier cible n'existe pas", {
               targetFolderId: "Dossier cible invalide",
             });
@@ -519,13 +527,20 @@ const documentAutomationResolvers = {
   },
 
   DocumentAutomationActionConfig: {
-    targetFolder: async (parent) => {
+    targetFolder: async (parent, _, context) => {
       if (!parent.targetFolderId) return null;
       // Scoper au workspace de l'automatisation parente (défense en profondeur)
-      return await SharedFolder.findOne({
+      const folder = await SharedFolder.findOne({
         _id: parent.targetFolderId,
         ...(parent.workspaceId ? { workspaceId: parent.workspaceId } : {}),
       });
+      if (!folder || !context?.user) return null;
+      // Dossier privé inaccessible : ni son nom ni son existence
+      const { canAccess } = await sharedFolderAccessFor(
+        context,
+        String(folder.workspaceId),
+      );
+      return canAccess(folder._id) ? folder : null;
     },
   },
 

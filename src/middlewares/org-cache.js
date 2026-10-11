@@ -1,4 +1,5 @@
 import { getActiveOrganization } from "./org-resolver.js";
+import { isObjectIdRef } from "../utils/objectIdString.js";
 
 /**
  * Organisation active d'un utilisateur (et son rôle de membre), mise en cache
@@ -27,6 +28,17 @@ export async function getActiveOrganizationCached(
   userId,
   requestedOrgId = null,
 ) {
+  // Identifiant d'espace qui n'est ni une chaîne ni un ObjectId (objet,
+  // tableau) : refusé avant le cache. Un tableau ["<id>"] donnait la même clé
+  // que "<id>" et ressortait l'entrée en cache de cet espace. Le format d'une
+  // chaîne est vérifié par getActiveOrganization (null jamais mis en cache).
+  if (
+    requestedOrgId &&
+    typeof requestedOrgId !== "string" &&
+    !isObjectIdRef(requestedOrgId)
+  ) {
+    return null;
+  }
   const key = cacheKey(userId, requestedOrgId);
   const entry = _orgCache.get(key);
   if (entry) {
