@@ -10,9 +10,6 @@ import {
   isValidIBAN,
   isValidBIC,
   isValidPostalCodeFR,
-  isValidStreet,
-  isValidCity,
-  isValidCountry,
   isValidURL,
   isStrongPassword,
   isPositiveAmount,
@@ -31,7 +28,6 @@ import {
   isValidCapitalSocial,
   isValidRCS,
   isFieldRequiredForCompanyStatus,
-  REQUIRED_FIELDS_BY_COMPANY_STATUS,
 } from "../../src/utils/validators.js";
 
 describe("Email validation", () => {
@@ -303,7 +299,9 @@ describe("Footer notes validation", () => {
   // 17/03) : des CGV complètes doivent pouvoir aller en bas de page.
   it("should accept long notes (no length limit)", () => {
     const longNotes =
-      "CONDITIONS GÉNÉRALES — 1. PRESTATIONS\nL'acompte de 30% est dû (40 €).\n".repeat(60);
+      "CONDITIONS GÉNÉRALES — 1. PRESTATIONS\nL'acompte de 30% est dû (40 €).\n".repeat(
+        60,
+      );
     expect(longNotes.length).toBeGreaterThan(2000);
     expect(isValidFooterNotes(longNotes)).toBe(true);
   });
