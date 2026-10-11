@@ -1,6 +1,9 @@
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
-import { resolveSupplier } from "../utils/supplierResolution.js";
+import {
+  resolveSupplier,
+  withoutWorkspaceIdentifiers,
+} from "../utils/supplierResolution.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { ocrMetadataFromOcrData } from "../utils/purchaseInvoiceOcrMetadata.js";
 import mongoose from "mongoose";
@@ -841,7 +844,9 @@ const purchaseInvoiceResolvers = {
 
         // Nouveau nom de fournisseur sans fiche explicite : la fiche liée
         // suit (identifiants, récurrence bancaire, nom ; cf.
-        // supplierResolution.js) et impose son nom si elle existe déjà.
+        // supplierResolution.js). Le nom saisi reste celui de la facture :
+        // une fiche existante ne le remplace plus (il revenait aussitôt à
+        // l'ancien, retrouvé par le n° de TVA lu).
         if (
           input.supplierName !== undefined &&
           input.supplierId === undefined &&
@@ -859,7 +864,7 @@ const purchaseInvoiceResolvers = {
               .lean();
           }
           try {
-            const { supplier, matchedBy } = await resolveSupplier({
+            const { supplier } = await resolveSupplier({
               workspaceId,
               name: input.supplierName,
               siret: invoice.ocrMetadata?.supplierSiret || null,
@@ -867,11 +872,9 @@ const purchaseInvoiceResolvers = {
               transaction,
               userId: context.user.id,
               category: invoice.category || "OTHER",
+              nameIsExplicit: true,
             });
             invoice.supplierId = supplier._id;
-            if (matchedBy !== "created" && supplier.name) {
-              invoice.supplierName = supplier.name;
-            }
           } catch (err) {
             logger.warn(
               `⚠️ [PI] Fiche fournisseur non résolue pour « ${input.supplierName} » : ${err.message}`,
@@ -1360,6 +1363,16 @@ const purchaseInvoiceResolvers = {
         // ocrMetadata vide, donc sans montant ni devise d'origine.
         if (input.ocrData) {
           const metadata = ocrMetadataFromOcrData(input.ocrData);
+          // N° de TVA / SIRET de l'organisation lus comme ceux du fournisseur
+          // (cf. withoutOwnIdentifiers) : non enregistrés
+          if (metadata.supplierSiret || metadata.supplierVatNumber) {
+            const kept = await withoutWorkspaceIdentifiers(workspaceId, {
+              siret: metadata.supplierSiret || null,
+              vatNumber: metadata.supplierVatNumber || null,
+            });
+            if (!kept.siret) delete metadata.supplierSiret;
+            if (!kept.vatNumber) delete metadata.supplierVatNumber;
+          }
           if (Object.keys(metadata).length > 0) {
             if (!invoice.ocrMetadata) invoice.ocrMetadata = {};
             Object.entries(metadata).forEach(([key, value]) => {
@@ -1459,51 +1472,49 @@ const purchaseInvoiceResolvers = {
     bulkUpdatePurchaseInvoiceStatus: requireAction("expenses", [
       "edit",
       "markPaid",
-    ])(
-      async (_, { ids, status }, context) => {
-        assertPermissionAction(
-          context,
-          "expenses",
-          status === "PAID" ? "markPaid" : "edit",
-        );
-        const workspaceId = new mongoose.Types.ObjectId(
-          context.workspaceId || context.organizationId,
-        );
-        const updateData = { status };
-        if (status === "PAID") {
-          updateData.paymentDate = new Date();
+    ])(async (_, { ids, status }, context) => {
+      assertPermissionAction(
+        context,
+        "expenses",
+        status === "PAID" ? "markPaid" : "edit",
+      );
+      const workspaceId = new mongoose.Types.ObjectId(
+        context.workspaceId || context.organizationId,
+      );
+      const updateData = { status };
+      if (status === "PAID") {
+        updateData.paymentDate = new Date();
+      }
+
+      const result = await PurchaseInvoice.updateMany(
+        { _id: { $in: ids }, workspaceId },
+        { $set: updateData },
+      );
+
+      // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
+      if (status === "PAID") {
+        const superPdpInvoices = await PurchaseInvoice.find({
+          _id: { $in: ids },
+          workspaceId,
+          source: "SUPERPDP",
+          superPdpInvoiceId: { $exists: true, $ne: null },
+        });
+        for (const inv of superPdpInvoices) {
+          await reportPurchaseInvoicePaymentIfNeeded(
+            inv,
+            workspaceId.toString(),
+          );
+          // Sauvegarde inconditionnelle : persiste REPORTED comme ERROR (relance)
+          await inv.save();
         }
+      }
 
-        const result = await PurchaseInvoice.updateMany(
-          { _id: { $in: ids }, workspaceId },
-          { $set: updateData },
-        );
-
-        // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
-        if (status === "PAID") {
-          const superPdpInvoices = await PurchaseInvoice.find({
-            _id: { $in: ids },
-            workspaceId,
-            source: "SUPERPDP",
-            superPdpInvoiceId: { $exists: true, $ne: null },
-          });
-          for (const inv of superPdpInvoices) {
-            await reportPurchaseInvoicePaymentIfNeeded(
-              inv,
-              workspaceId.toString(),
-            );
-            // Sauvegarde inconditionnelle : persiste REPORTED comme ERROR (relance)
-            await inv.save();
-          }
-        }
-
-        return {
-          success: true,
-          updatedCount: result.modifiedCount,
-          message: `${result.modifiedCount} facture(s) mise(s) à jour`,
-        };
-      },
-    ),
+      return {
+        success: true,
+        updatedCount: result.modifiedCount,
+        message: `${result.modifiedCount} facture(s) mise(s) à jour`,
+      };
+    }),
 
     bulkDeletePurchaseInvoices: requireDelete("expenses")(
       async (_, { ids }, context) => {
