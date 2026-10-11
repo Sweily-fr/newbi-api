@@ -185,6 +185,42 @@ describe("Invoice Resolver - Mutation.deleteInvoice", () => {
     expect(result).toBe(true);
   });
 
+  it("refuse de supprimer une facture transmise en e-facturation", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      superPdpInvoiceId: "spdp-789",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+    });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      "Cette facture a été transmise en facturation électronique : elle ne peut pas être supprimée. Créez un avoir pour l'annuler.",
+    );
+    expect(
+      await Invoice.collection.findOne({ _id: insertedId }),
+    ).not.toBeNull();
+  });
+
+  it("supprime une facture en attente dont l'envoi e-invoicing a échoué", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      eInvoiceStatus: "ERROR",
+    });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), workspaceId: organizationId.toString() },
+      ctx(),
+    );
+
+    expect(result).toBe(true);
+  });
+
   it("blocks deletion of a COMPLETED invoice", async () => {
     const { insertedId } = await insertInvoice({ status: "COMPLETED" });
 

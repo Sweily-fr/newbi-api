@@ -49,4 +49,21 @@ describe("assertNotEInvoiceTransmitted", () => {
     ).toThrow(/Cet avoir a été transmis/);
     expect(() => assertNotEInvoiceTransmitted({}, "invoice")).not.toThrow();
   });
+
+  it("adapte le message à la suppression", () => {
+    expect(() =>
+      assertNotEInvoiceTransmitted(
+        { superPdpInvoiceId: "spdp-1" },
+        "invoice",
+        "delete",
+      ),
+    ).toThrow(/ne peut pas être supprimée\. Créez un avoir pour l'annuler/);
+    expect(() =>
+      assertNotEInvoiceTransmitted(
+        { superPdpInvoiceId: "spdp-1" },
+        "creditNote",
+        "delete",
+      ),
+    ).toThrow(/Cet avoir .* ne peut pas être supprimé/);
+  });
 });

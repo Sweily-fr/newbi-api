@@ -2791,6 +2791,10 @@ const invoiceResolvers = {
           );
         }
 
+        // Facture transmise en facturation électronique : on l'annule par un
+        // avoir, jamais en la supprimant
+        assertNotEInvoiceTransmitted(invoice.toObject(), "invoice", "delete");
+
         // Si la facture est liée à un devis, retirer le lien du devis
 
         let sourceQuoteId = invoice.sourceQuote;

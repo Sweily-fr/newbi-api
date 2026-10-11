@@ -685,7 +685,13 @@ const creditNoteResolvers = {
             throw createNotFoundError("Avoir non trouvé");
           }
 
-          // Les avoirs avec statut CREATED peuvent toujours être supprimés
+          // Les avoirs avec statut CREATED peuvent toujours être supprimés,
+          // sauf un avoir transmis en facturation électronique
+          assertNotEInvoiceTransmitted(
+            creditNote.toObject(),
+            "creditNote",
+            "delete",
+          );
 
           await CreditNote.findOneAndDelete({ _id: id, workspaceId });
 
