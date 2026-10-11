@@ -2550,6 +2550,23 @@ const invoiceResolvers = {
             updateData["cachedPdf.generatedAt"] = null;
           }
 
+          // Facture déjà émise (en attente, payée…) modifiée sans avoir été
+          // transmise en e-facturation : son archive Factur-X (aperçu, bouton
+          // PDF, e-mails et relances sans PDF joint) date d'avant la
+          // modification. On l'oublie ici et on la régénère juste après
+          // l'enregistrement ; si la régénération échoue, l'aperçu et les
+          // envois retombent sur un rendu à jour au lieu de l'ancien PDF.
+          // Une facture transmise (superPdpInvoiceId) garde son archive : le
+          // document faisant foi est celui reçu par la plateforme.
+          const rearchiveAfterUpdate =
+            invoiceData.status !== "DRAFT" && !invoiceData.superPdpInvoiceId;
+          if (rearchiveAfterUpdate && invoiceData.archivedPdfKey) {
+            updateData.archivedPdfKey = null;
+            updateData.archivedPdfUrl = null;
+            updateData.archivedPdfStoredAt = null;
+            updateData.archivedPdfSource = null;
+          }
+
           try {
             // Désactiver temporairement les validations pour les coordonnées bancaires
             // car elles sont gérées manuellement dans le code ci-dessus
@@ -2684,6 +2701,10 @@ const invoiceResolvers = {
               ).catch((err) =>
                 console.error("Erreur sync Abby (finalisation):", err),
               );
+            } else if (rearchiveAfterUpdate) {
+              // Facture émise modifiée (cf. plus haut) : nouvelle archive
+              // Factur-X à jour. Fire-and-forget, ne bloque pas la réponse.
+              triggerInvoiceFacturXArchive(updatedInvoice, workspaceId);
             }
 
             return updatedInvoice;

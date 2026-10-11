@@ -28,9 +28,15 @@ vi.mock("../../src/models/Event.js", () => ({
   },
 }));
 
+// Archivage R2 (Puppeteer côté NewbiV2) : on vérifie seulement l'appel
+vi.mock("../../src/services/creditNoteFacturXArchiveService.js", () => ({
+  triggerCreditNoteFacturXArchive: vi.fn(),
+}));
+
 import CreditNote from "../../src/models/CreditNote.js";
 import Invoice from "../../src/models/Invoice.js";
 import creditNoteResolvers from "../../src/resolvers/creditNote.js";
+import { triggerCreditNoteFacturXArchive } from "../../src/services/creditNoteFacturXArchiveService.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -551,6 +557,41 @@ describe("CreditNote Resolver — updateCreditNote", () => {
 
     const stored = await CreditNote.collection.findOne({ _id: cn._id });
     expect(stored.cachedPdf?.url).toBeUndefined();
+  });
+});
+
+describe("CreditNote Resolver — updateCreditNote (archive)", () => {
+  it("régénère l'archive PDF de l'avoir modifié", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          archivedPdfKey: "credit-notes/ws/old.pdf",
+          archivedPdfStoredAt: new Date("2026-10-01"),
+          archivedPdfSource: "NEWBI",
+        },
+      },
+    );
+    triggerCreditNoteFacturXArchive.mockClear();
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+      ctx(),
+    );
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.archivedPdfKey).toBeUndefined();
+    expect(triggerCreditNoteFacturXArchive).toHaveBeenCalledTimes(1);
+    const [archived] = triggerCreditNoteFacturXArchive.mock.calls[0];
+    expect(archived._id.toString()).toBe(cn._id.toString());
+    expect(archived.headerNotes).toBe("Modifié");
   });
 });
 

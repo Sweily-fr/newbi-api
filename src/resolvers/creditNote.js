@@ -631,7 +631,19 @@ const creditNoteResolvers = {
           if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
             creditNote.cachedPdf = undefined;
           }
+          // Archive PDF de l'avoir (aperçu, bouton PDF, e-mails) : elle date
+          // d'avant la modification. On l'oublie et on la régénère après
+          // l'enregistrement (le web la réécrit aussi de son côté) ; si la
+          // régénération échoue, l'aperçu retombe sur un rendu à jour.
+          if (creditNote.archivedPdfKey) {
+            creditNote.archivedPdfKey = undefined;
+            creditNote.archivedPdfStoredAt = undefined;
+            creditNote.archivedPdfSource = undefined;
+          }
           await creditNote.save();
+
+          // Fire-and-forget, ne bloque pas la réponse
+          triggerCreditNoteFacturXArchive(creditNote, workspaceId);
 
           // Créer un événement
           await Event.create({

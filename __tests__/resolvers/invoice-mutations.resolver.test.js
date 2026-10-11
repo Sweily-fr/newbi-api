@@ -41,6 +41,10 @@ vi.mock("../../src/resolvers/clientAutomation.js", () => ({
     executeAutomations: vi.fn().mockResolvedValue(undefined),
   },
 }));
+// Archivage Factur-X (Puppeteer côté NewbiV2) : on vérifie seulement l'appel
+vi.mock("../../src/services/invoiceFacturXArchiveService.js", () => ({
+  triggerInvoiceFacturXArchive: vi.fn(),
+}));
 vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
   autoPushEventToConnections: vi.fn().mockResolvedValue(undefined),
   updateEventInExternalCalendars: vi.fn().mockResolvedValue(undefined),
@@ -54,6 +58,7 @@ vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Invoice from "../../src/models/Invoice.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
+import { triggerInvoiceFacturXArchive } from "../../src/services/invoiceFacturXArchiveService.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -460,6 +465,70 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     const stored = await Invoice.collection.findOne({ _id: insertedId });
     expect(stored.cachedPdf?.url ?? null).toBeNull();
     expect(stored.cachedPdf?.key ?? null).toBeNull();
+  });
+
+  it("réarchive une facture en attente modifiée, non transmise", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      archivedPdfKey: "invoices/ws/2026/10/old.pdf",
+      archivedPdfStoredAt: new Date("2026-10-01"),
+      archivedPdfSource: "NEWBI",
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { items, discount: 5 } },
+      ctx(),
+    );
+
+    // Ancienne archive oubliée : aperçu et envois ne la servent plus
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.archivedPdfKey ?? null).toBeNull();
+    expect(stored.archivedPdfStoredAt ?? null).toBeNull();
+    expect(stored.archivedPdfSource ?? null).toBeNull();
+
+    // Nouvelle archive générée depuis la facture modifiée
+    expect(triggerInvoiceFacturXArchive).toHaveBeenCalledTimes(1);
+    const [archived, workspaceId] = triggerInvoiceFacturXArchive.mock.calls[0];
+    expect(archived._id.toString()).toBe(insertedId.toString());
+    expect(archived.finalTotalHT).toBe(995);
+    expect(workspaceId.toString()).toBe(organizationId.toString());
+  });
+
+  it("garde l'archive d'une facture transmise en e-facturation", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      superPdpInvoiceId: "spdp-123",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+      archivedPdfKey: "invoices/ws/2026/10/transmise.pdf",
+      archivedPdfSource: "NEWBI",
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+      ctx(),
+    );
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.archivedPdfKey).toBe("invoices/ws/2026/10/transmise.pdf");
+    expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
+  });
+
+  it("n'archive pas un brouillon qui reste brouillon", async () => {
+    triggerInvoiceFacturXArchive.mockClear();
+    const { insertedId } = await insertInvoice({
+      status: "DRAFT",
+      number: "DRAFT-0001",
+    });
+
+    await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Brouillon" } },
+      ctx(),
+    );
+
+    expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
   });
 
   it("ne garde pas les champs client de l'ancien client quand il est remplacé", async () => {
