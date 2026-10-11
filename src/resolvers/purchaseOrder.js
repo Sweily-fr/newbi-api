@@ -32,6 +32,7 @@ import {
   requireRead,
   requireDelete,
   requireAction,
+  requireAllActions,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -1262,8 +1263,12 @@ const purchaseOrderResolvers = {
       ),
     ),
 
-    // Transformer un devis : action « convert » de la page Devis
-    convertQuoteToPurchaseOrder: requireAction("quotes", "convert")(
+    // Transformer un devis : action « convert » de la page Devis, et
+    // « Créer » sur les bons de commande (comme l'écran)
+    convertQuoteToPurchaseOrder: requireAllActions([
+      ["quotes", "convert"],
+      ["purchaseOrders", "create"],
+    ])(
       async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const quote = await Quote.findOne({ _id: quoteId, workspaceId });
@@ -1372,7 +1377,12 @@ const purchaseOrderResolvers = {
       },
     ),
 
-    convertPurchaseOrderToInvoice: requireAction("purchaseOrders", "convert")(
+    // Transformer un bon de commande en facture : « Transformer » sur les
+    // bons de commande ET « Créer » sur les factures (comme l'écran)
+    convertPurchaseOrderToInvoice: requireAllActions([
+      ["purchaseOrders", "convert"],
+      ["invoices", "create"],
+    ])(
       async (_, { id, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const po = await PurchaseOrder.findOne({ _id: id, workspaceId });

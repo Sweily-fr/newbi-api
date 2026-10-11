@@ -4,6 +4,7 @@ import Withdrawal from "../models/Withdrawal.js";
 import User from "../models/User.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
+import { requireAction } from "../middlewares/rbac.js";
 
 // Paliers de commission
 const COMMISSION_TIERS = [
@@ -593,28 +594,19 @@ const partnerResolvers = {
 
   Mutation: {
     /**
-     * Mettre à jour les coordonnées bancaires de l'organisation
+     * Mettre à jour les coordonnées bancaires de l'organisation : droit
+     * « Modifier » des informations de l'entreprise (rôles ajustés et
+     * personnalisés compris), comme l'écran Paramètres. Pas de contrôle
+     * d'abonnement, comme avant.
      */
-    updateOrganizationBankDetails: async (
-      _,
-      { organizationId, bankName, bankIban, bankBic },
-      { user },
-    ) => {
-      // Auth check — cette mutation était non authentifiée (faille critique corrigée Phase D.1)
-      if (!user) {
-        throw new AppError("Non authentifié", ERROR_CODES.UNAUTHORIZED);
-      }
-
-      // Vérifier que l'user appartient à l'organisation cible (owner ou admin)
-      const db = mongoose.connection.db;
-      const member = await db.collection("member").findOne({
-        userId: new mongoose.Types.ObjectId(user._id),
-        organizationId: new mongoose.Types.ObjectId(organizationId),
-        role: { $in: ["owner", "admin"] },
-      });
-      if (!member) {
+    updateOrganizationBankDetails: requireAction("orgSettings", "edit", {
+      skipSubscriptionCheck: true,
+    })(async (_, { organizationId, bankName, bankIban, bankBic }, context) => {
+      // Le droit est vérifié sur l'espace actif (en-tête, à défaut
+      // l'argument) : l'espace modifié doit être celui-là
+      if (String(organizationId) !== String(context.workspaceId)) {
         throw new AppError(
-          "Accès refusé — vous devez être propriétaire ou admin de cette organisation",
+          "Vous n'avez pas la permission d'effectuer cette action.",
           ERROR_CODES.FORBIDDEN,
         );
       }
@@ -680,7 +672,7 @@ const partnerResolvers = {
           ERROR_CODES.INTERNAL_ERROR,
         );
       }
-    },
+    }),
 
     /**
      * Demander un retrait de gains

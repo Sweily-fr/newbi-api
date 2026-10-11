@@ -157,6 +157,13 @@ const OPEN_TO_ANY_MEMBER = {
 // Arguments minimaux pour atteindre le contrôle de droit
 const ARGS = {
   uploadDocumentAnnex: { documentType: "INVOICE" },
+  // Espace actif, coordonnées invalides : refus métier, pas de droit
+  updateOrganizationBankDetails: {
+    organizationId: null, // espace du test, posé plus bas
+    bankName: "Banque",
+    bankIban: "invalide",
+    bankBic: "invalide",
+  },
 };
 
 /** Mutations protégées par cette passe → action qui les autorise. */
@@ -190,16 +197,60 @@ const NEWLY_PROTECTED = {
   testSuperPdpConnection: ["integrations", "manage"],
   registerEInvoicingDirectory: ["integrations", "manage"],
   updateEInvoicingVatRegime: ["orgSettings", "edit"],
+  // Choix d'action rendus cohérents
+  deleteTaskImage: ["kanban", "edit"],
+  updateEmailSettings: ["orgSettings", "edit"],
+  purchaseExtraOcrImports: ["billing", "manage"],
+  updateOrganizationBankDetails: ["orgSettings", "edit"],
+};
+
+/**
+ * Transformations d'un document en un autre : action « Transformer » sur la
+ * source ET « Créer » sur la cible, toutes deux exigées (comme l'écran).
+ */
+const REQUIRES_BOTH = {
+  convertQuoteToInvoice: [
+    ["quotes", "convert"],
+    ["invoices", "create"],
+  ],
+  createLinkedInvoice: [
+    ["quotes", "convert"],
+    ["invoices", "create"],
+  ],
+  convertQuoteToPurchaseOrder: [
+    ["quotes", "convert"],
+    ["purchaseOrders", "create"],
+  ],
+  createDeliveryNoteFromQuote: [
+    ["quotes", "convert"],
+    ["deliveryNotes", "create"],
+  ],
+  convertPurchaseOrderToInvoice: [
+    ["purchaseOrders", "convert"],
+    ["invoices", "create"],
+  ],
+  createInvoiceFromDeliveryNote: [
+    ["deliveryNotes", "convert"],
+    ["invoices", "create"],
+  ],
 };
 
 const organizationId = buildOrganizationId();
 const userId = buildUserId();
 const ROLE = `role_${"a".repeat(24)}`;
+ARGS.updateOrganizationBankDetails.organizationId = String(organizationId);
 let resolvers;
 
+/**
+ * « Voir » partout, plus les actions données : un couple [page, action] ou
+ * une liste de couples.
+ */
 const setRoleActions = async (extra = null) => {
   const actions = Object.fromEntries(MODULES.map((m) => [m.key, ["view"]]));
-  if (extra) actions[extra[0]] = ["view", extra[1]];
+  const pairs = !extra ? [] : Array.isArray(extra[0]) ? extra : [extra];
+  for (const [moduleKey, action] of pairs) {
+    actions[moduleKey] = [...actions[moduleKey], action];
+  }
   await mongoose.connection.db
     .collection("organizationRole")
     .updateOne({ role: ROLE }, { $set: { actions } });
@@ -285,5 +336,20 @@ describe("Rôle avec « Voir » seulement sur chaque page", () => {
       if (await isRefused(name)) stillRefused.push(name);
     }
     expect(stillRefused).toEqual([]);
+  }, 120000);
+
+  it("les transformations exigent les deux droits, source et cible", async () => {
+    const allowedWithOne = [];
+    const refusedWithBoth = [];
+    for (const [name, pairs] of Object.entries(REQUIRES_BOTH)) {
+      for (const pair of pairs) {
+        await setRoleActions(pair);
+        if (!(await isRefused(name))) allowedWithOne.push(`${name} ${pair}`);
+      }
+      await setRoleActions(pairs);
+      if (await isRefused(name)) refusedWithBoth.push(name);
+    }
+    expect(allowedWithOne).toEqual([]);
+    expect(refusedWithBoth).toEqual([]);
   }, 120000);
 });
