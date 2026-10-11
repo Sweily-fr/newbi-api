@@ -87,15 +87,40 @@ export function verifySignedState(purpose, state) {
   return { ok: true, data };
 }
 
+// Repli hors production quand Redis n'est pas configuré (dev local) :
+// clé -> échéance (ms), propre au processus
+const memoryUsedStates = new Map();
+
+/** REDIS_URL ou REDIS_HOST défini : Redis est attendu (voir config/redis.js). */
+function isRedisConfigured() {
+  return Boolean(process.env.REDIS_URL || process.env.REDIS_HOST);
+}
+
+// Vérification et écriture synchrones : atomiques dans le processus
+function consumeInMemory(key, ttlMs) {
+  const now = Date.now();
+  for (const [usedKey, expiresAt] of memoryUsedStates) {
+    if (expiresAt <= now) memoryUsedStates.delete(usedKey);
+  }
+  if (memoryUsedStates.has(key)) return "used";
+  memoryUsedStates.set(key, now + ttlMs);
+  return "ok";
+}
+
 /**
  * Consomme un state (usage unique) de façon atomique : SET NX dans Redis,
  * partagé entre les instances PM2. Seul le premier retour qui présente ce
  * nonce l'emporte ; l'ancien couple lecture puis écriture laissait passer
  * deux retours simultanés avec le même state.
  *
- * Sans Redis (ou en cas d'erreur Redis), le state est refusé : l'usage
- * unique ne peut pas être garanti entre les instances. Même choix que la
- * connexion SuperPDP, dont le state n'existe que dans Redis.
+ * Sans client Redis :
+ * - en production, ou si Redis est configuré (REDIS_URL / REDIS_HOST) mais
+ *   n'a pas pu se connecter : refus, l'usage unique ne pouvant pas être
+ *   garanti entre les instances (même choix que la connexion SuperPDP, dont
+ *   le state n'existe que dans Redis) ;
+ * - hors production sans Redis configuré (dev local) : repli en mémoire du
+ *   processus, avec expiration.
+ * Une erreur Redis (client présent, commande en échec) refuse toujours.
  *
  * @param {string} key - clé Redis propre au parcours et au nonce
  * @param {number} ttlMs - durée de conservation (durée de vie du state)
@@ -104,6 +129,9 @@ export function verifySignedState(purpose, state) {
 export async function consumeSignedStateOnce(key, ttlMs) {
   const client = getCacheClient();
   if (!client) {
+    if (process.env.NODE_ENV !== "production" && !isRedisConfigured()) {
+      return consumeInMemory(key, ttlMs);
+    }
     logger.warn(
       "State OAuth refusé : Redis indisponible, usage unique non garanti",
     );

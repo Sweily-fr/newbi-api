@@ -1,6 +1,7 @@
 /**
  * Usage unique du state OAuth (connexion Gmail et des agendas Google et
- * Microsoft) : consommation atomique, refus sans Redis.
+ * Microsoft) : consommation atomique, refus sans Redis en production (le
+ * repli hors production est testé dans oauth-state-memory-fallback.test.js).
  *
  * L'usage unique était une lecture puis une écriture dans Redis : deux
  * retours simultanés avec le même state lisaient tous deux « jamais
@@ -207,15 +208,20 @@ describe("Usage unique du state OAuth", () => {
       expect(locations.filter((l) => l.includes(flow.error))).toHaveLength(1);
     });
 
-    it(`${flow.name} : sans Redis, le state est refusé`, async () => {
+    it(`${flow.name} : en production sans Redis, le state est refusé`, async () => {
       const state = await authorize(flow);
       redis.available = false;
+      const previous = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        const location = await callback(flow, state);
 
-      const location = await callback(flow, state);
-
-      expect(location).toContain(flow.error);
-      expect(location).not.toContain(flow.success);
-      expect(await flow.count()).toBe(0);
+        expect(location).toContain(flow.error);
+        expect(location).not.toContain(flow.success);
+        expect(await flow.count()).toBe(0);
+      } finally {
+        process.env.NODE_ENV = previous;
+      }
     });
 
     it(`${flow.name} : avec Redis, un state neuf est accepté une fois`, async () => {
