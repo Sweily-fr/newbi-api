@@ -339,6 +339,8 @@ type PurchaseInvoiceDuplicate {
   invoiceNumber: String
   supplierName: String
   amountTTC: Float
+  # Devise de amountTTC (EUR si absente)
+  currency: String
   issueDate: DateTime
   status: String
 }

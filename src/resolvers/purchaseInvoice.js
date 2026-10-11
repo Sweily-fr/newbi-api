@@ -44,10 +44,21 @@ import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconci
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 
-const formatEuros = (value) =>
-  new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
-    value || 0,
-  );
+// Montant dans la devise de la facture (EUR par défaut ou si le code est
+// invalide) : une facture en dollars n'est pas affichée en euros.
+const formatAmount = (value, currency) => {
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: currency || "EUR",
+    }).format(value || 0);
+  } catch {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: "EUR",
+    }).format(value || 0);
+  }
+};
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -650,6 +661,7 @@ const purchaseInvoiceResolvers = {
           invoiceNumber: inv.invoiceNumber,
           supplierName: inv.supplierName,
           amountTTC: inv.amountTTC,
+          currency: inv.currency || "EUR",
           issueDate: inv.issueDate,
           status: inv.status,
         }));
@@ -729,7 +741,7 @@ const purchaseInvoiceResolvers = {
           if (duplicates.length > 0) {
             const d = duplicates[0];
             throw new AppError(
-              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatEuros(d.amountTTC)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
+              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatAmount(d.amountTTC, d.currency)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
               ERROR_CODES.VALIDATION_ERROR,
             );
           }

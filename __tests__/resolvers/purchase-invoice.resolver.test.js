@@ -919,6 +919,69 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoiceDuplicates", () => {
     );
     expect(result.map((r) => r.id)).toEqual([insertedId.toString()]);
   });
+
+  it("renvoie la devise du doublon (EUR à défaut)", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-10",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+    await PurchaseInvoice.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      supplierName: "Ancienne",
+      invoiceNumber: "OLD-0001",
+      amountTTC: 50,
+      status: "TO_PAY",
+      files: [],
+    });
+
+    const [usd] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "AWS-2026-10", amountTTC: 120 },
+      },
+      ctx(),
+    );
+    expect(usd.currency).toBe("USD");
+
+    const [old] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "OLD-0001", amountTTC: 50 },
+      },
+      ctx(),
+    );
+    expect(old.currency).toBe("EUR");
+  });
+
+  it("le refus de création affiche le montant du doublon dans sa devise", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-11",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+
+    await expect(
+      purchaseInvoiceResolvers.Mutation.createPurchaseInvoice(
+        null,
+        {
+          input: {
+            workspaceId: organizationId.toString(),
+            supplierName: "Amazon Web Services",
+            invoiceNumber: "AWS-2026-11",
+            issueDate: "2026-10-01",
+            amountTTC: 120,
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/\$US/);
+  });
 });
 
 describe("PurchaseInvoice Resolver - Query.suppliers (recherche)", () => {
