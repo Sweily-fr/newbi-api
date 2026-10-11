@@ -123,6 +123,74 @@ export function modifiedAfterArchiveFilter({
 }
 
 /**
+ * Réarchive une facture relue en base (`current`), avec les précautions
+ * communes aux scripts de remise en état :
+ *  1. copie locale de l'ancien PDF dans le dossier -pdf de la sauvegarde
+ *     (une fois par facture : la nouvelle archive du même mois a la même clé
+ *     R2 et l'écrase) ;
+ *  2. génération et archivage par `archive` (service de l'API) ;
+ *  3. contrôle que l'archive a bien changé ;
+ *  4. remise de la date de modification `updatedAt` (le réarchivage n'est
+ *     pas une modification de la facture).
+ * @param {Object} current - facture lue dans la collection
+ * @param {Object} entry - entrée de la sauvegarde (reçoit `oldPdfFile`)
+ * @param {Object} options
+ * @param {Object} options.backup - sauvegarde en cours (createBackup)
+ * @param {Date} options.updatedAt - date de modification à remettre
+ * @param {Function} options.archive - (invoice, workspaceId) => Promise
+ * @param {Function} [options.fetchArchivedPdf] - (key) => Promise<Buffer>
+ * @param {Function} [options.log]
+ * @returns {Promise<{fresh?: Object, error?: string}>} la facture relue après
+ *   archivage, ou la raison de l'échec
+ */
+export async function rearchiveInvoice(
+  current,
+  entry,
+  { backup, updatedAt, archive, fetchArchivedPdf, log = console.log },
+) {
+  const pdfDirName = path.basename(backup.file, ".json") + "-pdf";
+  const pdfDir = path.join(path.dirname(backup.file), pdfDirName);
+
+  // Copie locale de l'ancien PDF : la nouvelle archive peut avoir la même
+  // clé R2 (même mois) et l'écraser. Gardée telle quelle à une relance.
+  if (fetchArchivedPdf && !entry.oldPdfFile) {
+    try {
+      const buffer = await fetchArchivedPdf(current.archivedPdfKey);
+      fs.mkdirSync(pdfDir, { recursive: true });
+      fs.writeFileSync(path.join(pdfDir, `${entry._id}.pdf`), buffer);
+      entry.oldPdfFile = path.join(pdfDirName, `${entry._id}.pdf`);
+      backup.save();
+    } catch (error) {
+      log(`    ⚠️ ancien PDF non copié : ${error.message}`);
+    }
+  }
+
+  try {
+    await archive(current, String(current.workspaceId));
+  } catch (error) {
+    return { error: error.message };
+  }
+
+  const fresh = await Invoice.collection.findOne({ _id: current._id });
+  if (
+    !fresh?.archivedPdfStoredAt ||
+    fresh.archivedPdfStoredAt.getTime() ===
+      current.archivedPdfStoredAt?.getTime()
+  ) {
+    return {
+      error: "archive non régénérée (INTERNAL_API_SECRET, FRONTEND_URL ?)",
+    };
+  }
+
+  // Date de modification d'avant : le réarchivage n'en est pas une
+  await Invoice.collection.updateOne(
+    { _id: current._id, archivedPdfStoredAt: fresh.archivedPdfStoredAt },
+    { $set: { updatedAt } },
+  );
+  return { fresh };
+}
+
+/**
  * @param {Object} [options]
  * @param {boolean} [options.apply=false] réarchiver (sinon aperçu)
  * @param {string} [options.workspaceId] limiter à une organisation
@@ -201,8 +269,6 @@ export async function rearchiveModifiedInvoices({
     dir: backupDir,
     meta: { marginSeconds, before, since },
   });
-  const pdfDirName = path.basename(backup.file, ".json") + "-pdf";
-  const pdfDir = path.join(path.dirname(backup.file), pdfDirName);
   for (const raw of candidates) {
     backup.entries.push({
       collection: Invoice.collection.collectionName,
@@ -240,48 +306,19 @@ export async function rearchiveModifiedInvoices({
       continue;
     }
 
-    // Copie locale de l'ancien PDF : la nouvelle archive peut avoir la même
-    // clé R2 (même mois) et l'écraser
-    if (fetchArchivedPdf) {
-      try {
-        const buffer = await fetchArchivedPdf(previous.archivedPdfKey);
-        fs.mkdirSync(pdfDir, { recursive: true });
-        fs.writeFileSync(path.join(pdfDir, `${entry._id}.pdf`), buffer);
-        entry.oldPdfFile = path.join(pdfDirName, `${entry._id}.pdf`);
-        backup.save();
-      } catch (error) {
-        log(`    ⚠️ ancien PDF non copié : ${error.message}`);
-      }
-    }
-
-    try {
-      await archive(current, String(current.workspaceId));
-    } catch (error) {
+    const { fresh, error } = await rearchiveInvoice(current, entry, {
+      backup,
+      updatedAt: entry.updatedAt,
+      archive,
+      fetchArchivedPdf,
+      log,
+    });
+    if (error) {
       stats.failed += 1;
-      log(`  ❌ ${entry.label} : ${error.message} ${progress}`);
+      log(`  ❌ ${entry.label} : ${error} ${progress}`);
       await sleep(delayMs);
       continue;
     }
-
-    const fresh = await Invoice.collection.findOne({ _id: entry._id });
-    if (
-      !fresh?.archivedPdfStoredAt ||
-      fresh.archivedPdfStoredAt.getTime() ===
-        previous.archivedPdfStoredAt?.getTime()
-    ) {
-      stats.failed += 1;
-      log(
-        `  ❌ ${entry.label} : archive non régénérée (INTERNAL_API_SECRET, FRONTEND_URL ?) ${progress}`,
-      );
-      await sleep(delayMs);
-      continue;
-    }
-
-    // Date de modification d'avant : le réarchivage n'en est pas une
-    await Invoice.collection.updateOne(
-      { _id: entry._id, archivedPdfStoredAt: fresh.archivedPdfStoredAt },
-      { $set: { updatedAt: entry.updatedAt } },
-    );
 
     entry.after = pickValues(fresh, ARCHIVE_FIELDS);
     // Retour arrière : seulement si l'archive est toujours celle posée ici
@@ -301,12 +338,15 @@ export async function rearchiveModifiedInvoices({
 /**
  * Après le retour arrière d'une facture : si l'ancienne archive avait la même
  * clé R2 que la nouvelle, elle a été écrasée ; on y remet la copie locale.
+ * Rien à faire si la facture n'a pas été réarchivée (pas de clé d'archive
+ * dans l'état d'avant).
  */
 export function restoreOldPdf(uploadArchivedPdf, log = console.log) {
   return async (entry, backupFile) => {
     if (
       !entry.oldPdfFile ||
-      entry.before?.archivedPdfKey !== entry.after?.archivedPdfKey
+      !entry.before?.archivedPdfKey ||
+      entry.before.archivedPdfKey !== entry.after?.archivedPdfKey
     ) {
       return;
     }
@@ -321,7 +361,7 @@ export function restoreOldPdf(uploadArchivedPdf, log = console.log) {
 }
 
 /** Services R2 et Factur-X de l'API, chargés après .env.production. */
-async function loadServices() {
+export async function loadServices() {
   const { default: cloudflareService } =
     await import("../src/services/cloudflareService.js");
   const { archiveInvoiceFacturX } =

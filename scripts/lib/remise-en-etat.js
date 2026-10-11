@@ -142,6 +142,25 @@ export function readBackup(file) {
 }
 
 /**
+ * Sauvegarde existante rouverte pour être complétée (reprise d'une étape
+ * interrompue) : même interface que createBackup, `save()` réécrit le même
+ * fichier.
+ */
+export function openBackup(file) {
+  const content = readBackup(file);
+  content.entries = content.entries || [];
+  return {
+    file,
+    content,
+    entries: content.entries,
+    save() {
+      fs.writeFileSync(file, EJSON.stringify(content, null, 2));
+      return file;
+    },
+  };
+}
+
+/**
  * Écrit `after` si le document porte encore `before` (il a pu être modifié
  * dans l'appli entre l'aperçu et l'écriture : il est alors laissé tel quel).
  * @returns {Promise<boolean>} vrai si le document a été mis à jour
