@@ -16,6 +16,7 @@ import {
   requireDelete,
   requirePermission,
   requireAction,
+  requireAllActions,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -3335,7 +3336,13 @@ const invoiceResolvers = {
       },
     ),
 
-    createLinkedInvoice: requireAction("invoices", "create")(
+    // Facture liée (acompte, partielle) depuis un devis : transformation du
+    // devis, « Transformer » sur les devis ET « Créer » sur les factures
+    // (comme l'écran)
+    createLinkedInvoice: requireAllActions([
+      ["quotes", "convert"],
+      ["invoices", "create"],
+    ])(
       async (
         _,
         { quoteId, amount, isDeposit, workspaceId: inputWorkspaceId },

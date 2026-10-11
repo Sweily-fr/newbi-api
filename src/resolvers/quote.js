@@ -33,6 +33,7 @@ import {
   requireRead,
   requireDelete,
   requireAction,
+  requireAllActions,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -1795,7 +1796,12 @@ const quoteResolvers = {
       }),
     ),
 
-    convertQuoteToInvoice: requireAction("quotes", "convert")(
+    // Transformer un devis en facture : « Transformer » sur les devis ET
+    // « Créer » sur les factures (comme l'écran)
+    convertQuoteToInvoice: requireAllActions([
+      ["quotes", "convert"],
+      ["invoices", "create"],
+    ])(
       async (_, { id, distribution, isDeposit, skipValidation }, context) => {
         const { user, workspaceId } = context;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy

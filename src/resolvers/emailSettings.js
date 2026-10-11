@@ -62,9 +62,11 @@ const emailSettingsResolvers = {
 
   Mutation: {
     /**
-     * Mettre à jour les paramètres email
+     * Mettre à jour les paramètres email (expéditeur et modèles de
+     * l'espace, communs à tous les documents) : réglage de l'entreprise,
+     * droit « Modifier » des informations de l'entreprise
      */
-    updateEmailSettings: requireWrite("invoices")(
+    updateEmailSettings: requireWrite("orgSettings")(
       async (_, { input }, context) => {
         const { user, workspaceId, organization } = context;
 

@@ -6,9 +6,30 @@ import { syncConnection } from '../services/calendar/CalendarSyncService.js';
 import { registerWebhookForConnection } from '../services/calendar/CalendarWebhookService.js';
 import { translateGoogleError } from '../services/calendar/providers/GoogleCalendarProvider.js';
 import { translateMicrosoftError } from '../services/calendar/providers/MicrosoftCalendarProvider.js';
+import { requireWorkspaceActionPermission } from '../middlewares/require-workspace-membership.js';
+import { userHasWorkspaceAction } from '../utils/workspace-membership.js';
 import logger from '../utils/logger.js';
 
 const router = express.Router();
+
+// Connecter un agenda externe : droit « Modifier » du calendrier dans
+// l'espace actif (en-tête x-workspace-id transmis par le proxy du site),
+// comme les autres réglages des calendriers externes (connectAppleCalendar…)
+const requireCalendarEdit = requireWorkspaceActionPermission('calendar', 'edit');
+
+/**
+ * Retour OAuth : l'espace vérifié à l'autorisation voyage dans le state ; le
+ * droit est contrôlé de nouveau (rôle changé entre-temps, state sans espace).
+ */
+async function stateAllowsCalendarEdit(stateData) {
+  if (!stateData?.userId || !stateData?.workspaceId) return false;
+  return userHasWorkspaceAction(
+    String(stateData.userId),
+    String(stateData.workspaceId),
+    'calendar',
+    'edit'
+  );
+}
 
 // ============================================
 // GOOGLE CALENDAR OAuth
@@ -18,18 +39,17 @@ const router = express.Router();
  * GET /calendar-connect/google/authorize
  * Generates Google OAuth URL and redirects
  */
-router.get('/google/authorize', async (req, res) => {
+router.get('/google/authorize', requireCalendarEdit, async (req, res) => {
   try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: 'Non authentifié' });
-    }
+    // Utilisateur et espace validés par requireCalendarEdit
+    const user = req.user;
 
     const provider = getCalendarProvider('google');
 
-    // State contains userId + timestamp to identify user on callback
+    // State contains userId + workspaceId + timestamp to identify user on callback
     const state = Buffer.from(JSON.stringify({
       userId: user._id.toString(),
+      workspaceId: req.workspaceId,
       issuedAt: Date.now()
     })).toString('base64');
 
@@ -81,6 +101,12 @@ router.get('/google/callback', async (req, res) => {
     if (callbackUser && callbackUser._id.toString() !== stateData.userId) {
       logger.error(`[Google OAuth] userId mismatch: state=${stateData.userId}, jwt=${callbackUser._id}`);
       return res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_error=user_mismatch`);
+    }
+
+    // Droit « Modifier » du calendrier toujours exigé dans l'espace d'origine
+    if (!(await stateAllowsCalendarEdit(stateData))) {
+      logger.warn(`[Google OAuth] droit calendar.edit refusé pour userId ${stateData.userId} (espace ${stateData.workspaceId || 'absent'})`);
+      return res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_error=forbidden`);
     }
 
     const provider = getCalendarProvider('google');
@@ -159,17 +185,16 @@ router.get('/google/callback', async (req, res) => {
  * GET /calendar-connect/microsoft/authorize
  * Generates Microsoft OAuth URL
  */
-router.get('/microsoft/authorize', async (req, res) => {
+router.get('/microsoft/authorize', requireCalendarEdit, async (req, res) => {
   try {
-    const user = await betterAuthJWTMiddleware(req);
-    if (!user) {
-      return res.status(401).json({ error: 'Non authentifié' });
-    }
+    // Utilisateur et espace validés par requireCalendarEdit
+    const user = req.user;
 
     const provider = getCalendarProvider('microsoft');
 
     const state = Buffer.from(JSON.stringify({
       userId: user._id.toString(),
+      workspaceId: req.workspaceId,
       issuedAt: Date.now()
     })).toString('base64');
 
@@ -220,6 +245,12 @@ router.get('/microsoft/callback', async (req, res) => {
     if (callbackUser && callbackUser._id.toString() !== stateData.userId) {
       logger.error(`[Microsoft OAuth] userId mismatch: state=${stateData.userId}, jwt=${callbackUser._id}`);
       return res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_error=user_mismatch`);
+    }
+
+    // Droit « Modifier » du calendrier toujours exigé dans l'espace d'origine
+    if (!(await stateAllowsCalendarEdit(stateData))) {
+      logger.warn(`[Microsoft OAuth] droit calendar.edit refusé pour userId ${stateData.userId} (espace ${stateData.workspaceId || 'absent'})`);
+      return res.redirect(`${process.env.FRONTEND_URL}/dashboard/calendar?calendar_error=forbidden`);
     }
 
     const provider = getCalendarProvider('microsoft');

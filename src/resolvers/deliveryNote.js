@@ -30,6 +30,7 @@ import {
   requireRead,
   requireDelete,
   requireAction,
+  requireAllActions,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import {
@@ -1184,7 +1185,12 @@ const deliveryNoteResolvers = {
       ),
     ),
 
-    createDeliveryNoteFromQuote: requireAction("deliveryNotes", "create")(
+    // Bon de livraison depuis un devis : « Transformer » sur les devis ET
+    // « Créer » sur les bons de livraison (comme l'écran)
+    createDeliveryNoteFromQuote: requireAllActions([
+      ["quotes", "convert"],
+      ["deliveryNotes", "create"],
+    ])(
       async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const quote = await Quote.findOne({ _id: quoteId, workspaceId });
@@ -1291,8 +1297,12 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    // Facturer un bon de livraison : action « convert » de la page
-    createInvoiceFromDeliveryNote: requireAction("deliveryNotes", "convert")(
+    // Facturer un bon de livraison : action « convert » de la page, et
+    // « Créer » sur les factures (comme l'écran)
+    createInvoiceFromDeliveryNote: requireAllActions([
+      ["deliveryNotes", "convert"],
+      ["invoices", "create"],
+    ])(
       async (_, { deliveryNoteId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const dn = await DeliveryNote.findOne({
