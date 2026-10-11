@@ -1,7 +1,6 @@
 // resolvers/kanban.js
 import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -33,6 +32,12 @@ import {
   searchLinkableTasks,
 } from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
+import {
+  RESTRICTED_TEAM_VISIBILITY,
+  filterOrganizationMembers,
+  teamVisibilityForRole,
+  teamVisibilityFromGrid,
+} from "../utils/memberVisibility.js";
 import {
   normalizeMemberId,
   normalizeTag,
@@ -1038,9 +1043,12 @@ const resolvers = {
     }),
 
     // Annuaire des membres de l'espace, partagé avec d'autres modules (notes
-    // des clients) : pas de niveau « Projets » exigé, l'appartenance suffit.
-    organizationMembers: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
+    // des clients, calendrier, documents partagés) : pas de niveau « Projets »
+    // exigé, l'appartenance suffit. Sans « Voir les membres », l'identité des
+    // autres membres seulement (rôle du seul super admin), comme le site.
+    organizationMembers: withRBAC(
+      async (_, { workspaceId }, context) => {
+        const { workspaceId: contextWorkspaceId, db } = context;
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         try {
@@ -1184,23 +1192,21 @@ const resolvers = {
             .filter(Boolean); // Retirer les null
 
           logger.debug(`✅ [Kanban] Retour de ${result.length} membres`);
-          logger.debug(
-            "📋 [Kanban] Détails:",
-            result.map((r) => ({
-              email: r.email,
-              role: r.role,
-              hasImage: !!r.image,
-              image: r.image,
-            })),
-          );
 
-          return result;
+          return filterOrganizationMembers(result, {
+            callerUserId: context.user?._id,
+            canViewTeam: teamVisibilityFromGrid(context.permissionLevels)
+              .canViewTeam,
+          });
         } catch (error) {
           logger.error("❌ [Kanban] Erreur récupération membres:", error);
           logger.error("Stack:", error.stack);
           return [];
         }
       },
+      // Même choix d'espace et mêmes erreurs que withWorkspace, plus la
+      // grille de l'appelant (context.permissionLevels)
+      { preferArgsWorkspace: true, passthroughErrors: true },
     ),
 
     usersInfo: async (_, { userIds }, { db }) => {
@@ -4735,6 +4741,7 @@ const resolvers = {
     members: async (board, _args, context) => {
       try {
         const db = mongoose.connection.db;
+        const callerUserId = context?.user?._id?.toString() || null;
 
         // Convertir le workspaceId en ObjectId
         const orgId =
@@ -4759,7 +4766,30 @@ const resolvers = {
               organization: null,
               workspaceMembers: [],
               usersById: new Map(),
+              canViewTeam: false,
             };
+          }
+
+          // Droits de l'appelant sur les membres (grille de son rôle dans
+          // l'espace) : sans « Voir les membres », identité seulement.
+          // Fail-closed si la grille ne peut pas être lue.
+          let canViewTeam = RESTRICTED_TEAM_VISIBILITY.canViewTeam;
+          const callerMember = callerUserId
+            ? workspaceMembers.find(
+                (m) => m.userId?.toString() === callerUserId,
+              )
+            : null;
+          if (callerMember) {
+            try {
+              ({ canViewTeam } = await teamVisibilityForRole(
+                orgId.toString(),
+                callerMember.role,
+              ));
+            } catch (error) {
+              logger.error(
+                `❌ [Kanban Board.members] Droits illisibles: ${error.message}`,
+              );
+            }
           }
 
           const userIds = workspaceMembers
@@ -4781,6 +4811,7 @@ const resolvers = {
             organization,
             workspaceMembers,
             usersById: new Map(users.map((u) => [u._id.toString(), u])),
+            canViewTeam,
           };
         };
 
@@ -4799,7 +4830,7 @@ const resolvers = {
           orgDataPromise = loadOrgData();
         }
 
-        const { organization, workspaceMembers, usersById } =
+        const { organization, workspaceMembers, usersById, canViewTeam } =
           await orgDataPromise;
 
         if (!organization) {
@@ -4830,7 +4861,7 @@ const resolvers = {
         }
 
         // Combiner membres et users
-        return members
+        const result = members
           .map((member) => {
             const memberUserId = member.userId?.toString();
             const user = usersById.get(memberUserId);
@@ -4872,6 +4903,11 @@ const resolvers = {
             };
           })
           .filter(Boolean); // Retirer les null
+
+        return filterOrganizationMembers(result, {
+          callerUserId,
+          canViewTeam,
+        });
       } catch (error) {
         logger.error("❌ [Kanban Board.members] Erreur:", error);
         logger.error("Stack:", error.stack);

@@ -151,9 +151,15 @@ function inputActions({ actions, levels }, base = null) {
   return normalizeActions(partial, base);
 }
 
+/**
+ * `usage` null : effectifs non communiqués (appelant sans « Voir les
+ * membres ») → memberCount et invitationCount à null.
+ */
 function serializeRole(key, stored, usage) {
   const predefined = PREDEFINED_ROLES[key];
-  const counts = usage.get(key) || { members: 0, invitations: 0 };
+  const counts = usage
+    ? usage.get(key) || { members: 0, invitations: 0 }
+    : { members: null, invitations: null };
   return {
     key,
     name: predefined ? predefined.label : stored?.name || key,
@@ -172,11 +178,18 @@ function serializeRole(key, stored, usage) {
   };
 }
 
-/** Rôles prédéfinis (ajustés le cas échéant) puis rôles personnalisés. */
-export async function listOrganizationRoles(organizationId) {
+/**
+ * Rôles prédéfinis (ajustés le cas échéant) puis rôles personnalisés.
+ * `includeUsage: false` : sans les effectifs par rôle (membres, invitations
+ * en attente), réservés à « Voir les membres ».
+ */
+export async function listOrganizationRoles(
+  organizationId,
+  { includeUsage = true } = {},
+) {
   const [stored, usage] = await Promise.all([
     loadOrganizationRoles(organizationId),
-    countUsage(organizationId),
+    includeUsage ? countUsage(organizationId) : null,
   ]);
   const predefined = PREDEFINED_ROLE_KEYS.map((key) =>
     serializeRole(key, stored.get(key), usage),
