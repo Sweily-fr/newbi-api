@@ -1,5 +1,6 @@
 import express from "express";
 import crypto from "crypto";
+import { pipeline } from "stream";
 import {
   S3Client,
   GetObjectCommand,
@@ -60,6 +61,44 @@ async function authorizeTransferAccess(fileTransfer, req, usage) {
   }
 
   return { ok: true };
+}
+
+/**
+ * Plage d'octets demandée par l'en-tête Range d'un aperçu. iOS (lecteur
+ * vidéo, vignettes vidéo de l'app mobile) exige des réponses partielles pour
+ * lire une vidéo à distance. Une seule plage `bytes=` est prise en charge :
+ * plusieurs plages ou une autre unité sont ignorées (réponse complète, comme
+ * le permet la RFC 9110).
+ *
+ * @param {string|undefined} header - en-tête Range
+ * @param {number} size - taille du fichier en octets
+ * @returns {null|"unsatisfiable"|{start: number, end: number}} null : pas de
+ *   plage à appliquer ; "unsatisfiable" : réponse 416
+ */
+export function parseByteRange(header, size) {
+  if (typeof header !== "string" || !Number.isInteger(size) || size < 0) {
+    return null;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match) return null;
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === "" && rawEnd === "") return null;
+
+  let start;
+  let end;
+  if (rawStart === "") {
+    // bytes=-N : les N derniers octets
+    const suffixLength = Number(rawEnd);
+    if (suffixLength === 0 || size === 0) return "unsatisfiable";
+    start = Math.max(0, size - suffixLength);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    const requestedEnd = rawEnd === "" ? size - 1 : Number(rawEnd);
+    if (requestedEnd < start || start >= size) return "unsatisfiable";
+    end = Math.min(requestedEnd, size - 1);
+  }
+  return { start, end };
 }
 
 // ag-psd sans canvas : seule une factory ImageData est nécessaire pour
@@ -250,14 +289,6 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
         .json({ error: "Fichier non disponible (clé de stockage manquante)" });
     }
 
-    // Récupérer le fichier depuis R2
-    const command = new GetObjectCommand({
-      Bucket: process.env.TRANSFER_BUCKET,
-      Key: file.r2Key,
-    });
-
-    const response = await s3Client.send(command);
-
     const isHeic =
       ["image/heic", "image/heif"].includes(file.mimeType?.toLowerCase()) ||
       /\.(heic|heif)$/i.test(file.originalName || "");
@@ -283,6 +314,45 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
           "application/x-photoshop",
           "application/photoshop",
         ].includes(file.mimeType?.toLowerCase()));
+
+    // Fichier servi tel quel (vidéo, PDF…) : requêtes partielles (Range)
+    // transmises à R2. Les aperçus convertis (HEIC, grandes images, PSD)
+    // restent servis en entier.
+    const isPassthrough = !isHeic && !isLargeRasterImage && !isPsdByName;
+    const fileSize = Number(file.size);
+    const range =
+      isPassthrough && req.headers.range
+        ? parseByteRange(req.headers.range, fileSize)
+        : null;
+    const sendUnsatisfiable = () => {
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Range", `bytes */${fileSize}`);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      return res.status(416).end();
+    };
+    if (range === "unsatisfiable") return sendUnsatisfiable();
+
+    // Récupérer le fichier depuis R2
+    const command = new GetObjectCommand({
+      Bucket: process.env.TRANSFER_BUCKET,
+      Key: file.r2Key,
+      ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+    });
+
+    let response;
+    try {
+      response = await s3Client.send(command);
+    } catch (error) {
+      // Taille enregistrée plus grande que l'objet stocké
+      if (
+        range &&
+        (error?.name === "InvalidRange" ||
+          error?.$metadata?.httpStatusCode === 416)
+      ) {
+        return sendUnsatisfiable();
+      }
+      throw error;
+    }
 
     if (isHeic) {
       // Convertir HEIC → JPEG pour compatibilité navigateur
@@ -525,7 +595,22 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
         ? "application/pdf"
         : file.mimeType || "application/octet-stream";
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Length", file.size);
+      res.setHeader("Accept-Ranges", "bytes");
+      if (range) {
+        // Valeurs renvoyées par R2 en priorité (taille réelle de l'objet)
+        res.status(206);
+        res.setHeader(
+          "Content-Range",
+          response.ContentRange ||
+            `bytes ${range.start}-${range.end}/${fileSize}`,
+        );
+        res.setHeader(
+          "Content-Length",
+          response.ContentLength ?? range.end - range.start + 1,
+        );
+      } else {
+        res.setHeader("Content-Length", response.ContentLength ?? file.size);
+      }
       res.setHeader("Cache-Control", "public, max-age=3600");
       // Headers CORS pour permettre l'affichage dans un iframe
       res.setHeader("Access-Control-Allow-Origin", "*");
@@ -539,8 +624,16 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
       );
       res.removeHeader("X-Frame-Options");
 
-      // Streamer le fichier vers le client
-      response.Body.pipe(res);
+      // Streamer le fichier vers le client. pipeline ferme le flux R2 si le
+      // client abandonne (le lecteur vidéo annule souvent ses requêtes)
+      pipeline(response.Body, res, (streamError) => {
+        if (streamError && streamError.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+          logger.warn("👁️ Aperçu interrompu", {
+            fileName: file.originalName,
+            error: streamError.message,
+          });
+        }
+      });
     }
 
     logger.info("✅ Fichier prévisualisé avec succès", {
