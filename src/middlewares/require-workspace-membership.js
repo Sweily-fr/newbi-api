@@ -5,6 +5,7 @@ import {
   userHasWorkspaceLevel,
 } from "../utils/workspace-membership.js";
 import logger from "../utils/logger.js";
+import { isObjectIdString } from "../utils/objectIdString.js";
 
 /**
  * Middleware Express : exige que l'utilisateur authentifié soit MEMBRE du
@@ -14,7 +15,12 @@ import logger from "../utils/logger.js";
  * fourni par le client sans vérifier l'appartenance (betterAuthJWTMiddleware
  * authentifie seulement). À placer AVANT les handlers concernés.
  *
- * Pose `req.user` et `req.workspaceId` (validé) pour les handlers en aval.
+ * Pose `req.user` et `req.workspaceId` (validé) pour les handlers en aval,
+ * et réécrit l'en-tête x-workspace-id avec cet espace validé : les handlers
+ * lisent `x-workspace-id || query.workspaceId` (ou `|| body.workspaceId`).
+ * Sans cette réécriture, une requête avec x-organization-id = son espace et
+ * ?workspaceId=<autre espace> (ou { "$ne": … }) passait le contrôle sur le
+ * premier et le handler agissait sur le second.
  */
 export async function requireWorkspaceMembership(req, res, next) {
   try {
@@ -33,10 +39,11 @@ export async function requireWorkspaceMembership(req, res, next) {
       return res.status(400).json({ error: "WorkspaceId requis" });
     }
 
-    const isMember = await userBelongsToWorkspace(
-      String(user._id),
-      String(workspaceId),
-    );
+    // Identifiant d'ObjectId seulement (objet, tableau, chaîne quelconque :
+    // même refus qu'un non-membre)
+    const isMember =
+      isObjectIdString(workspaceId) &&
+      (await userBelongsToWorkspace(String(user._id), workspaceId));
     if (!isMember) {
       return res.status(403).json({
         error: "Accès non autorisé à cet espace de travail",
@@ -44,7 +51,8 @@ export async function requireWorkspaceMembership(req, res, next) {
     }
 
     req.user = user;
-    req.workspaceId = String(workspaceId);
+    req.workspaceId = workspaceId;
+    req.headers["x-workspace-id"] = workspaceId;
     return next();
   } catch (err) {
     logger.error("requireWorkspaceMembership:", err.message);
