@@ -8,9 +8,12 @@ d'octobre 2026 :
    justificatif (`ocrMetadata`) des factures d'achat ;
 2. `recompute-credit-note-totals.js` : totaux enregistrés des avoirs (frais de
    port de la facture d'origine, remise globale) ;
-3. `recompute-quote-purchase-order-totals.js` : totaux enregistrés des devis et
+3. `recompute-invoice-totals.js` : totaux enregistrés des factures (remise
+   globale en pourcentage appliquée aussi aux frais de port) et leur PDF
+   Factur-X archivé ;
+4. `recompute-quote-purchase-order-totals.js` : totaux enregistrés des devis et
    bons de commande (frais de port, remise globale) ;
-4. `rearchive-modified-invoices.js` : PDF archivé des factures modifiées après
+5. `rearchive-modified-invoices.js` : PDF archivé des factures modifiées après
    leur archivage.
 
 Tous fonctionnent de la même façon :
@@ -35,8 +38,10 @@ Signes utilisés dans les listes :
 | `·`   | document à corriger (corrigé avec `--apply`)                          |
 | `🔒`  | transmis en facturation électronique : jamais modifié, listé à part   |
 | `⏸`   | devis ou bon de commande finalisé : ignoré sans `--include-finalized` |
+|       | facture d'une autre cause : ignorée avec `--port-remise`              |
 | `⚠️`  | point à vérifier à la main                                            |
 | `?`   | avoir dont la facture d'origine est introuvable : ignoré              |
+|       | facture aux totaux incalculables (ligne incomplète) : ignorée         |
 | `-`   | document modifié entre l'aperçu et l'écriture : laissé tel quel       |
 
 ## 0. Avant de commencer
@@ -54,8 +59,9 @@ ssh -i ~/.ssh/vps_key joaquim@51.91.254.74
 cd ~/api.newbi.fr
 source ~/.nvm/nvm.sh
 
-ls scripts/recompute-credit-note-totals.js scripts/rearchive-modified-invoices.js
+ls scripts/recompute-credit-note-totals.js scripts/recompute-invoice-totals.js scripts/rearchive-modified-invoices.js
 grep -c "computeDocumentTotals" src/resolvers/creditNote.js   # au moins 1
+grep -c "computeDocumentTotals" src/resolvers/invoice.js      # au moins 1
 grep -c "rearchiveAfterUpdate" src/resolvers/invoice.js        # au moins 1
 ```
 
@@ -123,8 +129,9 @@ NODE_ENV=production node scripts/recompute-credit-note-totals.js | tee ~/remise-
 - les lignes `🔒` : avoirs transmis, laissés tels quels ;
 - les lignes `⚠️` : la somme des avoirs corrigés dépasserait le TTC enregistré
   de la facture. Souvent parce que le total enregistré de la facture elle-même
-  est faux (facture avec port et remise en pourcentage d'avant le 10/10, voir
-  « Hors périmètre »). Rien n'est bloqué, mais à regarder dans l'appli.
+  est faux (facture avec port et remise en pourcentage d'avant le 10/10) :
+  l'étape 3 le corrige, et son aperçu refait ce contrôle avec le nouveau
+  total. Rien n'est bloqué, mais à regarder dans l'appli.
 
 Écriture :
 
@@ -139,7 +146,104 @@ NODE_ENV=production node scripts/recompute-credit-note-totals.js --restore backu
 NODE_ENV=production node scripts/recompute-credit-note-totals.js --restore backups/remise-en-etat/avoirs-totaux-<date>.json --apply
 ```
 
-## 3. Devis et bons de commande : totaux enregistrés
+## 3. Factures : totaux enregistrés et PDF Factur-X
+
+Avant la correction du 10/10/2026, une facture avec frais de port et remise
+globale en pourcentage était enregistrée avec une remise appliquée aussi au
+port. Son PDF affichait le bon montant (il calcule à partir des lignes), mais
+pas les totaux enregistrés, que lisent le XML Factur-X, le paiement en ligne,
+le rapprochement, le plafond des avoirs et les statistiques. Le script
+recalcule les totaux de chaque facture avec le calcul actuel de l'API et ne
+réécrit que celles qui diffèrent au centime.
+
+Les brouillons sont corrigés aussi : l'enregistrement d'une facture ne
+recalcule pas ses totaux, et « Créer la facture » depuis le panneau latéral
+finalise un brouillon tel quel. Ils n'ont ni PDF archivé ni paiement.
+
+Une facture transmise en facturation électronique n'est **jamais** modifiée :
+elle apparaît avec `🔒` et son écart. Elle se corrige par un avoir.
+
+Le script ne touche ni aux paiements, ni aux rapprochements, ni aux avoirs :
+il les affiche sous chaque facture et signale (`⚠️`) ceux que le nouveau total
+rendrait incohérents.
+
+Lancer cette étape **après les avoirs** (étape 2) : son contrôle des avoirs
+utilise leurs montants corrigés.
+
+Aperçu :
+
+```bash
+NODE_ENV=production node scripts/recompute-invoice-totals.js | tee ~/remise-factures-totaux-apercu.txt
+```
+
+À relire :
+
+- chaque ligne `·` donne le numéro de la facture, son statut, son espace,
+  chaque total « avant → après » et l'écart TTC. La raison est entre
+  crochets : `[port + remise globale en %]` est le cas corrigé le 10/10.
+  `[autre]` ou `[totaux absents]` méritent un coup d'oeil : ouvrir la facture
+  dans l'appli, le total de son PDF doit être la valeur « après ». En cas de
+  doute, `--port-remise` ne traite que le cas du 10/10 (les autres sont listés
+  avec `⏸`) ;
+- sous chaque facture :
+  - `paiement :` les transactions rapprochées (ou le paiement par carte, ou
+    « marquée payée » sans montant) et l'état « payée / partiellement payée »
+    avec l'ancien et le nouveau total ;
+  - `avoirs :` les avoirs liés, leur somme et la couverture de la facture ;
+  - `archive :` le PDF Factur-X à régénérer (son XML porte les anciens
+    totaux) ;
+- les lignes `⚠️ paiement` : la facture a été réglée de l'ancien montant
+  (virement rapproché, ou carte qui débite le total enregistré) ; avec le
+  nouveau total il reste quelques centimes ou euros à encaisser. La facture
+  reste « Payée » dans l'appli : c'est à décider avec le client ;
+- les lignes `⚠️ avoirs` : un avoir total à l'ancien montant ne couvrirait
+  plus toute la facture, ou la somme des avoirs dépasserait le nouveau total ;
+- les lignes `🔒` : factures transmises, à corriger par un avoir si l'écart le
+  justifie ;
+- le bilan à la fin : nombre de factures à corriger (dont brouillons),
+  transmises, alertes et archives à régénérer.
+
+Écriture avec régénération des PDF archivés (`--rearchive`, même mécanisme
+que l'étape 5 : génération par www.newbi.fr, copie locale de l'ancien PDF,
+date de modification inchangée). D'abord une organisation, prise dans
+l'aperçu (`espace <id>`), à vérifier dans l'appli : total de la facture,
+aperçu et bouton PDF à jour. Le script affiche l'adresse qui génère les PDF :
+elle doit être `https://www.newbi.fr`.
+
+```bash
+NODE_ENV=production node scripts/recompute-invoice-totals.js --workspace <id> --apply --rearchive
+```
+
+Puis tout le reste, détaché (pause de 2 s entre deux PDF, `--delay <ms>`) :
+
+```bash
+nohup env NODE_ENV=production node scripts/recompute-invoice-totals.js --apply --rearchive > ~/remise-factures-totaux.log 2>&1 < /dev/null &
+tail -f ~/remise-factures-totaux.log
+```
+
+Chaque lancement avec `--apply` a sa sauvegarde, dont le chemin est affiché à
+la fin. **Archives restées à régénérer** (lancement sans `--rearchive`, ou
+échecs de génération) : l'étape 5 ne les retrouverait pas (la correction ne
+change pas la date de modification). Les reprendre depuis la sauvegarde du
+lancement, la commande exacte est affichée à la fin du journal :
+
+```bash
+NODE_ENV=production node scripts/recompute-invoice-totals.js --reprendre backups/remise-en-etat/factures-totaux-<date>.json
+NODE_ENV=production node scripts/recompute-invoice-totals.js --reprendre backups/remise-en-etat/factures-totaux-<date>.json --apply
+```
+
+Une facture modifiée dans l'appli depuis la correction n'est pas reprise :
+l'API a déjà régénéré son PDF.
+
+Retour arrière (remet les totaux d'avant et, pour les factures réarchivées,
+l'ancienne archive, plus l'ancien PDF quand il avait été écrasé) :
+
+```bash
+NODE_ENV=production node scripts/recompute-invoice-totals.js --restore backups/remise-en-etat/factures-totaux-<date>.json
+NODE_ENV=production node scripts/recompute-invoice-totals.js --restore backups/remise-en-etat/factures-totaux-<date>.json --apply
+```
+
+## 4. Devis et bons de commande : totaux enregistrés
 
 Recalcule les totaux comme le fait l'enregistrement d'un devis ou d'un bon de
 commande aujourd'hui (frais de port compris, remise plafonnée). Sans le
@@ -183,7 +287,7 @@ NODE_ENV=production node scripts/recompute-quote-purchase-order-totals.js --rest
 NODE_ENV=production node scripts/recompute-quote-purchase-order-totals.js --restore backups/remise-en-etat/devis-bc-totaux-<date>.json --apply
 ```
 
-## 4. Factures modifiées après leur archivage : nouveau PDF
+## 5. Factures modifiées après leur archivage : nouveau PDF
 
 Avant la correction, une facture en attente ou payée modifiée gardait le PDF
 Factur-X de sa finalisation (aperçu, bouton PDF, e-mails et relances sans PDF
@@ -196,6 +300,10 @@ d'archivage de plus d'une minute (`--marge <secondes>` pour changer). La liste
 est **plus large que nécessaire** : un paiement, un envoi par e-mail ou un
 rapprochement changent aussi la date de modification. Réarchiver une facture
 inchangée redonne le même contenu, cela coûte seulement une génération de PDF.
+
+Les factures dont l'étape 3 a corrigé les totaux n'y figurent pas (sauf si
+elles avaient été modifiées après leur archivage) : leur PDF se régénère par
+l'étape 3 (`--rearchive` ou `--reprendre`).
 
 Une facture transmise en facturation électronique n'est **jamais**
 réarchivée (`🔒`) : le document qui fait foi est celui reçu par la
@@ -248,7 +356,7 @@ NODE_ENV=production node scripts/rearchive-modified-invoices.js --restore backup
 NODE_ENV=production node scripts/rearchive-modified-invoices.js --restore backups/remise-en-etat/factures-rearchivage-<date>.json --apply
 ```
 
-## 5. Après coup
+## 6. Après coup
 
 Garder les sauvegardes quelques semaines. Pour en avoir une copie sur le Mac :
 
@@ -258,9 +366,8 @@ scp -i ~/.ssh/vps_key -r joaquim@51.91.254.74:~/api.newbi.fr/backups/remise-en-e
 
 ## Hors périmètre
 
-Aucun script ne touche aux **totaux enregistrés des factures**. Une facture
-avec frais de port et remise globale en pourcentage enregistrée (créée ou
-modifiée) avant la correction du 10/10/2026 garde un total où la remise
-s'appliquait aussi au port, alors que son PDF affiche le bon montant. Ces totaux servent au
-paiement, au rapprochement et au XML Factur-X : leur correction demande une
-décision à part.
+- Les factures **transmises en facturation électronique** gardent leurs
+  totaux et leur archive (lignes `🔒` de l'étape 3) : un écart se corrige par
+  un avoir, au cas par cas.
+- Les **paiements, rapprochements et avoirs** ne sont jamais modifiés : les
+  lignes `⚠️` de l'étape 3 se traitent à la main, dans l'appli.
