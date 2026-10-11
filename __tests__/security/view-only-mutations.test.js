@@ -130,7 +130,6 @@ const OPEN_TO_ANY_MEMBER = {
     "updateInvitedUserProfile",
     "logoutInvitedUser",
     "createPaymentSessionForFileTransfer",
-    "generateFileTransferPaymentLink",
     "consumePaymentReturnToken",
   ],
   // Réglages personnels dans une page, sans effet pour les autres membres
