@@ -170,6 +170,71 @@ function computeItemHT(item) {
   return itemHT;
 }
 
+const isPercentageDiscount = (discountType) =>
+  String(discountType || "").toUpperCase() === "PERCENTAGE";
+
+/**
+ * Remise globale à répartir sur les articles au lieu de l'envoyer au niveau
+ * du document. Qonto applique la remise globale « à la somme de toutes les
+ * lignes » (doc POST /v2/client_invoices, champ discount), donc aussi à la
+ * ligne « Frais de livraison », alors que Newbi ne remise jamais le port
+ * (documentTotals.js) : avec du port facturé, le total Qonto était inférieur
+ * au total Newbi.
+ */
+function spreadsGlobalDiscount(doc) {
+  return (
+    doc?.discount > 0 &&
+    !!doc.shipping?.billShipping &&
+    doc.shipping.shippingAmountHT > 0
+  );
+}
+
+/**
+ * Part HT de la remise globale portée par chaque article, au centime, au
+ * prorata de son HT. La somme des parts est la remise calculée par Newbi
+ * (pourcentage du HT des articles, ou montant fixe plafonné à ce HT),
+ * arrondie au centime ; le reliquat d'arrondi va aux plus grandes décimales.
+ */
+function globalDiscountShares(doc) {
+  const hts = (doc.items || []).map((item) => Math.max(0, computeItemHT(item)));
+  const itemsHT = hts.reduce((sum, ht) => sum + ht, 0);
+  if (!(itemsHT > 0)) return hts.map(() => 0);
+
+  const discountAmount = isPercentageDiscount(doc.discountType)
+    ? (itemsHT * Math.min(doc.discount, 100)) / 100
+    : Math.min(doc.discount, itemsHT);
+  const totalCents = Math.round(discountAmount * 100);
+
+  const raw = hts.map((ht) => (totalCents * ht) / itemsHT);
+  const cents = raw.map(Math.floor);
+  let rest = totalCents - cents.reduce((sum, c) => sum + c, 0);
+  raw
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction)
+    .forEach(({ index }) => {
+      if (rest > 0) {
+        cents[index] += 1;
+        rest -= 1;
+      }
+    });
+
+  return cents.map((c) => c / 100);
+}
+
+/**
+ * Remise globale du payload Qonto (facture ou devis), null si absente ou
+ * répartie sur les articles (cf. spreadsGlobalDiscount).
+ */
+function globalDiscountPayload(doc) {
+  if (!(doc?.discount > 0) || spreadsGlobalDiscount(doc)) return null;
+  return isPercentageDiscount(doc.discountType)
+    ? {
+        type: "percentage",
+        value: String(Math.min(doc.discount, 100) / 100),
+      }
+    : { type: "absolute", value: money(doc.discount) };
+}
+
 /**
  * Convertit un nom de pays en code ISO alpha-2 (cas courants FR)
  */
@@ -661,11 +726,18 @@ const qontoService = {
    * Construit les lignes Qonto d'une facture Newbi.
    * Si la ligne n'a pas d'avancement partiel, on envoie quantité × PU réels
    * (+ remise de ligne) ; sinon on envoie une ligne à quantité 1 au HT réel.
+   * Avec du port facturé, la remise globale est portée par les articles
+   * (remise fixe par ligne) pour ne pas remiser le port (cf.
+   * spreadsGlobalDiscount).
    */
   _buildItems(invoice) {
     const isReverseCharge = invoice.isReverseCharge || false;
     const currency = invoice.currency || "EUR";
-    const items = (invoice.items || []).map((item) => {
+    const shares = spreadsGlobalDiscount(invoice)
+      ? globalDiscountShares(invoice)
+      : null;
+    const items = (invoice.items || []).map((item, index) => {
+      const share = shares?.[index] || 0;
       const label = item.description || "Article";
       const vatRate = isReverseCharge ? "0" : mapVatRate(item.vatRate);
       const progress =
@@ -681,10 +753,17 @@ const qontoService = {
       };
 
       if (progress !== 100) {
+        const unitPrice = money(computeItemHT(item));
         return {
           ...base,
           quantity: "1",
-          unit_price: { value: money(computeItemHT(item)), currency },
+          unit_price: { value: unitPrice, currency },
+          ...(share > 0 && {
+            discount: {
+              type: "absolute",
+              value: money(Math.min(share, Number(unitPrice))),
+            },
+          }),
         };
       }
 
@@ -694,7 +773,17 @@ const qontoService = {
         unit_price: { value: money(item.unitPrice), currency },
       };
 
-      if (item.discount > 0) {
+      if (share > 0) {
+        // Remise de ligne et part de la remise globale réunies en une remise
+        // fixe : la ligne vaut son HT Newbi moins sa part de remise globale
+        const gross =
+          (Number(item.quantity) || 0) * Number(money(item.unitPrice));
+        const net = computeItemHT(item) - share;
+        line.discount = {
+          type: "absolute",
+          value: money(Math.min(gross, Math.max(0, gross - net))),
+        };
+      } else if (item.discount > 0) {
         const type = item.discountType === "FIXED" ? "absolute" : "percentage";
         line.discount = {
           type,
@@ -800,19 +889,8 @@ const qontoService = {
         }),
       };
 
-      if (invoice.discount > 0) {
-        if (invoice.discountType === "PERCENTAGE") {
-          payload.discount = {
-            type: "percentage",
-            value: String(Math.min(invoice.discount, 100) / 100),
-          };
-        } else {
-          payload.discount = {
-            type: "absolute",
-            value: money(invoice.discount),
-          };
-        }
-      }
+      const globalDiscount = globalDiscountPayload(invoice);
+      if (globalDiscount) payload.discount = globalDiscount;
 
       if (invoice.isReverseCharge) {
         payload.terms_and_conditions = truncate(
@@ -947,15 +1025,8 @@ const qontoService = {
         ...(uploadId && { upload_id: uploadId }),
       };
 
-      if (quote.discount > 0) {
-        payload.discount =
-          quote.discountType === "PERCENTAGE"
-            ? {
-                type: "percentage",
-                value: String(Math.min(quote.discount, 100) / 100),
-              }
-            : { type: "absolute", value: money(quote.discount) };
-      }
+      const globalDiscount = globalDiscountPayload(quote);
+      if (globalDiscount) payload.discount = globalDiscount;
 
       let data;
       try {
