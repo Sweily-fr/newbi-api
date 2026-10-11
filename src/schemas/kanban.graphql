@@ -346,6 +346,36 @@ type Mutation {
   
   createTask(input: CreateTaskInput!, workspaceId: ID): Task!
   updateTask(input: UpdateTaskInput!, workspaceId: ID): Task!
+
+  # Modifications atomiques des listes d'une tâche, un élément à la fois :
+  # deux personnes qui modifient la même tâche en même temps ne s'écrasent
+  # plus (updateTask remplace le tableau complet). Idempotentes : déjà
+  # assigné, tag déjà présent, élément déjà coché… renvoient la tâche telle
+  # quelle, sans activité ni diffusion.
+  assignTaskMember(taskId: ID!, memberId: String!, workspaceId: ID): Task!
+  unassignTaskMember(taskId: ID!, memberId: String!, workspaceId: ID): Task!
+  addTaskTag(taskId: ID!, tag: TagInput!, workspaceId: ID): Task!
+  # tagName : comparaison sans tenir compte de la casse
+  removeTaskTag(taskId: ID!, tagName: String!, workspaceId: ID): Task!
+  # itemId (facultatif) : ObjectId généré par le client pour afficher
+  # l'élément tout de suite ; un élément déjà présent avec cet id n'est pas
+  # ajouté une seconde fois (requête rejouée)
+  addChecklistItem(
+    taskId: ID!
+    text: String!
+    completed: Boolean
+    itemId: ID
+    workspaceId: ID
+  ): Task!
+  updateChecklistItem(
+    taskId: ID!
+    itemId: ID!
+    text: String
+    completed: Boolean
+    workspaceId: ID
+  ): Task!
+  removeChecklistItem(taskId: ID!, itemId: ID!, workspaceId: ID): Task!
+
   deleteTask(id: ID!, workspaceId: ID): Boolean!
   moveTask(id: ID!, columnId: String!, position: Int!, workspaceId: ID): Task!
 

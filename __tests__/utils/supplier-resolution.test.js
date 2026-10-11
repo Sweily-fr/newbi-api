@@ -10,6 +10,7 @@ import {
   resolveSupplier,
   normalizeBankDescriptor,
   normalizeSupplierName,
+  withoutOwnIdentifiers,
 } from "../../src/utils/supplierResolution.js";
 
 /**
@@ -274,5 +275,126 @@ describe("resolveSupplier", () => {
       userId,
     });
     expect(matchedBy).toBe("created");
+  });
+});
+
+/**
+ * Identifiants de l'organisation lus comme ceux du fournisseur, et nom saisi
+ * par l'utilisateur. Cas d'origine (11/10/2026) : le n° de TVA de Sweily,
+ * imprimé sur les factures étrangères (autoliquidation), rattachait les
+ * factures Hostinger et MongoDB à une fiche « Celonis Inc. » qui le portait,
+ * et le nom corrigé revenait à « Celonis Inc. » à chaque enregistrement.
+ */
+describe("identifiants de l'organisation et nom saisi", () => {
+  const OWN = {
+    siret: "98157654900019",
+    siren: "981576549",
+    vatNumber: "FR70981576549",
+  };
+
+  const insertOwnOrganization = () =>
+    mongoose.connection.db.collection("organization").insertOne({
+      _id: workspaceId,
+      name: "Sweily",
+      companyName: "Sweily",
+      ...OWN,
+    });
+
+  it("withoutOwnIdentifiers : retire le n° de TVA et le SIRET de l'organisation", () => {
+    const own = { siren: OWN.siren, vat: OWN.vatNumber };
+    expect(
+      withoutOwnIdentifiers(
+        { siret: "981 576 549 00027", vatNumber: "fr 70 981 576 549" },
+        own,
+      ),
+    ).toEqual({ siret: null, vatNumber: null });
+    // TVA française portant le SIREN de l'organisation, même sans n° de TVA
+    // renseigné sur sa fiche
+    expect(
+      withoutOwnIdentifiers(
+        { vatNumber: "FR70981576549" },
+        { siren: OWN.siren, vat: null },
+      ).vatNumber,
+    ).toBeNull();
+    // Identifiants d'un vrai fournisseur : gardés
+    expect(
+      withoutOwnIdentifiers(
+        { siret: "42476141900045", vatNumber: "IE6388047V" },
+        own,
+      ),
+    ).toEqual({ siret: "42476141900045", vatNumber: "IE6388047V" });
+    // Organisation inconnue : rien n'est retiré
+    expect(
+      withoutOwnIdentifiers({ vatNumber: "FR70981576549" }, null).vatNumber,
+    ).toBe("FR70981576549");
+  });
+
+  it("n° de TVA de l'organisation : ne rattache pas à la fiche qui le porte, ni ne l'enrichit", async () => {
+    await insertOwnOrganization();
+    const celonis = await makeSupplier("Celonis Inc.", {
+      vatNumber: OWN.vatNumber,
+    });
+
+    const { supplier, matchedBy } = await resolveSupplier({
+      workspaceId,
+      name: "Hostinger International Ltd.",
+      vatNumber: OWN.vatNumber,
+      userId,
+    });
+    expect(matchedBy).toBe("created");
+    expect(supplier._id.toString()).not.toBe(celonis._id.toString());
+    expect(supplier.name).toBe("Hostinger International Ltd.");
+    expect(supplier.vatNumber).toBeFalsy();
+  });
+
+  it("n° de TVA de l'organisation sur une facture passée : ignoré aussi", async () => {
+    await insertOwnOrganization();
+    const celonis = await makeSupplier("Celonis Inc.");
+    await makeInvoice(celonis, {
+      ocrMetadata: { supplierVatNumber: OWN.vatNumber },
+    });
+
+    const { matchedBy } = await resolveSupplier({
+      workspaceId,
+      name: "MongoDB",
+      vatNumber: OWN.vatNumber,
+      userId,
+      create: false,
+    });
+    expect(matchedBy).toBe("none");
+  });
+
+  it("nom saisi sans rapport avec la fiche des identifiants : nouvelle fiche, sans recopier les identifiants", async () => {
+    const celonis = await makeSupplier("Celonis Inc.", {
+      vatNumber: "IE3668997OH",
+    });
+
+    const { supplier, matchedBy } = await resolveSupplier({
+      workspaceId,
+      name: "MongoDB",
+      vatNumber: "IE3668997OH",
+      userId,
+      nameIsExplicit: true,
+    });
+    expect(matchedBy).toBe("created");
+    expect(supplier._id.toString()).not.toBe(celonis._id.toString());
+    expect(supplier.name).toBe("MongoDB");
+    expect(supplier.vatNumber).toBeFalsy();
+  });
+
+  it("nom saisi partageant un mot avec la fiche des identifiants : même fiche", async () => {
+    const ovh = await makeSupplier("OVHcloud SAS", {
+      siret: "42476141900045",
+    });
+
+    const { supplier, matchedBy } = await resolveSupplier({
+      workspaceId,
+      name: "OVHcloud",
+      siret: "42476141900045",
+      userId,
+      nameIsExplicit: true,
+    });
+    expect(matchedBy).toBe("identifier");
+    expect(supplier._id.toString()).toBe(ovh._id.toString());
   });
 });

@@ -161,6 +161,123 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoices", () => {
     expect(result.totalCount).toBe(1);
   });
 
+  it("filtre sur plusieurs statuts à la fois (statuses)", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "OVERDUE" });
+    await insertPurchaseInvoice({ status: "PAID" });
+    await insertPurchaseInvoice({ status: "ARCHIVED" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.status).sort()).toEqual([
+      "OVERDUE",
+      "TO_PAY",
+    ]);
+  });
+
+  it("combine status et statuses en ET", async () => {
+    await insertPurchaseInvoice({ status: "TO_PAY" });
+    await insertPurchaseInvoice({ status: "PAID" });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        status: "PAID",
+        statuses: ["TO_PAY", "OVERDUE"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(0);
+  });
+
+  it("filtre sur plusieurs sous-catégories, catégorie large à défaut", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF",
+      category: "TRANSPORT",
+      subcategory: "train",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Restaurant",
+      category: "MEALS",
+      subcategory: "restaurant",
+    });
+    // Ancienne facture sans sous-catégorie : comparée sur sa catégorie
+    await insertPurchaseInvoice({
+      supplierName: "EDF",
+      category: "ENERGY",
+      subcategory: null,
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Free",
+      category: "TELECOMMUNICATIONS",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        subcategories: ["train", "ENERGY"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(2);
+    expect(result.items.map((i) => i.supplierName).sort()).toEqual([
+      "EDF",
+      "SNCF",
+    ]);
+  });
+
+  it("combine sous-catégories, statuts et recherche", async () => {
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Voyageurs",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "SNCF Connect",
+      subcategory: "train",
+      status: "PAID",
+    });
+    await insertPurchaseInvoice({
+      supplierName: "Air France",
+      subcategory: "train",
+      status: "TO_PAY",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        search: "SNCF",
+        statuses: ["TO_PAY"],
+        subcategories: ["train"],
+        page: 1,
+        limit: 10,
+      },
+      ctx(),
+    );
+
+    expect(result.totalCount).toBe(1);
+    expect(result.items[0].supplierName).toBe("SNCF Voyageurs");
+  });
+
   it("filters by amount range", async () => {
     await insertPurchaseInvoice({ amountTTC: 100 });
     await insertPurchaseInvoice({ amountTTC: 500 });
@@ -802,6 +919,69 @@ describe("PurchaseInvoice Resolver - Query.purchaseInvoiceDuplicates", () => {
     );
     expect(result.map((r) => r.id)).toEqual([insertedId.toString()]);
   });
+
+  it("renvoie la devise du doublon (EUR à défaut)", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-10",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+    await PurchaseInvoice.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      supplierName: "Ancienne",
+      invoiceNumber: "OLD-0001",
+      amountTTC: 50,
+      status: "TO_PAY",
+      files: [],
+    });
+
+    const [usd] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "AWS-2026-10", amountTTC: 120 },
+      },
+      ctx(),
+    );
+    expect(usd.currency).toBe("USD");
+
+    const [old] = await query(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        input: { invoiceNumber: "OLD-0001", amountTTC: 50 },
+      },
+      ctx(),
+    );
+    expect(old.currency).toBe("EUR");
+  });
+
+  it("le refus de création affiche le montant du doublon dans sa devise", async () => {
+    await insertPurchaseInvoice({
+      invoiceNumber: "AWS-2026-11",
+      supplierName: "Amazon Web Services",
+      amountTTC: 120,
+      currency: "USD",
+    });
+
+    await expect(
+      purchaseInvoiceResolvers.Mutation.createPurchaseInvoice(
+        null,
+        {
+          input: {
+            workspaceId: organizationId.toString(),
+            supplierName: "Amazon Web Services",
+            invoiceNumber: "AWS-2026-11",
+            issueDate: "2026-10-01",
+            amountTTC: 120,
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/\$US/);
+  });
 });
 
 describe("PurchaseInvoice Resolver - Query.suppliers (recherche)", () => {
@@ -819,6 +999,131 @@ describe("PurchaseInvoice Resolver - Query.suppliers (recherche)", () => {
 
     expect(result.totalCount).toBe(1);
     expect(result.items[0].name).toBe("Orange (Business)");
+  });
+});
+
+/**
+ * Ticket du 11/10/2026 : le nom de fournisseur modifié dans le tiroir
+ * revenait aussitôt à « Celonis Inc. », fiche retrouvée par le n° de TVA lu
+ * sur la facture (celui de l'organisation, imprimé en autoliquidation).
+ */
+describe("PurchaseInvoice Resolver - nom du fournisseur saisi", () => {
+  const update = purchaseInvoiceResolvers.Mutation.updatePurchaseInvoice;
+  const OWN_VAT = "FR70981576549";
+
+  const setOwnIdentifiers = () =>
+    mongoose.connection.db
+      .collection("organization")
+      .updateOne(
+        { _id: organizationId },
+        { $set: { vatNumber: OWN_VAT, siren: "981576549" } },
+      );
+
+  it("le nom saisi reste celui de la facture, même si le n° de TVA lu désigne une autre fiche", async () => {
+    const celonis = await Supplier.create({
+      name: "Celonis Inc.",
+      workspaceId: organizationId,
+      createdBy: userId,
+      vatNumber: "IE3668997OH",
+    });
+    const { insertedId } = await insertPurchaseInvoice({
+      supplierName: "Celonis Inc.",
+      supplierId: celonis._id,
+      ocrMetadata: { supplierVatNumber: "IE3668997OH" },
+    });
+
+    const result = await update(
+      null,
+      { id: insertedId.toString(), input: { supplierName: "MongoDB" } },
+      ctx(),
+    );
+
+    expect(result.supplierName).toBe("MongoDB");
+    expect(String(result.supplierId)).not.toBe(String(celonis._id));
+    const saved = await PurchaseInvoice.findById(insertedId);
+    expect(saved.supplierName).toBe("MongoDB");
+    const mongo = await Supplier.findById(saved.supplierId);
+    expect(mongo.name).toBe("MongoDB");
+    // Les identifiants restent sur la fiche qui les portait
+    expect(mongo.vatNumber).toBeFalsy();
+  });
+
+  it("nom saisi plus court que la fiche du même fournisseur : fiche gardée, nom saisi conservé", async () => {
+    const canva = await Supplier.create({
+      name: "Canva Pty. Ltd.",
+      workspaceId: organizationId,
+      createdBy: userId,
+    });
+    const { insertedId } = await insertPurchaseInvoice({
+      supplierName: "Fournisseur inconnu",
+    });
+
+    const result = await update(
+      null,
+      { id: insertedId.toString(), input: { supplierName: "Canva" } },
+      ctx(),
+    );
+
+    expect(result.supplierName).toBe("Canva");
+    expect(String(result.supplierId)).toBe(String(canva._id));
+  });
+
+  it("n° de TVA de l'organisation dans les données lues : ignoré", async () => {
+    await setOwnIdentifiers();
+    const celonis = await Supplier.create({
+      name: "Celonis Inc.",
+      workspaceId: organizationId,
+      createdBy: userId,
+      vatNumber: OWN_VAT,
+    });
+    const { insertedId } = await insertPurchaseInvoice({
+      supplierName: "Celonis Inc.",
+      supplierId: celonis._id,
+      ocrMetadata: { supplierVatNumber: OWN_VAT },
+    });
+
+    const result = await update(
+      null,
+      { id: insertedId.toString(), input: { supplierName: "Hostinger" } },
+      ctx(),
+    );
+
+    expect(result.supplierName).toBe("Hostinger");
+    const hostinger = await Supplier.findById(result.supplierId);
+    expect(hostinger.name).toBe("Hostinger");
+    expect(hostinger.vatNumber).toBeFalsy();
+  });
+
+  it("ajout d'un justificatif : le n° de TVA de l'organisation n'est pas enregistré comme celui du fournisseur", async () => {
+    await setOwnIdentifiers();
+    const { insertedId } = await insertPurchaseInvoice();
+
+    const result =
+      await purchaseInvoiceResolvers.Mutation.addPurchaseInvoiceFile(
+        null,
+        {
+          purchaseInvoiceId: insertedId.toString(),
+          input: {
+            cloudflareUrl: "https://test.r2.dev/hostinger.pdf",
+            fileName: "hostinger.pdf",
+            mimeType: "application/pdf",
+            fileSize: 1234,
+            ocrData: {
+              transaction_data: {
+                vendor_name: "Hostinger International Ltd.",
+                amount: 143.88,
+              },
+              extracted_fields: { vendor_vat_number: OWN_VAT },
+            },
+          },
+        },
+        ctx(),
+      );
+
+    expect(result.ocrMetadata.supplierName).toBe(
+      "Hostinger International Ltd.",
+    );
+    expect(result.ocrMetadata.supplierVatNumber).toBeFalsy();
   });
 });
 
@@ -848,7 +1153,7 @@ describe("PurchaseInvoice Resolver - Mutation.addPurchaseInvoiceFile (données O
         currency: "USD",
       },
       extracted_fields: {
-        vendor_siret: "12345678901234",
+        vendor_siret: "42476141900045",
         vendor_vat_number: "FR12345678901",
         vendor_address: "1 Market St",
         payment_details: { iban: "FR7612345", bic: "BNPAFRPP" },
@@ -873,7 +1178,7 @@ describe("PurchaseInvoice Resolver - Mutation.addPurchaseInvoiceFile (données O
     expect(meta.amountHT).toBe(100);
     expect(meta.amountTVA).toBe(20);
     expect(meta.vatRate).toBe(20);
-    expect(meta.supplierSiret).toBe("12345678901234");
+    expect(meta.supplierSiret).toBe("42476141900045");
     expect(meta.supplierVatNumber).toBe("FR12345678901");
     expect(meta.iban).toBe("FR7612345");
     expect(meta.bic).toBe("BNPAFRPP");

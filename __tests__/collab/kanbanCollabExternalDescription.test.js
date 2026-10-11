@@ -35,12 +35,18 @@ const pubsub = {
   unsubscribe: (id) => subscribers.delete(id),
 };
 // Verrou Redis simulé (SET NX PX)
-const locks = new Set();
+const locks = new Map();
 const cacheClient = {
-  set: async (key, _value, _px, _ttl, nx) => {
+  set: async (key, value, _px, _ttl, nx) => {
     if (nx === "NX" && locks.has(key)) return null;
-    locks.add(key);
+    locks.set(key, value);
     return "OK";
+  },
+  // Libération du verrou de document (script Lua : DEL si même jeton)
+  eval: async (_script, _numKeys, key, token) => {
+    if (locks.get(key) !== token) return 0;
+    locks.delete(key);
+    return 1;
   },
 };
 vi.mock("../../src/config/redis.js", () => ({

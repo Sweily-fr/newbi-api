@@ -1,6 +1,9 @@
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
-import { resolveSupplier } from "../utils/supplierResolution.js";
+import {
+  resolveSupplier,
+  withoutWorkspaceIdentifiers,
+} from "../utils/supplierResolution.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { ocrMetadataFromOcrData } from "../utils/purchaseInvoiceOcrMetadata.js";
 import mongoose from "mongoose";
@@ -44,10 +47,21 @@ import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconci
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 
-const formatEuros = (value) =>
-  new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(
-    value || 0,
-  );
+// Montant dans la devise de la facture (EUR par défaut ou si le code est
+// invalide) : une facture en dollars n'est pas affichée en euros.
+const formatAmount = (value, currency) => {
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: currency || "EUR",
+    }).format(value || 0);
+  } catch {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: "EUR",
+    }).format(value || 0);
+  }
+};
 
 // Codes de cycle de vie destinataire (DGFiP) émis sur une facture reçue, et
 // statut e-invoice local correspondant. Voir submitPurchaseInvoiceEInvoiceEvent.
@@ -120,7 +134,9 @@ const purchaseInvoiceResolvers = {
         limit = 20,
         search,
         status,
+        statuses,
         category,
+        subcategories,
         supplierId,
         startDate,
         endDate,
@@ -134,9 +150,28 @@ const purchaseInvoiceResolvers = {
       } = args;
 
       const query = { workspaceId: new mongoose.Types.ObjectId(workspaceId) };
+      // Conditions combinées en ET (la recherche occupe déjà query.$or)
+      const and = [];
 
       if (status) query.status = status;
+      // Filtres multiples de l'app mobile : en plus de status / category
+      if (Array.isArray(statuses) && statuses.length > 0) {
+        and.push({ status: { $in: statuses } });
+      }
       if (category) query.category = category;
+      if (Array.isArray(subcategories) && subcategories.length > 0) {
+        // Code affiché = sous-catégorie, sinon catégorie large (même règle
+        // que le filtre Catégorie de la page web)
+        and.push({
+          $or: [
+            { subcategory: { $in: subcategories } },
+            {
+              subcategory: { $in: [null, ""] },
+              category: { $in: subcategories },
+            },
+          ],
+        });
+      }
       if (supplierId)
         query.supplierId = new mongoose.Types.ObjectId(supplierId);
 
@@ -176,6 +211,8 @@ const purchaseInvoiceResolvers = {
           query.$or.push({ amountTTC: numSearch });
         }
       }
+
+      if (and.length > 0) query.$and = and;
 
       const sort = {};
       sort[sortField] = sortOrder === "ASC" ? 1 : -1;
@@ -627,6 +664,7 @@ const purchaseInvoiceResolvers = {
           invoiceNumber: inv.invoiceNumber,
           supplierName: inv.supplierName,
           amountTTC: inv.amountTTC,
+          currency: inv.currency || "EUR",
           issueDate: inv.issueDate,
           status: inv.status,
         }));
@@ -706,7 +744,7 @@ const purchaseInvoiceResolvers = {
           if (duplicates.length > 0) {
             const d = duplicates[0];
             throw new AppError(
-              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatEuros(d.amountTTC)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
+              `Une facture similaire existe déjà : ${d.supplierName || "fournisseur"}${d.invoiceNumber ? ` - ${d.invoiceNumber}` : ""} (${formatAmount(d.amountTTC, d.currency)}). Ouvrez-la pour la rattacher à la transaction, ou confirmez la création.`,
               ERROR_CODES.VALIDATION_ERROR,
             );
           }
@@ -841,7 +879,9 @@ const purchaseInvoiceResolvers = {
 
         // Nouveau nom de fournisseur sans fiche explicite : la fiche liée
         // suit (identifiants, récurrence bancaire, nom ; cf.
-        // supplierResolution.js) et impose son nom si elle existe déjà.
+        // supplierResolution.js). Le nom saisi reste celui de la facture :
+        // une fiche existante ne le remplace plus (il revenait aussitôt à
+        // l'ancien, retrouvé par le n° de TVA lu).
         if (
           input.supplierName !== undefined &&
           input.supplierId === undefined &&
@@ -859,7 +899,7 @@ const purchaseInvoiceResolvers = {
               .lean();
           }
           try {
-            const { supplier, matchedBy } = await resolveSupplier({
+            const { supplier } = await resolveSupplier({
               workspaceId,
               name: input.supplierName,
               siret: invoice.ocrMetadata?.supplierSiret || null,
@@ -867,11 +907,9 @@ const purchaseInvoiceResolvers = {
               transaction,
               userId: context.user.id,
               category: invoice.category || "OTHER",
+              nameIsExplicit: true,
             });
             invoice.supplierId = supplier._id;
-            if (matchedBy !== "created" && supplier.name) {
-              invoice.supplierName = supplier.name;
-            }
           } catch (err) {
             logger.warn(
               `⚠️ [PI] Fiche fournisseur non résolue pour « ${input.supplierName} » : ${err.message}`,
@@ -1360,6 +1398,16 @@ const purchaseInvoiceResolvers = {
         // ocrMetadata vide, donc sans montant ni devise d'origine.
         if (input.ocrData) {
           const metadata = ocrMetadataFromOcrData(input.ocrData);
+          // N° de TVA / SIRET de l'organisation lus comme ceux du fournisseur
+          // (cf. withoutOwnIdentifiers) : non enregistrés
+          if (metadata.supplierSiret || metadata.supplierVatNumber) {
+            const kept = await withoutWorkspaceIdentifiers(workspaceId, {
+              siret: metadata.supplierSiret || null,
+              vatNumber: metadata.supplierVatNumber || null,
+            });
+            if (!kept.siret) delete metadata.supplierSiret;
+            if (!kept.vatNumber) delete metadata.supplierVatNumber;
+          }
           if (Object.keys(metadata).length > 0) {
             if (!invoice.ocrMetadata) invoice.ocrMetadata = {};
             Object.entries(metadata).forEach(([key, value]) => {
@@ -1459,51 +1507,49 @@ const purchaseInvoiceResolvers = {
     bulkUpdatePurchaseInvoiceStatus: requireAction("expenses", [
       "edit",
       "markPaid",
-    ])(
-      async (_, { ids, status }, context) => {
-        assertPermissionAction(
-          context,
-          "expenses",
-          status === "PAID" ? "markPaid" : "edit",
-        );
-        const workspaceId = new mongoose.Types.ObjectId(
-          context.workspaceId || context.organizationId,
-        );
-        const updateData = { status };
-        if (status === "PAID") {
-          updateData.paymentDate = new Date();
+    ])(async (_, { ids, status }, context) => {
+      assertPermissionAction(
+        context,
+        "expenses",
+        status === "PAID" ? "markPaid" : "edit",
+      );
+      const workspaceId = new mongoose.Types.ObjectId(
+        context.workspaceId || context.organizationId,
+      );
+      const updateData = { status };
+      if (status === "PAID") {
+        updateData.paymentDate = new Date();
+      }
+
+      const result = await PurchaseInvoice.updateMany(
+        { _id: { $in: ids }, workspaceId },
+        { $set: updateData },
+      );
+
+      // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
+      if (status === "PAID") {
+        const superPdpInvoices = await PurchaseInvoice.find({
+          _id: { $in: ids },
+          workspaceId,
+          source: "SUPERPDP",
+          superPdpInvoiceId: { $exists: true, $ne: null },
+        });
+        for (const inv of superPdpInvoices) {
+          await reportPurchaseInvoicePaymentIfNeeded(
+            inv,
+            workspaceId.toString(),
+          );
+          // Sauvegarde inconditionnelle : persiste REPORTED comme ERROR (relance)
+          await inv.save();
         }
+      }
 
-        const result = await PurchaseInvoice.updateMany(
-          { _id: { $in: ids }, workspaceId },
-          { $set: updateData },
-        );
-
-        // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
-        if (status === "PAID") {
-          const superPdpInvoices = await PurchaseInvoice.find({
-            _id: { $in: ids },
-            workspaceId,
-            source: "SUPERPDP",
-            superPdpInvoiceId: { $exists: true, $ne: null },
-          });
-          for (const inv of superPdpInvoices) {
-            await reportPurchaseInvoicePaymentIfNeeded(
-              inv,
-              workspaceId.toString(),
-            );
-            // Sauvegarde inconditionnelle : persiste REPORTED comme ERROR (relance)
-            await inv.save();
-          }
-        }
-
-        return {
-          success: true,
-          updatedCount: result.modifiedCount,
-          message: `${result.modifiedCount} facture(s) mise(s) à jour`,
-        };
-      },
-    ),
+      return {
+        success: true,
+        updatedCount: result.modifiedCount,
+        message: `${result.modifiedCount} facture(s) mise(s) à jour`,
+      };
+    }),
 
     bulkDeletePurchaseInvoices: requireDelete("expenses")(
       async (_, { ids }, context) => {
