@@ -35,6 +35,7 @@ vi.mock("../../src/services/mistralIntelligentAnalysisService.js", () => ({
   },
 }));
 
+import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import Transaction from "../../src/models/Transaction.js";
@@ -1080,6 +1081,122 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(invoices[0].supplierName).toBe("SFR Business");
     expect(invoices[0].amountTTC).toBe(45.99);
     expect(invoices[0].category).toBe("TELECOMMUNICATIONS");
+  });
+});
+
+/**
+ * Ticket du 11/10/2026 : le nom corrigé à la confirmation devenait « Celonis
+ * Inc. », fiche retrouvée par le n° de TVA lu, qui était celui de
+ * l'organisation (imprimé sur les factures étrangères en autoliquidation).
+ */
+describe("confirmation : nom du fournisseur corrigé et TVA de l'organisation", () => {
+  const OWN_VAT = "FR70981576549";
+
+  const mockHostingerReadWithVat = (vatNumber) => {
+    processFromBase64.mockResolvedValue({
+      success: true,
+      extractedText: "Hostinger International Ltd. VAT ID FR70981576549",
+      data: {},
+    });
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        document_number: "HCY-14928417",
+        transaction_date: "18/06/2025",
+        vendor_name: "Hostinger International Ltd.",
+        amount: 120.5,
+        currency: "EUR",
+      },
+      extracted_fields: { vendor_vat_number: vatNumber },
+      document_analysis: { confidence: 0.9 },
+    });
+  };
+
+  const analyze = async () => {
+    const tx = await createExpenseTransaction({
+      description: "Hostinger* Hostinger.f",
+    });
+    const params = {
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    };
+    const [proposal] =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    return { params, proposal };
+  };
+
+  const create = ({ params, proposal }, values) =>
+    transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+      transactionId: params.transactionId,
+      workspaceId,
+      userId,
+      fileId: proposal.receiptFile._id,
+      action: "CREATE",
+      values,
+      acknowledgedDuplicateId: null,
+    });
+
+  it("n° de TVA de l'organisation : ni proposé, ni enregistré, ni rattaché à la fiche qui le porte", async () => {
+    await mongoose.connection.db.collection("organization").insertOne({
+      _id: new mongoose.Types.ObjectId(workspaceId),
+      name: "Sweily",
+      vatNumber: OWN_VAT,
+      siren: "981576549",
+    });
+    const celonis = await Supplier.create({
+      name: "Celonis Inc.",
+      workspaceId,
+      createdBy: userId,
+      vatNumber: OWN_VAT,
+    });
+    mockHostingerReadWithVat(OWN_VAT);
+
+    const analyzed = await analyze();
+    expect(analyzed.proposal.proposal.meta.supplierVatNumber).toBeNull();
+
+    const { invoice } = await create(analyzed, {
+      supplierName: "Hostinger International Ltd.",
+    });
+    expect(invoice.supplierName).toBe("Hostinger International Ltd.");
+    expect(String(invoice.supplierId)).not.toBe(String(celonis._id));
+    expect(invoice.ocrMetadata.supplierVatNumber).toBeFalsy();
+  });
+
+  it("nom corrigé à la confirmation : gardé, même si le n° de TVA lu désigne une autre fiche", async () => {
+    const celonis = await Supplier.create({
+      name: "Celonis Inc.",
+      workspaceId,
+      createdBy: userId,
+      vatNumber: "IE3668997OH",
+    });
+    mockHostingerReadWithVat("IE3668997OH");
+
+    const analyzed = await analyze();
+    const { invoice } = await create(analyzed, { supplierName: "Hostinger" });
+
+    expect(invoice.supplierName).toBe("Hostinger");
+    expect(String(invoice.supplierId)).not.toBe(String(celonis._id));
+    const saved = await PurchaseInvoice.findById(invoice._id);
+    expect(saved.supplierName).toBe("Hostinger");
+  });
+
+  it("nom laissé tel quel : la fiche existante unifie toujours le nom (comportement inchangé)", async () => {
+    const hostinger = await Supplier.create({
+      name: "Hostinger",
+      workspaceId,
+      createdBy: userId,
+      vatNumber: "CY10301365E",
+    });
+    mockHostingerReadWithVat("CY10301365E");
+
+    const analyzed = await analyze();
+    const { invoice } = await create(analyzed, {
+      supplierName: analyzed.proposal.proposal.values.supplierName,
+    });
+
+    expect(invoice.supplierName).toBe("Hostinger");
+    expect(String(invoice.supplierId)).toBe(String(hostinger._id));
   });
 });
 

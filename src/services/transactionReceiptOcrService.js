@@ -8,7 +8,10 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
-import { resolveSupplier } from "../utils/supplierResolution.js";
+import {
+  resolveSupplier,
+  withoutWorkspaceIdentifiers,
+} from "../utils/supplierResolution.js";
 import {
   buildReconciliationLinkEntry,
   forgetReconciliationLink,
@@ -255,11 +258,33 @@ function mapPaymentMethod(ocrPaymentMethod, transactionPaymentMethod) {
 }
 
 /**
- * OCR d'un justificatif : Claude Vision direct (base64) si le buffer est
- * disponible, sinon pipeline hybride depuis l'URL Cloudflare.
+ * OCR d'un justificatif, sans les identifiants de l'organisation pris pour
+ * ceux du fournisseur (n° de TVA du client imprimé sur les factures
+ * étrangères) : ni proposés, ni enregistrés dans ocrMetadata.
  * @returns {{ financial: object|null, extractedText: string|null }}
  */
 async function runOcr(receiptFile, fileBuffer, workspaceId) {
+  const result = await runOcrEngines(receiptFile, fileBuffer, workspaceId);
+  const ef = result.financial?.extracted_fields;
+  if (ef && (ef.vendor_siret || ef.vendor_vat_number)) {
+    const kept = await withoutWorkspaceIdentifiers(workspaceId, {
+      siret: ef.vendor_siret || null,
+      vatNumber: ef.vendor_vat_number || null,
+    });
+    result.financial.extracted_fields = {
+      ...ef,
+      vendor_siret: kept.siret,
+      vendor_vat_number: kept.vatNumber,
+    };
+  }
+  return result;
+}
+
+/**
+ * Claude Vision direct (base64) si le buffer est disponible, sinon pipeline
+ * hybride depuis l'URL Cloudflare.
+ */
+async function runOcrEngines(receiptFile, fileBuffer, workspaceId) {
   // Tentative 1 : Claude Vision direct depuis le buffer
   if (fileBuffer) {
     try {
@@ -529,6 +554,9 @@ function buildReceiptInvoiceProposal({
 /**
  * Crée la facture d'achat d'un justificatif à partir d'une proposition
  * confirmée (valeurs éventuellement corrigées par l'utilisateur).
+ *
+ * @param {boolean} [params.supplierNameIsExplicit] nom du fournisseur corrigé
+ *   par l'utilisateur : gardé tel quel, jamais remplacé par celui d'une fiche.
  */
 async function createPurchaseInvoiceFromProposal({
   transaction,
@@ -536,6 +564,7 @@ async function createPurchaseInvoiceFromProposal({
   proposal,
   workspaceId,
   userId,
+  supplierNameIsExplicit = false,
 }) {
   const values = proposal?.values || {};
   const meta = proposal?.meta || {};
@@ -589,7 +618,8 @@ async function createPurchaseInvoiceFromProposal({
   try {
     // Fiche fournisseur : identifiants lus, récurrence bancaire, puis nom
     // (cf. supplierResolution.js). Une fiche existante impose son nom à la
-    // facture : « Canva » lu sur le PDF devient « Canva Pty. Ltd. ».
+    // facture : « Canva » lu sur le PDF devient « Canva Pty. Ltd. ». Sauf
+    // nom corrigé par l'utilisateur à la confirmation : c'est le sien.
     const { supplier, matchedBy } = await resolveSupplier({
       workspaceId,
       name: invoice.supplierName,
@@ -598,9 +628,10 @@ async function createPurchaseInvoiceFromProposal({
       transaction,
       userId,
       category: values.category,
+      nameIsExplicit: supplierNameIsExplicit,
     });
     invoice.supplierId = supplier._id;
-    if (matchedBy !== "created" && supplier.name) {
+    if (!supplierNameIsExplicit && matchedBy !== "created" && supplier.name) {
       invoice.supplierName = supplier.name;
     }
   } catch (supplierError) {
@@ -1332,6 +1363,13 @@ async function confirmReceiptInvoiceProposal({
     proposal: { values: confirmed, meta: proposal.meta },
     workspaceId,
     userId,
+    // Le dialogue renvoie toujours le nom : seul un nom changé est une
+    // correction de l'utilisateur.
+    supplierNameIsExplicit: Boolean(
+      values?.supplierName &&
+      values.supplierName.trim() !==
+        String(proposal.values?.supplierName || "").trim(),
+    ),
   });
   await finalizeReceiptInvoiceLink({
     transaction,
