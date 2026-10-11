@@ -595,6 +595,37 @@ describe("CreditNote Resolver — updateCreditNote (archive)", () => {
   });
 });
 
+describe("CreditNote Resolver — updateCreditNote (e-facturation)", () => {
+  it("refuse la modification d'un avoir transmis en facturation électronique", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    await CreditNote.collection.updateOne(
+      { _id: cn._id },
+      {
+        $set: {
+          superPdpInvoiceId: "spdp-cn-1",
+          eInvoiceStatus: "SENT_TO_RECIPIENT",
+        },
+      },
+    );
+
+    await expect(
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        { id: cn._id.toString(), input: { headerNotes: "Modifié" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/transmis en facturation électronique/);
+
+    const stored = await CreditNote.collection.findOne({ _id: cn._id });
+    expect(stored.headerNotes).not.toBe("Modifié");
+  });
+});
+
 describe("CreditNote Resolver — deleteCreditNote", () => {
   it("deletes a credit note", async () => {
     const inv = await insertInvoice();

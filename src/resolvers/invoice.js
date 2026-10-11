@@ -67,6 +67,10 @@ import {
   deleteEventFromExternalCalendars,
 } from "../services/calendar/CalendarSyncService.js";
 import { buildLinkedInvoiceItems } from "../utils/linkedInvoiceItems.js";
+import {
+  assertNotEInvoiceTransmitted,
+  isEInvoiceTransmitted,
+} from "../utils/eInvoiceLock.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1957,6 +1961,13 @@ const invoiceResolvers = {
             );
           }
 
+          // Facture transmise en facturation électronique : elle fait foi
+          // telle que déposée sur la plateforme, on la corrige par un avoir.
+          // (Paiement, rapprochement et statuts e-invoicing passent par
+          // d'autres chemins : markInvoiceAsPaid, changeInvoiceStatus, crons
+          // et webhooks SuperPDP.)
+          assertNotEInvoiceTransmitted(invoiceData, "invoice");
+
           // Garde-fou de transition : updateInvoice gère l'édition de contenu
           // et la SEULE transition DRAFT → PENDING (finalisation, numérotée plus
           // bas). Tout autre changement de statut (rétrogradation en DRAFT,
@@ -2548,16 +2559,16 @@ const invoiceResolvers = {
             updateData["cachedPdf.generatedAt"] = null;
           }
 
-          // Facture déjà émise (en attente, payée…) modifiée sans avoir été
-          // transmise en e-facturation : son archive Factur-X (aperçu, bouton
-          // PDF, e-mails et relances sans PDF joint) date d'avant la
-          // modification. On l'oublie ici et on la régénère juste après
-          // l'enregistrement ; si la régénération échoue, l'aperçu et les
-          // envois retombent sur un rendu à jour au lieu de l'ancien PDF.
-          // Une facture transmise (superPdpInvoiceId) garde son archive : le
-          // document faisant foi est celui reçu par la plateforme.
+          // Facture déjà émise (en attente, payée…) modifiée : son archive
+          // Factur-X (aperçu, bouton PDF, e-mails et relances sans PDF joint)
+          // date d'avant la modification. On l'oublie ici et on la régénère
+          // juste après l'enregistrement ; si la régénération échoue, l'aperçu
+          // et les envois retombent sur un rendu à jour au lieu de l'ancien
+          // PDF. Une facture transmise en e-facturation n'arrive pas ici
+          // (verrou plus haut) : son archive reste celle déposée.
           const rearchiveAfterUpdate =
-            invoiceData.status !== "DRAFT" && !invoiceData.superPdpInvoiceId;
+            invoiceData.status !== "DRAFT" &&
+            !isEInvoiceTransmitted(invoiceData);
           if (rearchiveAfterUpdate && invoiceData.archivedPdfKey) {
             updateData.archivedPdfKey = null;
             updateData.archivedPdfUrl = null;

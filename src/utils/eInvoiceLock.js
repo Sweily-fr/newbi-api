@@ -1,0 +1,45 @@
+import { AppError, ERROR_CODES } from "./errors.js";
+
+/**
+ * Verrou des documents transmis en facturation électronique.
+ *
+ * Une facture (ou un avoir) déposée sur la plateforme (SuperPDP) fait foi
+ * telle qu'elle a été transmise : la modifier dans Newbi ferait diverger
+ * les données, l'archive et les envois du document reçu par le client. On
+ * la corrige par un avoir.
+ *
+ * Seules les modifications de contenu (updateInvoice, updateCreditNote)
+ * sont refusées : paiement, rapprochement et statuts e-invoicing posés par
+ * les crons et webhooks SuperPDP passent par d'autres chemins.
+ */
+
+// Statuts e-invoicing qui n'impliquent pas de dépôt sur la plateforme :
+// jamais envoyée, ou envoi refusé avant dépôt (pas d'identifiant SuperPDP)
+const NOT_TRANSMITTED_STATUSES = new Set(["NOT_SENT", "ERROR"]);
+
+/** Vrai si le document a été déposé sur la plateforme d'e-facturation. */
+export function isEInvoiceTransmitted(doc) {
+  if (!doc) return false;
+  if (doc.superPdpInvoiceId) return true;
+  const status = doc.eInvoiceStatus;
+  return !!status && !NOT_TRANSMITTED_STATUSES.has(status);
+}
+
+/**
+ * Refuse la modification d'un document transmis.
+ * @param {Object} doc - facture ou avoir (document Mongoose ou objet lean)
+ * @param {"invoice"|"creditNote"} type
+ */
+export function assertNotEInvoiceTransmitted(doc, type = "invoice") {
+  if (!isEInvoiceTransmitted(doc)) return;
+  const message =
+    type === "creditNote"
+      ? "Cet avoir a été transmis en facturation électronique : il ne peut plus être modifié."
+      : "Cette facture a été transmise en facturation électronique : elle ne peut plus être modifiée. Créez un avoir pour la corriger.";
+  throw new AppError(message, ERROR_CODES.RESOURCE_LOCKED, {
+    resource: type,
+    reason: "E_INVOICE_TRANSMITTED",
+    superPdpInvoiceId: doc.superPdpInvoiceId || null,
+    eInvoiceStatus: doc.eInvoiceStatus || null,
+  });
+}

@@ -26,6 +26,7 @@ import {
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
+import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -529,7 +530,10 @@ const creditNoteResolvers = {
             throw createNotFoundError("Avoir non trouvé");
           }
 
-          // Les avoirs avec statut CREATED peuvent toujours être modifiés
+          // Les avoirs avec statut CREATED peuvent toujours être modifiés,
+          // sauf un avoir transmis en facturation électronique (toObject :
+          // champs e-invoicing lus même s'ils ne sont pas dans le schéma)
+          assertNotEInvoiceTransmitted(creditNote.toObject(), "creditNote");
 
           // Un avoir est toujours finalisé (pas de brouillon) : son numéro et
           // son préfixe sont VERROUILLÉS — les renuméroter casserait la

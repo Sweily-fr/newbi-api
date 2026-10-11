@@ -495,7 +495,7 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     expect(workspaceId.toString()).toBe(organizationId.toString());
   });
 
-  it("garde l'archive d'une facture transmise en e-facturation", async () => {
+  it("refuse la modification d'une facture transmise en e-facturation", async () => {
     triggerInvoiceFacturXArchive.mockClear();
     const { insertedId } = await insertInvoice({
       superPdpInvoiceId: "spdp-123",
@@ -504,15 +504,66 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
       archivedPdfSource: "NEWBI",
     });
 
-    await resolver(
-      null,
-      { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
-      ctx(),
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      "Cette facture a été transmise en facturation électronique : elle ne peut plus être modifiée. Créez un avoir pour la corriger.",
     );
 
     const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.headerNotes).toBeUndefined();
     expect(stored.archivedPdfKey).toBe("invoices/ws/2026/10/transmise.pdf");
     expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
+  });
+
+  it("refuse aussi sur un statut e-invoicing transmis sans identifiant", async () => {
+    const { insertedId } = await insertInvoice({ eInvoiceStatus: "ACCEPTED" });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { headerNotes: "Modifiée" } },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
+  });
+
+  it("laisse modifier une facture dont l'envoi e-invoicing a échoué avant dépôt", async () => {
+    const { insertedId } = await insertInvoice({
+      eInvoiceStatus: "ERROR",
+      eInvoiceError: "SIREN destinataire inconnu",
+    });
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { headerNotes: "Corrigée" } },
+      ctx(),
+    );
+
+    expect(result.headerNotes).toBe("Corrigée");
+  });
+
+  it("laisse marquer payée une facture transmise (autre chemin)", async () => {
+    const { insertedId } = await insertInvoice({
+      superPdpInvoiceId: "spdp-456",
+      eInvoiceStatus: "SENT_TO_RECIPIENT",
+    });
+
+    const result = await invoiceResolvers.Mutation.markInvoiceAsPaid(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        paymentDate: "2026-10-10",
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("COMPLETED");
   });
 
   it("n'archive pas un brouillon qui reste brouillon", async () => {
