@@ -48,8 +48,10 @@ type OrganizationRole {
   actions: JSON!
   # Niveau équivalent par page (déprécié) : { invoices: "write", … }
   levels: JSON!
-  memberCount: Int!
-  invitationCount: Int!
+  # Effectifs (membres, invitations en attente) : null sans « Voir les
+  # membres »
+  memberCount: Int
+  invitationCount: Int
   updatedAt: DateTime
 }
 
