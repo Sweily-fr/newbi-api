@@ -849,11 +849,3 @@ extend type Mutation {
     input: SyncAllTransactionsInput
   ): SyncAllTransactionsResult!
 }
-
-# Subscriptions
-
-extend type Subscription {
-  transactionUpdated(workspaceId: String!): Transaction!
-  accountBalanceUpdated(accountId: String!): AccountBalance!
-  apiMetricsUpdated(workspaceId: String!): ApiMetric!
-}

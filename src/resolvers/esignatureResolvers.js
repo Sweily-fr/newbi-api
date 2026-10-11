@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import mongoose from "mongoose";
 import {
   requireRead,
   requireAction,
@@ -8,6 +9,7 @@ import esignatureService from "../services/esignatureService.js";
 import SignatureRequest from "../models/SignatureRequest.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
+import CreditNote from "../models/CreditNote.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
@@ -24,6 +26,33 @@ import {
   signatureChannel,
 } from "../services/esignaturePubsub.js";
 import { getPubSub } from "../config/redis.js";
+
+/**
+ * Espace d'un document suivi par signatureStatusUpdated : celui de sa
+ * demande de signature, sinon celui du document lui-même (devis, facture ou
+ * avoir). Sans ce repli, l'abonnement était accepté pour tout document
+ * n'ayant encore aucune demande : un utilisateur connecté pouvait suivre la
+ * future signature du devis d'une autre organisation.
+ * @returns {Promise<string|null>} null si le document est introuvable
+ */
+async function resolveSignatureDocumentOrganization(documentId) {
+  if (!mongoose.isValidObjectId(documentId)) return null;
+
+  const request = await SignatureRequest.findOne({ documentId })
+    .select("organizationId")
+    .lean();
+  if (request?.organizationId) return String(request.organizationId);
+
+  for (const Model of [Quote, Invoice, CreditNote]) {
+    const document = await Model.findById(documentId)
+      .select("workspaceId")
+      .lean();
+    if (document) {
+      return document.workspaceId ? String(document.workspaceId) : null;
+    }
+  }
+  return null;
+}
 
 /**
  * Récupérer le modèle Mongoose correspondant au type de document
@@ -928,22 +957,22 @@ const esignatureResolvers = {
         if (!context?.user) {
           throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
         }
-        const request = await SignatureRequest.findOne({ documentId })
-          .select("organizationId")
-          .lean();
-        if (request) {
-          const { getActiveOrganization } =
-            await import("../middlewares/org-resolver.js");
-          const org = await getActiveOrganization(
-            context.user._id.toString(),
-            String(request.organizationId),
+        const organizationId =
+          await resolveSignatureDocumentOrganization(documentId);
+        if (!organizationId) {
+          throw new AppError("Document introuvable", ERROR_CODES.NOT_FOUND);
+        }
+        const { getActiveOrganization } =
+          await import("../middlewares/org-resolver.js");
+        const org = await getActiveOrganization(
+          context.user._id.toString(),
+          organizationId,
+        );
+        if (!org) {
+          throw new AppError(
+            "Vous n'êtes pas membre de cette organisation.",
+            ERROR_CODES.FORBIDDEN,
           );
-          if (!org) {
-            throw new AppError(
-              "Vous n'êtes pas membre de cette organisation.",
-              ERROR_CODES.FORBIDDEN,
-            );
-          }
         }
         return getPubSub().asyncIterableIterator([
           signatureChannel(documentId),
