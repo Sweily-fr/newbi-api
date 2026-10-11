@@ -86,10 +86,22 @@ const putUploaded = (key, fileId, finishedHoursAgo) =>
     },
   });
 
+// Liens uniques par transfert : les index uniques de FileTransfer refusent
+// deux documents sans lien dès qu'ils sont construits.
+let linkSeq = 0;
+const uniqueLinks = () => {
+  linkSeq += 1;
+  return {
+    shareLink: `lien-de-test-${linkSeq}`,
+    downloadLink: `telechargement-de-test-${linkSeq}`,
+  };
+};
+
 const attachToTransfer = (files) =>
   FileTransfer.collection.insertOne({
     userId: "u1",
     status: "active",
+    ...uniqueLinks(),
     files,
   });
 
@@ -98,6 +110,8 @@ const run = (options = {}) =>
 
 beforeAll(async () => {
   await startMongo();
+  // Index construits d'emblée (dont shareLink unique), comme sur la CI.
+  await FileTransfer.init();
 });
 
 afterAll(async () => {
@@ -135,6 +149,7 @@ describe("Nettoyage des fichiers de transfert orphelins", () => {
     await FileTransfer.collection.insertOne({
       userId: "u2",
       status: "expired",
+      ...uniqueLinks(),
       files: [{ fileId: "k2" }],
     });
 
