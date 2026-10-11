@@ -76,17 +76,27 @@ async function getCacheEntry(key) {
 }
 
 // Envoi multipart démarré : clé R2, utilisateur et espace, gardés 24 h comme
-// les métadonnées des fichiers, pour n'autoriser son annulation
-// (abortMultipartUpload) qu'à celui qui l'a démarré
+// les métadonnées des fichiers, pour n'autoriser sa finalisation, son
+// annulation ou sa reprise qu'à celui qui l'a démarré. Une fois finalisé,
+// l'entrée reste (completedAt, fileId, result) : une finalisation rejouée
+// (réponse perdue) renvoie le même résultat, et la reprise d'un envoi
+// interrompu (app mobile fermée) sait que ce fichier est prêt.
 const multipartCacheKey = (uploadId) => `multipart:${uploadId}`;
+
+// Nombre maximal de parts d'un envoi multipart (limite S3/R2)
+const MAX_MULTIPART_PARTS = 10000;
 
 const userIdOf = (user) => String(user?._id || user?.id || "");
 
+// Envoi que R2 ne connaît plus (annulé, ou purgé par R2)
+const isNoSuchUpload = (error) =>
+  error?.name === "NoSuchUpload" || error?.Code === "NoSuchUpload";
+
 /**
  * Envoi multipart démarré par cet utilisateur, dans cet espace, pour cette
- * clé : FORBIDDEN sinon. Utilisé par completeMultipartUpload ;
- * abortMultipartUpload renvoie false pour un envoi inconnu au lieu de
- * l'erreur.
+ * clé : FORBIDDEN sinon. Utilisé par completeMultipartUpload et
+ * refreshMultipartUploadUrls ; abortMultipartUpload et
+ * listMultipartUploadParts traitent un envoi inconnu sans erreur.
  * @returns {Promise<object|null>} l'entrée, null si l'envoi est inconnu
  */
 async function findOwnedMultipartUpload(uploadId, key, user, workspaceId) {
@@ -265,6 +275,8 @@ const chunkUploadR2Resolvers = {
             workspaceId: workspaceId ? String(workspaceId) : null,
             fileId,
             transferId,
+            totalParts,
+            startedAt: Date.now(),
           });
 
           return {
@@ -318,6 +330,18 @@ const chunkUploadR2Resolvers = {
           );
         }
 
+        // Déjà finalisé (réponse perdue, ou reprise après une fermeture de
+        // l'app) : même résultat, sans rappeler R2 ni annuler l'envoi
+        if (ownedUpload.completedAt) {
+          if (ownedUpload.fileId !== fileId || !ownedUpload.result) {
+            throw new AppError(
+              "Cet envoi est déjà finalisé.",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+          return { success: true, ...ownedUpload.result, fileId };
+        }
+
         try {
           logger.debug(
             `🔧 Finalisation Multipart Upload: ${key} (${parts.length} parts)`,
@@ -354,15 +378,24 @@ const chunkUploadR2Resolvers = {
           };
 
           await setCacheEntry(fileId, fileMetadata);
-          // Envoi terminé : plus rien à annuler
-          deleteCacheEntry(multipartCacheKey(uploadId));
-
-          return {
-            success: true,
+          // Envoi terminé : plus rien à annuler, mais la finalisation reste
+          // connue (voir multipartCacheKey)
+          const completedResult = {
             key: result.key,
             url: result.url,
             size: result.size,
-            etag: result.etag,
+            etag: result.etag || null,
+          };
+          await setCacheEntry(multipartCacheKey(uploadId), {
+            ...ownedUpload,
+            fileId,
+            completedAt: Date.now(),
+            result: completedResult,
+          });
+
+          return {
+            success: true,
+            ...completedResult,
             fileId: fileId,
           };
         } catch (error) {
@@ -410,15 +443,15 @@ const chunkUploadR2Resolvers = {
           user,
           workspaceId,
         );
-        if (!entry) return false;
+        // Inconnu, ou déjà finalisé : plus rien à annuler (le fichier
+        // finalisé n'est surtout pas touché)
+        if (!entry || entry.completedAt) return false;
 
         try {
           await cloudflareTransferService.abortMultipartUpload(uploadId, key);
         } catch (error) {
           // Déjà terminé ou déjà annulé : plus rien à annuler
-          const alreadyGone =
-            error?.name === "NoSuchUpload" || error?.Code === "NoSuchUpload";
-          if (!alreadyGone) {
+          if (!isNoSuchUpload(error)) {
             logger.error(
               `Erreur annulation multipart ${uploadId}: ${error.message}`,
             );
@@ -431,6 +464,113 @@ const chunkUploadR2Resolvers = {
 
         deleteCacheEntry(multipartCacheKey(uploadId));
         return true;
+      },
+    ),
+
+    // Reprise d'un envoi interrompu (app mobile fermée pendant l'envoi) :
+    // parts déjà reçues par R2, pour ne renvoyer que les manquantes.
+    // null : envoi inconnu (métadonnées expirées après 24 h, envoi annulé
+    // ou démarré avant cette version), à recommencer ; completed : envoi
+    // déjà finalisé, fichier prêt (fileId) ; FORBIDDEN : envoi d'un autre
+    // utilisateur, d'un autre espace ou clé différente.
+    listMultipartUploadParts: requireTransferCreate(
+      async (_, { uploadId, key }, { user, workspaceId }) => {
+        if (!uploadId || !key) {
+          throw new UserInputError("Paramètres manquants: uploadId ou key");
+        }
+
+        const entry = await findOwnedMultipartUpload(
+          uploadId,
+          key,
+          user,
+          workspaceId,
+        );
+        if (!entry) return null;
+
+        const summary = {
+          fileId: entry.fileId || null,
+          totalParts: Number.isInteger(entry.totalParts)
+            ? entry.totalParts
+            : null,
+        };
+        if (entry.completedAt) {
+          return { ...summary, completed: true, parts: [] };
+        }
+
+        try {
+          const parts =
+            await cloudflareTransferService.listMultipartUploadParts(
+              uploadId,
+              key,
+            );
+          return { ...summary, completed: false, parts };
+        } catch (error) {
+          // Annulé ou purgé par R2 : rien à reprendre
+          if (isNoSuchUpload(error)) {
+            deleteCacheEntry(multipartCacheKey(uploadId));
+            return null;
+          }
+          logger.error(
+            `Erreur lecture des parts multipart ${uploadId}: ${error.message}`,
+          );
+          throw new ApolloError(
+            "Une erreur est survenue lors de la lecture de l'envoi.",
+            "MULTIPART_LIST_ERROR",
+          );
+        }
+      },
+    ),
+
+    // Nouvelles URL présignées pour des parts d'un envoi en cours : à la
+    // reprise d'un envoi interrompu, celles remises au démarrage ont pu
+    // expirer (12 h). Mêmes contrôles que la finalisation ; l'envoi reste
+    // borné par ses métadonnées (24 h après son démarrage).
+    refreshMultipartUploadUrls: requireTransferCreate(
+      async (_, { uploadId, key, partNumbers }, { user, workspaceId }) => {
+        if (!uploadId || !key) {
+          throw new UserInputError("Paramètres manquants: uploadId ou key");
+        }
+        if (!Array.isArray(partNumbers) || partNumbers.length === 0) {
+          throw new UserInputError("Aucune part demandée");
+        }
+
+        const entry = await findOwnedMultipartUpload(
+          uploadId,
+          key,
+          user,
+          workspaceId,
+        );
+        if (!entry || entry.completedAt) {
+          throw new AppError(
+            "Cet envoi a expiré ou n'existe pas. Relancez l'envoi.",
+            ERROR_CODES.FORBIDDEN,
+          );
+        }
+
+        // Parts de cet envoi uniquement (nombre connu depuis son démarrage)
+        const maxPart = Number.isInteger(entry.totalParts)
+          ? entry.totalParts
+          : MAX_MULTIPART_PARTS;
+        const unique = [...new Set(partNumbers)];
+        if (unique.some((n) => !Number.isInteger(n) || n < 1 || n > maxPart)) {
+          throw new UserInputError("Numéro de part invalide");
+        }
+
+        try {
+          return await cloudflareTransferService.generateMultipartPartUrls(
+            uploadId,
+            key,
+            unique,
+          );
+        } catch (error) {
+          logger.error(
+            `Erreur génération des URL multipart ${uploadId}: ${error.message}`,
+          );
+          throw new ApolloError(
+            "Une erreur est survenue lors de la préparation de l'envoi.",
+            "MULTIPART_URLS_ERROR",
+          );
+        }
       },
     ),
 
