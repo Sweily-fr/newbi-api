@@ -5,7 +5,15 @@ import path from "path";
 
 // src/config/env.js agit au chargement : chaque test le réimporte dans un
 // dossier temporaire contenant un .env.production.
-const KEYS = ["NODE_ENV", "pm_id", "NODE_APP_INSTANCE", "ENV_TEST_VALUE"];
+const KEYS = [
+  "NODE_ENV",
+  "pm_id",
+  "NODE_APP_INSTANCE",
+  "ENV_TEST_VALUE",
+  "PATH",
+  "HOME",
+  "ENV_TEST_SCRIPT",
+];
 
 describe("src/config/env.js", () => {
   let savedEnv;
@@ -18,7 +26,15 @@ describe("src/config/env.js", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "env-priority-"));
     fs.writeFileSync(
       path.join(dir, ".env.production"),
-      "ENV_TEST_VALUE=fichier\nNODE_APP_INSTANCE=0\npm_id=0\n",
+      [
+        "ENV_TEST_VALUE=fichier",
+        "NODE_APP_INSTANCE=0",
+        "pm_id=0",
+        // Vieille copie d'environnement présente dans le .env.production du VPS
+        "PATH=/ancien/chemin",
+        "HOME=/ancien/home",
+        "ENV_TEST_SCRIPT=./src/server.js",
+      ].join("\n"),
     );
     process.chdir(dir);
     vi.resetModules();
@@ -39,14 +55,21 @@ describe("src/config/env.js", () => {
       pm_id: "6",
       NODE_APP_INSTANCE: "2",
       ENV_TEST_VALUE: "copie-pm2",
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/joaquim",
     });
+    delete process.env.ENV_TEST_SCRIPT;
 
     await import("../../src/config/env.js");
 
     expect(process.env.ENV_TEST_VALUE).toBe("fichier");
-    // La numérotation reste celle de PM2 (crons sur l'instance 0 seulement)
+    // Variables du système et de PM2 : celles du processus restent
+    expect(process.env.PATH).toBe("/usr/bin:/bin");
+    expect(process.env.HOME).toBe("/home/joaquim");
     expect(process.env.NODE_APP_INSTANCE).toBe("2");
     expect(process.env.pm_id).toBe("6");
+    // Une variable absente du processus est toujours complétée par le fichier
+    expect(process.env.ENV_TEST_SCRIPT).toBe("./src/server.js");
   });
 
   it("hors PM2, une variable déjà posée garde la priorité (scripts, tests)", async () => {
