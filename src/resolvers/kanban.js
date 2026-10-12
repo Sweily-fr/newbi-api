@@ -32,6 +32,7 @@ import {
   searchLinkableTasks,
 } from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
+import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import {
   RESTRICTED_TEAM_VISIBILITY,
   filterOrganizationMembers,
@@ -143,6 +144,26 @@ const presenceIdentity = async (contextUser) => {
     contextUser.email ||
     "Utilisateur";
   return { id, name, image };
+};
+
+/**
+ * Identifiants (chaînes) des utilisateurs membres de l'espace, dans l'ordre
+ * reçu : les autres ids sont écartés (collection `member` de Better Auth).
+ */
+const keepWorkspaceMembers = async (userIds, workspaceId) => {
+  const ids = (userIds || []).map(String);
+  const orgId = toObjectIdOrNull(String(workspaceId || ""));
+  const objectIds = ids.map(toObjectIdOrNull).filter(Boolean);
+  if (!orgId || objectIds.length === 0) return [];
+  const members = await mongoose.connection.db
+    .collection("member")
+    .find(
+      { organizationId: orgId, userId: { $in: objectIds } },
+      { projection: { userId: 1 } },
+    )
+    .toArray();
+  const memberIds = new Set(members.map((m) => String(m.userId)));
+  return ids.filter((id) => memberIds.has(id));
 };
 
 const assertBoardInWorkspace = async (boardId, workspaceId) => {
@@ -1209,14 +1230,17 @@ const resolvers = {
       { preferArgsWorkspace: true, passthroughErrors: true },
     ),
 
-    usersInfo: async (_, { userIds }, { db }) => {
+    // Nom, e-mail et photo des membres de l'espace validé (en-tête
+    // x-organization-id) : sans garde, n'importe qui, même sans compte,
+    // lisait ceux de n'importe quel utilisateur à partir de son id.
+    usersInfo: withRBAC(async (_, { userIds }, { db, workspaceId }) => {
       try {
         if (!userIds || userIds.length === 0) {
           return [];
         }
 
-        // Convertir les userIds en ObjectId
-        const objectIds = userIds
+        // Convertir les userIds des membres de l'espace en ObjectId
+        const objectIds = (await keepWorkspaceMembers(userIds, workspaceId))
           .map((id) => {
             try {
               return new ObjectId(id);
@@ -1279,7 +1303,7 @@ const resolvers = {
         );
         return [];
       }
-    },
+    }),
 
     board: requireWorkspaceLevel(
       "kanban",
