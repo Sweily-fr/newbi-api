@@ -6,6 +6,11 @@ import mongoose from "mongoose";
  * C'est cette fiche qui dit qui paie l'abonnement du client : le client
  * lui-même (par défaut) ou le gestionnaire. Le client ne peut pas retirer
  * son gestionnaire seul : la fin du lien passe par Newbi.
+ *
+ * Elle sert aussi d'invitation quand le cabinet invite un client qui a
+ * déjà un compte (statut « pending », sans espace) : le client choisit
+ * l'espace confié en acceptant. Écrite par le site (NewbiV2,
+ * src/lib/managed-client-invitations.js).
  */
 const managedClientSchema = new mongoose.Schema(
   {
@@ -15,10 +20,11 @@ const managedClientSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    // Espace du client (collection Better Auth `organization`)
+    // Espace du client (collection Better Auth `organization`) ; vide tant
+    // qu'une invitation n'est pas acceptée
     organizationId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true,
+      default: null,
       index: true,
     },
     payer: {
@@ -28,8 +34,21 @@ const managedClientSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["active", "ended"],
+      enum: ["pending", "active", "declined", "canceled", "ended"],
       default: "active",
+    },
+    // Invitation d'un client existant
+    invitedEmail: { type: String, default: null },
+    invitedUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    requestedAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: null },
+    respondedAt: { type: Date, default: null },
+    // Preuve de l'accord du client (RGPD : accord écrit préalable)
+    consent: {
+      acceptedAt: Date,
+      acceptedByUserId: mongoose.Schema.Types.ObjectId,
+      ip: String,
+      userAgent: String,
     },
     startedAt: { type: Date, default: Date.now },
     endedAt: { type: Date, default: null },
