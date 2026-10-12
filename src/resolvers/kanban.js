@@ -167,8 +167,44 @@ const keepWorkspaceMembers = async (userIds, workspaceId) => {
 };
 
 const assertBoardInWorkspace = async (boardId, workspaceId) => {
-  const exists = await Board.exists({ _id: boardId, workspaceId });
+  const boardObjectId = toObjectIdOrNull(String(boardId || ""));
+  const exists =
+    boardObjectId && (await Board.exists({ _id: boardObjectId, workspaceId }));
   if (!exists) throw boardNotFoundError();
+};
+
+// Colonne et tableau fournis par le client : ceux de l'espace seulement.
+// Sinon un membre d'un autre espace ajoutait colonnes et tâches au tableau
+// d'autrui (visibles sur sa page publique).
+const assertColumnInBoard = async (columnId, boardId, workspaceId) => {
+  const columnObjectId = toObjectIdOrNull(String(columnId || ""));
+  const boardObjectId = toObjectIdOrNull(String(boardId || ""));
+  const exists =
+    columnObjectId &&
+    boardObjectId &&
+    (await Column.exists({
+      _id: columnObjectId,
+      boardId: boardObjectId,
+      workspaceId,
+    }));
+  if (!exists) {
+    throw new AppError("Column not found", ERROR_CODES.NOT_FOUND, {
+      resource: "Column",
+    });
+  }
+};
+
+// Client rattaché à un tableau : celui de l'espace seulement
+const assertClientInWorkspace = async (clientId, workspaceId) => {
+  const clientObjectId = toObjectIdOrNull(String(clientId || ""));
+  const exists =
+    clientObjectId &&
+    (await Client.exists({ _id: clientObjectId, workspaceId }));
+  if (!exists) {
+    throw new AppError("Client non trouvé", ERROR_CODES.NOT_FOUND, {
+      resource: "Client",
+    });
+  }
 };
 
 const publishTaskPresence = (boardId, workspaceId, viewers) => {
@@ -1609,6 +1645,9 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        if (input.clientId) {
+          await assertClientInWorkspace(input.clientId, finalWorkspaceId);
+        }
 
         const board = new Board({
           ...input,
@@ -1671,6 +1710,9 @@ const resolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { boardMembers, ...rest } = input;
+        if (rest.clientId) {
+          await assertClientInWorkspace(rest.clientId, finalWorkspaceId);
+        }
 
         // Si on modifie la liste des membres (boardMembers), seul le créateur
         // du board peut le faire.
@@ -1792,6 +1834,7 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
 
         const column = new Column({
           ...input,
@@ -1957,6 +2000,12 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
+        await assertColumnInBoard(
+          input.columnId,
+          input.boardId,
+          finalWorkspaceId,
+        );
 
         // Nettoyer les IDs temporaires de la checklist
         const cleanedInput = { ...input };
@@ -2279,6 +2328,18 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
         });
         if (!oldTask) throw new Error("Task not found");
+
+        // Changement de colonne : une colonne du même tableau
+        if (
+          updates.columnId !== undefined &&
+          updates.columnId !== oldTask.columnId
+        ) {
+          await assertColumnInBoard(
+            updates.columnId,
+            oldTask.boardId,
+            finalWorkspaceId,
+          );
+        }
 
         // Fusionner timeTracking avec les valeurs existantes pour ne pas écraser startedBy, isRunning, entries, etc.
         if (updates.timeTracking) {
@@ -3335,6 +3396,11 @@ const resolvers = {
           if (!task) throw new Error("Task not found");
 
           const oldColumnId = task.columnId;
+
+          // Changement de colonne : une colonne du même tableau
+          if (columnId !== oldColumnId) {
+            await assertColumnInBoard(columnId, task.boardId, finalWorkspaceId);
+          }
 
           // Nettoyer assignedMembers pour s'assurer qu'on ne stocke que les IDs
           let cleanedAssignedMembers = task.assignedMembers;
