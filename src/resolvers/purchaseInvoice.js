@@ -1360,6 +1360,20 @@ const purchaseInvoiceResolvers = {
         let fileData;
 
         if (input.cloudflareUrl) {
+          // URL envoyée par le client : seul un fichier OCR ou justificatif
+          // de cet espace est accepté (relu et supprimé ensuite côté serveur)
+          if (
+            !cloudflareService.resolveWorkspaceFileUrl(
+              input.cloudflareUrl,
+              String(workspaceId),
+              ["ocr", "receipt"],
+            )
+          ) {
+            throw new AppError(
+              "Fichier invalide pour cet espace de travail",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
           // File already uploaded to Cloudflare
           fileData = {
             filename: input.fileName || "document",

@@ -1027,28 +1027,24 @@ const userResolvers = {
           // Si on supprime le logo (logoUrl est null/vide), supprimer l'ancien fichier de Cloudflare R2
           if (!logoUrl && oldLogoUrl) {
             try {
-              // Extraire la clé R2 depuis l'URL publique
-              const publicUrl =
-                cloudflareService.companyImagesPublicUrl ||
-                cloudflareService.publicUrl;
-              const bucketName =
-                cloudflareService.companyImagesBucketName ||
-                cloudflareService.bucketName;
-              let fileKey = null;
+              // Le logo enregistré vient du client : on ne supprime que s'il
+              // est rangé sous le préfixe de cet espace. Sinon, un logo
+              // pointant vers l'objet d'un autre espace le faisait effacer.
+              const resolved = cloudflareService.resolveWorkspaceFileUrl(
+                oldLogoUrl,
+                String(workspaceId),
+                ["imgCompany"],
+              );
 
-              if (publicUrl && oldLogoUrl.startsWith(publicUrl)) {
-                fileKey = oldLogoUrl.replace(publicUrl + "/", "");
-              } else if (oldLogoUrl.includes("/")) {
-                // Fallback : extraire la clé depuis l'URL (format: .../orgId/filename)
-                const urlParts = new URL(oldLogoUrl).pathname
-                  .split("/")
-                  .filter(Boolean);
-                fileKey = urlParts.join("/");
-              }
-
-              if (fileKey) {
-                await cloudflareService.deleteImage(fileKey, bucketName);
-                logger.debug("✅ Logo supprimé de Cloudflare R2:", fileKey);
+              if (resolved) {
+                await cloudflareService.deleteImage(
+                  resolved.key,
+                  resolved.bucket,
+                );
+                logger.debug(
+                  "✅ Logo supprimé de Cloudflare R2:",
+                  resolved.key,
+                );
               }
             } catch (err) {
               console.error(

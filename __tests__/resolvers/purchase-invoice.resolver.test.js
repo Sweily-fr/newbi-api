@@ -16,6 +16,8 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 // External side effects we don't exercise here
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
+    // Contrôle d'URL couvert par __tests__/security/r2-client-file-urls.test.js
+    resolveWorkspaceFileUrl: vi.fn(() => ({ bucket: "ocr", key: "k" })),
     deleteImage: vi.fn().mockResolvedValue(true),
     uploadImage: vi.fn().mockResolvedValue({
       url: "https://test.r2.dev/test.pdf",

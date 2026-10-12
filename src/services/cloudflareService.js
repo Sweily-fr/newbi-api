@@ -366,7 +366,10 @@ class CloudflareService {
    */
   async getDocumentAnnexBuffer(key) {
     const response = await this.client.send(
-      new GetObjectCommand({ Bucket: this.documentAnnexesBucketName, Key: key }),
+      new GetObjectCommand({
+        Bucket: this.documentAnnexesBucketName,
+        Key: key,
+      }),
     );
     return Buffer.from(await response.Body.transformToByteArray());
   }
@@ -1010,7 +1013,13 @@ class CloudflareService {
     ];
 
     for (const [publicUrl, bucket] of prefixToBucket) {
-      if (publicUrl && bucket && url.startsWith(publicUrl)) {
+      // Préfixe comparé avec son « / » final : sans lui, un hôte comme
+      // <domaine public>.attaquant.com passait pour notre domaine
+      if (
+        publicUrl &&
+        bucket &&
+        url.startsWith(`${publicUrl.replace(/\/+$/, "")}/`)
+      ) {
         return { bucket, key };
       }
     }
@@ -1022,6 +1031,61 @@ class CloudflareService {
     }
 
     return { bucket: this.bucketName, key };
+  }
+
+  /**
+   * Contrôle une URL de fichier envoyée par le client avant de l'enregistrer.
+   * Elle doit désigner, dans l'un des buckets attendus, un objet rangé sous
+   * le préfixe de l'espace (`${workspaceId}/…`, comme les téléversements OCR,
+   * justificatifs et factures importées). Sinon le serveur relisait ou
+   * supprimait plus tard, avec ses propres identifiants, l'objet d'un autre
+   * espace (archives de factures, justificatifs, logos).
+   *
+   * @param {string} url URL reçue du client
+   * @param {string} workspaceId espace validé de l'appelant
+   * @param {Array<"ocr"|"receipt"|"importedInvoice"|"imgCompany">} types
+   * @returns {{bucket: string, key: string}|null} null si refusée
+   */
+  resolveWorkspaceFileUrl(url, workspaceId, types) {
+    if (typeof url !== "string" || !workspaceId) return null;
+    const sources = {
+      ocr: [
+        this.ocrPublicUrl || this.publicUrl,
+        this.ocrBucketName || this.bucketName,
+      ],
+      receipt: [
+        this.receiptsPublicUrl || this.publicUrl,
+        this.receiptsBucketName || this.bucketName,
+      ],
+      importedInvoice: [
+        this.importedInvoicesPublicUrl || this.publicUrl,
+        this.importedInvoicesBucketName || this.bucketName,
+      ],
+      imgCompany: [
+        this.companyImagesPublicUrl || this.publicUrl,
+        this.companyImagesBucketName || this.bucketName,
+      ],
+    };
+    for (const type of types) {
+      const [publicUrl, bucket] = sources[type] || [];
+      if (!publicUrl || !bucket) continue;
+      const base = `${publicUrl.replace(/\/+$/, "")}/`;
+      if (!url.startsWith(base)) continue;
+      let key;
+      try {
+        key = decodeURIComponent(url.slice(base.length).split(/[?#]/)[0]);
+      } catch {
+        return null;
+      }
+      if (
+        !key.startsWith(`${workspaceId}/`) ||
+        key.split("/").some((part) => part === ".." || part === ".")
+      ) {
+        return null;
+      }
+      return { bucket, key };
+    }
+    return null;
   }
 
   /**
