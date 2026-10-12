@@ -86,6 +86,23 @@ const checkAccess = async (id, workspaceId) => {
   return doc;
 };
 
+// Une fiche fournisseur rattachée par le client doit être de l'espace : sans
+// ce contrôle, l'id d'un fournisseur d'un autre espace exposait sa fiche
+// (IBAN compris) par le champ supplier de la facture.
+const assertSupplierInWorkspace = async (supplierId, workspaceId) => {
+  if (supplierId === undefined || supplierId === null) return;
+  const exists =
+    mongoose.isValidObjectId(supplierId) &&
+    typeof supplierId !== "object" &&
+    (await Supplier.exists({
+      _id: supplierId,
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    }));
+  if (!exists) {
+    throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+  }
+};
+
 // Supprime de R2 les fichiers d'une facture d'achat (résolution automatique
 // du bucket depuis l'URL, y compris domaines custom), SAUF ceux partagés avec
 // un justificatif de transaction : une facture créée par OCR depuis un reçu
@@ -724,6 +741,7 @@ const purchaseInvoiceResolvers = {
         );
 
         const { forceCreate = false, vatBreakdown, ...invoiceInput } = input;
+        await assertSupplierInWorkspace(invoiceInput.supplierId, workspaceId);
 
         // Filet anti-doublon côté serveur (mêmes règles que l'avertissement
         // du front : même numéro confirmé par fournisseur ou montant, sinon
@@ -858,6 +876,7 @@ const purchaseInvoiceResolvers = {
         }
 
         const { vatBreakdown, ...fields } = input;
+        await assertSupplierInWorkspace(fields.supplierId, workspaceId);
         // HT / TVA / taux changés sans détail (app mobile) : le détail par
         // taux ne correspondrait plus, il est effacé. Mesuré avant
         // l'affectation, qui écrase les valeurs comparées.
@@ -2087,7 +2106,10 @@ const purchaseInvoiceResolvers = {
         : parent.updatedAt || null,
     supplier: async (parent) => {
       if (!parent.supplierId) return null;
-      const supplier = await Supplier.findById(parent.supplierId).lean();
+      const supplier = await Supplier.findOne({
+        _id: parent.supplierId,
+        workspaceId: parent.workspaceId,
+      }).lean();
       if (!supplier) return null;
       return { ...supplier, id: supplier._id.toString() };
     },
@@ -2121,12 +2143,20 @@ const purchaseInvoiceResolvers = {
         : parent.updatedAt || null,
     invoiceCount: async (parent) => {
       const supplierId = parent._id || parent.id;
-      return await PurchaseInvoice.countDocuments({ supplierId });
+      return await PurchaseInvoice.countDocuments({
+        supplierId,
+        workspaceId: parent.workspaceId,
+      });
     },
     totalAmount: async (parent) => {
       const supplierId = parent._id || parent.id;
       const result = await PurchaseInvoice.aggregate([
-        { $match: { supplierId: new mongoose.Types.ObjectId(supplierId) } },
+        {
+          $match: {
+            supplierId: new mongoose.Types.ObjectId(supplierId),
+            workspaceId: new mongoose.Types.ObjectId(parent.workspaceId),
+          },
+        },
         { $group: { _id: null, total: { $sum: "$amountTTC" } } },
       ]);
       return result[0]?.total || 0;
