@@ -22,11 +22,12 @@ const managedClientSchema = new mongoose.Schema(
       index: true,
     },
     // Espace du client (collection Better Auth `organization`) ; vide tant
-    // qu'une invitation n'est pas acceptée
+    // qu'une invitation n'est pas acceptée. Pas d'index simple : il
+    // porterait le même nom (organizationId_1) que l'index unique partiel
+    // ci-dessous, créé par le site, et le ferait échouer.
     organizationId: {
       type: mongoose.Schema.Types.ObjectId,
       default: null,
-      index: true,
     },
     payer: {
       type: String,
