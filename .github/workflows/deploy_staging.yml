@@ -22,7 +22,7 @@ jobs:
   deploy:
     name: Deploy to Staging Server
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -35,48 +35,20 @@ jobs:
           ssh-keyscan -H 51.91.254.74 >> ~/.ssh/known_hosts
 
       - name: Deploy to Staging
-        env:
-          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
         run: |
           echo "🚀 Déploiement STAGING en cours..."
-          
-          # Sync files
-          rsync -avz --exclude='uploads' --exclude='node_modules' --exclude='.git' \
-            --exclude='.env' --exclude='.env.*' --exclude='ecosystem.config.cjs' \
-            -e 'ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no' \
-            ./* joaquim@51.91.254.74:~/staging
-          
-          # Execute deployment commands
-          ssh -i ~/.ssh/vps_key -o StrictHostKeyChecking=no joaquim@51.91.254.74 << 'ENDSSH'
-            source ~/.nvm/nvm.sh
-            cd staging
-            
-            echo "🔄 Vérification Redis..."
-            if redis.cli -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
-              echo "✅ Redis opérationnel"
-            else
-              echo "❌ Redis problème - redémarrage..."
-              sudo snap restart redis
-              sleep 3
-              if redis.cli -a "$REDIS_PASSWORD" ping > /dev/null 2>&1; then
-                echo "✅ Redis redémarré avec succès"
-              else
-                echo "⚠️ Redis indisponible - l'app utilisera le fallback mémoire"
-              fi
-            fi
-            
-            echo "📦 Installation des dépendances..."
-            npm ci --omit=dev
-            npm install
-            
-            echo "🔄 Rechargement PM2..."
-            pm2 reload newbi-staging
-            
-            echo "✅ Vérification du statut..."
-            pm2 status newbi-staging
-            
-            echo "🎉 Déploiement STAGING terminé avec succès!"
-          ENDSSH
+          SSH="ssh -i $HOME/.ssh/vps_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30"
+
+          # Même déroulé que la production (scripts/deploy/deploy-vps.sh) :
+          # copie à part, démarrage d'essai, puis remplacement des instances
+          # une par une. La config PM2 du staging reste celle du VPS.
+          $SSH joaquim@51.91.254.74 'mkdir -p ~/staging/.deploy/next'
+          rsync -az --delete --exclude='uploads' --exclude='node_modules' --exclude='.git' \
+            --exclude='.env' --exclude='.env.*' \
+            -e "$SSH" \
+            ./* joaquim@51.91.254.74:~/staging/.deploy/next/
+
+          $SSH joaquim@51.91.254.74 'bash ~/staging/.deploy/next/scripts/deploy/deploy-vps.sh staging'
 
       - name: Cleanup SSH Key
         if: always()
