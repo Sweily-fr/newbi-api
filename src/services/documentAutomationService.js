@@ -49,8 +49,10 @@ async function cacheDocumentPdf(
     workspaceId,
   );
 
+  // Filtré par espace : sans ce filtre, un id de document d'un autre espace
+  // remplaçait son PDF en cache (envoyé ensuite par e-mail et aux intégrations)
   await Model.updateOne(
-    { _id: documentId },
+    { _id: documentId, workspaceId },
     {
       $set: {
         cachedPdf: {
@@ -1361,7 +1363,10 @@ const documentAutomationService = {
     pdfBase64,
     userId,
   ) {
-    const automation = await DocumentAutomation.findById(automationId);
+    const automation = await DocumentAutomation.findOne({
+      _id: automationId,
+      workspaceId,
+    });
     if (!automation) {
       throw new Error("Automatisation non trouvée");
     }
@@ -1382,9 +1387,14 @@ const documentAutomationService = {
       );
     }
 
-    const doc = await config.model.findById(documentId).lean();
+    // Le document doit appartenir à l'espace de l'automatisation : documentId
+    // vient du client. String() couvre Transaction (workspaceId en chaîne) ;
+    // Mongoose convertit pour les modèles en ObjectId.
+    const doc = await config.model
+      .findOne({ _id: documentId, workspaceId: String(workspaceId) })
+      .lean();
     if (!doc) {
-      throw new Error(`Document non trouvé: ${documentId}`);
+      throw new Error("Document non trouvé");
     }
 
     // Récupérer le fichier selon le type de document
