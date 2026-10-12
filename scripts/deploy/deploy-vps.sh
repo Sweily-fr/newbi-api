@@ -20,6 +20,11 @@ case "$TARGET" in
     APP_DIR="$HOME/api.newbi.fr"
     PM2_APP="newbi"
     ECOSYSTEM="ecosystem.production.cjs"
+    # PM2 ne reconnaît un fichier de configuration qu'à son nom (*.config.cjs) :
+    # lancé sur ecosystem.production.cjs, il l'exécute comme un script
+    # (processus « ecosystem.production », API arrêtée, incident du 12/10).
+    # Les commandes PM2 passent donc par le renvoi ecosystem.config.cjs.
+    PM2_CONFIG="ecosystem.config.cjs"
     ENV_FILE=".env.production"
     LIVE_PORT=4000
     CANARY_PORT=4099
@@ -29,6 +34,7 @@ case "$TARGET" in
     PM2_APP="newbi-staging"
     # Config propre au VPS (valeurs d'env dans son bloc env), jamais écrasée
     ECOSYSTEM="ecosystem.config.cjs"
+    PM2_CONFIG="ecosystem.config.cjs"
     ENV_FILE=".env.staging"
     LIVE_PORT=4001
     CANARY_PORT=4098
@@ -119,11 +125,13 @@ fi
 PHASE="redémarrage de l'API"
 if pm2 jlist | node scripts/deploy/pm2-app.cjs supports-reload "$PM2_APP"; then
   echo "🔄 Remplacement des instances une par une, sans coupure..."
-  PM2_CONCURRENT_ACTIONS=1 pm2 reload "$ECOSYSTEM" --only "$PM2_APP"
+  PM2_CONCURRENT_ACTIONS=1 pm2 reload "$PM2_CONFIG" --only "$PM2_APP"
 else
   echo "🔁 Bascule vers le redémarrage sans coupure : arrêt complet unique (~30 s)"
   pm2 delete "$PM2_APP" || true
-  pm2 start "$ECOSYSTEM" --only "$PM2_APP"
+  # Processus parasite laissé par un lancement sur le mauvais nom de fichier
+  pm2 delete "${ECOSYSTEM%.cjs}" > /dev/null 2>&1 || true
+  pm2 start "$PM2_CONFIG" --only "$PM2_APP"
 fi
 pm2 save
 
