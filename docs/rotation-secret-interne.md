@@ -67,8 +67,12 @@ mémorisé par PM2 (`src/config/env.js`). À chaque étape :
 
 ```bash
 source ~/.nvm/nvm.sh && cd ~/api.newbi.fr
-pm2 reload ecosystem.production.cjs && pm2 save
+pm2 reload newbi && pm2 save
 ```
+
+Ne jamais passer `ecosystem.production.cjs` à PM2 : il ne reconnaît un
+fichier de configuration qu'à son nom (`*.config.cjs`) et l'exécuterait comme
+un script, ce qui arrête l'API (incident du 12/10/2026).
 
 Pendant le `reload`, les 4 instances basculent une par une : certaines sont à
 l'étape précédente, d'autres à l'étape en cours, cas couvert par la procédure.
