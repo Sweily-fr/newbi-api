@@ -20,16 +20,18 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const digest = (value) =>
   crypto.createHash("sha256").update(value, "utf8").digest();
 
+// Jetons acceptés, sans les espaces ou retours à la ligne collés avec la
+// valeur dans l'interface d'hébergement (sinon toute requête échoue en 401)
 export function getAcceptedAdminServiceTokens(env = process.env) {
-  return [env.ADMIN_SERVICE_TOKEN, env.ADMIN_SERVICE_TOKEN_ALT].filter(
-    (value) =>
-      typeof value === "string" && value.trim().length >= MIN_TOKEN_LENGTH,
-  );
+  return [env.ADMIN_SERVICE_TOKEN, env.ADMIN_SERVICE_TOKEN_ALT]
+    .filter((value) => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length >= MIN_TOKEN_LENGTH);
 }
 
 export function isAcceptedAdminServiceToken(provided, env = process.env) {
-  if (typeof provided !== "string" || provided === "") return false;
-  const providedDigest = digest(provided);
+  if (typeof provided !== "string" || provided.trim() === "") return false;
+  const providedDigest = digest(provided.trim());
   let match = false;
   for (const token of getAcceptedAdminServiceTokens(env)) {
     match = crypto.timingSafeEqual(providedDigest, digest(token)) || match;

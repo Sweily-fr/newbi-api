@@ -105,6 +105,16 @@ describe("accès", () => {
     });
     expect(res.status).toBe(201);
   });
+
+  it("accepte un jeton configuré avec un espace ou un retour à la ligne final", async () => {
+    process.env.ADMIN_SERVICE_TOKEN_ALT = `${"b".repeat(40)}\n`;
+    await seedUser("cabinet@dupont.fr");
+    const res = await call("/account-managers", {
+      token: "b".repeat(40),
+      body: { email: "cabinet@dupont.fr", name: "Compta Dupont" },
+    });
+    expect(res.status).toBe(201);
+  });
 });
 
 describe("création", () => {
