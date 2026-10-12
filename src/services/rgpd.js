@@ -197,120 +197,155 @@ export async function deleteUserAccount(userId, organizationId) {
       `[RGPD] Début de la suppression du compte utilisateur ${userId} (org: ${organizationId})`,
     );
 
+    const db = mongoose.connection.db;
+
+    // Les données de l'espace ne partent qu'avec son dernier membre. Relu
+    // ici, au moment de l'exécution : une demande différée date de 30 jours
+    // et l'utilisateur a pu quitter l'espace ou y être rejoint depuis. Sinon,
+    // seul ce qui lui est personnel est supprimé, l'espace reste aux autres.
+    const isMember =
+      (await db
+        .collection("member")
+        .countDocuments(
+          { userId: userObjectId, organizationId: orgObjectId },
+          { session, limit: 1 },
+        )) > 0;
+    const otherMembers = await db
+      .collection("member")
+      .countDocuments(
+        { organizationId: orgObjectId, userId: { $ne: userObjectId } },
+        { session, limit: 1 },
+      );
+    const isLastMember = isMember && otherMembers === 0;
+    if (!isLastMember) {
+      logger.info(
+        `[RGPD] Données de l'espace ${organizationId} conservées : ${isMember ? "d'autres membres y restent" : "l'utilisateur n'en est pas membre"}`,
+      );
+    }
+
     // ================================================================
     // 1. ANONYMISATION DES DOCUMENTS COMPTABLES (conservation 10 ans)
     // ================================================================
 
-    // --- Factures ---
-    const invoices = await Invoice.find({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
+    // Coordonnées de l'entreprise : laissées intactes tant que d'autres
+    // membres utilisent l'espace
+    if (isLastMember) {
+      // --- Factures ---
+      const invoices = await Invoice.find({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
 
-    for (const invoice of invoices) {
-      if (invoice.companyInfo) {
-        invoice.companyInfo = anonymizeCompanyInfo(
-          invoice.companyInfo.toObject
-            ? invoice.companyInfo.toObject()
-            : invoice.companyInfo,
-        );
+      for (const invoice of invoices) {
+        if (invoice.companyInfo) {
+          invoice.companyInfo = anonymizeCompanyInfo(
+            invoice.companyInfo.toObject
+              ? invoice.companyInfo.toObject()
+              : invoice.companyInfo,
+          );
+        }
+        // Anonymiser les coordonnées bancaires au niveau facture
+        if (invoice.bankDetails) {
+          invoice.bankDetails = null;
+        }
+        // Supprimer le PDF mis en cache (données personnelles potentielles)
+        if (invoice.cachedPdf) {
+          invoice.cachedPdf = null;
+        }
+        await invoice.save({ session, validateBeforeSave: false });
+        summary.invoicesAnonymized++;
       }
-      // Anonymiser les coordonnées bancaires au niveau facture
-      if (invoice.bankDetails) {
-        invoice.bankDetails = null;
-      }
-      // Supprimer le PDF mis en cache (données personnelles potentielles)
-      if (invoice.cachedPdf) {
-        invoice.cachedPdf = null;
-      }
-      await invoice.save({ session, validateBeforeSave: false });
-      summary.invoicesAnonymized++;
-    }
 
-    // --- Avoirs (Credit Notes) ---
-    const creditNotes = await CreditNote.find({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
+      // --- Avoirs (Credit Notes) ---
+      const creditNotes = await CreditNote.find({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
 
-    for (const cn of creditNotes) {
-      if (cn.companyInfo) {
-        cn.companyInfo = anonymizeCompanyInfo(
-          cn.companyInfo.toObject ? cn.companyInfo.toObject() : cn.companyInfo,
-        );
+      for (const cn of creditNotes) {
+        if (cn.companyInfo) {
+          cn.companyInfo = anonymizeCompanyInfo(
+            cn.companyInfo.toObject
+              ? cn.companyInfo.toObject()
+              : cn.companyInfo,
+          );
+        }
+        if (cn.bankDetails) {
+          cn.bankDetails = null;
+        }
+        if (cn.cachedPdf) {
+          cn.cachedPdf = null;
+        }
+        await cn.save({ session, validateBeforeSave: false });
+        summary.creditNotesAnonymized++;
       }
-      if (cn.bankDetails) {
-        cn.bankDetails = null;
-      }
-      if (cn.cachedPdf) {
-        cn.cachedPdf = null;
-      }
-      await cn.save({ session, validateBeforeSave: false });
-      summary.creditNotesAnonymized++;
-    }
 
-    // --- Devis ---
-    const quotes = await Quote.find({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
+      // --- Devis ---
+      const quotes = await Quote.find({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
 
-    for (const quote of quotes) {
-      if (quote.companyInfo) {
-        quote.companyInfo = anonymizeCompanyInfo(
-          quote.companyInfo.toObject
-            ? quote.companyInfo.toObject()
-            : quote.companyInfo,
-        );
+      for (const quote of quotes) {
+        if (quote.companyInfo) {
+          quote.companyInfo = anonymizeCompanyInfo(
+            quote.companyInfo.toObject
+              ? quote.companyInfo.toObject()
+              : quote.companyInfo,
+          );
+        }
+        if (quote.cachedPdf) {
+          quote.cachedPdf = null;
+        }
+        await quote.save({ session, validateBeforeSave: false });
+        summary.quotesAnonymized++;
       }
-      if (quote.cachedPdf) {
-        quote.cachedPdf = null;
-      }
-      await quote.save({ session, validateBeforeSave: false });
-      summary.quotesAnonymized++;
     }
 
     // ================================================================
     // 2. SUPPRESSION COMPLÈTE DES DONNÉES NON COMPTABLES
     // ================================================================
 
-    // --- Clients ---
-    const clientResult = await Client.deleteMany({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
-    summary.clientsDeleted = clientResult.deletedCount;
-
-    // --- Produits ---
-    const productResult = await Product.deleteMany({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
-    summary.productsDeleted = productResult.deletedCount;
-
-    // --- Dépenses (avec leurs fichiers marqués pour nettoyage R2) ---
-    const expenses = await Expense.find({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
-
-    // Collecter les clés R2 des fichiers de dépenses pour nettoyage ultérieur
+    // Clés R2 des fichiers de dépenses, pour nettoyage ultérieur
     const r2KeysToCleanup = [];
-    for (const expense of expenses) {
-      if (expense.files && expense.files.length > 0) {
-        for (const file of expense.files) {
-          if (file.path) {
-            r2KeysToCleanup.push(file.path);
+    // Clients, produits et dépenses : partagés dans l'espace
+    if (isLastMember) {
+      // --- Clients ---
+      const clientResult = await Client.deleteMany({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
+      summary.clientsDeleted = clientResult.deletedCount;
+
+      // --- Produits ---
+      const productResult = await Product.deleteMany({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
+      summary.productsDeleted = productResult.deletedCount;
+
+      // --- Dépenses (avec leurs fichiers marqués pour nettoyage R2) ---
+      const expenses = await Expense.find({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
+
+      for (const expense of expenses) {
+        if (expense.files && expense.files.length > 0) {
+          for (const file of expense.files) {
+            if (file.path) {
+              r2KeysToCleanup.push(file.path);
+            }
           }
         }
       }
-    }
 
-    const expenseResult = await Expense.deleteMany({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
-    }).session(session);
-    summary.expensesDeleted = expenseResult.deletedCount;
+      const expenseResult = await Expense.deleteMany({
+        workspaceId: orgObjectId,
+        createdBy: userObjectId,
+      }).session(session);
+      summary.expensesDeleted = expenseResult.deletedCount;
+    }
 
     // --- Signatures email (v1 et v2) ---
     // Signatures v2 relevées avant suppression : les images de celles
@@ -355,15 +390,17 @@ export async function deleteUserAccount(userId, organizationId) {
       createdBy: userObjectId,
     }).session(session);
 
-    // --- Paramètres SMTP ---
-    await SmtpSettings.deleteMany({
-      workspaceId: orgObjectId,
-    }).session(session);
+    if (isLastMember) {
+      // --- Paramètres SMTP ---
+      await SmtpSettings.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
 
-    // --- Paramètres email ---
-    await EmailSettings.deleteMany({
-      workspaceId: orgObjectId,
-    }).session(session);
+      // --- Paramètres email ---
+      await EmailSettings.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
+    }
 
     // --- Intégrations ---
     await Integration.deleteMany({
@@ -392,22 +429,23 @@ export async function deleteUserAccount(userId, organizationId) {
       userId: userObjectId,
     }).session(session);
 
-    // --- Paramètres de documents ---
-    await DocumentSettings.deleteMany({
-      workspaceId: orgObjectId,
-    }).session(session);
+    if (isLastMember) {
+      // --- Paramètres de documents ---
+      await DocumentSettings.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
 
-    // --- Kanban (projets et tâches) ---
-    const db = mongoose.connection.db;
-    const kanbanResult = await db
-      .collection("kanbanprojects")
-      .deleteMany({ workspaceId: orgObjectId }, { session });
-    summary.kanbanProjectsDeleted = kanbanResult.deletedCount || 0;
+      // --- Kanban (projets et tâches) ---
+      const kanbanResult = await db
+        .collection("kanbanprojects")
+        .deleteMany({ workspaceId: orgObjectId }, { session });
+      summary.kanbanProjectsDeleted = kanbanResult.deletedCount || 0;
 
-    // --- Supprimer les tâches kanban associées ---
-    await db
-      .collection("kanbantasks")
-      .deleteMany({ workspaceId: orgObjectId }, { session });
+      // --- Supprimer les tâches kanban associées ---
+      await db
+        .collection("kanbantasks")
+        .deleteMany({ workspaceId: orgObjectId }, { session });
+    }
 
     // ================================================================
     // 3. SUPPRESSION DES COLLECTIONS BETTER AUTH
@@ -423,11 +461,6 @@ export async function deleteUserAccount(userId, organizationId) {
       .collection("account")
       .deleteMany({ userId: userObjectId }, { session });
 
-    // --- Vérifier si l'utilisateur est le seul membre de l'organisation ---
-    const memberCount = await db
-      .collection("member")
-      .countDocuments({ organizationId: orgObjectId }, { session });
-
     // --- Supprimer l'adhésion de l'utilisateur ---
     await db
       .collection("member")
@@ -436,8 +469,8 @@ export async function deleteUserAccount(userId, organizationId) {
         { session },
       );
 
-    // Si l'utilisateur est le seul membre, supprimer l'organisation et les invitations
-    if (memberCount <= 1) {
+    // Dernier membre : l'organisation et ses invitations partent avec lui
+    if (isLastMember) {
       await db
         .collection("organization")
         .deleteOne({ _id: orgObjectId }, { session });
@@ -510,6 +543,8 @@ export async function deleteUserAccount(userId, organizationId) {
     ];
 
     for (const col of collectionsToClean) {
+      // Tout sauf ce qui est filtré par userId appartient à l'espace
+      if (!isLastMember && !col.filter.userId) continue;
       try {
         const collections = await db
           .listCollections({ name: col.name })
