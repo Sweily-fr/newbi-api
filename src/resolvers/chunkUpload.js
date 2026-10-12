@@ -15,10 +15,19 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 const requireTransferCreate = requireTransferActionFromInput("create");
 
 // Fonction utilitaire pour récupérer les informations d'un fichier temporaire par son ID
-const getFileInfoByTransferId = async (fileId) => {
+// 🔐 Limitée aux transferts de l'utilisateur : le nom de stockage (fileName)
+// et le nom d'origine des fichiers sont visibles des destinataires, ils ne
+// doivent pas permettre de recopier le fichier d'un autre dans son transfert.
+const getFileInfoByTransferId = async (fileId, user) => {
   try {
+    const uploaderId = String(user?._id || user?.id || "");
+    if (!uploaderId) {
+      throw new Error("Utilisateur requis pour retrouver un fichier envoyé");
+    }
+
     // Rechercher principalement par originalName qui contient maintenant le fileId
     let fileTransfer = await FileTransfer.findOne({
+      userId: uploaderId,
       "files.originalName": fileId,
       uploadMethod: "chunk",
     });
@@ -26,17 +35,13 @@ const getFileInfoByTransferId = async (fileId) => {
     // Si non trouvé, essayer par fileName (pour compatibilité avec l'ancien code)
     if (!fileTransfer) {
       fileTransfer = await FileTransfer.findOne({
+        userId: uploaderId,
         "files.fileName": fileId,
         uploadMethod: "chunk",
       });
     }
 
-    // Si toujours pas trouvé, récupérer tous les transferts en mode chunk pour déboguer
     if (!fileTransfer) {
-      const allChunkTransfers = await FileTransfer.find({
-        uploadMethod: "chunk",
-      });
-
       throw new Error(`Transfert de fichier non trouvé pour fileId: ${fileId}`);
     }
 
@@ -218,7 +223,7 @@ const chunkUploadResolvers = {
           for (const fileId of fileIds) {
             try {
               // Récupérer les informations du fichier à partir du transfert temporaire
-              const fileInfo = await getFileInfoByTransferId(fileId);
+              const fileInfo = await getFileInfoByTransferId(fileId, user);
 
               // Ajouter les informations du fichier à la liste
               filesInfo.push({
