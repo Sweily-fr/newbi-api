@@ -8,9 +8,10 @@ import mongoose from "mongoose";
  * son gestionnaire seul : la fin du lien passe par Newbi.
  *
  * Elle sert aussi d'invitation quand le cabinet invite un client qui a
- * déjà un compte (statut « pending », sans espace) : le client choisit
- * l'espace confié en acceptant. Écrite par le site (NewbiV2,
- * src/lib/managed-client-invitations.js).
+ * déjà un compte (statut « pending », sans espace) : le client choisit le
+ * ou les espaces confiés en acceptant. L'invitation devient la fiche du
+ * premier espace ; chaque autre espace a sa fiche, avec `invitationId`.
+ * Écrite par le site (NewbiV2, src/lib/managed-client-invitations.js).
  */
 const managedClientSchema = new mongoose.Schema(
   {
@@ -38,6 +39,7 @@ const managedClientSchema = new mongoose.Schema(
       default: "active",
     },
     // Invitation d'un client existant
+    invitationId: { type: mongoose.Schema.Types.ObjectId, default: null },
     invitedEmail: { type: String, default: null },
     invitedUserId: { type: mongoose.Schema.Types.ObjectId, default: null },
     requestedAt: { type: Date, default: null },
