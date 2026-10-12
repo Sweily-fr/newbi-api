@@ -40,6 +40,14 @@ function canManageIntegrations(permissionLevels) {
   return levelsAllowLevel(permissionLevels, "integrations", "write");
 }
 
+// Repli de compatibilité par userId : seulement les anciens comptes créés
+// avant le rattachement aux espaces (sans organizationId). Un compte rattaché
+// à un autre espace, que l'utilisateur a pu quitter, reste hors d'atteinte.
+// Même règle que le site (src/lib/stripe-connect-account.js).
+function legacyAccountFilter(userId) {
+  return { userId, organizationId: { $in: [null, ""] } };
+}
+
 function isRateLimited(map, key, windowMs, max) {
   const now = Date.now();
   const entry = map.get(key);
@@ -86,10 +94,13 @@ const stripeConnectResolvers = {
           account = await StripeConnectAccount.findOne({ organizationId });
         }
 
-        // Fallback: Si pas de compte trouvé avec organizationId, essayer avec userId (ancien système)
+        // Fallback: ancien système par userId, réservé aux comptes sans
+        // organizationId (le compte d'un autre espace reste hors d'atteinte)
         if (!account) {
           logger.debug("⚠️ Fallback: Recherche par userId pour compatibilité");
-          account = await StripeConnectAccount.findOne({ userId: user._id });
+          account = await StripeConnectAccount.findOne(
+            legacyAccountFilter(user._id),
+          );
         }
 
         logger.debug(`📊 Compte trouvé: ${account ? "OUI" : "NON"}`);
@@ -220,11 +231,11 @@ const stripeConnectResolvers = {
           organizationId,
         });
 
-        // Fallback: vérifier avec userId pour compatibilité
+        // Fallback: ancien compte sans organizationId créé par l'utilisateur
         if (!account) {
           const accountByUser = await StripeConnectAccount.findOne({
             accountId,
-            userId: user._id,
+            ...legacyAccountFilter(user._id),
           });
           if (!accountByUser) {
             return {
@@ -294,11 +305,11 @@ const stripeConnectResolvers = {
           organizationId,
         });
 
-        // Fallback: vérifier avec userId pour compatibilité
+        // Fallback: ancien compte sans organizationId créé par l'utilisateur
         if (!account) {
           const accountByUser = await StripeConnectAccount.findOne({
             accountId,
-            userId: user._id,
+            ...legacyAccountFilter(user._id),
           });
           if (!accountByUser) {
             logger.warn("❌ Compte Stripe Connect non trouvé");
@@ -360,11 +371,11 @@ const stripeConnectResolvers = {
           organizationId,
         });
 
-        // Fallback: vérifier avec userId pour compatibilité
+        // Fallback: ancien compte sans organizationId créé par l'utilisateur
         if (!account) {
           const accountByUser = await StripeConnectAccount.findOne({
             accountId,
-            userId: user._id,
+            ...legacyAccountFilter(user._id),
           });
           if (!accountByUser) {
             return {
@@ -420,11 +431,11 @@ const stripeConnectResolvers = {
       try {
         const account = await StripeConnectAccount.findOne({ organizationId });
 
-        // Fallback: chercher par userId pour compatibilité
+        // Fallback: ancien compte sans organizationId créé par l'utilisateur
         if (!account) {
-          const accountByUser = await StripeConnectAccount.findOne({
-            userId: user._id,
-          });
+          const accountByUser = await StripeConnectAccount.findOne(
+            legacyAccountFilter(user._id),
+          );
           if (!accountByUser) {
             return {
               success: false,
@@ -432,8 +443,8 @@ const stripeConnectResolvers = {
                 "Aucun compte Stripe Connect trouvé pour cette organisation",
             };
           }
-          // Supprimer le compte trouvé par userId
-          await StripeConnectAccount.deleteOne({ userId: user._id });
+          // Supprimer ce seul compte (pas tous ceux de l'utilisateur)
+          await StripeConnectAccount.deleteOne({ _id: accountByUser._id });
         } else {
           // Supprimer le compte
           await StripeConnectAccount.deleteOne({ organizationId });
