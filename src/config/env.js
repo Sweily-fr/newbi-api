@@ -15,26 +15,49 @@ export const envFile =
       ? ".env.staging"
       : ".env";
 
-// Sous PM2 en production, le fichier fait foi. PM2 redonne à chaque instance
-// relancée (pm2 reload) l'environnement mémorisé au dernier `pm2 start` ou
-// `--update-env` : sans `override`, une valeur changée dans .env.production
-// resterait masquée jusqu'à un arrêt complet de l'API, donc une coupure.
-// La numérotation des instances reste celle de PM2 : les crons ne tournent
-// que sur l'instance 0.
+const envPath = path.resolve(process.cwd(), envFile);
+
+// Sous PM2 en production, le fichier fait foi pour les variables de l'app.
+// PM2 redonne à chaque instance relancée (pm2 reload) l'environnement
+// mémorisé au dernier `pm2 start` ou `--update-env` : sans cela, une valeur
+// changée dans .env.production resterait masquée jusqu'à un arrêt complet de
+// l'API, donc une coupure.
 const fileWinsOverPm2 =
   process.env.NODE_ENV === "production" && process.env.pm_id !== undefined;
-const pm2Numbering = ["pm_id", "NODE_APP_INSTANCE"].map((key) => [
-  key,
-  process.env[key],
-]);
-
-dotenv.config({
-  path: path.resolve(process.cwd(), envFile),
-  override: fileWinsOverPm2,
-});
 
 if (fileWinsOverPm2) {
-  for (const [key, value] of pm2Numbering) {
-    if (value !== undefined) process.env[key] = value;
+  const fileValues = dotenv.config({ path: envPath, processEnv: {} }).parsed;
+  for (const [key, value] of Object.entries(fileValues || {})) {
+    if (process.env[key] === undefined || !isProcessOwned(key)) {
+      process.env[key] = value;
+    }
   }
+} else {
+  dotenv.config({ path: envPath });
+}
+
+// Variables du système et de PM2 : la valeur du processus reste la bonne (le
+// .env.production du VPS contient une vieille copie d'environnement, PATH et
+// HOME compris), et la numérotation des instances reste celle de PM2 (crons
+// sur l'instance 0 seulement).
+function isProcessOwned(key) {
+  return (
+    /^[a-z]/.test(key) || // configuration interne de PM2 : pm_id, unique_id…
+    /^(PM2|NVM|SSH|XDG|LC|DBUS)_/.test(key) ||
+    [
+      "_",
+      "HOME",
+      "LANG",
+      "LOGNAME",
+      "MAIL",
+      "NODE_APP_INSTANCE",
+      "OLDPWD",
+      "PATH",
+      "PWD",
+      "SHELL",
+      "SHLVL",
+      "TERM",
+      "USER",
+    ].includes(key)
+  );
 }
