@@ -26,15 +26,12 @@ import {
   sharedDocsS3Client,
   SHARED_DOCUMENTS_BUCKET,
 } from "../services/sharedDocumentZipService.js";
+import { loadSharedFolderAccess } from "../services/sharedFolderAccess.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
 import archiver from "archiver";
 import { PassThrough } from "stream";
-import Stripe from "stripe";
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-import constants from "../utils/constants.js";
-const { BASE_URL } = constants;
 import mongoose from "mongoose";
 
 // Taille maximale par défaut (5 GB en octets)
@@ -602,85 +599,6 @@ const fileTransferResolvers = {
       },
     ),
 
-    // Générer un lien de paiement pour un transfert de fichiers
-    generateFileTransferPaymentLink: async (_, { shareLink, accessKey }) => {
-      try {
-        const fileTransfer = await FileTransfer.findOne({
-          shareLink,
-          accessKey,
-          status: "active",
-          isPaymentRequired: true,
-          isPaid: false,
-        });
-
-        if (!fileTransfer) {
-          return {
-            success: false,
-            message: "Transfert de fichiers non trouvé ou paiement non requis",
-            checkoutUrl: null,
-          };
-        }
-
-        // Vérifier si le transfert est expiré
-        if (fileTransfer.isExpired()) {
-          return {
-            success: false,
-            message: "Ce lien de partage a expiré",
-            checkoutUrl: null,
-          };
-        }
-
-        // Créer une session de paiement Stripe
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ["card"],
-          line_items: [
-            {
-              price_data: {
-                currency: fileTransfer.paymentCurrency.toLowerCase(),
-                product_data: {
-                  name: "Accès aux fichiers partagés",
-                  description: `Accès à ${fileTransfer.files.length} fichier(s) partagé(s)`,
-                },
-                unit_amount: Math.round(fileTransfer.paymentAmount * 100), // Stripe utilise les centimes
-              },
-              quantity: 1,
-            },
-          ],
-          mode: "payment",
-          // Créer un customer Stripe et envoyer le reçu à l'email saisi
-          customer_creation: "always",
-          invoice_creation: {
-            enabled: true,
-            invoice_data: {
-              description: `Accès aux fichiers partagés - ${fileTransfer.files.length} fichier(s)`,
-            },
-          },
-          success_url: `${BASE_URL}/file-transfer/success?share=${shareLink}&key=${accessKey}&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${BASE_URL}/file-transfer/cancel?share=${shareLink}&key=${accessKey}`,
-          metadata: {
-            fileTransferId: fileTransfer.id,
-            shareLink,
-            accessKey,
-          },
-        });
-
-        return {
-          success: true,
-          message: "Lien de paiement généré avec succès",
-          checkoutUrl: session.url,
-        };
-      } catch (error) {
-        console.error(
-          "Erreur lors de la génération du lien de paiement:",
-          error,
-        );
-        throw new ApolloError(
-          "Une erreur est survenue lors de la génération du lien de paiement.",
-          "PAYMENT_LINK_GENERATION_ERROR",
-        );
-      }
-    },
-
     // Créer un transfert de fichiers à partir de documents partagés (ZIP unique)
     createFileTransferFromSharedDocuments: requireTransferAction("create")(
       async (
@@ -703,6 +621,14 @@ const fileTransferResolvers = {
             );
           }
 
+          // Dossiers privés : même visibilité que la page (un dossier ou un
+          // document inaccessible est ignoré comme s'il n'existait pas, un
+          // sous-dossier inaccessible n'entre pas dans le ZIP de son parent)
+          const { canAccess } = await loadSharedFolderAccess(
+            workspaceId,
+            user._id || user.id,
+          );
+
           // 1. Construire la liste de documents avec leurs chemins ZIP
           const allDocumentsToZip = []; // { document, zipPath }
           const includedDocIds = new Set(); // Éviter les doublons (docs déjà inclus via dossiers)
@@ -715,7 +641,9 @@ const fileTransferResolvers = {
             // fois (une fois imbriqué, une fois à la racine).
             const descendantOfSelected = new Set();
             for (const folderId of folderIds) {
-              const subs = await getAllSubfolders(folderId, workspaceId);
+              const subs = await getAllSubfolders(folderId, workspaceId, {
+                canAccess,
+              });
               for (const f of subs) {
                 const fid = f._id.toString();
                 if (fid !== String(folderId)) descendantOfSelected.add(fid);
@@ -726,7 +654,9 @@ const fileTransferResolvers = {
             );
 
             for (const folderId of topLevelFolderIds) {
-              const folders = await getAllSubfolders(folderId, workspaceId);
+              const folders = await getAllSubfolders(folderId, workspaceId, {
+                canAccess,
+              });
               if (folders.length === 0) continue;
 
               const filteredFolderIds = folders.map((f) => f._id);
@@ -770,6 +700,7 @@ const fileTransferResolvers = {
 
             for (const doc of individualDocs) {
               if (includedDocIds.has(doc._id.toString())) continue;
+              if (!canAccess(doc.folderId)) continue;
               const fileName = sanitizeFileName(doc.originalName || doc.name);
               allDocumentsToZip.push({ document: doc, zipPath: fileName });
             }
@@ -975,11 +906,10 @@ const fileTransferResolvers = {
   },
 };
 
-// Wrap mutations with subscription check (except generateFileTransferPaymentLink which is public)
+// Wrap mutations with subscription check
 const _origMutFT = fileTransferResolvers.Mutation;
 fileTransferResolvers.Mutation = Object.fromEntries(
   Object.entries(_origMutFT).map(([name, fn]) => {
-    if (name === "generateFileTransferPaymentLink") return [name, fn];
     return [
       name,
       async (parent, args, context, info) => {

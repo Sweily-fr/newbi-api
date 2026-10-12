@@ -10,11 +10,19 @@
 
 import mongoose from "mongoose";
 import logger from "../utils/logger.js";
+import { toObjectIdOrNull } from "../utils/objectIdString.js";
 
 /**
  * Resolve the active organization for a user.
  * If requestedOrgId is provided, verify membership.
  * Otherwise, fall back to the user's default org (owner > admin > member).
+ *
+ * 🔐 requestedOrgId vient du client (argument, en-tête, corps ou query
+ * d'une route REST) : tout ce qui n'est pas un identifiant d'ObjectId
+ * (objet `{ "$ne": … }`, tableau, chaîne quelconque) est refusé (null, comme
+ * un non-membre). Utilisé tel quel, un objet devenait un opérateur MongoDB :
+ * l'adhésion trouvée était n'importe laquelle de l'utilisateur, et
+ * l'organisation renvoyée la première de la collection.
  *
  * @param {string} userId
  * @param {string|null} requestedOrgId
@@ -26,8 +34,11 @@ export async function getActiveOrganization(userId, requestedOrgId = null) {
     const memberCollection = db.collection("member");
     const { ObjectId } = mongoose.Types;
 
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
+    const userObjectId = toObjectIdOrNull(userId);
+    if (!userObjectId) {
+      logger.warn("getActiveOrganization: identifiant d'utilisateur invalide");
+      return null;
+    }
 
     const organizationCollection = db.collection("organization");
     // Seuls les champs renvoyés ci-dessous.
@@ -37,10 +48,13 @@ export async function getActiveOrganization(userId, requestedOrgId = null) {
     let organization;
 
     if (requestedOrgId) {
-      const requestedOrgObjectId =
-        typeof requestedOrgId === "string"
-          ? new ObjectId(requestedOrgId)
-          : requestedOrgId;
+      const requestedOrgObjectId = toObjectIdOrNull(requestedOrgId);
+      if (!requestedOrgObjectId) {
+        logger.warn(
+          `Utilisateur ${userId} : identifiant d'organisation invalide refusé (${typeof requestedOrgId})`,
+        );
+        return null;
+      }
 
       // Adhésion et organisation lues en parallèle (elles étaient enchaînées).
       [member, organization] = await Promise.all([

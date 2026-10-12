@@ -4,6 +4,7 @@ import crypto from "crypto";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { isBackofficeAdmin } from "../utils/backofficeAdmin.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
@@ -948,48 +949,63 @@ const userResolvers = {
     ),
 
     /**
-     * Met à jour le statut partenaire d'un utilisateur
+     * Met à jour le statut partenaire d'un utilisateur.
+     * 🔐 Mutation publique jusqu'ici : n'importe qui (même sans compte)
+     * devenait partenaire, recevait un code de parrainage et touchait des
+     * commissions, ou retirait ce statut à un vrai partenaire. Réservée aux
+     * administrateurs du back-office (BACKOFFICE_ADMIN_USER_IDS, comptes
+     * @sweily.fr / @newbi.fr) : aucun écran ne l'appelle, le statut
+     * partenaire s'attribue en interne (le webhook Stripe s'en sert pour
+     * calculer les commissions).
      */
-    updatePartnerStatus: async (_, { email, isPartner }) => {
-      try {
-        // Trouver l'utilisateur par email
-        const user = await User.findOne({ email: email.toLowerCase() });
-
-        if (!user) {
-          throw createNotFoundError("Utilisateur non trouvé");
+    updatePartnerStatus: isAuthenticated(
+      async (_, { email, isPartner }, { user: caller }) => {
+        if (!(await isBackofficeAdmin(caller._id || caller.id))) {
+          throw new AppError(
+            "Accès réservé aux administrateurs",
+            ERROR_CODES.FORBIDDEN,
+          );
         }
+        try {
+          // Trouver l'utilisateur par email
+          const user = await User.findOne({ email: email.toLowerCase() });
 
-        // Mettre à jour le statut partenaire
-        user.isPartner = isPartner;
+          if (!user) {
+            throw createNotFoundError("Utilisateur non trouvé");
+          }
 
-        // Générer un code de parrainage si l'utilisateur devient partenaire et n'en a pas
-        if (isPartner && !user.referralCode) {
-          user.referralCode = crypto
-            .randomBytes(8)
-            .toString("hex")
-            .toUpperCase();
+          // Mettre à jour le statut partenaire
+          user.isPartner = isPartner;
+
+          // Générer un code de parrainage si l'utilisateur devient partenaire et n'en a pas
+          if (isPartner && !user.referralCode) {
+            user.referralCode = crypto
+              .randomBytes(8)
+              .toString("hex")
+              .toUpperCase();
+          }
+
+          await user.save();
+
+          logger.debug(
+            `✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`,
+          );
+
+          return user;
+        } catch (error) {
+          if (error.name === "AppError") throw error;
+
+          console.error(
+            "Erreur lors de la mise à jour du statut partenaire:",
+            error,
+          );
+          throw new AppError(
+            "Erreur lors de la mise à jour du statut partenaire",
+            ERROR_CODES.INTERNAL_ERROR,
+          );
         }
-
-        await user.save();
-
-        logger.debug(
-          `✅ Utilisateur ${email} mis à jour : isPartner=${isPartner}`,
-        );
-
-        return user;
-      } catch (error) {
-        if (error.name === "AppError") throw error;
-
-        console.error(
-          "Erreur lors de la mise à jour du statut partenaire:",
-          error,
-        );
-        throw new AppError(
-          "Erreur lors de la mise à jour du statut partenaire",
-          ERROR_CODES.INTERNAL_ERROR,
-        );
-      }
-    },
+      },
+    ),
 
     /**
      * Met à jour uniquement le logo de l'entreprise

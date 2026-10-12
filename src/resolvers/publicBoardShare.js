@@ -3,7 +3,14 @@ import PublicBoardShare, {
   hasPasswordProtection,
 } from "../models/PublicBoardShare.js";
 import { timingSafeStringEqual } from "../utils/timing-safe.js";
+import {
+  checkBoardShareProof,
+  createBoardShareAccessToken,
+  verifyBoardShareAccessToken,
+} from "../utils/boardShareAccessToken.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { resolveVisitorSession } from "../utils/boardVisitorSession.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
 import logger from "../utils/logger.js";
@@ -37,7 +44,12 @@ const PUBLIC_VISITOR_UPDATED = "PUBLIC_VISITOR_UPDATED";
  * membres de l'espace du tableau ayant la lecture du kanban, comme les
  * subscriptions de kanban.js. Les subscriptions des visiteurs
  * (publicTaskUpdated, accessApproved, accessRevoked) restent ouvertes aux
- * connexions anonymes : elles sont gardées par le jeton de partage.
+ * connexions anonymes : elles sont gardées par le jeton de partage, et
+ * publicTaskUpdated, qui diffuse le contenu des tâches, exige en plus une
+ * session visiteur (ou un membre connecté) et, pour un partage protégé, le
+ * jeton remis par getPublicBoard une fois le mot de passe vérifié. accessApproved et accessRevoked ne renvoient que le lien et
+ * l'e-mail fournis par l'abonné, avec l'issue de sa propre demande : aucun
+ * contenu du tableau.
  */
 const subscribeAsBoardMember =
   (subscribe) => async (parent, args, context, info) => {
@@ -77,10 +89,192 @@ const safePublish = (channel, payload, context = "") => {
 // URL de base pour les liens de partage (à configurer dans les variables d'environnement)
 const getBaseUrl = () => process.env.FRONTEND_URL || "http://localhost:3000";
 
+// Adresse du client pour le compteur d'essais de mot de passe (trust proxy
+// actif : req.ip est l'adresse transmise par le proxy, non falsifiable)
+const clientIpOf = (context) =>
+  context?.req?.ip || context?.req?.socket?.remoteAddress || null;
+
+const isEmailBanned = (share, email) => {
+  const emailLower = String(email || "").toLowerCase();
+  return (
+    Boolean(emailLower) &&
+    (share?.bannedEmails || []).some((b) => b.email === emailLower)
+  );
+};
+
+const REVOKED_MESSAGE = "Votre accès à ce tableau a été révoqué";
+const VISITOR_SESSION_MESSAGE =
+  "Confirmez votre adresse e-mail pour accéder au tableau";
+
+/**
+ * 🔐 Identité d'un visiteur. Jusqu'ici, l'e-mail déclaré par le client à
+ * chaque appel : un visiteur banni revenait sous une autre adresse et
+ * n'importe qui commentait sous l'adresse d'un autre. Désormais :
+ *   - session visiteur signée, remise par authenticateInvitedUser une fois
+ *     l'adresse prouvée (code par e-mail), liée à ce lien de partage ;
+ *   - ou membre connecté de l'espace du tableau (lecture du kanban), sous
+ *     l'adresse de son compte.
+ * L'e-mail éventuellement transmis par le client est ignoré.
+ * @returns {Promise<null|{kind: "visitor"|"member", email: string,
+ *   name: string|null, image: string|null, userInvited?: object}>}
+ */
+async function resolveVisitorIdentity(share, { sessionToken }, context) {
+  if (sessionToken) {
+    const userInvited = await resolveVisitorSession(sessionToken, { share });
+    if (userInvited) {
+      return {
+        kind: "visitor",
+        email: userInvited.email,
+        name: userInvited.name || null,
+        image: userInvited.image || null,
+        userInvited,
+      };
+    }
+  }
+  const user = context?.user;
+  if (user?.email) {
+    const allowed = await userHasWorkspaceLevel(
+      String(user._id || user.id),
+      String(share.workspaceId),
+      "kanban",
+      "read",
+    );
+    if (allowed) {
+      return {
+        kind: "member",
+        email: String(user.email).toLowerCase(),
+        name: user.name || null,
+        image: user.image || null,
+      };
+    }
+  }
+  return null;
+}
+
+// Banni du lien (liste du partage) ou du tableau (UserInvited)
+const isIdentityBanned = (share, identity) =>
+  isEmailBanned(share, identity.email) ||
+  Boolean(identity.userInvited?.isBannedFromBoard?.(share.boardId));
+
+/**
+ * 🔐 Contrôles communs aux actions d'un visiteur (commentaire, images,
+ * profil, demande d'accès) : même preuve que getPublicBoard pour un partage
+ * protégé (jeton remis par getPublicBoard, ou mot de passe aux essais
+ * limités), identité prouvée (session visiteur, ou membre connecté sauf
+ * `visitorOnly`), puis visiteur non banni (sauf pour demander un nouvel
+ * accès).
+ * @returns {Promise<{denied: object}|{identity: object}>}
+ */
+async function checkVisitorAction(
+  share,
+  {
+    password,
+    accessToken,
+    sessionToken,
+    allowBanned = false,
+    visitorOnly = false,
+  },
+  context,
+) {
+  const proof = await checkBoardShareProof(share, {
+    password,
+    accessToken,
+    ip: clientIpOf(context),
+  });
+  if (!proof.ok) {
+    return {
+      denied: {
+        success: false,
+        message: proof.message,
+        requiresPassword: true,
+      },
+    };
+  }
+  const identity = await resolveVisitorIdentity(
+    share,
+    { sessionToken },
+    context,
+  );
+  if (!identity || (visitorOnly && identity.kind !== "visitor")) {
+    return {
+      denied: {
+        success: false,
+        message: VISITOR_SESSION_MESSAGE,
+        requiresVisitorSession: true,
+      },
+    };
+  }
+  if (!allowBanned && isIdentityBanned(share, identity)) {
+    return { denied: { success: false, message: REVOKED_MESSAGE } };
+  }
+  return { identity };
+}
+
+/**
+ * Abonnement d'un visiteur toujours permis : partage actif et non expiré,
+ * mot de passe inchangé depuis la remise de son jeton, session visiteur
+ * toujours valide (déconnexion, nouveau mot de passe), visiteur non banni.
+ * Relu à chaque événement : une révocation, un bannissement ou un nouveau
+ * mot de passe coupe le flux déjà ouvert.
+ */
+async function isVisitorSubscriptionAllowed(
+  shareId,
+  { accessToken, identity, sessionToken },
+) {
+  const share = await PublicBoardShare.findById(shareId)
+    .select("isActive expiresAt password passwordHash bannedEmails boardId")
+    .lean();
+  if (!share?.isActive) return false;
+  if (share.expiresAt && new Date(share.expiresAt) < new Date()) return false;
+  if (
+    hasPasswordProtection(share) &&
+    !verifyBoardShareAccessToken(accessToken, share, { allowExpired: true })
+  ) {
+    return false;
+  }
+  if (identity.kind === "visitor") {
+    const userInvited = await resolveVisitorSession(sessionToken, { share });
+    if (!userInvited) return false;
+    return !isIdentityBanned(share, { email: userInvited.email, userInvited });
+  }
+  return !isEmailBanned(share, identity.email);
+}
+
+// Itérateur qui se termine dès que isAllowed() devient faux
+function guardIterator(iterator, isAllowed) {
+  const end = async () => {
+    await iterator.return?.();
+    return { done: true, value: undefined };
+  };
+  return {
+    async next() {
+      const result = await iterator.next();
+      if (result.done) return result;
+      try {
+        if (await isAllowed()) return result;
+      } catch (error) {
+        logger.warn(
+          `[PublicShare] Contrôle d'abonnement impossible : ${error.message}`,
+        );
+      }
+      return end();
+    },
+    return: () =>
+      iterator.return?.() ?? Promise.resolve({ done: true, value: undefined }),
+    throw: (error) => iterator.throw?.(error) ?? Promise.reject(error),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}
+
 const resolvers = {
   Query: {
     // Récupérer les liens de partage d'un tableau (utilisateurs connectés)
-    getPublicShares: requireWorkspaceLevel("kanban", "read")(
+    getPublicShares: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, workspaceId },
@@ -121,7 +315,13 @@ const resolvers = {
     ),
 
     // Accéder au tableau via le token (visiteurs externes)
-    getPublicBoard: async (_, { token, email, password }) => {
+    // 🔐 Identité : session visiteur (sessionToken) ou membre connecté ;
+    // l'argument email, déclaratif, est ignoré
+    getPublicBoard: async (
+      _,
+      { token, password, accessToken, sessionToken },
+      context,
+    ) => {
       try {
         logger.info(
           `🔓 [PublicShare] Accès demandé avec token: ${token.substring(0, 8)}...`,
@@ -145,29 +345,56 @@ const resolvers = {
           };
         }
 
-        // Vérifier le mot de passe si nécessaire
-        if (share.hasPasswordSet && !(await share.verifyPassword(password))) {
+        // Vérifier le mot de passe si nécessaire (ou le jeton remis lors
+        // d'une ouverture précédente). Essais en échec limités par adresse
+        // IP et par partage.
+        const proof = await checkBoardShareProof(share, {
+          password,
+          accessToken,
+          ip: clientIpOf(context),
+        });
+        if (!proof.ok) {
           return {
             success: false,
-            message: "Mot de passe incorrect",
+            message: proof.message,
+            requiresPassword: true,
           };
         }
 
-        // Vérifier si l'email est banni
-        const emailLower = email.toLowerCase();
-        const isBanned = (share.bannedEmails || []).some(
-          (b) => b.email === emailLower,
+        // Identité prouvée (session visiteur ou membre connecté)
+        const identity = await resolveVisitorIdentity(
+          share,
+          { sessionToken },
+          context,
         );
-        if (isBanned) {
+        if (!identity) {
+          return {
+            success: false,
+            message: VISITOR_SESSION_MESSAGE,
+            requiresVisitorSession: true,
+            // Mot de passe du partage déjà vérifié : la page le garde pour
+            // ne pas le redemander après la confirmation de l'adresse
+            accessToken: share.hasPasswordSet
+              ? createBoardShareAccessToken(share)
+              : null,
+          };
+        }
+
+        // Visiteur banni
+        const emailLower = identity.email;
+        if (isIdentityBanned(share, identity)) {
           return {
             success: false,
             message: "BANNED",
             isBanned: true,
+            visitorEmail: emailLower,
           };
         }
 
-        // Enregistrer la visite
-        await share.recordVisit(email);
+        // Enregistrer la visite (un membre de l'espace n'est pas un visiteur
+        // du lien : ni fiche, ni présence côté propriétaire)
+        const isVisitor = identity.kind === "visitor";
+        if (isVisitor) await share.recordVisit(emailLower);
 
         // Récupérer le tableau
         const board = await Board.findById(share.boardId);
@@ -495,22 +722,24 @@ const resolvers = {
 
         // Publier la présence du visiteur (connecté)
         const visitorInfo = share.visitors?.find((v) => v.email === emailLower);
-        safePublish(
-          "VISITOR_PRESENCE",
-          {
-            visitorPresence: {
-              email: emailLower,
-              name:
-                visitorInfo?.name ||
-                visitorInfo?.firstName ||
-                email.split("@")[0],
-              image: visitorInfo?.image || null,
-              boardId: board._id.toString(),
-              isConnected: true,
+        if (isVisitor)
+          safePublish(
+            "VISITOR_PRESENCE",
+            {
+              visitorPresence: {
+                email: emailLower,
+                name:
+                  visitorInfo?.name ||
+                  visitorInfo?.firstName ||
+                  identity.name ||
+                  emailLower.split("@")[0],
+                image: visitorInfo?.image || null,
+                boardId: board._id.toString(),
+                isConnected: true,
+              },
             },
-          },
-          `Visiteur ${emailLower} connecté`,
-        );
+            `Visiteur ${emailLower} connecté`,
+          );
 
         return {
           success: true,
@@ -527,8 +756,20 @@ const resolvers = {
             id: share._id.toString(),
             hasPassword: hasPasswordProtection(share),
             shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
+            // 🔐 Un visiteur ne voit que sa propre fiche : ni les adresses
+            // des autres visiteurs, ni les bannis, ni les demandes d'accès
+            visitors: (share.visitors || [])
+              .filter((v) => v.email === emailLower)
+              .map((v) => ({ ...v.toObject(), id: v._id.toString() })),
+            bannedEmails: [],
+            accessRequests: [],
           },
-          visitorEmail: email,
+          visitorEmail: emailLower,
+          // Preuve du mot de passe pour les rechargements et l'abonnement
+          // temps réel (publicTaskUpdated), sans garder le mot de passe
+          accessToken: share.hasPasswordSet
+            ? createBoardShareAccessToken(share)
+            : null,
         };
       } catch (error) {
         logger.error("❌ [PublicShare] Erreur accès public:", error);
@@ -554,7 +795,10 @@ const resolvers = {
 
   Mutation: {
     // Créer un lien de partage
-    createPublicShare: requireWorkspaceAction("kanban", "share")(
+    createPublicShare: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -613,7 +857,10 @@ const resolvers = {
     ),
 
     // Mettre à jour un lien de partage
-    updatePublicShare: requireWorkspaceAction("kanban", "share")(
+    updatePublicShare: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -652,51 +899,57 @@ const resolvers = {
     ),
 
     // Supprimer un lien de partage
-    deletePublicShare: requireWorkspaceAction("kanban", "share")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    deletePublicShare: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const result = await PublicBoardShare.deleteOne({
-          _id: id,
-          workspaceId: finalWorkspaceId,
-        });
+      const result = await PublicBoardShare.deleteOne({
+        _id: id,
+        workspaceId: finalWorkspaceId,
+      });
 
-        return result.deletedCount > 0;
-      },
-    ),
+      return result.deletedCount > 0;
+    }),
 
     // Révoquer un lien de partage (désactiver sans supprimer)
-    revokePublicShare: requireWorkspaceAction("kanban", "share")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    revokePublicShare: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const share = await PublicBoardShare.findOneAndUpdate(
-          { _id: id, workspaceId: finalWorkspaceId },
-          { isActive: false, updatedAt: new Date() },
-          { new: true },
-        );
+      const share = await PublicBoardShare.findOneAndUpdate(
+        { _id: id, workspaceId: finalWorkspaceId },
+        { isActive: false, updatedAt: new Date() },
+        { new: true },
+      );
 
-        return !!share;
-      },
-    ),
+      return !!share;
+    }),
 
     // Réactiver un lien de partage désactivé
-    reactivatePublicShare: requireWorkspaceAction("kanban", "share")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    reactivatePublicShare: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        const share = await PublicBoardShare.findOneAndUpdate(
-          { _id: id, workspaceId: finalWorkspaceId },
-          { isActive: true, updatedAt: new Date() },
-          { new: true },
-        );
+      const share = await PublicBoardShare.findOneAndUpdate(
+        { _id: id, workspaceId: finalWorkspaceId },
+        { isActive: true, updatedAt: new Date() },
+        { new: true },
+      );
 
-        return !!share;
-      },
-    ),
+      return !!share;
+    }),
 
     // Révoquer l'accès d'un visiteur spécifique (le bannit)
-    revokeVisitorAccess: requireWorkspaceAction("kanban", "share")(
+    revokeVisitorAccess: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { shareId, visitorEmail, reason, workspaceId },
@@ -773,7 +1026,10 @@ const resolvers = {
     ),
 
     // Débannir un visiteur
-    unbanVisitor: requireWorkspaceAction("kanban", "share")(
+    unbanVisitor: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { shareId, visitorEmail, workspaceId },
@@ -817,7 +1073,11 @@ const resolvers = {
     ),
 
     // Demander l'accès (pour les visiteurs bannis)
-    requestAccess: async (_, { token, email, name, message }) => {
+    requestAccess: async (
+      _,
+      { token, name, message, password, accessToken, sessionToken },
+      context,
+    ) => {
       try {
         const share = await PublicBoardShare.findOne({ token });
 
@@ -829,7 +1089,14 @@ const resolvers = {
           };
         }
 
-        const emailLower = email.toLowerCase();
+        const { denied, identity } = await checkVisitorAction(
+          share,
+          { password, accessToken, sessionToken, allowBanned: true },
+          context,
+        );
+        if (denied) return { ...denied, alreadyRequested: false };
+
+        const emailLower = identity.email;
 
         // Vérifier si l'email est bien banni
         const isBanned = (share.bannedEmails || []).some(
@@ -863,7 +1130,7 @@ const resolvers = {
         // Ajouter la demande d'accès
         const newRequest = {
           email: emailLower,
-          name: name || email.split("@")[0],
+          name: name || identity.name || emailLower.split("@")[0],
           message: message || "",
           requestedAt: new Date(),
           status: "pending",
@@ -876,7 +1143,9 @@ const resolvers = {
         const createdRequest =
           share.accessRequests[share.accessRequests.length - 1];
 
-        logger.info(`📩 [PublicShare] Nouvelle demande d'accès de ${email}`);
+        logger.info(
+          `📩 [PublicShare] Nouvelle demande d'accès de ${emailLower}`,
+        );
 
         // Publier l'événement pour notifier le propriétaire en temps réel
         safePublish(
@@ -885,7 +1154,7 @@ const resolvers = {
             accessRequested: {
               id: createdRequest._id?.toString() || createdRequest.id,
               email: emailLower,
-              name: name || email.split("@")[0],
+              name: newRequest.name,
               message: message || "",
               requestedAt: newRequest.requestedAt,
               boardId: share.boardId.toString(),
@@ -911,7 +1180,10 @@ const resolvers = {
     },
 
     // Approuver une demande d'accès
-    approveAccessRequest: requireWorkspaceAction("kanban", "share")(
+    approveAccessRequest: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { shareId, requestId, workspaceId },
@@ -998,7 +1270,10 @@ const resolvers = {
     ),
 
     // Rejeter une demande d'accès
-    rejectAccessRequest: requireWorkspaceAction("kanban", "share")(
+    rejectAccessRequest: requireWorkspaceAction(
+      "kanban",
+      "share",
+    )(
       async (
         _,
         { shareId, requestId, workspaceId },
@@ -1064,9 +1339,11 @@ const resolvers = {
     ),
 
     // Ajouter un commentaire externe
+    // 🔐 Auteur : session visiteur ou membre connecté (visitorEmail ignoré)
     addExternalComment: async (
       _,
-      { token, taskId, content, visitorEmail, images },
+      { token, taskId, content, images, password, accessToken, sessionToken },
+      context,
     ) => {
       try {
         // Vérifier le lien de partage
@@ -1078,6 +1355,14 @@ const resolvers = {
             message: "Lien de partage invalide ou expiré",
           };
         }
+
+        const { denied, identity } = await checkVisitorAction(
+          share,
+          { password, accessToken, sessionToken },
+          context,
+        );
+        if (denied) return denied;
+        const visitorEmail = identity.email;
 
         if (!share.permissions.canComment) {
           return {
@@ -1105,7 +1390,10 @@ const resolvers = {
         );
         const visitorId = visitor?._id?.toString();
         const userName =
-          visitor?.name || visitor?.firstName || visitorEmail.split("@")[0];
+          visitor?.name ||
+          visitor?.firstName ||
+          identity.name ||
+          visitorEmail.split("@")[0];
 
         // Vérifier qu'il y a au moins du contenu ou des images
         const trimmedContent = (content || "").trim();
@@ -1286,9 +1574,9 @@ const resolvers = {
         // sans ça, les refetch/polls du front peuvent recevoir jusqu'à 30s
         // de données périmées après un commentaire externe (réponse du bot
         // Claude incluse).
-        cacheDel(
-          `kanban:tasks:${share.workspaceId}:${share.boardId}`,
-        ).catch(() => {});
+        cacheDel(`kanban:tasks:${share.workspaceId}:${share.boardId}`).catch(
+          () => {},
+        );
 
         logger.info(
           `✅ [PublicShare] Événement UPDATED publié pour tâche ${task._id}`,
@@ -1475,16 +1763,29 @@ const resolvers = {
     },
 
     // Mutation pour mettre à jour le profil d'un visiteur externe
-    updateVisitorProfile: async (_, { token, email, input }) => {
+    // 🔐 Profil du visiteur de la session (email ignoré)
+    updateVisitorProfile: async (
+      _,
+      { token, input, password, accessToken, sessionToken },
+      context,
+    ) => {
       try {
         const share = await PublicBoardShare.findOne({ token, isActive: true });
 
-        if (!share) {
+        if (!share || !share.isValid()) {
           return {
             success: false,
             message: "Lien de partage invalide ou expiré",
           };
         }
+
+        const { denied, identity } = await checkVisitorAction(
+          share,
+          { password, accessToken, sessionToken, visitorOnly: true },
+          context,
+        );
+        if (denied) return denied;
+        const email = identity.email;
 
         // Trouver le visiteur par email
         const visitorIndex = share.visitors.findIndex(
@@ -1659,7 +1960,12 @@ const resolvers = {
     },
 
     // Upload une image de profil visiteur sur Cloudflare
-    uploadVisitorImage: async (_, { token, email, file }) => {
+    // 🔐 Photo du visiteur de la session (email ignoré)
+    uploadVisitorImage: async (
+      _,
+      { token, file, password, accessToken, sessionToken },
+      context,
+    ) => {
       try {
         const share = await PublicBoardShare.findOne({ token, isActive: true });
 
@@ -1670,6 +1976,14 @@ const resolvers = {
             imageUrl: null,
           };
         }
+
+        const { denied, identity } = await checkVisitorAction(
+          share,
+          { password, accessToken, sessionToken, visitorOnly: true },
+          context,
+        );
+        if (denied) return { ...denied, imageUrl: null };
+        const email = identity.email;
 
         // Trouver le visiteur dans share.visitors
         let visitorIndex = share.visitors.findIndex(
@@ -1836,9 +2150,11 @@ const resolvers = {
     },
 
     // Upload une image pour un commentaire externe (visiteur)
+    // 🔐 Auteur : session visiteur ou membre connecté (visitorEmail ignoré)
     uploadExternalCommentImage: async (
       _,
-      { token, taskId, file, visitorEmail },
+      { token, taskId, file, password, accessToken, sessionToken },
+      context,
     ) => {
       try {
         // Vérifier le lien de partage
@@ -1851,6 +2167,14 @@ const resolvers = {
             message: "Lien de partage invalide ou expiré",
           };
         }
+
+        const { denied, identity } = await checkVisitorAction(
+          share,
+          { password, accessToken, sessionToken },
+          context,
+        );
+        if (denied) return { ...denied, image: null };
+        const visitorEmail = identity.email;
 
         if (!share.permissions.canComment) {
           return {
@@ -1961,15 +2285,52 @@ const resolvers = {
   // Subscription pour les mises à jour en temps réel sur la page publique
   Subscription: {
     publicTaskUpdated: {
-      subscribe: async (_, { token, boardId }) => {
+      subscribe: async (
+        _,
+        { token, boardId, accessToken, sessionToken },
+        context,
+      ) => {
         try {
-          // Vérifier que le token est valide
+          // Vérifier que le token est valide (actif et non expiré)
           const share = await PublicBoardShare.findOne({
             token,
             isActive: true,
           });
-          if (!share) {
+          if (!share || !share.isValid()) {
             throw new Error("Lien de partage invalide ou expiré");
+          }
+
+          // 🔐 Partage protégé : jeton remis par getPublicBoard une fois le
+          // mot de passe vérifié (le mot de passe lui-même n'est pas accepté
+          // ici, ses essais ne sont limités que par requête HTTP). Sans
+          // cette preuve, le lien seul suffisait à suivre tâches,
+          // commentaires et pièces jointes en temps réel.
+          if (
+            hasPasswordProtection(share) &&
+            !verifyBoardShareAccessToken(accessToken, share)
+          ) {
+            throw new AppError(
+              "Mot de passe requis pour suivre ce tableau",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+
+          // 🔐 Visiteur identifié (session visiteur ou membre connecté) et
+          // non banni : l'e-mail transmis par la page n'était qu'une
+          // déclaration
+          const identity = await resolveVisitorIdentity(
+            share,
+            { sessionToken },
+            context,
+          );
+          if (!identity) {
+            throw new AppError(
+              VISITOR_SESSION_MESSAGE,
+              ERROR_CODES.UNAUTHENTICATED,
+            );
+          }
+          if (isIdentityBanned(share, identity)) {
+            throw new AppError(REVOKED_MESSAGE, ERROR_CODES.FORBIDDEN);
           }
 
           // Vérifier que le boardId correspond
@@ -1985,7 +2346,18 @@ const resolvers = {
             `📡 [PublicShare] Subscription aux canaux: ${taskChannel}, ${visitorChannel}`,
           );
 
-          return pubsub.asyncIterableIterator([taskChannel, visitorChannel]);
+          // Flux coupé dès que le partage est révoqué ou expiré, que le mot
+          // de passe change, que la session prend fin ou que le visiteur est
+          // banni
+          return guardIterator(
+            pubsub.asyncIterableIterator([taskChannel, visitorChannel]),
+            () =>
+              isVisitorSubscriptionAllowed(share._id, {
+                accessToken,
+                identity,
+                sessionToken,
+              }),
+          );
         } catch (error) {
           logger.error(
             "❌ [PublicShare] Erreur subscription publicTaskUpdated:",

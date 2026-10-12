@@ -3,6 +3,7 @@ import crypto from "crypto";
 import logger from "../utils/logger.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
+import { requireInternalSecret } from "../middlewares/internal-secret.js";
 
 const router = express.Router();
 
@@ -10,26 +11,10 @@ const router = express.Router();
 const OAUTH_STATE_PREFIX = "superpdp:oauth:";
 const OAUTH_STATE_TTL = 10 * 60; // secondes
 
-/**
- * Garde d'authentification serveur-à-serveur : ces routes sont appelées par les
- * route handlers Next.js qui ont DÉJÀ authentifié la session utilisateur et vérifié
- * l'appartenance à l'organisation. On exige donc le secret interne partagé.
- */
-function requireInternalSecret(req, res, next) {
-  const expected = process.env.INTERNAL_API_SECRET;
-  if (!expected) {
-    logger.error(
-      "[superpdp-oauth] INTERNAL_API_SECRET non défini — routes OAuth non sécurisées, accès refusé",
-    );
-    return res
-      .status(500)
-      .json({ success: false, error: "Configuration serveur manquante" });
-  }
-  if (req.headers["x-internal-secret"] !== expected) {
-    return res.status(401).json({ success: false, error: "Non autorisé" });
-  }
-  next();
-}
+// Garde d'authentification serveur-à-serveur (requireInternalSecret) : ces
+// routes sont appelées par les route handlers Next.js qui ont DÉJÀ authentifié
+// la session utilisateur et vérifié l'appartenance à l'organisation. On exige
+// donc le secret interne partagé.
 
 // Configuration OAuth2 SuperPDP
 const SUPERPDP_OAUTH_CONFIG = {

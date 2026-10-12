@@ -3,6 +3,7 @@ import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
   MODULES,
+  CATALOG_VERSION,
   CUSTOM_ROLE_PREFIX,
   PREDEFINED_ROLES,
   PREDEFINED_ROLE_KEYS,
@@ -23,8 +24,9 @@ import {
  *
  * Document : { organizationId, role, permission (JSON Better Auth),
  *   actions (grille Newbi : module → actions permises ; les documents
- *   antérieurs ont `levels`, converti à la lecture), name, description,
- *   createdBy, createdAt, updatedAt }
+ *   antérieurs ont `levels`, converti à la lecture), catalogVersion (version
+ *   du catalogue connue de la grille), name, description, createdBy,
+ *   createdAt, updatedAt }
  */
 
 const COLLECTION = "organizationRole";
@@ -149,9 +151,15 @@ function inputActions({ actions, levels }, base = null) {
   return normalizeActions(partial, base);
 }
 
+/**
+ * `usage` null : effectifs non communiqués (appelant sans « Voir les
+ * membres ») → memberCount et invitationCount à null.
+ */
 function serializeRole(key, stored, usage) {
   const predefined = PREDEFINED_ROLES[key];
-  const counts = usage.get(key) || { members: 0, invitations: 0 };
+  const counts = usage
+    ? usage.get(key) || { members: 0, invitations: 0 }
+    : { members: null, invitations: null };
   return {
     key,
     name: predefined ? predefined.label : stored?.name || key,
@@ -170,11 +178,18 @@ function serializeRole(key, stored, usage) {
   };
 }
 
-/** Rôles prédéfinis (ajustés le cas échéant) puis rôles personnalisés. */
-export async function listOrganizationRoles(organizationId) {
+/**
+ * Rôles prédéfinis (ajustés le cas échéant) puis rôles personnalisés.
+ * `includeUsage: false` : sans les effectifs par rôle (membres, invitations
+ * en attente), réservés à « Voir les membres ».
+ */
+export async function listOrganizationRoles(
+  organizationId,
+  { includeUsage = true } = {},
+) {
   const [stored, usage] = await Promise.all([
     loadOrganizationRoles(organizationId),
-    countUsage(organizationId),
+    includeUsage ? countUsage(organizationId) : null,
   ]);
   const predefined = PREDEFINED_ROLE_KEYS.map((key) =>
     serializeRole(key, stored.get(key), usage),
@@ -263,6 +278,8 @@ export async function createOrganizationRole(
       role: key,
       permission: JSON.stringify(toBetterAuthPermission(normalized)),
       actions: normalized,
+      // Version du catalogue que la grille a connue (actions ajoutées ensuite)
+      catalogVersion: CATALOG_VERSION,
       name: roleName,
       description: cleanDescription(description),
       createdBy: userId ? toObjectId(userId) : null,
@@ -304,6 +321,7 @@ export async function updateOrganizationRole(
   const normalized = inputActions({ actions, levels }, base);
   if (normalized) {
     set.actions = normalized;
+    set.catalogVersion = CATALOG_VERSION;
     set.permission = JSON.stringify(toBetterAuthPermission(normalized));
     unset.levels = "";
   }
@@ -327,6 +345,7 @@ export async function updateOrganizationRole(
     };
     if (!set.actions) {
       set.actions = predefined.actions;
+      set.catalogVersion = CATALOG_VERSION;
       set.permission = JSON.stringify(
         toBetterAuthPermission(predefined.actions),
       );

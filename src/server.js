@@ -60,6 +60,7 @@ import {
 } from "./controllers/invoicePaymentController.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
+import { createGracefulShutdown } from "./utils/gracefulShutdown.js";
 import {
   betterAuthJWTMiddleware,
   validateJWT,
@@ -100,7 +101,10 @@ import resendWebhookRoutes from "./routes/resendWebhook.js";
 import assistantRoutes from "./routes/assistant.js";
 import { initializeBankingSystem } from "./services/banking/index.js";
 import emailReminderScheduler from "./services/emailReminderScheduler.js";
-import { startInvoiceReminderCron } from "./cron/invoiceReminderCron.js";
+import {
+  startInvoiceReminderCron,
+  stopInvoiceReminderCron,
+} from "./cron/invoiceReminderCron.js";
 import { startRecurringInvoiceDetectionCron } from "./cron/recurringInvoiceDetectionCron.js";
 import { startCrmEmailAutomationCron } from "./cron/crmEmailAutomationCron.js";
 import { startCalendarSyncCron } from "./cron/calendarSyncCron.js";
@@ -117,6 +121,8 @@ import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaym
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
+
+const gracefulShutdown = createGracefulShutdown();
 
 // Connexion à MongoDB — pool réduit car 4 instances PM2 (4 × 5 = 20 connexions max)
 mongoose
@@ -219,6 +225,9 @@ async function startServer() {
   // SHA-1 de chaque réponse, inutile pour des POST jamais revalidés.
   // express.static garde ses propres ETag pour les fichiers.
   app.set("etag", false);
+
+  // Arrêt de l'instance (pm2 reload) : connexions fermées après chaque réponse
+  app.use(gracefulShutdown.middleware);
 
   // Security headers
   app.use(
@@ -756,41 +765,29 @@ async function startServer() {
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
       );
     }
+
+    // Sous PM2 (wait_ready) : l'ancienne instance n'est arrêtée qu'à ce signal
+    process.send?.("ready");
   });
 
-  // Nettoyage propre à l'arrêt
-  process.on("SIGTERM", async () => {
-    logger.info("🛑 Arrêt du serveur en cours...");
-    try {
-      emailReminderScheduler.stop();
-      // Flush des descriptions collaboratives en attente d'enregistrement
-      await destroyKanbanCollabServer();
-      subscriptionServer.close();
-      await closeRedis();
-      logger.info("✅ Serveur arrêté proprement");
-    } catch (error) {
-      logger.error("❌ Erreur lors de l'arrêt:", error);
-    }
-    process.exit(0);
-  });
-
-  process.on("SIGINT", async () => {
-    logger.info("🛑 Interruption du serveur (Ctrl+C)...");
-    try {
-      emailReminderScheduler.stop();
-      // Arrêter la queue de relances
-      const { stopInvoiceReminderCron } =
-        await import("./cron/invoiceReminderCron.js");
-      await stopInvoiceReminderCron();
-      await destroyKanbanCollabServer();
-      subscriptionServer.close();
-      await closeRedis();
-      logger.info("✅ Serveur arrêté proprement");
-    } catch (error) {
-      logger.error("❌ Erreur lors de l'arrêt:", error);
-    }
-    process.exit(0);
-  });
+  // Nettoyage propre à l'arrêt (SIGINT de PM2 ou Ctrl+C, SIGTERM du système)
+  const stopServer = (signal) =>
+    gracefulShutdown.shutdown(signal, {
+      httpServer,
+      closeRealtime: async () => {
+        // Flush des descriptions collaboratives en attente d'enregistrement
+        await destroyKanbanCollabServer();
+        subscriptionServer.close();
+      },
+      cleanup: async () => {
+        emailReminderScheduler.stop();
+        // Arrêter la queue de relances
+        await stopInvoiceReminderCron();
+        await closeRedis();
+      },
+    });
+  process.on("SIGTERM", () => stopServer("SIGTERM"));
+  process.on("SIGINT", () => stopServer("SIGINT"));
 }
 
 // Configuration des routes

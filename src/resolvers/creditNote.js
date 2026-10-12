@@ -1,6 +1,9 @@
 import logger from "../utils/logger.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
-import { inputOrStored } from "../utils/documentTotals.js";
+import {
+  computeDocumentTotals,
+  inputOrStored,
+} from "../utils/documentTotals.js";
 import CreditNote from "../models/CreditNote.js";
 import {
   archiveDocumentPdf,
@@ -23,6 +26,7 @@ import {
 } from "../middlewares/rbac.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
+import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -39,76 +43,68 @@ import documentAutomationService from "../services/documentAutomationService.js"
 // (même choix d'espace, appartenance vérifiée, rôle contrôlé)
 
 /**
- * Calcule les totaux d'un avoir
- * @param {Boolean} isReverseCharge - Indique si l'avoir est soumis à l'auto-liquidation (TVA = 0)
+ * Calcule les totaux d'un avoir, avec les règles des factures
+ * (utils/documentTotals.js) et de l'aperçu PDF de l'avoir :
+ *  - remise globale sur le HT des articles seulement (fixe plafonnée à ce HT) ;
+ *  - frais de port de la facture d'origine ajoutés ensuite, sans remise :
+ *    l'aperçu et le PDF les reprennent, les totaux enregistrés les ignoraient.
+ * Les articles d'un avoir sont stockés en négatif (quantité et prix
+ * unitaire) : le calcul se fait en valeur absolue, comme l'aperçu, puis les
+ * montants sont rendus négatifs.
+ *
+ * @param {Array} items - articles de l'avoir
+ * @param {Number} discount - remise globale
+ * @param {String} discountType - "PERCENTAGE" ou "FIXED"
+ * @param {Boolean} isReverseCharge - auto-liquidation (TVA = 0)
+ * @param {Object} [shipping] - frais de port de la facture d'origine
  */
-const calculateCreditNoteTotals = (
+export const calculateCreditNoteTotals = (
   items,
   discount = 0,
   discountType = "FIXED",
   isReverseCharge = false,
+  shipping = null,
 ) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-
-  items.forEach((item) => {
-    // Prendre en compte le pourcentage d'avancement
-    const progressPercentage =
-      item.progressPercentage !== undefined && item.progressPercentage !== null
-        ? parseFloat(item.progressPercentage)
-        : 100;
-    const itemTotal =
-      item.quantity * item.unitPrice * (progressPercentage / 100);
-    const itemDiscount = item.discount || 0;
-    const itemDiscountType = item.discountType || "FIXED";
-
-    let itemTotalAfterDiscount = itemTotal;
-    if (
-      itemDiscountType === "PERCENTAGE" ||
-      itemDiscountType === "percentage"
-    ) {
-      // Limiter la remise à 100% maximum
-      const discountPercent = Math.min(itemDiscount, 100);
-      itemTotalAfterDiscount = itemTotal * (1 - discountPercent / 100);
-    } else {
-      itemTotalAfterDiscount = itemTotal - itemDiscount;
-    }
-
-    totalHT += itemTotalAfterDiscount;
-    // Auto-liquidation : TVA = 0 si isReverseCharge = true
-    const itemVAT = isReverseCharge
-      ? 0
-      : itemTotalAfterDiscount * (item.vatRate / 100);
-    totalVAT += itemVAT;
+  const absoluteItems = (items || []).map((item) => {
+    const plain = typeof item?.toObject === "function" ? item.toObject() : item;
+    return {
+      ...plain,
+      quantity: Math.abs(parseFloat(plain?.quantity) || 0),
+      unitPrice: Math.abs(parseFloat(plain?.unitPrice) || 0),
+      vatRate: parseFloat(plain?.vatRate) || 0,
+      discount: Math.abs(parseFloat(plain?.discount) || 0),
+      progressPercentage:
+        plain?.progressPercentage !== undefined &&
+        plain?.progressPercentage !== null
+          ? parseFloat(plain.progressPercentage)
+          : undefined,
+    };
   });
 
-  // Appliquer la remise globale
-  let finalTotalHT = totalHT;
-  if (discountType === "PERCENTAGE" || discountType === "percentage") {
-    // Limiter la remise à 100% maximum
-    const discountPercent = Math.min(discount, 100);
-    finalTotalHT = totalHT * (1 - discountPercent / 100);
-  } else {
-    finalTotalHT = totalHT - discount;
-  }
-
-  // Recalculer la TVA après remise globale
-  // Si finalTotalHT <= 0 (remise >= 100%), la TVA doit être 0
-  // Auto-liquidation : TVA = 0 si isReverseCharge = true
-  let finalTotalVAT = 0;
-  if (!isReverseCharge && finalTotalHT > 0 && totalHT > 0) {
-    finalTotalVAT = totalVAT * (finalTotalHT / totalHT);
-  }
-  const finalTotalTTC = finalTotalHT + finalTotalVAT;
+  const totals = computeDocumentTotals({
+    items: absoluteItems,
+    discount: Math.abs(parseFloat(discount) || 0),
+    discountType,
+    shipping: shipping?.billShipping
+      ? {
+          billShipping: true,
+          shippingAmountHT: Math.abs(
+            parseFloat(shipping.shippingAmountHT) || 0,
+          ),
+          shippingVatRate: shipping.shippingVatRate,
+        }
+      : null,
+    isReverseCharge,
+  });
 
   // Les avoirs ont des montants négatifs
   return {
-    totalHT: -Math.abs(totalHT),
-    totalVAT: -Math.abs(totalVAT),
-    totalTTC: -Math.abs(totalHT + totalVAT),
-    finalTotalHT: -Math.abs(finalTotalHT),
-    finalTotalVAT: -Math.abs(finalTotalVAT),
-    finalTotalTTC: -Math.abs(finalTotalTTC),
+    totalHT: -Math.abs(totals.totalHT),
+    totalVAT: -Math.abs(totals.totalVAT),
+    totalTTC: -Math.abs(totals.totalTTC),
+    finalTotalHT: -Math.abs(totals.finalTotalHT),
+    finalTotalVAT: -Math.abs(totals.finalTotalVAT),
+    finalTotalTTC: -Math.abs(totals.finalTotalTTC),
   };
 };
 
@@ -282,12 +278,14 @@ const creditNoteResolvers = {
             );
           }
 
-          // Calculer les totaux du nouvel avoir avec auto-liquidation si nécessaire
+          // Totaux du nouvel avoir : auto-liquidation et frais de port de la
+          // facture d'origine (repris par l'aperçu et le PDF de l'avoir)
           const totals = calculateCreditNoteTotals(
             input.items,
             input.discount,
             input.discountType,
             originalInvoice.isReverseCharge || false,
+            originalInvoice.shipping,
           );
 
           // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
@@ -532,7 +530,10 @@ const creditNoteResolvers = {
             throw createNotFoundError("Avoir non trouvé");
           }
 
-          // Les avoirs avec statut CREATED peuvent toujours être modifiés
+          // Les avoirs avec statut CREATED peuvent toujours être modifiés,
+          // sauf un avoir transmis en facturation électronique (toObject :
+          // champs e-invoicing lus même s'ils ne sont pas dans le schéma)
+          assertNotEInvoiceTransmitted(creditNote.toObject(), "creditNote");
 
           // Un avoir est toujours finalisé (pas de brouillon) : son numéro et
           // son préfixe sont VERROUILLÉS — les renuméroter casserait la
@@ -567,10 +568,14 @@ const creditNoteResolvers = {
             }
           }
 
-          // Calculer les nouveaux totaux si les items ont changé
+          // Calculer les nouveaux totaux si les articles ou la remise changent
           let totals = {};
-          if (input.items) {
-            // Récupérer la facture originale pour obtenir isReverseCharge
+          if (
+            input.items ||
+            input.discount !== undefined ||
+            input.discountType !== undefined
+          ) {
+            // Facture d'origine : auto-liquidation et frais de port
             const originalInvoice = await Invoice.findOne({
               _id: creditNote.originalInvoice,
               workspaceId: creditNote.workspaceId,
@@ -582,10 +587,11 @@ const creditNoteResolvers = {
             // Valeur de l'input dès qu'il la porte (une remise remise à 0
             // reste à 0), sinon celle de l'avoir enregistré
             totals = calculateCreditNoteTotals(
-              input.items,
+              inputOrStored(input, creditNote, "items") || [],
               inputOrStored(input, creditNote, "discount") ?? 0,
               inputOrStored(input, creditNote, "discountType") ?? "FIXED",
               originalInvoice.isReverseCharge || false,
+              originalInvoice.shipping,
             );
 
             // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
@@ -629,7 +635,19 @@ const creditNoteResolvers = {
           if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
             creditNote.cachedPdf = undefined;
           }
+          // Archive PDF de l'avoir (aperçu, bouton PDF, e-mails) : elle date
+          // d'avant la modification. On l'oublie et on la régénère après
+          // l'enregistrement (le web la réécrit aussi de son côté) ; si la
+          // régénération échoue, l'aperçu retombe sur un rendu à jour.
+          if (creditNote.archivedPdfKey) {
+            creditNote.archivedPdfKey = undefined;
+            creditNote.archivedPdfStoredAt = undefined;
+            creditNote.archivedPdfSource = undefined;
+          }
           await creditNote.save();
+
+          // Fire-and-forget, ne bloque pas la réponse
+          triggerCreditNoteFacturXArchive(creditNote, workspaceId);
 
           // Créer un événement
           await Event.create({
@@ -667,7 +685,13 @@ const creditNoteResolvers = {
             throw createNotFoundError("Avoir non trouvé");
           }
 
-          // Les avoirs avec statut CREATED peuvent toujours être supprimés
+          // Les avoirs avec statut CREATED peuvent toujours être supprimés,
+          // sauf un avoir transmis en facturation électronique
+          assertNotEInvoiceTransmitted(
+            creditNote.toObject(),
+            "creditNote",
+            "delete",
+          );
 
           await CreditNote.findOneAndDelete({ _id: id, workspaceId });
 

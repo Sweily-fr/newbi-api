@@ -63,6 +63,24 @@ input PartInput {
   etag: String!
 }
 
+# Part déjà reçue par R2 (ListParts)
+type MultipartUploadPart {
+  partNumber: Int!
+  etag: String!
+  size: Float!
+}
+
+# État d'un envoi multipart, pour reprendre un envoi interrompu
+type ListMultipartUploadPartsResponse {
+  # true : envoi déjà finalisé, le fichier est prêt (fileId)
+  completed: Boolean!
+  fileId: String
+  # Nombre de parts annoncé au démarrage (null pour un envoi plus ancien)
+  totalParts: Int
+  # Parts reçues, triées par numéro (vide si completed)
+  parts: [MultipartUploadPart!]!
+}
+
 extend type Mutation {
   # Démarrer un multipart upload natif S3/R2
   startMultipartUpload(
@@ -82,6 +100,30 @@ extend type Mutation {
     transferId: String
     fileId: String!
   ): CompleteMultipartUploadResponse!
+
+  # Annuler un multipart upload en cours (échec ou annulation de l'envoi).
+  # true : annulé ; false : envoi inconnu (déjà finalisé, ou démarré il y a
+  # plus de 24 h) ; erreur FORBIDDEN : envoi d'un autre utilisateur, d'un
+  # autre espace ou clé différente
+  abortMultipartUpload(uploadId: String!, key: String!): Boolean!
+
+  # Reprendre un envoi interrompu : parts déjà reçues par R2. null : envoi
+  # inconnu (démarré il y a plus de 24 h, annulé, ou avant cette version),
+  # à recommencer ; erreur FORBIDDEN : envoi d'un autre utilisateur, d'un
+  # autre espace ou clé différente
+  listMultipartUploadParts(
+    uploadId: String!
+    key: String!
+  ): ListMultipartUploadPartsResponse
+
+  # Nouvelles URL présignées (12 h) pour des parts d'un envoi en cours, à la
+  # reprise (celles du démarrage ont pu expirer). Mêmes contrôles que
+  # completeMultipartUpload ; envoi inconnu ou déjà finalisé : FORBIDDEN
+  refreshMultipartUploadUrls(
+    uploadId: String!
+    key: String!
+    partNumbers: [Int!]!
+  ): [MultipartUploadUrl!]!
 
   # Générer des URLs signées pour upload direct vers R2
   generatePresignedUploadUrls(

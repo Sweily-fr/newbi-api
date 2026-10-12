@@ -23,8 +23,44 @@ import { GraphQLUpload } from "graphql-upload";
 import path from "path";
 import crypto from "crypto";
 import { getPubSub } from "../config/redis.js";
+import {
+  canAccessFolder,
+  getEffectiveVisibility,
+  sharedFolderAccessFor,
+} from "../services/sharedFolderAccess.js";
 
 const { ObjectId } = mongoose.Types;
+
+// 🔐 Dossiers privés : un dossier ou un document auquel l'utilisateur n'a
+// pas accès (visibility / allowedUserIds, voir services/sharedFolderAccess.js)
+// se comporte comme introuvable dans toutes les queries et mutations, et
+// n'entre pas dans les statistiques.
+const DOCUMENT_NOT_FOUND = "Document non trouvé";
+const FOLDER_NOT_FOUND = "Dossier non trouvé";
+
+/** Identifiants des documents du lot visibles par l'utilisateur. */
+async function visibleDocumentIds(context, workspaceId, ids) {
+  const { canAccessDocument } = await sharedFolderAccessFor(
+    context,
+    workspaceId,
+  );
+  const documents = await SharedDocument.find(
+    { _id: { $in: ids }, workspaceId },
+    { folderId: 1, originalFolderId: 1 },
+  );
+  return documents.filter(canAccessDocument).map((doc) => doc._id);
+}
+
+/** Filtres excluant les éléments des dossiers inaccessibles. */
+function visibilityFilters(inaccessibleFolderIds) {
+  return {
+    documents: {
+      folderId: { $nin: inaccessibleFolderIds },
+      originalFolderId: { $nin: inaccessibleFolderIds },
+    },
+    folders: { _id: { $nin: inaccessibleFolderIds } },
+  };
+}
 
 // 🔐 Ferme l'IDOR cross-org de façon uniforme : valide l'appartenance à l'org
 // et le droit de lecture du module « sharedDocuments » (requireRead) ET force
@@ -119,33 +155,8 @@ export function publishSharedDocsChanged(
   }
 }
 
-// === Visibility helpers ===
-
-function getEffectiveVisibility(folder, folderMap) {
-  if (folder.visibility) {
-    return {
-      visibility: folder.visibility,
-      allowedUserIds: (folder.allowedUserIds || []).map((id) => id.toString()),
-      createdBy: folder.createdBy?.toString(),
-    };
-  }
-  if (folder.parentId) {
-    const parent = folderMap.get(folder.parentId.toString());
-    if (parent) return getEffectiveVisibility(parent, folderMap);
-  }
-  return {
-    visibility: "public",
-    allowedUserIds: [],
-    createdBy: folder.createdBy?.toString(),
-  };
-}
-
-function canAccessFolder(userId, folder, effectiveVis) {
-  if (effectiveVis.visibility === "public") return true;
-  if (folder.createdBy?.toString() === userId) return true;
-  if (effectiveVis.createdBy === userId) return true;
-  return effectiveVis.allowedUserIds.includes(userId);
-}
+// Visibilité des dossiers : services/sharedFolderAccess.js (partagée avec les
+// routes REST de téléchargement, les ZIP et les transferts)
 
 // === Registre de tags ===
 
@@ -207,42 +218,27 @@ const sharedDocumentResolvers = {
           sortBy = "createdAt",
           sortOrder = "desc",
         },
-        { user },
+        context,
       ) => {
         try {
-          const userId = user._id?.toString() || user.id?.toString();
-
-          // Charger tous les dossiers pour vérifier la visibilité
-          const allFolders = await SharedFolder.find({
-            workspaceId,
-            trashedAt: null,
-          });
-          const folderMap = new Map();
-          for (const folder of allFolders) {
-            folderMap.set(folder._id.toString(), folder);
-          }
-
-          // Calculer les dossiers inaccessibles
-          const inaccessibleFolderIds = allFolders
-            .filter((folder) => {
-              const effectiveVis = getEffectiveVisibility(folder, folderMap);
-              return !canAccessFolder(userId, folder, effectiveVis);
-            })
-            .map((f) => f._id);
+          // Dossiers privés inaccessibles (visibilité héritée comprise)
+          const { canAccess, inaccessibleFolderIds } =
+            await sharedFolderAccessFor(context, workspaceId);
 
           // Exclure les documents en corbeille
           const query = { workspaceId, trashedAt: null };
+
+          // Exclure les documents des dossiers privés inaccessibles, y compris
+          // sans filtre (la liste complète les renvoyait)
+          if (filter?.folderId === undefined && inaccessibleFolderIds.length) {
+            query.folderId = { $nin: inaccessibleFolderIds };
+          }
 
           // Filtres optionnels
           if (filter) {
             if (filter.folderId !== undefined) {
               // Si le dossier demandé est inaccessible, retourner vide
-              if (
-                filter.folderId &&
-                inaccessibleFolderIds.some(
-                  (id) => id.toString() === filter.folderId,
-                )
-              ) {
+              if (filter.folderId && !canAccess(filter.folderId)) {
                 return {
                   success: true,
                   documents: [],
@@ -251,9 +247,6 @@ const sharedDocumentResolvers = {
                 };
               }
               query.folderId = filter.folderId || null;
-            } else if (inaccessibleFolderIds.length > 0) {
-              // Exclure les documents des dossiers privés inaccessibles
-              query.folderId = { $nin: inaccessibleFolderIds };
             }
             if (filter.status) {
               query.status = filter.status;
@@ -373,17 +366,21 @@ const sharedDocumentResolvers = {
     /**
      * Récupère un document par ID
      */
-    sharedDocument: scopedQuery(async (_, { id, workspaceId }, { user }) => {
+    sharedDocument: scopedQuery(async (_, { id, workspaceId }, context) => {
       try {
         const document = await SharedDocument.findOne({
           _id: id,
           workspaceId,
         });
+        const { canAccessDocument } = await sharedFolderAccessFor(
+          context,
+          workspaceId,
+        );
 
-        if (!document) {
+        if (!document || !canAccessDocument(document)) {
           return {
             success: false,
-            message: "Document non trouvé",
+            message: DOCUMENT_NOT_FOUND,
             document: null,
           };
         }
@@ -473,14 +470,15 @@ const sharedDocumentResolvers = {
     /**
      * Récupère un dossier par ID
      */
-    sharedFolder: scopedQuery(async (_, { id, workspaceId }, { user }) => {
+    sharedFolder: scopedQuery(async (_, { id, workspaceId }, context) => {
       try {
         const folder = await SharedFolder.findOne({ _id: id, workspaceId });
+        const { canAccess } = await sharedFolderAccessFor(context, workspaceId);
 
-        if (!folder) {
+        if (!folder || !canAccess(folder._id)) {
           return {
             success: false,
-            message: "Dossier non trouvé",
+            message: FOLDER_NOT_FOUND,
             folder: null,
           };
         }
@@ -511,10 +509,16 @@ const sharedDocumentResolvers = {
     /**
      * Statistiques des documents partagés
      */
-    sharedDocumentsStats: scopedQuery(async (_, { workspaceId }, { user }) => {
+    sharedDocumentsStats: scopedQuery(async (_, { workspaceId }, context) => {
       try {
         // Convertir workspaceId en ObjectId pour l'aggregation
         const workspaceObjectId = new ObjectId(workspaceId);
+        // Ce que l'utilisateur ne voit pas (dossiers privés) n'est pas compté
+        const { inaccessibleFolderIds } = await sharedFolderAccessFor(
+          context,
+          workspaceId,
+        );
+        const visible = visibilityFilters(inaccessibleFolderIds);
 
         const [
           totalDocuments,
@@ -528,41 +532,61 @@ const sharedDocumentResolvers = {
           trashedSizeAggregation,
         ] = await Promise.all([
           // Documents actifs (non en corbeille)
-          SharedDocument.countDocuments({ workspaceId, trashedAt: null }),
+          SharedDocument.countDocuments({
+            workspaceId,
+            trashedAt: null,
+            ...visible.documents,
+          }),
           SharedDocument.countDocuments({
             workspaceId,
             status: "pending",
             trashedAt: null,
+            ...visible.documents,
           }),
           SharedDocument.countDocuments({
             workspaceId,
             status: "classified",
             trashedAt: null,
+            ...visible.documents,
           }),
           SharedDocument.countDocuments({
             workspaceId,
             status: "archived",
             trashedAt: null,
+            ...visible.documents,
           }),
-          SharedFolder.countDocuments({ workspaceId, trashedAt: null }),
+          SharedFolder.countDocuments({
+            workspaceId,
+            trashedAt: null,
+            ...visible.folders,
+          }),
           SharedDocument.aggregate([
-            { $match: { workspaceId: workspaceObjectId, trashedAt: null } },
+            {
+              $match: {
+                workspaceId: workspaceObjectId,
+                trashedAt: null,
+                ...visible.documents,
+              },
+            },
             { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
           ]),
           // Stats corbeille
           SharedDocument.countDocuments({
             workspaceId,
             trashedAt: { $ne: null },
+            ...visible.documents,
           }),
           SharedFolder.countDocuments({
             workspaceId,
             trashedAt: { $ne: null },
+            ...visible.folders,
           }),
           SharedDocument.aggregate([
             {
               $match: {
                 workspaceId: workspaceObjectId,
                 trashedAt: { $ne: null },
+                ...visible.documents,
               },
             },
             { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
@@ -608,15 +632,29 @@ const sharedDocumentResolvers = {
     /**
      * Récupère les éléments de la corbeille
      */
-    trashItems: scopedQuery(async (_, { workspaceId }, { user }) => {
+    trashItems: scopedQuery(async (_, { workspaceId }, context) => {
       try {
         const workspaceObjectId = new ObjectId(workspaceId);
+        // Éléments des dossiers privés inaccessibles : absents de la corbeille
+        const { inaccessibleFolderIds } = await sharedFolderAccessFor(
+          context,
+          workspaceId,
+        );
+        const visible = visibilityFilters(inaccessibleFolderIds);
 
         const [documents, folders, sizeAggregation] = await Promise.all([
-          SharedDocument.find({ workspaceId, trashedAt: { $ne: null } }).sort({
+          SharedDocument.find({
+            workspaceId,
+            trashedAt: { $ne: null },
+            ...visible.documents,
+          }).sort({
             trashedAt: -1,
           }),
-          SharedFolder.find({ workspaceId, trashedAt: { $ne: null } }).sort({
+          SharedFolder.find({
+            workspaceId,
+            trashedAt: { $ne: null },
+            ...visible.folders,
+          }).sort({
             trashedAt: -1,
           }),
           SharedDocument.aggregate([
@@ -624,6 +662,7 @@ const sharedDocumentResolvers = {
               $match: {
                 workspaceId: workspaceObjectId,
                 trashedAt: { $ne: null },
+                ...visible.documents,
               },
             },
             { $group: { _id: null, totalSize: { $sum: "$fileSize" } } },
@@ -685,13 +724,24 @@ const sharedDocumentResolvers = {
      * présents sur des documents mais absents du registre (legacy) sont
      * surfacés et auto-enregistrés.
      */
-    documentTags: scopedQuery(async (_, { workspaceId }, { user }) => {
+    documentTags: scopedQuery(async (_, { workspaceId }, context) => {
       try {
         const wsId = new ObjectId(workspaceId);
+        const { inaccessibleFolderIds } = await sharedFolderAccessFor(
+          context,
+          workspaceId,
+        );
 
-        // Compter les usages réels par tag (documents non en corbeille)
+        // Compter les usages réels par tag (documents non en corbeille et
+        // visibles : ceux des dossiers privés inaccessibles ne comptent pas)
         const usageAgg = await SharedDocument.aggregate([
-          { $match: { workspaceId: wsId, trashedAt: null } },
+          {
+            $match: {
+              workspaceId: wsId,
+              trashedAt: null,
+              ...visibilityFilters(inaccessibleFolderIds).documents,
+            },
+          },
           { $unwind: "$tags" },
           { $group: { _id: "$tags", count: { $sum: 1 } } },
         ]);
@@ -744,13 +794,29 @@ const sharedDocumentResolvers = {
       async (
         _,
         { workspaceId, file, folderId, name, description, tags },
-        { user },
+        context,
       ) => {
+        const { user } = context;
         try {
           logger.debug(
             "📤 Upload document partagé pour workspace:",
             workspaceId,
           );
+
+          // Dossier cible privé inaccessible : comme introuvable
+          if (folderId) {
+            const { canAccess } = await sharedFolderAccessFor(
+              context,
+              workspaceId,
+            );
+            if (!canAccess(folderId)) {
+              return {
+                success: false,
+                message: FOLDER_NOT_FOUND,
+                document: null,
+              };
+            }
+          }
 
           // Récupérer les informations du fichier
           const { createReadStream, filename, mimetype } = await file;
@@ -876,8 +942,29 @@ const sharedDocumentResolvers = {
      * Met à jour un document
      */
     updateSharedDocument: scopedMutation(
-      async (_, { id, workspaceId, input }, { user }) => {
+      async (_, { id, workspaceId, input }, context) => {
         try {
+          const access = await sharedFolderAccessFor(context, workspaceId);
+          const existing = await SharedDocument.findOne({
+            _id: id,
+            workspaceId,
+          });
+          if (!access.canAccessDocument(existing)) {
+            return {
+              success: false,
+              message: DOCUMENT_NOT_FOUND,
+              document: null,
+            };
+          }
+          // Déplacement vers un dossier privé inaccessible : refusé
+          if (input?.folderId && !access.canAccess(input.folderId)) {
+            return {
+              success: false,
+              message: FOLDER_NOT_FOUND,
+              document: null,
+            };
+          }
+
           const document = await SharedDocument.findOneAndUpdate(
             { _id: id, workspaceId },
             { $set: input },
@@ -920,15 +1007,19 @@ const sharedDocumentResolvers = {
      * Supprime un document
      */
     deleteSharedDocument: scopedDeleteMutation(
-      async (_, { id, workspaceId }, { user }) => {
+      async (_, { id, workspaceId }, context) => {
         try {
           const document = await SharedDocument.findOne({
             _id: id,
             workspaceId,
             trashedAt: null,
           });
+          const { canAccessDocument } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
 
-          if (!document) {
+          if (!document || !canAccessDocument(document)) {
             return {
               success: false,
               message: "Document non trouvé",
@@ -964,13 +1055,19 @@ const sharedDocumentResolvers = {
      * Supprime plusieurs documents
      */
     deleteSharedDocuments: scopedDeleteMutation(
-      async (_, { ids, workspaceId }, { user }) => {
+      async (_, { ids, workspaceId }, context) => {
         try {
-          const documents = await SharedDocument.find({
-            _id: { $in: ids },
+          const { canAccessDocument } = await sharedFolderAccessFor(
+            context,
             workspaceId,
-            trashedAt: null,
-          });
+          );
+          const documents = (
+            await SharedDocument.find({
+              _id: { $in: ids },
+              workspaceId,
+              trashedAt: null,
+            })
+          ).filter(canAccessDocument);
 
           if (documents.length === 0) {
             return {
@@ -1012,10 +1109,23 @@ const sharedDocumentResolvers = {
      * Déplace des documents vers un dossier
      */
     moveSharedDocuments: scopedMutation(
-      async (_, { ids, workspaceId, targetFolderId }, { user }) => {
+      async (_, { ids, workspaceId, targetFolderId }, context) => {
         try {
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
+          if (targetFolderId && !canAccess(targetFolderId)) {
+            return { success: false, message: FOLDER_NOT_FOUND, movedCount: 0 };
+          }
+          const visibleIds = await visibleDocumentIds(
+            context,
+            workspaceId,
+            ids,
+          );
+
           const result = await SharedDocument.updateMany(
-            { _id: { $in: ids }, workspaceId },
+            { _id: { $in: visibleIds }, workspaceId },
             {
               $set: {
                 folderId: targetFolderId || null,
@@ -1044,8 +1154,20 @@ const sharedDocumentResolvers = {
      * Ajoute un commentaire à un document
      */
     addDocumentComment: scopedMutation(
-      async (_, { workspaceId, input }, { user }) => {
+      async (_, { workspaceId, input }, context) => {
+        const { user } = context;
         try {
+          const [visibleId] = await visibleDocumentIds(context, workspaceId, [
+            input.documentId,
+          ]);
+          if (!visibleId) {
+            return {
+              success: false,
+              message: DOCUMENT_NOT_FOUND,
+              document: null,
+            };
+          }
+
           const document = await SharedDocument.findOneAndUpdate(
             { _id: input.documentId, workspaceId },
             {
@@ -1092,8 +1214,18 @@ const sharedDocumentResolvers = {
      * Met à jour les tags de plusieurs documents
      */
     bulkUpdateTags: scopedMutation(
-      async (_, { ids, workspaceId, addTags, removeTags }, { user }) => {
+      async (
+        _,
+        { ids: requestedIds, workspaceId, addTags, removeTags },
+        context,
+      ) => {
         try {
+          // Documents des dossiers privés inaccessibles : ignorés
+          const ids = await visibleDocumentIds(
+            context,
+            workspaceId,
+            requestedIds,
+          );
           const updateOperations = {};
 
           // Ajouter des tags
@@ -1295,8 +1427,24 @@ const sharedDocumentResolvers = {
      * Crée un dossier
      */
     createSharedFolder: scopedCreateMutation(
-      async (_, { workspaceId, input }, { user }) => {
+      async (_, { workspaceId, input }, context) => {
+        const { user } = context;
         try {
+          // Dossier parent privé inaccessible : comme introuvable
+          if (input.parentId) {
+            const { canAccess } = await sharedFolderAccessFor(
+              context,
+              workspaceId,
+            );
+            if (!canAccess(input.parentId)) {
+              return {
+                success: false,
+                message: FOLDER_NOT_FOUND,
+                folder: null,
+              };
+            }
+          }
+
           // Vérifier si un dossier avec le même nom existe déjà
           const existing = await SharedFolder.findOne({
             workspaceId,
@@ -1350,16 +1498,45 @@ const sharedDocumentResolvers = {
      * Met à jour un dossier
      */
     updateSharedFolder: scopedMutation(
-      async (_, { id, workspaceId, input }, { user }) => {
+      async (_, { id, workspaceId, input }, context) => {
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
 
-          if (!folder) {
+          if (!folder || !canAccess(folder._id)) {
             return {
               success: false,
-              message: "Dossier non trouvé",
+              message: FOLDER_NOT_FOUND,
               folder: null,
             };
+          }
+
+          // Déplacement sous un dossier privé inaccessible : refusé
+          if (input.parentId && !canAccess(input.parentId)) {
+            return { success: false, message: FOLDER_NOT_FOUND, folder: null };
+          }
+
+          // Visibilité : mêmes règles que updateFolderVisibility (le créateur,
+          // ou pour un dossier système un rôle qui gère l'entreprise). Sans
+          // ce contrôle, tout membre ayant accès au dossier le rendait public.
+          if ("visibility" in input || "allowedUserIds" in input) {
+            const userId =
+              context.user._id?.toString() || context.user.id?.toString();
+            const allowed = folder.isSystem
+              ? context.permissions?.hasPermissionLevel("orgSettings", "write")
+              : folder.createdBy?.toString() === userId;
+            if (!allowed) {
+              return {
+                success: false,
+                message: folder.isSystem
+                  ? "Seul un administrateur peut modifier la visibilité des dossiers système"
+                  : "Seul le créateur peut modifier la visibilité",
+                folder: null,
+              };
+            }
           }
 
           if (folder.isSystem) {
@@ -1414,15 +1591,19 @@ const sharedDocumentResolvers = {
      * Les documents et sous-dossiers sont aussi mis en corbeille
      */
     deleteSharedFolder: scopedDeleteMutation(
-      async (_, { id, workspaceId }, { user }) => {
+      async (_, { id, workspaceId }, context) => {
         try {
           const folder = await SharedFolder.findOne({
             _id: id,
             workspaceId,
             trashedAt: null,
           });
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
 
-          if (!folder) {
+          if (!folder || !canAccess(folder._id)) {
             return {
               success: false,
               message: "Dossier non trouvé",
@@ -1521,10 +1702,14 @@ const sharedDocumentResolvers = {
         const { user } = context;
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
-          if (!folder) {
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
+          if (!folder || !canAccess(folder._id)) {
             return {
               success: false,
-              message: "Dossier non trouvé",
+              message: FOLDER_NOT_FOUND,
               folder: null,
             };
           }
@@ -1573,10 +1758,15 @@ const sharedDocumentResolvers = {
      * Restaure des éléments depuis la corbeille
      */
     restoreFromTrash: scopedMutation(
-      async (_, { workspaceId, documentIds, folderIds }, { user }) => {
+      async (_, { workspaceId, documentIds, folderIds }, context) => {
         try {
           let restoredDocuments = 0;
           let restoredFolders = 0;
+          // Éléments des dossiers privés inaccessibles : comme introuvables
+          const { canAccess, canAccessDocument } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
 
           // Restaurer les documents
           if (documentIds && documentIds.length > 0) {
@@ -1587,7 +1777,7 @@ const sharedDocumentResolvers = {
                 trashedAt: { $ne: null },
               });
 
-              if (doc) {
+              if (doc && canAccessDocument(doc)) {
                 // Vérifier si le dossier original existe encore et n'est pas en corbeille
                 let targetFolderId = doc.originalFolderId;
                 if (targetFolderId) {
@@ -1647,7 +1837,7 @@ const sharedDocumentResolvers = {
                 trashedAt: { $ne: null },
               });
 
-              if (!folder) continue;
+              if (!folder || !canAccess(folder._id)) continue;
 
               // Vérifier si le dossier parent original existe encore
               let targetParentId = folder.originalParentId;
@@ -1741,12 +1931,21 @@ const sharedDocumentResolvers = {
      * Vide complètement la corbeille (suppression définitive)
      */
     emptyTrash: scopedDeleteMutationNoSub(
-      async (_, { workspaceId }, { user }) => {
+      async (_, { workspaceId }, context) => {
         try {
+          // Seulement ce que l'utilisateur voit dans la corbeille : les
+          // éléments des dossiers privés inaccessibles n'y sont pas
+          const { inaccessibleFolderIds } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
+          const visible = visibilityFilters(inaccessibleFolderIds);
+
           // Récupérer tous les documents en corbeille pour supprimer de R2
           const trashedDocs = await SharedDocument.find({
             workspaceId,
             trashedAt: { $ne: null },
+            ...visible.documents,
           });
 
           // Supprimer les fichiers de Cloudflare R2
@@ -1765,12 +1964,14 @@ const sharedDocumentResolvers = {
           const deleteDocsResult = await SharedDocument.deleteMany({
             workspaceId,
             trashedAt: { $ne: null },
+            ...visible.documents,
           });
 
           // Supprimer définitivement les dossiers
           const deleteFoldersResult = await SharedFolder.deleteMany({
             workspaceId,
             trashedAt: { $ne: null },
+            ...visible.folders,
           });
 
           return {
@@ -1791,13 +1992,20 @@ const sharedDocumentResolvers = {
      * Supprime définitivement des documents (de la corbeille)
      */
     permanentlyDeleteDocuments: scopedDeleteMutationNoSub(
-      async (_, { ids, workspaceId }, { user }) => {
+      async (_, { ids, workspaceId }, context) => {
         try {
-          const documents = await SharedDocument.find({
-            _id: { $in: ids },
+          // Documents de la corbeille visibles par l'utilisateur seulement
+          const { canAccessDocument } = await sharedFolderAccessFor(
+            context,
             workspaceId,
-            trashedAt: { $ne: null },
-          });
+          );
+          const documents = (
+            await SharedDocument.find({
+              _id: { $in: ids },
+              workspaceId,
+              trashedAt: { $ne: null },
+            })
+          ).filter(canAccessDocument);
 
           // Supprimer de Cloudflare R2
           for (const doc of documents) {
@@ -1811,9 +2019,9 @@ const sharedDocumentResolvers = {
             }
           }
 
-          // Supprimer de la base
+          // Supprimer de la base (ceux retrouvés ci-dessus seulement)
           await SharedDocument.deleteMany({
-            _id: { $in: ids },
+            _id: { $in: documents.map((doc) => doc._id) },
             workspaceId,
           });
 
@@ -1835,8 +2043,15 @@ const sharedDocumentResolvers = {
      * Supprime définitivement des dossiers (de la corbeille)
      */
     permanentlyDeleteFolders: scopedDeleteMutationNoSub(
-      async (_, { ids, workspaceId }, { user }) => {
+      async (_, { ids: requestedIds, workspaceId }, context) => {
         try {
+          // Dossiers privés inaccessibles : comme introuvables
+          const { canAccess } = await sharedFolderAccessFor(
+            context,
+            workspaceId,
+          );
+          const ids = requestedIds.filter((id) => canAccess(id));
+
           // Récupérer les documents dans ces dossiers pour supprimer de R2
           const docsInFolders = await SharedDocument.find({
             workspaceId,
@@ -1907,9 +2122,17 @@ const sharedDocumentResolvers = {
 
   SharedFolder: {
     id: (parent) => parent._id || parent.id,
-    parent: async (parent) => {
-      if (!parent.parentId) return null;
-      return await SharedFolder.findById(parent.parentId).lean();
+    parent: async (parent, _, context) => {
+      if (!parent.parentId || !context?.user) return null;
+      const folder = await SharedFolder.findById(parent.parentId).lean();
+      if (!folder) return null;
+      // Parent privé inaccessible (sous-dossier public d'un dossier privé) :
+      // ni son nom ni son existence
+      const { canAccess } = await sharedFolderAccessFor(
+        context,
+        String(folder.workspaceId),
+      );
+      return canAccess(folder._id) ? folder : null;
     },
     trashedAt: (parent) =>
       parent.trashedAt?.toISOString?.() || parent.trashedAt,

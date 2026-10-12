@@ -59,3 +59,6 @@ TEST_INFRA_FINDINGS.md
 
 # Cache des fichiers de langue Tesseract (téléchargés au premier OCR)
 .cache/
+
+# Sauvegardes des scripts de remise en état (données clients, restent locales)
+backups/remise-en-etat/

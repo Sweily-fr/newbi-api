@@ -146,6 +146,118 @@ describe("buildLinkedInvoiceItems", () => {
     expect(totalTTC(items)).toBeCloseTo(117.5, 2);
   });
 
+  it("applique la remise globale aux articles seulement, pas au port", () => {
+    // Articles : 1000 HT à 5,5 % remisés de 10 % => 900 HT (949,50 TTC)
+    // Port : 100 HT à 20 %, jamais remisé => 120 TTC. Total devis : 1069,50
+    const quote = {
+      items: [{ quantity: 1, unitPrice: 1000, vatRate: 5.5 }],
+      discount: 10,
+      discountType: "PERCENTAGE",
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 100,
+        shippingVatRate: 20,
+      },
+    };
+
+    const items = buildLinkedInvoiceItems({
+      quote,
+      amountTTC: 1069.5,
+      description: DESCRIPTION,
+    });
+
+    const at55 = items.find((i) => i.vatRate === 5.5);
+    const at20 = items.find((i) => i.vatRate === 20);
+    expect(at55.unitPrice).toBeCloseTo(900, 2);
+    expect(at20.unitPrice).toBeCloseTo(100, 2);
+    expect(totalTTC(items)).toBeCloseTo(1069.5, 2);
+  });
+
+  it("répartit une remise fixe au prorata du HT de chaque taux", () => {
+    // 600 HT à 20 % + 400 HT à 10 %, remise fixe 100 => 540 + 360 HT
+    // Port 50 HT à 20 %. TTC : 540×1,2 + 50×1,2 + 360×1,1 = 1104
+    const quote = {
+      items: [
+        { quantity: 1, unitPrice: 600, vatRate: 20 },
+        { quantity: 1, unitPrice: 400, vatRate: 10 },
+      ],
+      discount: 100,
+      discountType: "FIXED",
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 50,
+        shippingVatRate: 20,
+      },
+    };
+
+    const items = buildLinkedInvoiceItems({
+      quote,
+      amountTTC: 1104,
+      description: DESCRIPTION,
+    });
+
+    expect(items.find((i) => i.vatRate === 20).unitPrice).toBeCloseTo(590, 2);
+    expect(items.find((i) => i.vatRate === 10).unitPrice).toBeCloseTo(360, 2);
+    expect(totalTTC(items)).toBeCloseTo(1104, 2);
+  });
+
+  it("plafonne la remise fixe au HT des articles (le port reste dû)", () => {
+    const quote = {
+      items: [{ quantity: 1, unitPrice: 100, vatRate: 5.5 }],
+      discount: 500,
+      discountType: "FIXED",
+      shipping: {
+        billShipping: true,
+        shippingAmountHT: 10,
+        shippingVatRate: 20,
+      },
+    };
+
+    const items = buildLinkedInvoiceItems({
+      quote,
+      amountTTC: 12,
+      description: DESCRIPTION,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0].vatRate).toBe(20);
+    expect(items[0].unitPrice).toBeCloseTo(10, 2);
+  });
+
+  it("garde un port à 0 % et prend 20 % si son taux est absent", () => {
+    const base = {
+      items: [{ quantity: 1, unitPrice: 100, vatRate: 20 }],
+    };
+
+    const exempt = buildLinkedInvoiceItems({
+      quote: {
+        ...base,
+        shipping: {
+          billShipping: true,
+          shippingAmountHT: 100,
+          shippingVatRate: 0,
+        },
+      },
+      amountTTC: 220,
+      description: DESCRIPTION,
+    });
+    expect(exempt.map((i) => i.vatRate).sort((a, b) => a - b)).toEqual([0, 20]);
+    expect(exempt.find((i) => i.vatRate === 0).vatExemptionText).toBe(
+      VAT_EXEMPT_MENTION,
+    );
+
+    const missingRate = buildLinkedInvoiceItems({
+      quote: {
+        ...base,
+        shipping: { billShipping: true, shippingAmountHT: 100 },
+      },
+      amountTTC: 240,
+      description: DESCRIPTION,
+    });
+    expect(missingRate).toHaveLength(1);
+    expect(missingRate[0].vatRate).toBe(20);
+  });
+
   it("sort une ligne à 0 % avec la mention d'autoliquidation", () => {
     const items = buildLinkedInvoiceItems({
       quote: {

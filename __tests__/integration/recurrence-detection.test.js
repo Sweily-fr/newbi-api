@@ -13,6 +13,9 @@ import {
 
 beforeAll(async () => {
   await startMongo();
+  // Index construits d'emblée (dont provider + externalId unique), comme sur
+  // la CI où ils le sont avant les premières insertions.
+  await Transaction.init();
 });
 
 afterAll(async () => {
@@ -31,10 +34,16 @@ const monthsAgo = (n) => {
   return new Date(now.getFullYear(), now.getMonth() - n, 15);
 };
 
+// Identifiant externe unique par transaction : l'index unique
+// { provider, externalId } refuse deux transactions sans identifiant.
+let externalSeq = 0;
+
 const insertTransaction = (data) =>
   Transaction.collection.insertOne({
     // Transaction stores workspaceId as a String (not ObjectId).
     workspaceId: String(workspaceId),
+    provider: "test",
+    externalId: `tx-test-${++externalSeq}`,
     status: "completed",
     deletedAt: null,
     createdAt: new Date(),

@@ -12,6 +12,29 @@ import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
+// Réglages de la facturation électronique (Paramètres > Facturation
+// électronique) : droit de gérer les applications, comme l'écran, sur
+// l'espace passé en argument (validé : il n'était pas contrôlé). Le régime
+// de TVA est aussi repris à l'enregistrement des informations légales :
+// « Modifier » les informations de l'entreprise suffit alors.
+const requireManageEInvoicing = requireAction("integrations", "manage", {
+  preferArgsWorkspace: true,
+});
+const requireEInvoicingVatRegime = requireAction(
+  ["integrations", "orgSettings"],
+  "manage",
+  { preferArgsWorkspace: true },
+);
+
+// 🔐 Toutes ces opérations lisent ou écrivent l'espace passé en argument
+// (workspaceId) : c'est lui que RBAC doit contrôler. Par défaut, withRBAC
+// valide l'en-tête x-organization-id puis laisse le resolver lire
+// args.workspaceId sans contrôle : un membre d'un espace A (en-tête A)
+// lisait les réglages, statistiques, vérifications SuperPDP, annuaire,
+// e-reporting et factures d'un espace B en passant workspaceId: B.
+const ARGS_WORKSPACE = { preferArgsWorkspace: true };
+const readInvoices = requireRead("invoices", ARGS_WORKSPACE);
+
 const eInvoicingResolvers = {
   Query: {
     /**
@@ -21,207 +44,195 @@ const eInvoicingResolvers = {
      * - Brouillon → null (preview client live).
      * - Facture sans document archivé ni SuperPDP → null (preview client live).
      */
-    invoiceDocumentUrl: requireRead("invoices")(
-      async (_, { workspaceId, invoiceId }) => {
-        const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
-        if (!invoice) {
-          throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
-        }
+    invoiceDocumentUrl: readInvoices(async (_, { workspaceId, invoiceId }) => {
+      const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
+      if (!invoice) {
+        throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
+      }
 
-        // Brouillon ou aucun document disponible → preview client live
-        if (invoice.status === "DRAFT") return null;
-        if (!invoice.superPdpInvoiceId && !invoice.archivedPdfKey) return null;
+      // Brouillon ou aucun document disponible → preview client live
+      if (invoice.status === "DRAFT") return null;
+      if (!invoice.superPdpInvoiceId && !invoice.archivedPdfKey) return null;
 
-        // Aperçu iframe des PDF archivés désactivé par défaut : le cookie de
-        // session est host-only (www.newbi.fr) et n'est jamais envoyé à
-        // api.newbi.fr par l'iframe en prod → 401 → ERR_BLOCKED_BY_RESPONSE.
-        // null = le front rebascule sur le rendu live. À réactiver quand
-        // l'aperçu passera par un proxy same-origin côté front.
-        if (process.env.ENABLE_ARCHIVED_PDF_IFRAME_PREVIEW !== "true")
-          return null;
+      // Aperçu iframe des PDF archivés désactivé par défaut : le cookie de
+      // session est host-only (www.newbi.fr) et n'est jamais envoyé à
+      // api.newbi.fr par l'iframe en prod → 401 → ERR_BLOCKED_BY_RESPONSE.
+      // null = le front rebascule sur le rendu live. À réactiver quand
+      // l'aperçu passera par un proxy same-origin côté front.
+      if (process.env.ENABLE_ARCHIVED_PDF_IFRAME_PREVIEW !== "true")
+        return null;
 
-        const base = (
-          process.env.BACKEND_URL ||
-          process.env.NEXT_PUBLIC_API_URL ||
-          "http://localhost:4000"
-        ).replace(/\/$/, "");
+      const base = (
+        process.env.BACKEND_URL ||
+        process.env.NEXT_PUBLIC_API_URL ||
+        "http://localhost:4000"
+      ).replace(/\/$/, "");
 
-        return `${base}/invoices/${invoiceId}/document-pdf`;
-      },
-    ),
+      return `${base}/invoices/${invoiceId}/document-pdf`;
+    }),
 
     /**
      * Statut de vérification KYC/KYB + entreprise SuperPDP connectée.
      * Tolérant aux erreurs : si non connecté / 403, renvoie connected=false.
      */
-    eInvoicingVerification: requireRead("invoices")(
-      async (_, { workspaceId }) => {
-        try {
-          const isEnabled =
-            await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
-          if (!isEnabled) {
-            return { connected: false };
-          }
-
-          const session = await superPdpService.getOAuthSession(workspaceId);
-
-          // companies/me peut échouer si la vérification n'est pas encore "verified"
-          let company = null;
-          try {
-            company = await superPdpService.getCurrentCompany(workspaceId);
-          } catch (companyError) {
-            logger.debug(
-              `eInvoicingVerification: companies/me indisponible: ${companyError.message}`,
-            );
-          }
-
-          return {
-            connected: true,
-            companyVerificationStatus: session.companyVerificationStatus,
-            userIdentityVerificationStatus:
-              session.userIdentityVerificationStatus,
-            company: company
-              ? {
-                  formalName: company.formalName,
-                  tradeName: company.tradeName,
-                  number: company.number,
-                  numberScheme: company.numberScheme,
-                  vatRegime: company.vatRegime,
-                  env: company.env,
-                }
-              : null,
-          };
-        } catch (error) {
-          logger.warn(`eInvoicingVerification erreur: ${error.message}`);
-          return { connected: false, error: error.message };
+    eInvoicingVerification: readInvoices(async (_, { workspaceId }) => {
+      try {
+        const isEnabled =
+          await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+        if (!isEnabled) {
+          return { connected: false };
         }
-      },
-    ),
+
+        const session = await superPdpService.getOAuthSession(workspaceId);
+
+        // companies/me peut échouer si la vérification n'est pas encore "verified"
+        let company = null;
+        try {
+          company = await superPdpService.getCurrentCompany(workspaceId);
+        } catch (companyError) {
+          logger.debug(
+            `eInvoicingVerification: companies/me indisponible: ${companyError.message}`,
+          );
+        }
+
+        return {
+          connected: true,
+          companyVerificationStatus: session.companyVerificationStatus,
+          userIdentityVerificationStatus:
+            session.userIdentityVerificationStatus,
+          company: company
+            ? {
+                formalName: company.formalName,
+                tradeName: company.tradeName,
+                number: company.number,
+                numberScheme: company.numberScheme,
+                vatRegime: company.vatRegime,
+                env: company.env,
+              }
+            : null,
+        };
+      } catch (error) {
+        logger.warn(`eInvoicingVerification erreur: ${error.message}`);
+        return { connected: false, error: error.message };
+      }
+    }),
 
     /**
      * Entrées d'annuaire de l'entreprise (réception de factures).
      */
-    eInvoicingDirectoryEntries: requireRead("invoices")(
-      async (_, { workspaceId }) => {
-        try {
-          const isEnabled =
-            await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
-          if (!isEnabled) return [];
-          return await superPdpService.getDirectoryEntries(workspaceId);
-        } catch (error) {
-          logger.warn(`eInvoicingDirectoryEntries erreur: ${error.message}`);
-          return [];
-        }
-      },
-    ),
+    eInvoicingDirectoryEntries: readInvoices(async (_, { workspaceId }) => {
+      try {
+        const isEnabled =
+          await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+        if (!isEnabled) return [];
+        return await superPdpService.getDirectoryEntries(workspaceId);
+      } catch (error) {
+        logger.warn(`eInvoicingDirectoryEntries erreur: ${error.message}`);
+        return [];
+      }
+    }),
 
     /**
      * Historique des déclarations e-reporting transmises au PPF.
      */
-    eInvoicingEReportings: requireRead("invoices")(
-      async (_, { workspaceId }) => {
-        try {
-          const isEnabled =
-            await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
-          if (!isEnabled) return [];
-          const list = await superPdpService.getEReportings(workspaceId);
-          return list.map((e) => ({
-            id: e.id,
-            kind: e.kind,
-            startPeriod: e.start_period || null,
-            endPeriod: e.end_period || null,
-          }));
-        } catch (error) {
-          logger.warn(`eInvoicingEReportings erreur: ${error.message}`);
-          return [];
-        }
-      },
-    ),
+    eInvoicingEReportings: readInvoices(async (_, { workspaceId }) => {
+      try {
+        const isEnabled =
+          await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+        if (!isEnabled) return [];
+        const list = await superPdpService.getEReportings(workspaceId);
+        return list.map((e) => ({
+          id: e.id,
+          kind: e.kind,
+          startPeriod: e.start_period || null,
+          endPeriod: e.end_period || null,
+        }));
+      } catch (error) {
+        logger.warn(`eInvoicingEReportings erreur: ${error.message}`);
+        return [];
+      }
+    }),
 
     /**
      * Récupérer les paramètres e-invoicing d'une organisation
      */
-    eInvoicingSettings: requireRead("invoices")(
-      async (_, { workspaceId }, context) => {
-        try {
-          const settings =
-            await EInvoicingSettingsService.getEInvoicingSettings(workspaceId);
-          return settings;
-        } catch (error) {
-          logger.error("Erreur récupération paramètres e-invoicing:", error);
-          throw new AppError(
-            "Erreur lors de la récupération des paramètres e-invoicing",
-            ERROR_CODES.INTERNAL_ERROR,
-          );
-        }
-      },
-    ),
+    eInvoicingSettings: readInvoices(async (_, { workspaceId }, context) => {
+      try {
+        const settings =
+          await EInvoicingSettingsService.getEInvoicingSettings(workspaceId);
+        return settings;
+      } catch (error) {
+        logger.error("Erreur récupération paramètres e-invoicing:", error);
+        throw new AppError(
+          "Erreur lors de la récupération des paramètres e-invoicing",
+          ERROR_CODES.INTERNAL_ERROR,
+        );
+      }
+    }),
 
     /**
      * Récupérer les statistiques e-invoicing d'une organisation
      */
-    eInvoicingStats: requireRead("invoices")(
-      async (_, { workspaceId }, context) => {
-        try {
-          // Compter les factures par statut e-invoicing
-          const stats = await Invoice.aggregate([
-            // L'agrégation ne caste pas automatiquement la String en ObjectId
-            {
-              $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) },
+    eInvoicingStats: readInvoices(async (_, { workspaceId }, context) => {
+      try {
+        // Compter les factures par statut e-invoicing
+        const stats = await Invoice.aggregate([
+          // L'agrégation ne caste pas automatiquement la String en ObjectId
+          {
+            $match: { workspaceId: new mongoose.Types.ObjectId(workspaceId) },
+          },
+          {
+            $group: {
+              _id: "$eInvoiceStatus",
+              count: { $sum: 1 },
             },
-            {
-              $group: {
-                _id: "$eInvoiceStatus",
-                count: { $sum: 1 },
-              },
-            },
-          ]);
+          },
+        ]);
 
-          const statusCounts = {
-            NOT_SENT: 0,
-            PENDING_VALIDATION: 0,
-            VALIDATED: 0,
-            SENT_TO_RECIPIENT: 0,
-            RECEIVED: 0,
-            ACCEPTED: 0,
-            REJECTED: 0,
-            PAID: 0,
-            ERROR: 0,
-          };
+        const statusCounts = {
+          NOT_SENT: 0,
+          PENDING_VALIDATION: 0,
+          VALIDATED: 0,
+          SENT_TO_RECIPIENT: 0,
+          RECEIVED: 0,
+          ACCEPTED: 0,
+          REJECTED: 0,
+          PAID: 0,
+          ERROR: 0,
+        };
 
-          stats.forEach((stat) => {
-            if (
-              stat._id &&
-              Object.prototype.hasOwnProperty.call(statusCounts, stat._id)
-            ) {
-              statusCounts[stat._id] = stat.count;
-            }
-          });
+        stats.forEach((stat) => {
+          if (
+            stat._id &&
+            Object.prototype.hasOwnProperty.call(statusCounts, stat._id)
+          ) {
+            statusCounts[stat._id] = stat.count;
+          }
+        });
 
-          const totalSent =
-            Object.values(statusCounts).reduce((a, b) => a + b, 0) -
-            statusCounts.NOT_SENT;
+        const totalSent =
+          Object.values(statusCounts).reduce((a, b) => a + b, 0) -
+          statusCounts.NOT_SENT;
 
-          return {
-            ...statusCounts,
-            totalSent,
-            successRate:
-              totalSent > 0
-                ? (
-                    ((statusCounts.ACCEPTED + statusCounts.PAID) / totalSent) *
-                    100
-                  ).toFixed(2)
-                : 0,
-          };
-        } catch (error) {
-          logger.error("Erreur récupération stats e-invoicing:", error);
-          throw new AppError(
-            "Erreur lors de la récupération des statistiques e-invoicing",
-            ERROR_CODES.INTERNAL_ERROR,
-          );
-        }
-      },
-    ),
+        return {
+          ...statusCounts,
+          totalSent,
+          successRate:
+            totalSent > 0
+              ? (
+                  ((statusCounts.ACCEPTED + statusCounts.PAID) / totalSent) *
+                  100
+                ).toFixed(2)
+              : 0,
+        };
+      } catch (error) {
+        logger.error("Erreur récupération stats e-invoicing:", error);
+        throw new AppError(
+          "Erreur lors de la récupération des statistiques e-invoicing",
+          ERROR_CODES.INTERNAL_ERROR,
+        );
+      }
+    }),
   },
 
   Mutation: {
@@ -229,7 +240,7 @@ const eInvoicingResolvers = {
      * Activer la facturation électronique pour une organisation
      * Teste la connexion à SuperPDP avant d'activer
      */
-    enableEInvoicing: requireWrite("invoices")(
+    enableEInvoicing: requireManageEInvoicing(
       async (_, { workspaceId, environment }, context) => {
         try {
           // Activer l'e-invoicing : module « Applications et banques »
@@ -288,7 +299,7 @@ const eInvoicingResolvers = {
     /**
      * Désactiver la facturation électronique pour une organisation
      */
-    disableEInvoicing: requireWrite("invoices")(
+    disableEInvoicing: requireManageEInvoicing(
       async (_, { workspaceId }, context) => {
         try {
           if (!context.permissions?.canWrite("integrations")) {
@@ -324,7 +335,7 @@ const eInvoicingResolvers = {
     /**
      * Tester la connexion à SuperPDP
      */
-    testSuperPdpConnection: requireWrite("invoices")(
+    testSuperPdpConnection: requireManageEInvoicing(
       async (_, { workspaceId }, context) => {
         try {
           const result = await superPdpService.testConnection(workspaceId);
@@ -351,6 +362,7 @@ const eInvoicingResolvers = {
     resendInvoiceToSuperPdp: requireAction(
       "invoices",
       "send",
+      ARGS_WORKSPACE,
     )(async (_, { workspaceId, invoiceId }, context) => {
       try {
         // Vérifier que l'e-invoicing est activé
@@ -430,7 +442,7 @@ const eInvoicingResolvers = {
     /**
      * Vérifier si un destinataire peut recevoir des factures électroniques
      */
-    checkRecipientEInvoicing: requireRead("invoices")(
+    checkRecipientEInvoicing: readInvoices(
       async (_, { workspaceId, siret }, context) => {
         try {
           const result = await superPdpService.checkRecipientDirectory(
@@ -461,7 +473,7 @@ const eInvoicingResolvers = {
      * Prévisualiser le routage e-invoicing d'une facture (sans l'envoyer)
      * Utile pour le debug et l'affichage frontend
      */
-    previewInvoiceRouting: requireRead("invoices")(
+    previewInvoiceRouting: readInvoices(
       async (_, { workspaceId, invoiceId }, context) => {
         try {
           const invoice = await Invoice.findOne({
@@ -511,77 +523,75 @@ const eInvoicingResolvers = {
      * Le PDF est stocké dans un bucket privé ; on le sert ensuite via une URL signée
      * (query invoiceDocumentUrl). Les brouillons ne sont jamais archivés.
      */
-    archiveInvoicePdf: requireWrite("invoices")(
-      async (_, { workspaceId, invoiceId, file }, context) => {
-        const invoice = await Invoice.findOne({
-          _id: invoiceId,
-          workspaceId,
-        });
+    archiveInvoicePdf: requireWrite(
+      "invoices",
+      ARGS_WORKSPACE,
+    )(async (_, { workspaceId, invoiceId, file }, context) => {
+      const invoice = await Invoice.findOne({
+        _id: invoiceId,
+        workspaceId,
+      });
 
-        if (!invoice) {
-          throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
-        }
+      if (!invoice) {
+        throw new AppError("Facture non trouvée", ERROR_CODES.NOT_FOUND);
+      }
 
-        // Sécurité : ne jamais archiver un brouillon
-        if (invoice.status === "DRAFT") {
-          throw new AppError(
-            "Un brouillon ne peut pas être archivé",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        // Lire le fichier uploadé (pattern graphql-upload)
-        const { createReadStream, mimetype } = await file;
-        if (mimetype && mimetype !== "application/pdf") {
-          throw new AppError(
-            "Le document à archiver doit être un PDF",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        const chunks = [];
-        for await (const chunk of createReadStream()) {
-          chunks.push(chunk);
-        }
-        const pdfBuffer = Buffer.concat(chunks);
-
-        // Garde-fou taille (PDF facture : 20 Mo max)
-        if (pdfBuffer.length > 20 * 1024 * 1024) {
-          throw new AppError(
-            "PDF trop volumineux",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        const fileName = `facture_${invoice.prefix || ""}${invoice.number || invoiceId}.pdf`;
-
-        // Upload dans le bucket DÉDIÉ aux factures (privé) — URL signée à la demande
-        const uploadResult = await cloudflareService.uploadInvoicePdf(
-          pdfBuffer,
-          workspaceId,
-          invoiceId.toString(),
-          { source: "NEWBI", fileName },
+      // Sécurité : ne jamais archiver un brouillon
+      if (invoice.status === "DRAFT") {
+        throw new AppError(
+          "Un brouillon ne peut pas être archivé",
+          ERROR_CODES.VALIDATION_ERROR,
         );
+      }
 
-        invoice.archivedPdfKey = uploadResult.key;
-        invoice.archivedPdfUrl = null; // bucket privé : pas d'URL publique
-        invoice.archivedPdfStoredAt = new Date();
-        invoice.archivedPdfSource = "NEWBI";
-        await invoice.save();
-
-        logger.info(
-          `🗄️ PDF Factur-X archivé sur R2 pour la facture ${invoiceId} (${uploadResult.key})`,
+      // Lire le fichier uploadé (pattern graphql-upload)
+      const { createReadStream, mimetype } = await file;
+      if (mimetype && mimetype !== "application/pdf") {
+        throw new AppError(
+          "Le document à archiver doit être un PDF",
+          ERROR_CODES.VALIDATION_ERROR,
         );
+      }
 
-        return invoice;
-      },
-    ),
+      const chunks = [];
+      for await (const chunk of createReadStream()) {
+        chunks.push(chunk);
+      }
+      const pdfBuffer = Buffer.concat(chunks);
+
+      // Garde-fou taille (PDF facture : 20 Mo max)
+      if (pdfBuffer.length > 20 * 1024 * 1024) {
+        throw new AppError("PDF trop volumineux", ERROR_CODES.VALIDATION_ERROR);
+      }
+
+      const fileName = `facture_${invoice.prefix || ""}${invoice.number || invoiceId}.pdf`;
+
+      // Upload dans le bucket DÉDIÉ aux factures (privé) — URL signée à la demande
+      const uploadResult = await cloudflareService.uploadInvoicePdf(
+        pdfBuffer,
+        workspaceId,
+        invoiceId.toString(),
+        { source: "NEWBI", fileName },
+      );
+
+      invoice.archivedPdfKey = uploadResult.key;
+      invoice.archivedPdfUrl = null; // bucket privé : pas d'URL publique
+      invoice.archivedPdfStoredAt = new Date();
+      invoice.archivedPdfSource = "NEWBI";
+      await invoice.save();
+
+      logger.info(
+        `🗄️ PDF Factur-X archivé sur R2 pour la facture ${invoiceId} (${uploadResult.key})`,
+      );
+
+      return invoice;
+    }),
 
     /**
      * Inscrit l'entreprise dans les annuaires Peppol + PPF (pour recevoir des factures).
      * Idempotent : ignore les annuaires où une entrée "created" existe déjà.
      */
-    registerEInvoicingDirectory: requireWrite("invoices")(
+    registerEInvoicingDirectory: requireManageEInvoicing(
       async (_, { workspaceId }) => {
         const isEnabled =
           await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
@@ -669,7 +679,7 @@ const eInvoicingResolvers = {
     /**
      * Met à jour le régime TVA SuperPDP (pilote le calendrier d'envoi e-reporting au PPF).
      */
-    updateEInvoicingVatRegime: requireWrite("invoices")(
+    updateEInvoicingVatRegime: requireEInvoicingVatRegime(
       async (_, { workspaceId, vatRegime }) => {
         const allowed = ["monthly", "quarterly", "simplified", "vat_exemption"];
         if (!allowed.includes(vatRegime)) {

@@ -23,13 +23,25 @@ const s3Client = new S3Client({
 const SHARED_DOCUMENTS_BUCKET =
   process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging";
 
+// Sans contrôle de visibilité (appelants internes) : tout dossier est ouvert
+const ALL_FOLDERS = () => true;
+
 /**
  * Récupère récursivement tous les sous-dossiers d'un dossier
  * @param {string} folderId - ID du dossier parent
  * @param {string} workspaceId - ID du workspace
+ * @param {Object} [options]
+ * @param {Function} [options.canAccess] - visibilité des dossiers pour
+ *   l'utilisateur (voir sharedFolderAccess.js) : un dossier inaccessible
+ *   n'est pas renvoyé, ni rien de ce qu'il contient (un sous-dossier privé
+ *   n'entre pas dans le ZIP de son parent)
  * @returns {Promise<Array>} Liste des dossiers (incluant le parent et tous les enfants)
  */
-async function getAllSubfolders(folderId, workspaceId) {
+async function getAllSubfolders(
+  folderId,
+  workspaceId,
+  { canAccess = ALL_FOLDERS } = {},
+) {
   const folders = [];
   // Cast to ObjectId to avoid string/ObjectId comparison issues
   const folderObjectId = new mongoose.Types.ObjectId(folderId);
@@ -43,6 +55,7 @@ async function getAllSubfolders(folderId, workspaceId) {
     });
 
     for (const child of children) {
+      if (!canAccess(child._id)) continue;
       folders.push(child);
       await fetchChildren(child._id);
     }
@@ -55,7 +68,7 @@ async function getAllSubfolders(folderId, workspaceId) {
     trashedAt: null,
   });
 
-  if (mainFolder) {
+  if (mainFolder && canAccess(mainFolder._id)) {
     folders.push(mainFolder);
     await fetchChildren(mainFolder._id);
   }
@@ -102,9 +115,9 @@ function sanitizeFileName(name) {
  * @param {string} workspaceId - ID du workspace
  * @returns {Promise<Object>} Documents organisés par dossier avec chemins
  */
-async function getDocumentsWithPaths(folderId, workspaceId) {
-  // Récupérer tous les sous-dossiers
-  const folders = await getAllSubfolders(folderId, workspaceId);
+async function getDocumentsWithPaths(folderId, workspaceId, options = {}) {
+  // Récupérer tous les sous-dossiers (accessibles à l'utilisateur)
+  const folders = await getAllSubfolders(folderId, workspaceId, options);
   const folderIds = folders.map((f) => f._id);
 
   // Créer une map pour accès rapide
@@ -160,10 +173,10 @@ async function getDocumentsWithPaths(folderId, workspaceId) {
  * @param {string} workspaceId - ID du workspace
  * @param {Object} res - Response Express pour le streaming
  */
-async function streamFolderAsZip(folderId, workspaceId, res) {
+async function streamFolderAsZip(folderId, workspaceId, res, options = {}) {
   // Récupérer les documents avec leurs chemins
   const { documents, folderPaths, rootFolderName, totalFiles, totalFolders } =
-    await getDocumentsWithPaths(folderId, workspaceId);
+    await getDocumentsWithPaths(folderId, workspaceId, options);
 
   if (totalFiles === 0 && totalFolders <= 1) {
     logger.warn(`⚠️ Dossier vide ${folderId}`, {
@@ -275,7 +288,13 @@ async function verifyFolderAccess(folderId, workspaceId) {
  * @param {Object} res - Response Express pour le streaming
  */
 async function streamSelectionAsZip(
-  { folderIds = [], documentIds = [], excludedFolderIds = [], workspaceId },
+  {
+    folderIds = [],
+    documentIds = [],
+    excludedFolderIds = [],
+    workspaceId,
+    canAccess = ALL_FOLDERS,
+  },
   res,
 ) {
   const excludedSet = new Set(excludedFolderIds.map(String));
@@ -284,7 +303,9 @@ async function streamSelectionAsZip(
 
   // 1. Process each selected folder
   for (const folderId of folderIds) {
-    const folders = await getAllSubfolders(folderId, workspaceId);
+    const folders = await getAllSubfolders(folderId, workspaceId, {
+      canAccess,
+    });
     if (folders.length === 0) continue;
 
     // Filter out excluded subfolders and their descendants
@@ -352,6 +373,7 @@ async function streamSelectionAsZip(
     });
 
     for (const doc of individualDocs) {
+      if (!canAccess(doc.folderId)) continue;
       const fileName = sanitizeFileName(doc.originalName || doc.name);
       allDocumentsToZip.push({ document: doc, zipPath: fileName });
     }
@@ -460,11 +482,14 @@ async function getSelectionInfo({
   folderIds = [],
   documentIds = [],
   workspaceId,
+  canAccess = ALL_FOLDERS,
 }) {
   const folderDetails = [];
 
   for (const folderId of folderIds) {
-    const folders = await getAllSubfolders(folderId, workspaceId);
+    const folders = await getAllSubfolders(folderId, workspaceId, {
+      canAccess,
+    });
     if (folders.length === 0) continue;
 
     const rootFolder = folders.find((f) => f._id.toString() === folderId);
@@ -525,11 +550,13 @@ async function getSelectionInfo({
   // Individual documents info
   let individualDocs = [];
   if (documentIds.length > 0) {
-    individualDocs = await SharedDocument.find({
-      _id: { $in: documentIds },
-      workspaceId,
-      trashedAt: null,
-    });
+    individualDocs = (
+      await SharedDocument.find({
+        _id: { $in: documentIds },
+        workspaceId,
+        trashedAt: null,
+      })
+    ).filter((doc) => canAccess(doc.folderId));
   }
 
   const individualDocsSize = individualDocs.reduce(

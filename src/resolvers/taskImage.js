@@ -257,11 +257,12 @@ const taskImageResolvers = {
     ),
 
     /**
-     * Supprime une image de la description d'une tâche
+     * Supprime une image de la description d'une tâche. Retirer une pièce
+     * jointe modifie la tâche : droit « Modifier », comme l'ajout.
      */
-    deleteTaskImage: requireWorkspaceLevel(
+    deleteTaskImage: requireWorkspaceAction(
       "kanban",
-      "delete",
+      "edit",
     )(async (_, { taskId, imageId, workspaceId }, { user }) => {
       try {
         logger.info(

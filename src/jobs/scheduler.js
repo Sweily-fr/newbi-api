@@ -2,11 +2,12 @@
  * Planificateur de tâches pour les jobs récurrents
  */
 
-import cron from 'node-cron';
-import { cleanupExpiredFiles } from './cleanupExpiredFiles.js';
-import { cleanupOrphanChunks } from './cleanupOrphanChunks.js';
-import { processAccountDeletions } from './processAccountDeletions.js';
-import logger from '../utils/logger.js';
+import cron from "node-cron";
+import { cleanupExpiredFiles } from "./cleanupExpiredFiles.js";
+import { cleanupOrphanChunks } from "./cleanupOrphanChunks.js";
+import { cleanupOrphanTransferFiles } from "./cleanupOrphanTransferFiles.js";
+import { processAccountDeletions } from "./processAccountDeletions.js";
+import logger from "../utils/logger.js";
 
 /**
  * Configure et démarre tous les jobs planifiés
@@ -14,43 +15,67 @@ import logger from '../utils/logger.js';
 function setupScheduledJobs() {
   // Job de nettoyage des fichiers expirés - s'exécute tous les jours à 3h du matin
   // Format cron: minute heure jour_du_mois mois jour_de_la_semaine
-  cron.schedule('0 3 * * *', async () => {
+  cron.schedule("0 3 * * *", async () => {
     try {
-      logger.info('Exécution du job de nettoyage des fichiers expirés');
+      logger.info("Exécution du job de nettoyage des fichiers expirés");
       await cleanupExpiredFiles();
     } catch (error) {
-      logger.error('Erreur lors de l\'exécution du job de nettoyage:', error);
+      logger.error("Erreur lors de l'exécution du job de nettoyage:", error);
     }
   });
 
   // Job de nettoyage des chunks orphelins - s'exécute toutes les 6 heures
   // Supprime les chunks temporaires (uploads abandonnés) de plus de 24h
-  cron.schedule('0 */6 * * *', async () => {
+  cron.schedule("0 */6 * * *", async () => {
     try {
-      logger.info('Exécution du job de nettoyage des chunks orphelins');
+      logger.info("Exécution du job de nettoyage des chunks orphelins");
       await cleanupOrphanChunks(24); // Chunks > 24h
     } catch (error) {
-      logger.error('Erreur lors de l\'exécution du job de nettoyage des chunks:', error);
+      logger.error(
+        "Erreur lors de l'exécution du job de nettoyage des chunks:",
+        error,
+      );
+    }
+  });
+
+  // Job de nettoyage des fichiers de transfert orphelins - toutes les 6 heures
+  // (décalé de 30 min) : fichiers finalisés depuis plus de 24 h d'un lot
+  // annulé avant la création de son transfert, et envois multipart jamais
+  // terminés. Un fichier rattaché à un transfert n'est jamais supprimé.
+  cron.schedule("30 */6 * * *", async () => {
+    try {
+      logger.info(
+        "Exécution du job de nettoyage des fichiers de transfert orphelins",
+      );
+      await cleanupOrphanTransferFiles();
+    } catch (error) {
+      logger.error(
+        "Erreur lors du nettoyage des fichiers de transfert orphelins:",
+        error,
+      );
     }
   });
 
   // Job de traitement des suppressions de compte RGPD - s'exécute tous les jours à 4h du matin
   // Traite les demandes dont le délai de grâce de 30 jours est écoulé
-  cron.schedule('0 4 * * *', async () => {
+  cron.schedule("0 4 * * *", async () => {
     try {
-      logger.info('Exécution du job de traitement des suppressions de compte RGPD');
+      logger.info(
+        "Exécution du job de traitement des suppressions de compte RGPD",
+      );
       await processAccountDeletions();
     } catch (error) {
-      logger.error('Erreur lors du traitement des suppressions RGPD:', error);
+      logger.error("Erreur lors du traitement des suppressions RGPD:", error);
     }
   });
 
-  logger.info('Jobs planifiés configurés avec succès');
-  logger.info('  - Nettoyage fichiers expirés: tous les jours à 3h UTC');
-  logger.info('  - Nettoyage chunks orphelins: toutes les 6 heures');
-  logger.info('  - Suppressions RGPD: tous les jours à 4h UTC');
+  logger.info("Jobs planifiés configurés avec succès");
+  logger.info("  - Nettoyage fichiers expirés: tous les jours à 3h UTC");
+  logger.info("  - Nettoyage chunks orphelins: toutes les 6 heures");
+  logger.info(
+    "  - Nettoyage fichiers de transfert orphelins: toutes les 6 heures (h+30)",
+  );
+  logger.info("  - Suppressions RGPD: tous les jours à 4h UTC");
 }
 
-export {
-  setupScheduledJobs
-};
+export { setupScheduledJobs };

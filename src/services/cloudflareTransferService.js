@@ -15,6 +15,7 @@ import {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListPartsCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
 } from "@aws-sdk/client-s3";
@@ -303,45 +304,91 @@ class CloudflareTransferService {
       logger.debug(`📦 Multipart Upload créé: ${uploadId}`);
 
       // Générer des presigned URLs pour chaque part
-      const presignedUrls = [];
-      const urlPromises = [];
-
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        urlPromises.push(
-          (async () => {
-            const uploadPartCommand = new UploadPartCommand({
-              Bucket: this.bucketName,
-              Key: finalKey,
-              UploadId: uploadId,
-              PartNumber: partNumber,
-            });
-
-            const presignedUrl = await getSignedUrl(
-              this.client,
-              uploadPartCommand,
-              { expiresIn: MULTIPART_PART_URL_TTL_SECONDS },
-            );
-
-            return { partNumber, uploadUrl: presignedUrl };
-          })(),
-        );
-      }
-
-      presignedUrls.push(...(await Promise.all(urlPromises)));
+      const presignedUrls = await this.generateMultipartPartUrls(
+        uploadId,
+        finalKey,
+        Array.from({ length: totalParts }, (_, index) => index + 1),
+      );
 
       logger.debug(`✅ ${presignedUrls.length} URLs presigned générées`);
 
       return {
         uploadId,
         key: finalKey,
-        presignedUrls: presignedUrls.sort(
-          (a, b) => a.partNumber - b.partNumber,
-        ),
+        presignedUrls,
       };
     } catch (error) {
       console.error("❌ Erreur démarrage multipart upload:", error);
       throw new Error(`Échec démarrage multipart: ${error.message}`);
     }
+  }
+
+  /**
+   * URL présignées (PUT) des parts d'un envoi multipart, valables
+   * MULTIPART_PART_URL_TTL_SECONDS. Utilisé au démarrage de l'envoi, et à sa
+   * reprise pour les parts manquantes (les premières URL ont pu expirer).
+   * La signature est calculée localement, sans appel à R2.
+   * @param {string} uploadId
+   * @param {string} key
+   * @param {number[]} partNumbers
+   * @returns {Promise<Array<{partNumber: number, uploadUrl: string}>>} triées
+   */
+  async generateMultipartPartUrls(uploadId, key, partNumbers) {
+    const urls = await Promise.all(
+      partNumbers.map(async (partNumber) => {
+        const uploadPartCommand = new UploadPartCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+        });
+        const uploadUrl = await getSignedUrl(this.client, uploadPartCommand, {
+          expiresIn: MULTIPART_PART_URL_TTL_SECONDS,
+        });
+        return { partNumber, uploadUrl };
+      }),
+    );
+    return urls.sort((a, b) => a.partNumber - b.partNumber);
+  }
+
+  /**
+   * Parts déjà reçues par R2 pour un envoi multipart en cours (ListParts),
+   * pour reprendre un envoi interrompu sans renvoyer ce qui est arrivé.
+   * Lève l'erreur de R2 telle quelle (NoSuchUpload : envoi annulé ou déjà
+   * finalisé).
+   * @param {string} uploadId
+   * @param {string} key
+   * @returns {Promise<Array<{partNumber: number, etag: string, size: number}>>} triées
+   */
+  async listMultipartUploadParts(uploadId, key) {
+    const parts = [];
+    let marker;
+    // Pages de 1000 parts (un fichier de 5 Go en parts de 50 Mo en compte
+    // 103) : boucle bornée au cas où R2 ne ferait pas avancer le curseur
+    for (let page = 0; page < 20; page++) {
+      const response = await this.client.send(
+        new ListPartsCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+          MaxParts: 1000,
+          ...(marker ? { PartNumberMarker: marker } : {}),
+        }),
+      );
+      for (const part of response.Parts || []) {
+        parts.push({
+          partNumber: Number(part.PartNumber),
+          etag: String(part.ETag || "").replace(/"/g, ""),
+          size: Number(part.Size) || 0,
+        });
+      }
+      const next = response.NextPartNumberMarker;
+      if (!response.IsTruncated || !next || String(next) === String(marker)) {
+        break;
+      }
+      marker = next;
+    }
+    return parts.sort((a, b) => a.partNumber - b.partNumber);
   }
 
   /**

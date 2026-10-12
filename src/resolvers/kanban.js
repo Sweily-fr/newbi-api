@@ -1,7 +1,6 @@
 // resolvers/kanban.js
 import { Board, Column, Task } from "../models/kanban.js";
 import { AuthenticationError } from "apollo-server-express";
-import { withWorkspace } from "../middlewares/better-auth-jwt.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -33,6 +32,19 @@ import {
   searchLinkableTasks,
 } from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
+import {
+  RESTRICTED_TEAM_VISIBILITY,
+  filterOrganizationMembers,
+  teamVisibilityForRole,
+  teamVisibilityFromGrid,
+} from "../utils/memberVisibility.js";
+import {
+  normalizeMemberId,
+  normalizeTag,
+  parseChecklistItemId,
+  preserveChecklistIds,
+  tagActivityValue,
+} from "../services/kanbanTaskFieldsService.js";
 import {
   maybeTriggerClaudeDev,
   hasClaudeMention,
@@ -144,6 +156,285 @@ const publishTaskPresence = (boardId, workspaceId, viewers) => {
     { boardId: String(boardId), workspaceId: String(workspaceId), viewers },
     "Présence tâche",
   );
+};
+
+// Entrée d'activité d'assignation / désassignation (même format que
+// updateTask : ids des membres dans newValue / oldValue)
+const assignmentActivity = (user, type, memberIds) => {
+  const count = memberIds.length;
+  const plural = count > 1 ? "s" : "";
+  return type === "assigned"
+    ? {
+        userId: user?.id,
+        type: "assigned",
+        description: `assigné ${count} membre${plural}`,
+        newValue: memberIds,
+        createdAt: new Date(),
+      }
+    : {
+        userId: user?.id,
+        type: "unassigned",
+        description: `désassigné ${count} membre${plural}`,
+        oldValue: memberIds,
+        createdAt: new Date(),
+      };
+};
+
+/**
+ * E-mail, notification (boîte de réception + temps réel) et push aux membres
+ * qui viennent d'être assignés à une tâche, selon leurs préférences
+ * kanban_task_assigned. En arrière-plan : ne bloque ni ne fait échouer la
+ * mutation.
+ * @param {object} params
+ * @param {string[]} params.memberIds - membres ajoutés
+ * @param {object} params.task - { _id, title, description, boardId, columnId, dueDate, priority }
+ * @param {object} params.user - auteur (contexte GraphQL)
+ * @param {object|null} params.actorData - document brut `user` de l'auteur
+ * @param {string} params.workspaceId
+ * @param {string} params.source - préfixe des logs
+ */
+const notifyTaskAssignment = ({
+  memberIds,
+  task,
+  user,
+  actorData,
+  workspaceId,
+  source,
+}) => {
+  if (!memberIds?.length) return;
+  (async () => {
+    try {
+      const db = mongoose.connection.db;
+      const board = await Board.findById(task.boardId);
+      const column = await Column.findById(task.columnId);
+      const assignerName =
+        actorData?.name || user?.name || user?.email || "Un membre de l'équipe";
+      const assignerImage =
+        actorData?.image ||
+        actorData?.avatar ||
+        actorData?.profile?.profilePicture ||
+        actorData?.profile?.profilePictureUrl ||
+        null;
+      const boardName = board?.title || "Tableau sans nom";
+      const columnName = column?.title || "Colonne";
+      logger.debug(
+        `📧 [${source}] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`,
+      );
+
+      // Batch fetch : récupérer tous les membres en une seule requête
+      const memberObjectIds = memberIds
+        .map((mid) => {
+          try {
+            return new mongoose.Types.ObjectId(mid);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      const membersData =
+        memberObjectIds.length > 0
+          ? await db
+              .collection("user")
+              .find({ _id: { $in: memberObjectIds } })
+              .toArray()
+          : [];
+      const membersDataMap = {};
+      membersData.forEach((m) => {
+        membersDataMap[m._id.toString()] = m;
+      });
+
+      for (const memberId of memberIds) {
+        try {
+          const memberData = membersDataMap[memberId];
+          if (!memberData?.email) continue;
+
+          const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${task.boardId}?task=${task._id}`;
+          const memberPrefs =
+            memberData?.notificationPreferences?.kanban_task_assigned;
+
+          // E-mail d'assignation (si la préférence n'est pas désactivée)
+          if (memberPrefs?.email !== false) {
+            await sendTaskAssignmentEmail(memberData.email, {
+              taskTitle: task.title || "Sans titre",
+              taskDescription: task.description || "",
+              boardName,
+              columnName,
+              assignerName,
+              assignerImage,
+              dueDate: task.dueDate,
+              priority: task.priority || "",
+              taskUrl,
+            });
+            logger.debug(
+              `📧 [${source}] Email d'assignation envoyé à ${memberData.email} pour la tâche "${task.title}"`,
+            );
+          } else {
+            logger.debug(
+              `📧 [${source}] Email désactivé par préférences pour ${memberData.email}`,
+            );
+          }
+
+          // Notification dans la boîte de réception (si la préférence n'est
+          // pas désactivée)
+          if (memberPrefs?.push !== false) {
+            try {
+              const notification =
+                await Notification.createTaskAssignedNotification({
+                  userId: memberId,
+                  workspaceId,
+                  taskId: task._id,
+                  taskTitle: task.title || "Sans titre",
+                  boardId: task.boardId,
+                  boardName,
+                  columnName,
+                  actorId: user?.id || user?._id,
+                  actorName: assignerName,
+                  actorImage: assignerImage,
+                  url: taskUrl,
+                });
+
+              // Publier la notification en temps réel
+              await publishNotification(notification);
+              logger.debug(
+                `🔔 [${source}] Notification créée pour ${memberData.email}`,
+              );
+
+              // Notification push sur l'appareil (titre, corps et clés
+              // boardId/taskId inchangés : l'app mobile les lit déjà)
+              sendNotificationPush(notification, {
+                title: "Nouvelle tâche assignée",
+                body: `${assignerName} vous a assigné à « ${task.title || "Sans titre"} »`,
+                data: {
+                  boardId: String(task.boardId),
+                  taskId: String(task._id),
+                },
+              }).catch((pushError) =>
+                logger.error(`❌ [${source}] Erreur push:`, pushError),
+              );
+            } catch (notifError) {
+              logger.error(
+                `❌ [${source}] Erreur création notification:`,
+                notifError,
+              );
+            }
+          } else {
+            logger.debug(
+              `🔔 [${source}] Notification push désactivée par préférences pour ${memberData.email}`,
+            );
+          }
+        } catch (emailError) {
+          logger.error(
+            `❌ [${source}] Erreur envoi email à membre ${memberId}:`,
+            emailError,
+          );
+        }
+      }
+    } catch (error) {
+      logger.error(
+        `❌ [${source}] Erreur lors de l'envoi des emails d'assignation:`,
+        error,
+      );
+    }
+  })();
+};
+
+// ── Modifications atomiques des listes d'une tâche ─────────────────────────
+// Membres, tags et checklist modifiés élément par élément ($push/$pull,
+// opérateur positionnel) avec une condition qui rend l'opération idempotente
+// (déjà assigné, tag déjà présent, élément déjà coché…) : deux personnes qui
+// modifient la même tâche en même temps ne s'écrasent plus, et une requête
+// rejouée (retry réseau) ne crée ni doublon ni activité en trop.
+
+/**
+ * Applique la modification si la condition est remplie et trace l'activité
+ * dans la même écriture. Renvoie la tâche modifiée, ou null si la condition
+ * n'est pas remplie (rien à faire) ou la tâche introuvable.
+ */
+const applyAtomicTaskChange = ({
+  taskId,
+  workspaceId,
+  condition = {},
+  update = {},
+  activity = null,
+}) => {
+  const updateDoc = {
+    ...update,
+    $set: { ...(update.$set || {}), updatedAt: new Date() },
+  };
+  if (activity) {
+    updateDoc.$push = { ...(update.$push || {}), activity };
+  }
+  return Task.findOneAndUpdate(
+    { _id: taskId, workspaceId, ...condition },
+    updateDoc,
+    { new: true, runValidators: true },
+  );
+};
+
+const taskNotFoundError = () =>
+  new AppError("Task not found", ERROR_CODES.NOT_FOUND, { resource: "Task" });
+
+// Nom exact, sans tenir compte de la casse (caractères spéciaux échappés)
+const exactNameRegex = (name) =>
+  new RegExp(`^${String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+
+// Document brut `user` de l'auteur (nom et photo des notifications)
+const loadActivityUser = async (user) => {
+  if (!user?.id) return null;
+  try {
+    const users = mongoose.connection.db.collection("user");
+    const byId = await users.findOne({ _id: user.id });
+    if (byId || !/^[0-9a-fA-F]{24}$/.test(String(user.id))) return byId;
+    return await users.findOne({
+      _id: new mongoose.Types.ObjectId(String(user.id)),
+    });
+  } catch (error) {
+    logger.warn("Could not fetch user data for activity:", error.message);
+    return null;
+  }
+};
+
+/**
+ * Fin d'une modification atomique : tâche modifiée → enrichie et diffusée
+ * (TASK_UPDATED, comme updateTask) ; rien n'a changé → état courant renvoyé
+ * sans diffusion.
+ */
+const finishAtomicTaskChange = async (task, taskId, workspaceId, context) => {
+  if (!task) {
+    const current = await Task.findOne({ _id: taskId, workspaceId });
+    if (!current) throw taskNotFoundError();
+    return enrichTaskWithUserInfo(current);
+  }
+  const enrichedTask = await enrichTaskWithUserInfo(task);
+  safePublish(
+    `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+    {
+      type: "UPDATED",
+      task: enrichedTask,
+      boardId: enrichedTask.boardId,
+      workspaceId,
+    },
+    context,
+  );
+  return enrichedTask;
+};
+
+const findTaskOrThrow = async (taskId, workspaceId) => {
+  const task = await Task.findOne({ _id: taskId, workspaceId });
+  if (!task) throw taskNotFoundError();
+  return task;
+};
+
+const checklistItemIdOrThrow = (itemId) => {
+  try {
+    const parsed = parseChecklistItemId(itemId);
+    if (!parsed) throw new Error("Identifiant d'élément manquant");
+    return parsed;
+  } catch (error) {
+    throw new AppError(error.message, ERROR_CODES.VALIDATION_ERROR, {
+      field: "itemId",
+    });
+  }
 };
 
 // Fonction utilitaire pour enrichir une tâche avec les infos utilisateur dynamiques
@@ -680,7 +971,10 @@ const loadTaskUsersInfo = async (context, userIds) => {
 
 const resolvers = {
   Query: {
-    boards: requireWorkspaceLevel("kanban", "read")(
+    boards: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { workspaceId },
@@ -719,38 +1013,42 @@ const resolvers = {
       },
     ),
 
-    organizationMembersPresence: requireWorkspaceLevel("kanban", "read")(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        try {
-          const orgId =
-            typeof finalWorkspaceId === "string"
-              ? new ObjectId(finalWorkspaceId)
-              : finalWorkspaceId;
-          const members = await db
-            .collection("member")
-            .find({ organizationId: orgId }, { projection: { userId: 1 } })
-            .toArray();
-          const userIds = members.map((m) => m.userId).filter(Boolean);
-          const presence = await getUsersPresence(db, userIds);
-          return Array.from(presence.entries()).map(([userId, p]) => ({
-            userId,
-            isOnline: p.isOnline,
-            lastSeenAt: p.lastSeenAt,
-          }));
-        } catch (error) {
-          logger.error(
-            `❌ [Kanban] organizationMembersPresence: ${error.message}`,
-          );
-          return [];
-        }
-      },
-    ),
+    organizationMembersPresence: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      try {
+        const orgId =
+          typeof finalWorkspaceId === "string"
+            ? new ObjectId(finalWorkspaceId)
+            : finalWorkspaceId;
+        const members = await db
+          .collection("member")
+          .find({ organizationId: orgId }, { projection: { userId: 1 } })
+          .toArray();
+        const userIds = members.map((m) => m.userId).filter(Boolean);
+        const presence = await getUsersPresence(db, userIds);
+        return Array.from(presence.entries()).map(([userId, p]) => ({
+          userId,
+          isOnline: p.isOnline,
+          lastSeenAt: p.lastSeenAt,
+        }));
+      } catch (error) {
+        logger.error(
+          `❌ [Kanban] organizationMembersPresence: ${error.message}`,
+        );
+        return [];
+      }
+    }),
 
     // Annuaire des membres de l'espace, partagé avec d'autres modules (notes
-    // des clients) : pas de niveau « Projets » exigé, l'appartenance suffit.
-    organizationMembers: withWorkspace(
-      async (_, { workspaceId }, { workspaceId: contextWorkspaceId, db }) => {
+    // des clients, calendrier, documents partagés) : pas de niveau « Projets »
+    // exigé, l'appartenance suffit. Sans « Voir les membres », l'identité des
+    // autres membres seulement (rôle du seul super admin), comme le site.
+    organizationMembers: withRBAC(
+      async (_, { workspaceId }, context) => {
+        const { workspaceId: contextWorkspaceId, db } = context;
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
         try {
@@ -894,23 +1192,21 @@ const resolvers = {
             .filter(Boolean); // Retirer les null
 
           logger.debug(`✅ [Kanban] Retour de ${result.length} membres`);
-          logger.debug(
-            "📋 [Kanban] Détails:",
-            result.map((r) => ({
-              email: r.email,
-              role: r.role,
-              hasImage: !!r.image,
-              image: r.image,
-            })),
-          );
 
-          return result;
+          return filterOrganizationMembers(result, {
+            callerUserId: context.user?._id,
+            canViewTeam: teamVisibilityFromGrid(context.permissionLevels)
+              .canViewTeam,
+          });
         } catch (error) {
           logger.error("❌ [Kanban] Erreur récupération membres:", error);
           logger.error("Stack:", error.stack);
           return [];
         }
       },
+      // Même choix d'espace et mêmes erreurs que withWorkspace, plus la
+      // grille de l'appelant (context.permissionLevels)
+      { preferArgsWorkspace: true, passthroughErrors: true },
     ),
 
     usersInfo: async (_, { userIds }, { db }) => {
@@ -985,7 +1281,10 @@ const resolvers = {
       }
     },
 
-    board: requireWorkspaceLevel("kanban", "read")(
+    board: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { id, workspaceId },
@@ -1022,7 +1321,10 @@ const resolvers = {
       },
     ),
 
-    columns: requireWorkspaceLevel("kanban", "read")(
+    columns: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, workspaceId },
@@ -1038,14 +1340,18 @@ const resolvers = {
       },
     ),
 
-    column: requireWorkspaceLevel("kanban", "read")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
-      },
-    ),
+    column: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      return await Column.findOne({ _id: id, workspaceId: finalWorkspaceId });
+    }),
 
-    tasks: requireWorkspaceLevel("kanban", "read")(
+    tasks: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, columnId, workspaceId },
@@ -1059,18 +1365,22 @@ const resolvers = {
       },
     ),
 
-    task: requireWorkspaceLevel("kanban", "read")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const task = await Task.findOne({
-          _id: id,
-          workspaceId: finalWorkspaceId,
-        });
-        return await enrichTaskWithUserInfo(task);
-      },
-    ),
+    task: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const task = await Task.findOne({
+        _id: id,
+        workspaceId: finalWorkspaceId,
+      });
+      return await enrichTaskWithUserInfo(task);
+    }),
 
-    taskPresence: requireWorkspaceLevel("kanban", "read")(
+    taskPresence: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, workspaceId },
@@ -1089,7 +1399,10 @@ const resolvers = {
       },
     ),
 
-    searchTasks: requireWorkspaceLevel("kanban", "read")(
+    searchTasks: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { search, boardId, columnId, excludeTaskId, limit, workspaceId },
@@ -1238,7 +1551,10 @@ const resolvers = {
     // Présence : pas une écriture métier, donc hors du verrou d'abonnement
     // (voir l'exclusion dans le wrapper checkSubscriptionActive en bas de
     // fichier) - un membre en lecture seule peut aussi être « sur » une tâche.
-    setTaskPresence: requireWorkspaceLevel("kanban", "read")(
+    setTaskPresence: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, taskId, clientId, workspaceId },
@@ -1259,7 +1575,10 @@ const resolvers = {
     ),
 
     // Board mutations
-    createBoard: requireWorkspaceAction("kanban", "create")(
+    createBoard: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1317,7 +1636,10 @@ const resolvers = {
       },
     ),
 
-    updateBoard: requireWorkspaceLevel("kanban", "write")(
+    updateBoard: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1365,48 +1687,52 @@ const resolvers = {
       },
     ),
 
-    deleteBoard: requireWorkspaceLevel("kanban", "delete")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    deleteBoard: requireWorkspaceLevel(
+      "kanban",
+      "delete",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        try {
-          // Supprimer les tâches associées au tableau
-          await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
+      try {
+        // Supprimer les tâches associées au tableau
+        await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
 
-          // Supprimer les colonnes associées au tableau
-          await Column.deleteMany({
-            boardId: id,
-            workspaceId: finalWorkspaceId,
-          });
+        // Supprimer les colonnes associées au tableau
+        await Column.deleteMany({
+          boardId: id,
+          workspaceId: finalWorkspaceId,
+        });
 
-          // Supprimer le tableau
-          const result = await Board.deleteOne({
-            _id: id,
-            workspaceId: finalWorkspaceId,
-          });
+        // Supprimer le tableau
+        const result = await Board.deleteOne({
+          _id: id,
+          workspaceId: finalWorkspaceId,
+        });
 
-          if (result.deletedCount > 0) {
-            // Publier l'événement de suppression de board
-            safePublish(
-              `${BOARD_UPDATED}_${finalWorkspaceId}`,
-              {
-                type: "DELETED",
-                boardId: id,
-                workspaceId: finalWorkspaceId,
-              },
-              "Board supprimé",
-            );
-          }
-
-          return result.deletedCount > 0;
-        } catch (error) {
-          console.error("Error deleting board:", error);
-          throw new Error("Failed to delete board");
+        if (result.deletedCount > 0) {
+          // Publier l'événement de suppression de board
+          safePublish(
+            `${BOARD_UPDATED}_${finalWorkspaceId}`,
+            {
+              type: "DELETED",
+              boardId: id,
+              workspaceId: finalWorkspaceId,
+            },
+            "Board supprimé",
+          );
         }
-      },
-    ),
 
-    toggleBoardFavorite: requireWorkspaceLevel("kanban", "read")(
+        return result.deletedCount > 0;
+      } catch (error) {
+        console.error("Error deleting board:", error);
+        throw new Error("Failed to delete board");
+      }
+    }),
+
+    toggleBoardFavorite: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(
       async (
         _,
         { boardId, workspaceId },
@@ -1432,7 +1758,10 @@ const resolvers = {
     ),
 
     // Column mutations
-    createColumn: requireWorkspaceAction("kanban", "create")(
+    createColumn: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1464,7 +1793,10 @@ const resolvers = {
       },
     ),
 
-    updateColumn: requireWorkspaceLevel("kanban", "write")(
+    updateColumn: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1495,53 +1827,57 @@ const resolvers = {
       },
     ),
 
-    deleteColumn: requireWorkspaceLevel("kanban", "delete")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+    deleteColumn: requireWorkspaceLevel(
+      "kanban",
+      "delete",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-        try {
-          // Récupérer la colonne avant suppression pour avoir le boardId
-          const column = await Column.findOne({
-            _id: id,
-            workspaceId: finalWorkspaceId,
-          });
-          if (!column) throw new Error("Column not found");
+      try {
+        // Récupérer la colonne avant suppression pour avoir le boardId
+        const column = await Column.findOne({
+          _id: id,
+          workspaceId: finalWorkspaceId,
+        });
+        if (!column) throw new Error("Column not found");
 
-          // Supprimer les tâches associées à la colonne
-          await Task.deleteMany({
-            columnId: id,
-            workspaceId: finalWorkspaceId,
-          });
+        // Supprimer les tâches associées à la colonne
+        await Task.deleteMany({
+          columnId: id,
+          workspaceId: finalWorkspaceId,
+        });
 
-          // Supprimer la colonne
-          const result = await Column.deleteOne({
-            _id: id,
-            workspaceId: finalWorkspaceId,
-          });
+        // Supprimer la colonne
+        const result = await Column.deleteOne({
+          _id: id,
+          workspaceId: finalWorkspaceId,
+        });
 
-          if (result.deletedCount > 0) {
-            // Publier l'événement de suppression de colonne
-            safePublish(
-              `${COLUMN_UPDATED}_${finalWorkspaceId}_${column.boardId}`,
-              {
-                type: "DELETED",
-                columnId: id,
-                boardId: column.boardId,
-                workspaceId: finalWorkspaceId,
-              },
-              "Colonne supprimée",
-            );
-          }
-
-          return result.deletedCount > 0;
-        } catch (error) {
-          console.error("Error deleting column:", error);
-          throw new Error("Failed to delete column");
+        if (result.deletedCount > 0) {
+          // Publier l'événement de suppression de colonne
+          safePublish(
+            `${COLUMN_UPDATED}_${finalWorkspaceId}_${column.boardId}`,
+            {
+              type: "DELETED",
+              columnId: id,
+              boardId: column.boardId,
+              workspaceId: finalWorkspaceId,
+            },
+            "Colonne supprimée",
+          );
         }
-      },
-    ),
 
-    reorderColumns: requireWorkspaceLevel("kanban", "write")(
+        return result.deletedCount > 0;
+      } catch (error) {
+        console.error("Error deleting column:", error);
+        throw new Error("Failed to delete column");
+      }
+    }),
+
+    reorderColumns: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { columns, workspaceId },
@@ -1587,7 +1923,10 @@ const resolvers = {
     ),
 
     // Task mutations
-    createTask: requireWorkspaceAction("kanban", "create")(
+    createTask: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1895,7 +2234,10 @@ const resolvers = {
       },
     ),
 
-    updateTask: requireWorkspaceLevel("kanban", "write")(
+    updateTask: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { input, workspaceId },
@@ -1924,16 +2266,15 @@ const resolvers = {
           };
         }
 
-        // Nettoyer les IDs temporaires de la checklist
+        // Checklist reçue en bloc (apps en store, ancien front) : les éléments
+        // existants gardent leur _id (voir preserveChecklistIds), sinon les
+        // modifications atomiques des autres personnes ne les trouveraient
+        // plus. Les ids temporaires (« temp-… », uuid) donnent un nouvel _id.
         if (updates.checklist) {
-          updates.checklist = updates.checklist.map((item) => {
-            const cleanedItem = { ...item };
-            // Supprimer les IDs temporaires (qui commencent par 'temp-')
-            if (cleanedItem.id && cleanedItem.id.startsWith("temp-")) {
-              delete cleanedItem.id;
-            }
-            return cleanedItem;
-          });
+          updates.checklist = preserveChecklistIds(
+            updates.checklist,
+            oldTask.checklist,
+          );
         }
 
         // Récupérer les données utilisateur pour l'activité
@@ -2130,6 +2471,8 @@ const resolvers = {
         // mutations concurrentes (ou arrivées dans le désordre) s'écrasent en
         // "last-write-wins" et un membre retiré peut réapparaître.
         let memberAtomicOps = null; // { add: [], remove: [], all: [] } | null
+        // Activités assigned/unassigned, ajoutées ($push) avec les autres
+        const memberActivities = [];
         logger.debug(
           `📧 [UpdateTask] updates.assignedMembers reçu: ${JSON.stringify(updates.assignedMembers)}`,
         );
@@ -2188,195 +2531,41 @@ const resolvers = {
               // Ne PAS ajouter aux changes[] car on a une activité dédiée "assigned"
               // (sinon le bloc generic "updated" plus bas écraserait notre activité)
               // Ajouter une activité spécifique pour l'assignation avec les IDs des membres
-              updates.activity = [
-                ...(oldTask.activity || []),
-                {
-                  userId: user?.id,
-                  userName: userData?.name || user?.name || user?.email,
-                  userImage: userImage,
-                  type: "assigned",
-                  description: `assigné ${addedMembers.length} membre${
-                    addedMembers.length > 1 ? "s" : ""
-                  }`,
-                  newValue: addedMembers, // Stocker les IDs des membres ajoutés
-                  createdAt: new Date(),
-                },
-              ];
+              memberActivities.push(
+                assignmentActivity(user, "assigned", addedMembers),
+              );
 
-              // Envoyer des emails de notification aux membres assignés
+              // E-mails, notifications et push aux membres assignés
               logger.debug(
                 `📧 [UpdateTask] Début envoi emails pour ${addedMembers.length} membres assignés: ${addedMembers.join(", ")}`,
               );
-              (async () => {
-                try {
-                  // Récupérer les infos du board et de la colonne
-                  const board = await Board.findById(oldTask.boardId);
-                  logger.debug(
-                    `📧 [UpdateTask] oldTask.boardId: ${oldTask.boardId}, Board trouvé: ${board ? "OUI" : "NON"}, Board name: ${board?.title}`,
-                  );
-                  logger.debug(
-                    `📧 [UpdateTask] oldTask.columnId: ${oldTask.columnId}`,
-                  );
-                  const column = await Column.findById(oldTask.columnId);
-                  logger.debug(
-                    `📧 [UpdateTask] Column trouvée: ${column ? "OUI" : "NON"}, Column title: ${column?.title}`,
-                  );
-                  const assignerName =
-                    userData?.name ||
-                    user?.name ||
-                    user?.email ||
-                    "Un membre de l'équipe";
-                  const boardName = board?.title || "Tableau sans nom";
-                  const columnName = column?.title || "Colonne";
-                  logger.debug(
-                    `📧 [UpdateTask] Board: ${boardName}, Column: ${columnName}, Assigner: ${assignerName}`,
-                  );
-
-                  // Batch fetch : récupérer tous les membres ajoutés en une seule requête
-                  const addedMemberObjectIds = addedMembers
-                    .map((mid) => {
-                      try {
-                        return new mongoose.Types.ObjectId(mid);
-                      } catch {
-                        return null;
-                      }
-                    })
-                    .filter(Boolean);
-                  const allAddedMembersData =
-                    addedMemberObjectIds.length > 0
-                      ? await db
-                          .collection("user")
-                          .find({ _id: { $in: addedMemberObjectIds } })
-                          .toArray()
-                      : [];
-                  const addedMembersDataMap = {};
-                  allAddedMembersData.forEach((m) => {
-                    addedMembersDataMap[m._id.toString()] = m;
-                  });
-
-                  for (const memberId of addedMembers) {
-                    try {
-                      const memberData = addedMembersDataMap[memberId];
-
-                      if (memberData?.email) {
-                        const taskUrl = `${process.env.FRONTEND_URL}/dashboard/outils/kanban/${oldTask.boardId}?task=${id}`;
-                        const memberPrefs =
-                          memberData?.notificationPreferences
-                            ?.kanban_task_assigned;
-
-                        // Envoyer l'email d'assignation (si la préférence n'est pas désactivée)
-                        if (memberPrefs?.email !== false) {
-                          await sendTaskAssignmentEmail(memberData.email, {
-                            taskTitle: oldTask.title || "Sans titre",
-                            taskDescription: oldTask.description || "",
-                            boardName: boardName,
-                            columnName: columnName,
-                            assignerName: assignerName,
-                            assignerImage: userImage || userData?.image || null,
-                            dueDate: oldTask.dueDate || updates.dueDate,
-                            priority:
-                              updates.priority !== undefined
-                                ? updates.priority
-                                : oldTask.priority || "",
-                            taskUrl: taskUrl,
-                          });
-                          logger.debug(
-                            `📧 [UpdateTask] Email d'assignation envoyé à ${memberData.email} pour la tâche "${oldTask.title}"`,
-                          );
-                        } else {
-                          logger.debug(
-                            `📧 [UpdateTask] Email désactivé par préférences pour ${memberData.email}`,
-                          );
-                        }
-
-                        // Créer une notification dans la boîte de réception (si la préférence n'est pas désactivée)
-                        if (memberPrefs?.push !== false) {
-                          try {
-                            const notification =
-                              await Notification.createTaskAssignedNotification(
-                                {
-                                  userId: memberId,
-                                  workspaceId: finalWorkspaceId,
-                                  taskId: oldTask._id,
-                                  taskTitle: oldTask.title || "Sans titre",
-                                  boardId: oldTask.boardId,
-                                  boardName: boardName,
-                                  columnName: columnName,
-                                  actorId: user?.id || user?._id,
-                                  actorName: assignerName,
-                                  actorImage:
-                                    userImage || userData?.image || null,
-                                  url: taskUrl,
-                                },
-                              );
-
-                            // Publier la notification en temps réel
-                            await publishNotification(notification);
-                            logger.debug(
-                              `🔔 [UpdateTask] Notification créée pour ${memberData.email}`,
-                            );
-
-                            // Envoyer la notification push sur l'appareil
-                            // (titre, corps et clés boardId/taskId inchangés :
-                            // l'app mobile les lit déjà)
-                            sendNotificationPush(notification, {
-                              title: "Nouvelle tâche assignée",
-                              body: `${assignerName} vous a assigné à « ${oldTask.title || "Sans titre"} »`,
-                              data: {
-                                boardId: String(oldTask.boardId),
-                                taskId: String(id),
-                              },
-                            }).catch((pushError) =>
-                              logger.error(
-                                "❌ [UpdateTask] Erreur push:",
-                                pushError,
-                              ),
-                            );
-                          } catch (notifError) {
-                            logger.error(
-                              "❌ [UpdateTask] Erreur création notification:",
-                              notifError,
-                            );
-                          }
-                        } else {
-                          logger.debug(
-                            `🔔 [UpdateTask] Notification push désactivée par préférences pour ${memberData.email}`,
-                          );
-                        }
-                      }
-                    } catch (emailError) {
-                      logger.error(
-                        `❌ [UpdateTask] Erreur envoi email à membre ${memberId}:`,
-                        emailError,
-                      );
-                    }
-                  }
-                } catch (error) {
-                  logger.error(
-                    "❌ [UpdateTask] Erreur lors de l'envoi des emails d'assignation:",
-                    error,
-                  );
-                }
-              })();
+              notifyTaskAssignment({
+                memberIds: addedMembers,
+                task: {
+                  _id: oldTask._id,
+                  title: oldTask.title,
+                  description: oldTask.description,
+                  boardId: oldTask.boardId,
+                  columnId: oldTask.columnId,
+                  dueDate: oldTask.dueDate || updates.dueDate,
+                  priority:
+                    updates.priority !== undefined
+                      ? updates.priority
+                      : oldTask.priority || "",
+                },
+                user,
+                actorData: userData,
+                workspaceId: finalWorkspaceId,
+                source: "UpdateTask",
+              });
             }
             if (removedMembers.length > 0) {
               // Ne PAS ajouter aux changes[] car on a une activité dédiée "unassigned"
               // (sinon le bloc generic "updated" plus bas écraserait notre activité)
               // Ajouter une activité spécifique pour la désassignation
-              updates.activity = [
-                ...(updates.activity || oldTask.activity || []),
-                {
-                  userId: user?.id,
-                  userName: userData?.name || user?.name || user?.email,
-                  userImage: userImage,
-                  type: "unassigned",
-                  description: `désassigné ${removedMembers.length} membre${
-                    removedMembers.length > 1 ? "s" : ""
-                  }`,
-                  oldValue: removedMembers, // Stocker les IDs des membres retirés
-                  createdAt: new Date(),
-                },
-              ];
+              memberActivities.push(
+                assignmentActivity(user, "unassigned", removedMembers),
+              );
             }
           }
         }
@@ -2533,20 +2722,20 @@ const resolvers = {
           newActivities.push(columnActivity);
         }
 
-        if (newActivities.length > 0) {
-          // Utiliser updates.activity comme base s'il existe déjà (ex: activités assigned/unassigned)
-          // sinon fallback sur oldTask.activity
-          updates.activity = [
-            ...(updates.activity || oldTask.activity || []),
-            ...newActivities,
-          ];
-        }
+        // Activités ajoutées en $push (assigned/unassigned d'abord, comme
+        // avant) : réécrire le tableau complet effaçait les entrées posées
+        // entre-temps par une autre mutation (commentaire, case cochée…).
+        const pushedActivities = [...memberActivities, ...newActivities];
 
         // Construire le document de mise à jour. Les membres sont traités
         // atomiquement ($addToSet/$pull) pour que des changements concurrents
         // ou désordonnés convergent au lieu de s'écraser mutuellement.
         const setFields = { ...updates, updatedAt: new Date() };
+        delete setFields.activity;
         const updateDoc = {};
+        if (pushedActivities.length > 0) {
+          updateDoc.$push = { activity: { $each: pushedActivities } };
+        }
 
         if (memberAtomicOps) {
           delete setFields.assignedMembers;
@@ -2624,132 +2813,488 @@ const resolvers = {
       },
     ),
 
-    deleteTask: requireWorkspaceLevel("kanban", "delete")(
-      async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+    // ── Membres, tags et checklist : un élément à la fois ──────────────────
+    // Mêmes droits (kanban write), même activité et même diffusion que
+    // updateTask, sans écraser les modifications concurrentes.
+
+    assignTaskMember: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, memberId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const member = normalizeMemberId(memberId);
+        if (!member) {
+          throw new AppError("Membre manquant", ERROR_CODES.VALIDATION_ERROR, {
+            field: "memberId",
+          });
+        }
 
-        // Récupérer la tâche avant suppression pour avoir le boardId
-        const task = await Task.findOne({
-          _id: id,
+        const task = await applyAtomicTaskChange({
+          taskId,
           workspaceId: finalWorkspaceId,
+          condition: { assignedMembers: { $ne: member } },
+          update: { $push: { assignedMembers: member } },
+          activity: assignmentActivity(user, "assigned", [member]),
         });
-        if (!task) throw new Error("Task not found");
 
-        const result = await Task.deleteOne({
-          _id: id,
+        // Vraie assignation : e-mail, notification et push au membre (pas
+        // à soi-même, comme à la création de la tâche)
+        if (task && member !== String(user?.id)) {
+          const actorData = await loadActivityUser(user);
+          notifyTaskAssignment({
+            memberIds: [member],
+            task,
+            user,
+            actorData,
+            workspaceId: finalWorkspaceId,
+            source: "AssignTaskMember",
+          });
+        }
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Membre assigné",
+        );
+      },
+    ),
+
+    unassignTaskMember: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, memberId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const member = normalizeMemberId(memberId);
+        if (!member) {
+          throw new AppError("Membre manquant", ERROR_CODES.VALIDATION_ERROR, {
+            field: "memberId",
+          });
+        }
+
+        const task = await applyAtomicTaskChange({
+          taskId,
           workspaceId: finalWorkspaceId,
+          condition: { assignedMembers: member },
+          update: { $pull: { assignedMembers: member } },
+          activity: assignmentActivity(user, "unassigned", [member]),
         });
 
-        if (result.deletedCount > 0) {
-          // Retirer la tâche supprimée des tâches qui lui étaient liées et
-          // diffuser leur mise à jour (le lien disparaît en temps réel)
-          const affected = await detachTaskLinks(id, finalWorkspaceId);
-          if (affected.length > 0) {
-            const affectedTasks = await Task.find({
-              _id: { $in: affected.map((t) => t._id) },
-              workspaceId: finalWorkspaceId,
-            });
-            for (const affectedTask of affectedTasks) {
-              await publishTaskUpdated(affectedTask, finalWorkspaceId);
-            }
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Membre désassigné",
+        );
+      },
+    ),
+
+    addTaskTag: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, tag, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const cleanTag = normalizeTag(tag);
+        if (!cleanTag.name) {
+          throw new AppError(
+            "Nom de tag manquant",
+            ERROR_CODES.VALIDATION_ERROR,
+            { field: "tag.name" },
+          );
+        }
+
+        // Un tag du même nom (sans tenir compte de la casse) n'est pas ajouté
+        // une seconde fois
+        const task = await applyAtomicTaskChange({
+          taskId,
+          workspaceId: finalWorkspaceId,
+          condition: { "tags.name": { $not: exactNameRegex(cleanTag.name) } },
+          update: { $push: { tags: cleanTag } },
+          activity: {
+            userId: user?.id,
+            type: "updated",
+            field: "tags",
+            description: `a ajouté le tag : ${cleanTag.name}`,
+            newValue: tagActivityValue(cleanTag),
+            oldValue: null,
+            createdAt: new Date(),
+          },
+        });
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Tag ajouté",
+        );
+      },
+    ),
+
+    removeTaskTag: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, tagName, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const wanted = String(tagName || "")
+          .trim()
+          .toLowerCase();
+
+        // Lecture préalable : nom exact et couleurs du tag pour l'activité
+        const current = await findTaskOrThrow(taskId, finalWorkspaceId);
+        const existing = (current.tags || []).find(
+          (t) => (t.name || "").trim().toLowerCase() === wanted,
+        );
+        if (!existing) return enrichTaskWithUserInfo(current);
+
+        const task = await applyAtomicTaskChange({
+          taskId,
+          workspaceId: finalWorkspaceId,
+          condition: { "tags.name": existing.name },
+          update: { $pull: { tags: { name: existing.name } } },
+          activity: {
+            userId: user?.id,
+            type: "updated",
+            field: "tags",
+            description: `a supprimé le tag : ${existing.name}`,
+            newValue: null,
+            oldValue: tagActivityValue(existing),
+            createdAt: new Date(),
+          },
+        });
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Tag retiré",
+        );
+      },
+    ),
+
+    addChecklistItem: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, text, completed, itemId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const cleanText = String(text || "").trim();
+        if (!cleanText) {
+          throw new AppError(
+            "Le texte de l'élément est requis",
+            ERROR_CODES.VALIDATION_ERROR,
+            { field: "text" },
+          );
+        }
+        const clientId =
+          itemId === undefined || itemId === null || itemId === ""
+            ? null
+            : checklistItemIdOrThrow(itemId);
+        const item = {
+          _id: clientId || new mongoose.Types.ObjectId(),
+          text: cleanText,
+          completed: Boolean(completed),
+        };
+
+        const task = await applyAtomicTaskChange({
+          taskId,
+          workspaceId: finalWorkspaceId,
+          // Requête rejouée avec le même id : pas de doublon
+          condition: clientId ? { "checklist._id": { $ne: clientId } } : {},
+          update: { $push: { checklist: item } },
+          activity: {
+            userId: user?.id,
+            type: "updated",
+            field: "checklist",
+            description: `a ajouté l'élément : ${cleanText}`,
+            createdAt: new Date(),
+          },
+        });
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Élément de checklist ajouté",
+        );
+      },
+    ),
+
+    updateChecklistItem: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, itemId, text, completed, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const id = checklistItemIdOrThrow(itemId);
+        const newText =
+          text === undefined || text === null ? undefined : String(text).trim();
+        if (newText === "") {
+          throw new AppError(
+            "Le texte de l'élément est requis",
+            ERROR_CODES.VALIDATION_ERROR,
+            { field: "text" },
+          );
+        }
+
+        // Lecture préalable : état actuel de l'élément pour l'activité.
+        // Élément supprimé entre-temps : rien à faire, la tâche à jour est
+        // renvoyée (le client se réaligne).
+        const current = await findTaskOrThrow(taskId, finalWorkspaceId);
+        const item = (current.checklist || []).find(
+          (i) => i._id && String(i._id) === String(id),
+        );
+        if (!item) return enrichTaskWithUserInfo(current);
+
+        const textChanged = newText !== undefined && newText !== item.text;
+        const completedChanged =
+          completed !== undefined &&
+          completed !== null &&
+          Boolean(completed) !== Boolean(item.completed);
+        if (!textChanged && !completedChanged) {
+          return enrichTaskWithUserInfo(current);
+        }
+
+        const $set = {};
+        const conditions = [];
+        const parts = [];
+        if (textChanged) {
+          $set["checklist.$.text"] = newText;
+          conditions.push({ text: { $ne: newText } });
+          // Même format que updateTask (lu par le web et le mobile)
+          parts.push(`a ajouté l'élément : ${newText}`);
+          parts.push(`a supprimé l'élément : ${item.text}`);
+        }
+        if (completedChanged) {
+          $set["checklist.$.completed"] = Boolean(completed);
+          conditions.push(
+            completed ? { completed: { $ne: true } } : { completed: true },
+          );
+          parts.push(
+            `a ${completed ? "coché" : "décoché"} l'élément : ${newText ?? item.text}`,
+          );
+        }
+
+        const task = await applyAtomicTaskChange({
+          taskId,
+          workspaceId: finalWorkspaceId,
+          // Seulement si l'élément diffère encore (requête rejouée, ou même
+          // changement fait par quelqu'un d'autre entre-temps)
+          condition: {
+            checklist: { $elemMatch: { _id: id, $or: conditions } },
+          },
+          update: { $set },
+          activity: {
+            userId: user?.id,
+            type: "updated",
+            field: "checklist",
+            description: parts.join(" et "),
+            createdAt: new Date(),
+          },
+        });
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Élément de checklist modifié",
+        );
+      },
+    ),
+
+    removeChecklistItem: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
+      async (
+        _,
+        { taskId, itemId, workspaceId },
+        { user, workspaceId: contextWorkspaceId },
+      ) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const id = checklistItemIdOrThrow(itemId);
+
+        // Lecture préalable : texte de l'élément pour l'activité
+        const current = await findTaskOrThrow(taskId, finalWorkspaceId);
+        const item = (current.checklist || []).find(
+          (i) => i._id && String(i._id) === String(id),
+        );
+        if (!item) return enrichTaskWithUserInfo(current);
+
+        const task = await applyAtomicTaskChange({
+          taskId,
+          workspaceId: finalWorkspaceId,
+          condition: { "checklist._id": id },
+          update: { $pull: { checklist: { _id: id } } },
+          activity: {
+            userId: user?.id,
+            type: "updated",
+            field: "checklist",
+            description: `a supprimé l'élément : ${item.text ?? ""}`,
+            createdAt: new Date(),
+          },
+        });
+
+        return finishAtomicTaskChange(
+          task,
+          taskId,
+          finalWorkspaceId,
+          "Élément de checklist supprimé",
+        );
+      },
+    ),
+
+    deleteTask: requireWorkspaceLevel(
+      "kanban",
+      "delete",
+    )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+
+      // Récupérer la tâche avant suppression pour avoir le boardId
+      const task = await Task.findOne({
+        _id: id,
+        workspaceId: finalWorkspaceId,
+      });
+      if (!task) throw new Error("Task not found");
+
+      const result = await Task.deleteOne({
+        _id: id,
+        workspaceId: finalWorkspaceId,
+      });
+
+      if (result.deletedCount > 0) {
+        // Retirer la tâche supprimée des tâches qui lui étaient liées et
+        // diffuser leur mise à jour (le lien disparaît en temps réel)
+        const affected = await detachTaskLinks(id, finalWorkspaceId);
+        if (affected.length > 0) {
+          const affectedTasks = await Task.find({
+            _id: { $in: affected.map((t) => t._id) },
+            workspaceId: finalWorkspaceId,
+          });
+          for (const affectedTask of affectedTasks) {
+            await publishTaskUpdated(affectedTask, finalWorkspaceId);
           }
-
-          // Enrichir la tâche avant suppression pour inclure les commentaires avec photos
-          const enrichedTask = await enrichTaskWithUserInfo(task);
-
-          // Publier l'événement de suppression de tâche
-          safePublish(
-            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
-            {
-              type: "DELETED",
-              task: enrichedTask,
-              taskId: id,
-              boardId: enrichedTask.boardId,
-              workspaceId: finalWorkspaceId,
-            },
-            "Tâche supprimée",
-          );
         }
 
-        return result.deletedCount > 0;
-      },
-    ),
-
-    linkTask: requireWorkspaceLevel("kanban", "write")(
-      async (
-        _,
-        { taskId, linkedTaskId, workspaceId },
-        context,
-      ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const author = await resolveActivityAuthor(context, user);
-        const { task, linkedTask, changed } = await linkTasks({
-          taskId,
-          linkedTaskId,
-          workspaceId: finalWorkspaceId,
-          user,
-          ...author,
-        });
-        if (changed && linkedTask) {
-          // La tâche liée peut être sur un autre tableau : diffusée sur son canal
-          await publishTaskUpdated(linkedTask, finalWorkspaceId);
-        }
+        // Enrichir la tâche avant suppression pour inclure les commentaires avec photos
         const enrichedTask = await enrichTaskWithUserInfo(task);
-        if (changed) {
-          safePublish(
-            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
-            {
-              type: "UPDATED",
-              task: enrichedTask,
-              boardId: enrichedTask.boardId,
-              workspaceId: finalWorkspaceId,
-            },
-            "Tâche liée",
-          );
-        }
-        return enrichedTask;
-      },
-    ),
 
-    unlinkTask: requireWorkspaceLevel("kanban", "write")(
-      async (
-        _,
-        { taskId, linkedTaskId, workspaceId },
-        context,
-      ) => {
-        const { user, workspaceId: contextWorkspaceId } = context;
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        const author = await resolveActivityAuthor(context, user);
-        const { task, linkedTask, changed } = await unlinkTasks({
-          taskId,
-          linkedTaskId,
-          workspaceId: finalWorkspaceId,
-          user,
-          ...author,
-        });
-        if (changed && linkedTask) {
-          // La tâche liée peut être sur un autre tableau : diffusée sur son canal
-          await publishTaskUpdated(linkedTask, finalWorkspaceId);
-        }
-        const enrichedTask = await enrichTaskWithUserInfo(task);
-        if (changed) {
-          safePublish(
-            `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
-            {
-              type: "UPDATED",
-              task: enrichedTask,
-              boardId: enrichedTask.boardId,
-              workspaceId: finalWorkspaceId,
-            },
-            "Tâche déliée",
-          );
-        }
-        return enrichedTask;
-      },
-    ),
+        // Publier l'événement de suppression de tâche
+        safePublish(
+          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
+          {
+            type: "DELETED",
+            task: enrichedTask,
+            taskId: id,
+            boardId: enrichedTask.boardId,
+            workspaceId: finalWorkspaceId,
+          },
+          "Tâche supprimée",
+        );
+      }
 
-    moveTask: requireWorkspaceLevel("kanban", "write")(
+      return result.deletedCount > 0;
+    }),
+
+    linkTask: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(async (_, { taskId, linkedTaskId, workspaceId }, context) => {
+      const { user, workspaceId: contextWorkspaceId } = context;
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const author = await resolveActivityAuthor(context, user);
+      const { task, linkedTask, changed } = await linkTasks({
+        taskId,
+        linkedTaskId,
+        workspaceId: finalWorkspaceId,
+        user,
+        ...author,
+      });
+      if (changed && linkedTask) {
+        // La tâche liée peut être sur un autre tableau : diffusée sur son canal
+        await publishTaskUpdated(linkedTask, finalWorkspaceId);
+      }
+      const enrichedTask = await enrichTaskWithUserInfo(task);
+      if (changed) {
+        safePublish(
+          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
+          {
+            type: "UPDATED",
+            task: enrichedTask,
+            boardId: enrichedTask.boardId,
+            workspaceId: finalWorkspaceId,
+          },
+          "Tâche liée",
+        );
+      }
+      return enrichedTask;
+    }),
+
+    unlinkTask: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(async (_, { taskId, linkedTaskId, workspaceId }, context) => {
+      const { user, workspaceId: contextWorkspaceId } = context;
+      const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      const author = await resolveActivityAuthor(context, user);
+      const { task, linkedTask, changed } = await unlinkTasks({
+        taskId,
+        linkedTaskId,
+        workspaceId: finalWorkspaceId,
+        user,
+        ...author,
+      });
+      if (changed && linkedTask) {
+        // La tâche liée peut être sur un autre tableau : diffusée sur son canal
+        await publishTaskUpdated(linkedTask, finalWorkspaceId);
+      }
+      const enrichedTask = await enrichTaskWithUserInfo(task);
+      if (changed) {
+        safePublish(
+          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
+          {
+            type: "UPDATED",
+            task: enrichedTask,
+            boardId: enrichedTask.boardId,
+            workspaceId: finalWorkspaceId,
+          },
+          "Tâche déliée",
+        );
+      }
+      return enrichedTask;
+    }),
+
+    moveTask: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { id, columnId, position, workspaceId },
@@ -2934,7 +3479,10 @@ const resolvers = {
     ),
 
     // Ajouter un commentaire
-    addComment: requireWorkspaceAction("kanban", "comment")(
+    addComment: requireWorkspaceAction(
+      "kanban",
+      "comment",
+    )(
       async (
         _,
         { taskId, input, workspaceId },
@@ -3230,7 +3778,10 @@ const resolvers = {
     ),
 
     // Modifier un commentaire
-    updateComment: requireWorkspaceAction("kanban", "comment")(
+    updateComment: requireWorkspaceAction(
+      "kanban",
+      "comment",
+    )(
       async (
         _,
         { taskId, commentId, content, mentionedUserIds, workspaceId },
@@ -3400,7 +3951,10 @@ const resolvers = {
     ),
 
     // Supprimer un commentaire
-    deleteComment: requireWorkspaceAction("kanban", "comment")(
+    deleteComment: requireWorkspaceAction(
+      "kanban",
+      "comment",
+    )(
       async (
         _,
         { taskId, commentId, workspaceId },
@@ -3460,7 +4014,10 @@ const resolvers = {
     ),
 
     // Démarrer le timer
-    startTimer: requireWorkspaceLevel("kanban", "write")(
+    startTimer: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { taskId, workspaceId },
@@ -3563,7 +4120,10 @@ const resolvers = {
     ),
 
     // Arrêter le timer
-    stopTimer: requireWorkspaceLevel("kanban", "write")(
+    stopTimer: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { taskId, workspaceId },
@@ -3675,7 +4235,10 @@ const resolvers = {
     ),
 
     // Réinitialiser le timer
-    resetTimer: requireWorkspaceLevel("kanban", "write")(
+    resetTimer: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { taskId, workspaceId },
@@ -3764,7 +4327,10 @@ const resolvers = {
     ),
 
     // Mettre à jour les paramètres du timer
-    updateTimerSettings: requireWorkspaceLevel("kanban", "write")(
+    updateTimerSettings: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { taskId, hourlyRate, roundingOption, workspaceId },
@@ -3820,7 +4386,10 @@ const resolvers = {
     ),
 
     // Ajouter du temps manuellement
-    addManualTime: requireWorkspaceLevel("kanban", "write")(
+    addManualTime: requireWorkspaceLevel(
+      "kanban",
+      "write",
+    )(
       async (
         _,
         { taskId, seconds, description, workspaceId },
@@ -4172,6 +4741,7 @@ const resolvers = {
     members: async (board, _args, context) => {
       try {
         const db = mongoose.connection.db;
+        const callerUserId = context?.user?._id?.toString() || null;
 
         // Convertir le workspaceId en ObjectId
         const orgId =
@@ -4196,7 +4766,30 @@ const resolvers = {
               organization: null,
               workspaceMembers: [],
               usersById: new Map(),
+              canViewTeam: false,
             };
+          }
+
+          // Droits de l'appelant sur les membres (grille de son rôle dans
+          // l'espace) : sans « Voir les membres », identité seulement.
+          // Fail-closed si la grille ne peut pas être lue.
+          let canViewTeam = RESTRICTED_TEAM_VISIBILITY.canViewTeam;
+          const callerMember = callerUserId
+            ? workspaceMembers.find(
+                (m) => m.userId?.toString() === callerUserId,
+              )
+            : null;
+          if (callerMember) {
+            try {
+              ({ canViewTeam } = await teamVisibilityForRole(
+                orgId.toString(),
+                callerMember.role,
+              ));
+            } catch (error) {
+              logger.error(
+                `❌ [Kanban Board.members] Droits illisibles: ${error.message}`,
+              );
+            }
           }
 
           const userIds = workspaceMembers
@@ -4218,6 +4811,7 @@ const resolvers = {
             organization,
             workspaceMembers,
             usersById: new Map(users.map((u) => [u._id.toString(), u])),
+            canViewTeam,
           };
         };
 
@@ -4236,7 +4830,7 @@ const resolvers = {
           orgDataPromise = loadOrgData();
         }
 
-        const { organization, workspaceMembers, usersById } =
+        const { organization, workspaceMembers, usersById, canViewTeam } =
           await orgDataPromise;
 
         if (!organization) {
@@ -4267,7 +4861,7 @@ const resolvers = {
         }
 
         // Combiner membres et users
-        return members
+        const result = members
           .map((member) => {
             const memberUserId = member.userId?.toString();
             const user = usersById.get(memberUserId);
@@ -4309,6 +4903,11 @@ const resolvers = {
             };
           })
           .filter(Boolean); // Retirer les null
+
+        return filterOrganizationMembers(result, {
+          callerUserId,
+          canViewTeam,
+        });
       } catch (error) {
         logger.error("❌ [Kanban Board.members] Erreur:", error);
         logger.error("Stack:", error.stack);
@@ -4482,6 +5081,14 @@ const resolvers = {
     id: (parent) => parent._id || parent.id,
   },
 
+  // Identifiant stable des éléments de checklist : les tâches du tableau
+  // sont lues en lean() (et mises en cache Redis), sans le virtuel `id`, et
+  // le client recevait null. Il cible désormais un élément par cet id
+  // (updateChecklistItem, removeChecklistItem).
+  ChecklistItem: {
+    id: (item) => (item?._id ? String(item._id) : item?.id || null),
+  },
+
   // Resolver pour transformer _id en id pour les images
   TaskImage: {
     id: (image) => image._id?.toString() || image.id,
@@ -4489,24 +5096,22 @@ const resolvers = {
 
   Subscription: {
     boardUpdated: {
-      subscribe: requireWorkspaceLevel("kanban", "read")(
-        (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
-          const finalWorkspaceId = workspaceId || contextWorkspaceId;
-          try {
-            const pubsub = getPubSub();
-            // Utiliser un canal spécifique au workspace pour optimiser les performances
-            return pubsub.asyncIterableIterator([
-              `${BOARD_UPDATED}_${finalWorkspaceId}`,
-            ]);
-          } catch (error) {
-            logger.error(
-              "❌ [Kanban] Erreur subscription boardUpdated:",
-              error,
-            );
-            throw new Error("Subscription failed");
-          }
-        },
-      ),
+      subscribe: requireWorkspaceLevel(
+        "kanban",
+        "read",
+      )((_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace pour optimiser les performances
+          return pubsub.asyncIterableIterator([
+            `${BOARD_UPDATED}_${finalWorkspaceId}`,
+          ]);
+        } catch (error) {
+          logger.error("❌ [Kanban] Erreur subscription boardUpdated:", error);
+          throw new Error("Subscription failed");
+        }
+      }),
       resolve: (
         payload,
         { workspaceId },
@@ -4522,21 +5127,22 @@ const resolvers = {
     },
 
     taskUpdated: {
-      subscribe: requireWorkspaceLevel("kanban", "read")(
-        (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-          const finalWorkspaceId = workspaceId || contextWorkspaceId;
-          try {
-            const pubsub = getPubSub();
-            // Utiliser un canal spécifique au workspace et board pour optimiser
-            return pubsub.asyncIterableIterator([
-              `${TASK_UPDATED}_${finalWorkspaceId}_${boardId}`,
-            ]);
-          } catch (error) {
-            logger.error("❌ [Kanban] Erreur subscription taskUpdated:", error);
-            throw new Error("Subscription failed");
-          }
-        },
-      ),
+      subscribe: requireWorkspaceLevel(
+        "kanban",
+        "read",
+      )((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace et board pour optimiser
+          return pubsub.asyncIterableIterator([
+            `${TASK_UPDATED}_${finalWorkspaceId}_${boardId}`,
+          ]);
+        } catch (error) {
+          logger.error("❌ [Kanban] Erreur subscription taskUpdated:", error);
+          throw new Error("Subscription failed");
+        }
+      }),
       resolve: (payload) => {
         // Pour les événements VISITOR_PROFILE_UPDATED, retourner le payload avec visitor
         if (payload.type === "VISITOR_PROFILE_UPDATED" && payload.visitor) {
@@ -4560,24 +5166,22 @@ const resolvers = {
     },
 
     columnUpdated: {
-      subscribe: requireWorkspaceLevel("kanban", "read")(
-        (_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-          const finalWorkspaceId = workspaceId || contextWorkspaceId;
-          try {
-            const pubsub = getPubSub();
-            // Utiliser un canal spécifique au workspace et board pour optimiser
-            return pubsub.asyncIterableIterator([
-              `${COLUMN_UPDATED}_${finalWorkspaceId}_${boardId}`,
-            ]);
-          } catch (error) {
-            logger.error(
-              "❌ [Kanban] Erreur subscription columnUpdated:",
-              error,
-            );
-            throw new Error("Subscription failed");
-          }
-        },
-      ),
+      subscribe: requireWorkspaceLevel(
+        "kanban",
+        "read",
+      )((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        try {
+          const pubsub = getPubSub();
+          // Utiliser un canal spécifique au workspace et board pour optimiser
+          return pubsub.asyncIterableIterator([
+            `${COLUMN_UPDATED}_${finalWorkspaceId}_${boardId}`,
+          ]);
+        } catch (error) {
+          logger.error("❌ [Kanban] Erreur subscription columnUpdated:", error);
+          throw new Error("Subscription failed");
+        }
+      }),
       resolve: (payload) => {
         // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
         // Toujours retourner le payload car il vient du bon canal
@@ -4586,7 +5190,10 @@ const resolvers = {
     },
 
     taskPresence: {
-      subscribe: requireWorkspaceLevel("kanban", "read")(
+      subscribe: requireWorkspaceLevel(
+        "kanban",
+        "read",
+      )(
         (
           _,
           { boardId, workspaceId, clientId },

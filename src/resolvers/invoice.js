@@ -16,6 +16,7 @@ import {
   requireDelete,
   requirePermission,
   requireAction,
+  requireAllActions,
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
@@ -67,6 +68,10 @@ import {
   deleteEventFromExternalCalendars,
 } from "../services/calendar/CalendarSyncService.js";
 import { buildLinkedInvoiceItems } from "../utils/linkedInvoiceItems.js";
+import {
+  assertNotEInvoiceTransmitted,
+  isEInvoiceTransmitted,
+} from "../utils/eInvoiceLock.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -543,13 +548,11 @@ const invoiceResolvers = {
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
 
+        // Statut strict : COMPLETED ne renvoie que les factures payées (il
+        // renvoyait aussi les annulées, affichées dans l'onglet « Payées »
+        // de l'app mobile). Les annulées se filtrent avec CANCELED.
         if (status) {
-          // Si on filtre par COMPLETED, inclure aussi les factures CANCELED
-          if (status === "COMPLETED") {
-            query.status = { $in: ["COMPLETED", "CANCELED"] };
-          } else {
-            query.status = status;
-          }
+          query.status = status;
         }
 
         if (search) {
@@ -1959,6 +1962,13 @@ const invoiceResolvers = {
             );
           }
 
+          // Facture transmise en facturation électronique : elle fait foi
+          // telle que déposée sur la plateforme, on la corrige par un avoir.
+          // (Paiement, rapprochement et statuts e-invoicing passent par
+          // d'autres chemins : markInvoiceAsPaid, changeInvoiceStatus, crons
+          // et webhooks SuperPDP.)
+          assertNotEInvoiceTransmitted(invoiceData, "invoice");
+
           // Garde-fou de transition : updateInvoice gère l'édition de contenu
           // et la SEULE transition DRAFT → PENDING (finalisation, numérotée plus
           // bas). Tout autre changement de statut (rétrogradation en DRAFT,
@@ -2550,6 +2560,23 @@ const invoiceResolvers = {
             updateData["cachedPdf.generatedAt"] = null;
           }
 
+          // Facture déjà émise (en attente, payée…) modifiée : son archive
+          // Factur-X (aperçu, bouton PDF, e-mails et relances sans PDF joint)
+          // date d'avant la modification. On l'oublie ici et on la régénère
+          // juste après l'enregistrement ; si la régénération échoue, l'aperçu
+          // et les envois retombent sur un rendu à jour au lieu de l'ancien
+          // PDF. Une facture transmise en e-facturation n'arrive pas ici
+          // (verrou plus haut) : son archive reste celle déposée.
+          const rearchiveAfterUpdate =
+            invoiceData.status !== "DRAFT" &&
+            !isEInvoiceTransmitted(invoiceData);
+          if (rearchiveAfterUpdate && invoiceData.archivedPdfKey) {
+            updateData.archivedPdfKey = null;
+            updateData.archivedPdfUrl = null;
+            updateData.archivedPdfStoredAt = null;
+            updateData.archivedPdfSource = null;
+          }
+
           try {
             // Désactiver temporairement les validations pour les coordonnées bancaires
             // car elles sont gérées manuellement dans le code ci-dessus
@@ -2684,6 +2711,10 @@ const invoiceResolvers = {
               ).catch((err) =>
                 console.error("Erreur sync Abby (finalisation):", err),
               );
+            } else if (rearchiveAfterUpdate) {
+              // Facture émise modifiée (cf. plus haut) : nouvelle archive
+              // Factur-X à jour. Fire-and-forget, ne bloque pas la réponse.
+              triggerInvoiceFacturXArchive(updatedInvoice, workspaceId);
             }
 
             return updatedInvoice;
@@ -2760,6 +2791,10 @@ const invoiceResolvers = {
             "Impossible de supprimer une facture finalisée",
           );
         }
+
+        // Facture transmise en facturation électronique : on l'annule par un
+        // avoir, jamais en la supprimant
+        assertNotEInvoiceTransmitted(invoice.toObject(), "invoice", "delete");
 
         // Si la facture est liée à un devis, retirer le lien du devis
 
@@ -3301,7 +3336,13 @@ const invoiceResolvers = {
       },
     ),
 
-    createLinkedInvoice: requireAction("invoices", "create")(
+    // Facture liée (acompte, partielle) depuis un devis : transformation du
+    // devis, « Transformer » sur les devis ET « Créer » sur les factures
+    // (comme l'écran)
+    createLinkedInvoice: requireAllActions([
+      ["quotes", "convert"],
+      ["invoices", "create"],
+    ])(
       async (
         _,
         { quoteId, amount, isDeposit, workspaceId: inputWorkspaceId },

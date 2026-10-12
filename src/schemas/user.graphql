@@ -2,7 +2,11 @@
 # Note: GraphQL n'a pas de directive d'importation native,
 # mais la fusion des schémas gère cela pour nous
 
-type Subscription {
+# Abonnement porté par l'utilisateur (licence, essai, client Stripe).
+# Nommé « Subscription », ce type fusionnait avec le type racine des
+# subscriptions GraphQL et y déclarait licence, trial et stripeCustomerId
+# comme des abonnements temps réel sans resolver.
+type UserSubscription {
   licence: Boolean!
   trial: Boolean!
   stripeCustomerId: String
@@ -15,7 +19,7 @@ type User {
   isDisabled: Boolean!
   profile: UserProfile
   company: Company
-  subscription: Subscription
+  subscription: UserSubscription
   isPartner: Boolean
   referralCode: String
   createdAt: String!

@@ -10,9 +10,13 @@
  *
  * Le taux est donc repris du devis. Si le devis mélange plusieurs taux, une
  * seule ligne ne peut pas être juste : on émet une ligne par taux, au prorata du
- * TTC que chaque taux représente dans le devis. La remise globale, la retenue de
- * garantie et l'escompte s'appliquent proportionnellement à tous les taux, ils ne
- * changent donc pas ces parts.
+ * TTC que chaque taux représente dans le devis.
+ *
+ * Ces parts suivent les totaux du devis (cf. documentTotals.js côté API) : la
+ * remise globale porte sur le HT des articles seulement, jamais sur les frais
+ * de port. Avec du port à un autre taux que les articles, l'ignorer gonflait la
+ * part des articles et faussait la ventilation. La retenue de garantie et
+ * l'escompte ne modifient pas les totaux : ils ne changent pas ces parts.
  *
  * Ce module est dupliqué à l'identique dans NewbiV2
  * (src/utils/linked-invoice-items.js) et dans l'app mobile
@@ -68,15 +72,23 @@ const itemTotalHT = (item) => {
   return ht;
 };
 
+const isPercentageDiscount = (discountType) =>
+  String(discountType || "").toUpperCase() === "PERCENTAGE";
+
 /**
  * TTC du devis ventilé par taux de TVA (mêmes règles que calculateInvoiceTotals),
- * avec la mention d'exonération rencontrée pour un taux à 0.
+ * avec la mention d'exonération rencontrée pour un taux à 0 :
+ *  1. HT des articles par taux (avancement et remise de ligne appliqués) ;
+ *  2. remise globale sur le HT des articles uniquement (une remise fixe est
+ *     plafonnée à ce HT), répartie entre les taux au prorata de leur HT ;
+ *  3. frais de port facturés ajoutés à leur propre taux, jamais remisés.
  *
  * @returns {Map<number, {ttc: number, exemptionText: string}>}
  */
 export function vatBreakdown(quote) {
   const breakdown = new Map();
-  const add = (rate, ttc, exemptionText) => {
+  const add = (rate, ht, exemptionText) => {
+    const ttc = ht * (1 + rate / 100);
     if (ttc <= 0) return;
     const current = breakdown.get(rate) || { ttc: 0, exemptionText: "" };
     breakdown.set(rate, {
@@ -85,15 +97,40 @@ export function vatBreakdown(quote) {
     });
   };
 
+  // 1. HT des articles par taux
+  const itemsByRate = new Map();
+  let itemsHT = 0;
   const items = Array.isArray(quote?.items) ? quote.items : [];
   for (const item of items) {
     const rate = toNumber(item?.vatRate);
-    add(rate, itemTotalHT(item) * (1 + rate / 100), item?.vatExemptionText);
+    const ht = itemTotalHT(item);
+    itemsHT += ht;
+    const current = itemsByRate.get(rate) || { ht: 0, exemptionText: "" };
+    itemsByRate.set(rate, {
+      ht: current.ht + ht,
+      exemptionText: current.exemptionText || item?.vatExemptionText || "",
+    });
   }
 
+  // 2. Remise globale sur le HT des articles, hors frais de port
+  const discount = toNumber(quote?.discount);
+  let discountAmount = 0;
+  if (discount > 0) {
+    discountAmount = isPercentageDiscount(quote?.discountType)
+      ? (itemsHT * Math.min(discount, 100)) / 100
+      : Math.min(discount, Math.max(0, itemsHT));
+  }
+  const discountRatio =
+    itemsHT > 0 ? Math.max(0, itemsHT - discountAmount) / itemsHT : 0;
+
+  for (const [rate, { ht, exemptionText }] of itemsByRate) {
+    add(rate, ht * discountRatio, exemptionText);
+  }
+
+  // 3. Frais de port facturés, à leur taux (20 % par défaut, comme le schéma)
   if (quote?.shipping?.billShipping) {
-    const rate = toNumber(quote.shipping.shippingVatRate);
-    add(rate, toNumber(quote.shipping.shippingAmountHT) * (1 + rate / 100), "");
+    const rate = toNumber(quote.shipping.shippingVatRate ?? FALLBACK_VAT_RATE);
+    add(rate, toNumber(quote.shipping.shippingAmountHT), "");
   }
 
   return breakdown;
@@ -117,8 +154,7 @@ export function buildLinkedInvoiceItems({ quote, amountTTC, description }) {
     unitPrice,
     vatRate,
     // Obligatoire à 0 %, interdit sinon (cf. models/schemas/item.js).
-    vatExemptionText:
-      vatRate === 0 ? exemptionText || VAT_EXEMPT_MENTION : "",
+    vatExemptionText: vatRate === 0 ? exemptionText || VAT_EXEMPT_MENTION : "",
   });
 
   // Auto-liquidation / franchise en base : la facture liée ne porte pas de TVA,

@@ -17,6 +17,7 @@ import {
   updateOrganizationRole,
 } from "../services/organizationRoleService.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { teamVisibilityFromGrid } from "../utils/memberVisibility.js";
 
 function isOwner(context) {
   return String(context.userRole || "")
@@ -58,9 +59,14 @@ const organizationRoleResolvers = {
     roleCatalog: withOrganization(() => catalog),
 
     // Lisible par tout membre : libellés des rôles affichés partout
-    // (liste des membres, sélecteurs), la grille n'a rien de sensible
+    // (liste des membres, sélecteurs), la grille n'a rien de sensible. Les
+    // effectifs par rôle (membres, invitations en attente) suivent « Voir
+    // les membres » : null sans ce droit.
     organizationRoles: withOrganization((_, __, context) =>
-      listOrganizationRoles(context.organizationId),
+      listOrganizationRoles(context.organizationId, {
+        includeUsage: teamVisibilityFromGrid(context.permissionLevels)
+          .canViewTeam,
+      }),
     ),
 
     myPermissions: withOrganization(async (_, __, context) => {

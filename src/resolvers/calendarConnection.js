@@ -13,7 +13,10 @@ import {
   registerWebhookForConnection,
 } from "../services/calendar/CalendarWebhookService.js";
 import logger from "../utils/logger.js";
-import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 
 const calendarConnectionResolvers = {
   Query: {
@@ -448,7 +451,7 @@ const calendarConnectionResolvers = {
       }
     },
 
-    pushEventToCalendar: async (_, { input }, { user }) => {
+    pushEventToCalendar: async (_, { input }, { user, workspaceId }) => {
       if (!user) {
         return { success: false, message: "Non authentifié", connection: null };
       }
@@ -464,6 +467,20 @@ const calendarConnectionResolvers = {
           return {
             success: false,
             message: "Connexion non trouvée",
+            connection: null,
+          };
+        }
+
+        // L'événement doit appartenir à l'espace actif (l'envoi modifie ses
+        // liens vers les calendriers externes)
+        const eventInWorkspace = await Event.exists({
+          _id: input.eventId,
+          workspaceId: workspaceId,
+        });
+        if (!eventInWorkspace) {
+          return {
+            success: false,
+            message: "Événement non trouvé",
             connection: null,
           };
         }
@@ -598,6 +615,29 @@ const calendarConnectionResolvers = {
     },
   },
 };
+
+// Connecter, synchroniser ou régler un calendrier externe, envoyer un
+// événement vers celui-ci : droit « Modifier » du calendrier dans l'espace
+// actif (comme l'écran, qui masque ces actions sans ce droit). La
+// déconnexion reste ouverte : chacun peut toujours retirer l'accès à son
+// propre compte externe.
+const CAL_EDIT = [
+  "connectAppleCalendar",
+  "updateSelectedCalendars",
+  "syncCalendar",
+  "syncAllCalendars",
+  "pushEventToCalendar",
+  "updateAutoSync",
+];
+CAL_EDIT.forEach((name) => {
+  const original = calendarConnectionResolvers.Mutation[name];
+  if (original) {
+    calendarConnectionResolvers.Mutation[name] = requireWorkspaceAction(
+      "calendar",
+      "edit",
+    )(original);
+  }
+});
 
 // ✅ Phase A.4 — Subscription check on calendar connection mutations (exclude disconnectCalendar)
 const CAL_BLOCK = [

@@ -5,7 +5,10 @@
 // - Un document par tâche (`kanban-task:{taskId}`), champ Yjs "default".
 // - Chargement : état Yjs stocké (KanbanCollabDoc) si le HTML de la tâche n'a
 //   pas bougé entre-temps, sinon reconstruction depuis `task.description`
-//   (modifié hors collab : app mobile, import…).
+//   (modifié hors collab : app mobile, import…). La reconstruction est
+//   déterministe et exclusive (verrou Redis), puis enregistrée : deux
+//   instances qui ouvrent la tâche en même temps ont le même document et la
+//   fusion par l'extension Redis ne double pas le texte.
 // - Enregistrement (débouncé par Hocuspocus) : état Yjs + HTML réécrit dans
 //   `task.description` pour tout ce qui lit du HTML (cartes, PDF, mobile),
 //   événement TASK_UPDATED pour les autres écrans, entrée d'activité
@@ -71,10 +74,105 @@ const taskIdFromDocumentName = (documentName) =>
     ? documentName.slice(DOCUMENT_PREFIX.length)
     : null;
 
+// Identifiant de client Yjs (entier 32 bits) dérivé du contenu
+const contentClientId = (json) =>
+  parseInt(sha1(JSON.stringify(json)).slice(0, 8), 16) || 1;
+
+/**
+ * Mise à jour Yjs construite depuis le HTML, DÉTERMINISTE : même HTML →
+ * mêmes octets (clientID dérivé du contenu, horloges à partir de 0).
+ *
+ * Deux instances PM2 qui ouvrent en même temps une tâche jamais éditée en
+ * collab (ou dont l'empreinte a changé) construisent chacune le document
+ * depuis le HTML. Avec un clientID aléatoire par construction, Yjs voyait
+ * deux insertions distinctes du même texte et l'extension Redis, en
+ * fusionnant les deux documents, doublait le contenu. Avec des identifiants
+ * identiques, la fusion reconnaît les mêmes éléments et ne double rien.
+ *
+ * TiptapTransformer crée son propre Y.Doc (clientID aléatoire) : ses nœuds
+ * sont clonés dans un document au clientID fixé (comme replaceDocumentHtml).
+ */
 export const htmlToYdocUpdate = (html) => {
   const json = generateJSON(html || "<p></p>", collabExtensions);
-  const ydoc = TiptapTransformer.toYdoc(json, FIELD, collabExtensions);
-  return Y.encodeStateAsUpdate(ydoc);
+  const source = TiptapTransformer.toYdoc(json, FIELD, collabExtensions);
+  const target = new Y.Doc();
+  try {
+    target.clientID = contentClientId(json);
+    const nodes = source
+      .getXmlFragment(FIELD)
+      .toArray()
+      .map((node) => node.clone());
+    target.transact(() => {
+      target.getXmlFragment(FIELD).insert(0, nodes);
+    });
+    return Y.encodeStateAsUpdate(target);
+  } finally {
+    source.destroy();
+    target.destroy();
+  }
+};
+
+// --- Construction et enregistrement exclusifs --------------------------------
+//
+// Verrou Redis par tâche (SET NX PX) pris par loadDocument (lecture de
+// l'empreinte + construction + enregistrement de l'état construit) et par
+// storeDocument (écriture de task.description puis de KanbanCollabDoc) :
+// - une seule instance construit le document ; l'autre attend le verrou puis
+//   recharge l'état stocké par la gagnante (mêmes octets) ;
+// - un chargement ne lit jamais l'état entre les deux écritures d'un
+//   enregistrement (HTML neuf mais empreinte ancienne : il reconstruirait
+//   une autre histoire que celle du document ouvert ailleurs, et la fusion
+//   doublerait le texte).
+// Sans Redis (développement local, une seule instance) ou verrou introuvable
+// à temps : on continue sans, la construction déterministe évite déjà le
+// doublon.
+const DOCUMENT_LOCK_PREFIX = "kanban-collab:document-lock:";
+const DOCUMENT_LOCK_TTL_MS = 10 * 1000;
+const DOCUMENT_LOCK_WAIT_MS = 5 * 1000;
+const DOCUMENT_LOCK_RETRY_MS = 50;
+const RELEASE_LOCK_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export const withDocumentLock = async (taskId, fn) => {
+  const client = getCacheClient();
+  if (!client || !taskId) return fn();
+  const key = `${DOCUMENT_LOCK_PREFIX}${taskId}`;
+  const token = `${process.pid}:${crypto.randomUUID()}`;
+  const deadline = Date.now() + DOCUMENT_LOCK_WAIT_MS;
+  let acquired = false;
+  try {
+    for (;;) {
+      acquired =
+        (await client.set(key, token, "PX", DOCUMENT_LOCK_TTL_MS, "NX")) ===
+        "OK";
+      if (acquired || Date.now() >= deadline) break;
+      await sleep(DOCUMENT_LOCK_RETRY_MS);
+    }
+  } catch (error) {
+    logger.warn(
+      `[Collab] Verrou du document ${taskId} indisponible:`,
+      error.message,
+    );
+  }
+  if (!acquired) {
+    logger.warn(
+      `[Collab] Verrou du document ${taskId} non obtenu, on continue`,
+    );
+  }
+  try {
+    return await fn();
+  } finally {
+    if (acquired) {
+      try {
+        await client.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
+      } catch (error) {
+        // Il expirera de lui-même (TTL)
+        logger.debug("[Collab] Libération du verrou:", error.message);
+      }
+    }
+  }
 };
 
 export const ydocToHtml = (document) => {
@@ -148,30 +246,60 @@ const authenticateOrThrow = async ({
   };
 };
 
-const loadDocument = async ({ documentName, document }) => {
-  const taskId = taskIdFromDocumentName(documentName);
-  logger.info(`[Collab] Chargement du document de la tâche ${taskId}`);
+// État initial du document : état stocké si le HTML de la tâche n'a pas
+// bougé, sinon construit depuis le HTML et enregistré aussitôt (sous verrou,
+// voir withDocumentLock) pour que toute autre instance recharge les mêmes
+// octets au lieu de reconstruire.
+const readInitialState = async (taskId) => {
   const task = await Task.findById(taskId).select("description");
-  if (!task) return document;
+  if (!task) return null;
   const html = task.description || "";
+  const htmlHash = sha1(html);
   const stored = await KanbanCollabDoc.findOne({ taskId }).lean();
 
-  if (stored && stored.htmlHash === sha1(html)) {
-    Y.applyUpdate(document, new Uint8Array(stored.state.buffer));
-  } else {
-    // Première ouverture, ou description modifiée hors collab : on repart
-    // du HTML de la tâche (source de vérité pour tous les autres écrans)
-    Y.applyUpdate(document, htmlToYdocUpdate(html));
-    if (stored) {
-      logger.info(
-        `[Collab] Description de ${taskId} modifiée hors collab, document reconstruit`,
-      );
-    }
+  if (stored && stored.htmlHash === htmlHash) {
+    return new Uint8Array(stored.state.buffer);
   }
+
+  // Première ouverture, ou description modifiée hors collab : on repart
+  // du HTML de la tâche (source de vérité pour tous les autres écrans)
+  const update = htmlToYdocUpdate(html);
+  if (stored) {
+    logger.info(
+      `[Collab] Description de ${taskId} modifiée hors collab, document reconstruit`,
+    );
+  }
+  try {
+    await KanbanCollabDoc.updateOne(
+      { taskId },
+      { $set: { field: FIELD, state: Buffer.from(update), htmlHash } },
+      { upsert: true },
+    );
+  } catch (error) {
+    // Construction déterministe : une autre instance qui reconstruit
+    // obtiendra les mêmes octets
+    logger.warn(
+      `[Collab] État initial de ${taskId} non enregistré:`,
+      error.message,
+    );
+  }
+  return update;
+};
+
+export const loadDocument = async ({ documentName, document }) => {
+  const taskId = taskIdFromDocumentName(documentName);
+  logger.info(`[Collab] Chargement du document de la tâche ${taskId}`);
+  const state = await withDocumentLock(taskId, () => readInitialState(taskId));
+  if (state) Y.applyUpdate(document, state);
   return document;
 };
 
-const storeDocument = async ({ documentName, document, lastContext }) => {
+export const storeDocument = (payload) =>
+  withDocumentLock(taskIdFromDocumentName(payload.documentName), () =>
+    writeDocument(payload),
+  );
+
+const writeDocument = async ({ documentName, document, lastContext }) => {
   const taskId = taskIdFromDocumentName(documentName);
   const html = ydocToHtml(document);
   const state = Buffer.from(Y.encodeStateAsUpdate(document));

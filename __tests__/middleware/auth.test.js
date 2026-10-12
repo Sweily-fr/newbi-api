@@ -42,7 +42,6 @@ import {
   withWorkspace,
 } from "../../src/middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../../src/middlewares/org-resolver.js";
-import { AppError, ERROR_CODES } from "../../src/utils/errors.js";
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -5,6 +5,7 @@ import {
   levelsAllowLevel,
 } from "../config/rolePermissions.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
+import { toObjectIdOrNull } from "./objectIdString.js";
 
 /**
  * Vérifie que l'utilisateur fait partie du workspace cible. Pattern aligné
@@ -14,14 +15,21 @@ import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
  * Retourne `true` si membre, `false` sinon (et logge un warn en cas de
  * tentative cross-tenant — utile pour détecter un client mal configuré ou un
  * abus).
+ *
+ * 🔐 Identifiants venus du client : seule une chaîne d'ObjectId est
+ * acceptée (un objet `{ "$ne": null }` lu dans un corps JSON ou une query
+ * string devenait un opérateur et trouvait n'importe quelle adhésion).
  */
 export async function userBelongsToWorkspace(userId, workspaceId) {
   try {
-    const { ObjectId } = mongoose.Types;
-    const orgObjectId =
-      typeof workspaceId === "string" ? new ObjectId(workspaceId) : workspaceId;
-    const userObjectId =
-      typeof userId === "string" ? new ObjectId(userId) : userId;
+    const orgObjectId = toObjectIdOrNull(workspaceId);
+    const userObjectId = toObjectIdOrNull(userId);
+    if (!orgObjectId || !userObjectId) {
+      logger.warn(
+        `userBelongsToWorkspace: identifiant invalide refusé (user ${typeof userId}, workspace ${typeof workspaceId})`,
+      );
+      return false;
+    }
     const member = await mongoose.connection.db.collection("member").findOne({
       organizationId: orgObjectId,
       userId: userObjectId,
@@ -44,11 +52,13 @@ export async function userBelongsToWorkspace(userId, workspaceId) {
  * workspace (rôles prédéfinis ou personnalisés), null s'il n'est pas membre.
  */
 async function workspaceMemberGrid(userId, workspaceId) {
-  const { ObjectId } = mongoose.Types;
+  // Même règle que userBelongsToWorkspace : identifiants d'ObjectId seulement
+  const orgObjectId = toObjectIdOrNull(workspaceId);
+  const userObjectId = toObjectIdOrNull(userId);
+  if (!orgObjectId || !userObjectId) return null;
   const member = await mongoose.connection.db.collection("member").findOne({
-    organizationId:
-      typeof workspaceId === "string" ? new ObjectId(workspaceId) : workspaceId,
-    userId: typeof userId === "string" ? new ObjectId(userId) : userId,
+    organizationId: orgObjectId,
+    userId: userObjectId,
   });
   if (!member) return null;
   const role = String(member.role || "").toLowerCase();

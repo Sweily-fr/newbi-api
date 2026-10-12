@@ -1,11 +1,17 @@
 import crypto from "crypto";
+import mongoose from "mongoose";
 import FileTransfer from "../models/FileTransfer.js";
 import DownloadEvent from "../models/DownloadEvent.js";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import logger from "../utils/logger.js";
 import { registerTransferDownload } from "../services/transferDownloadService.js";
-import { checkTransferRecipientAccess } from "../utils/transferAccess.js";
+import {
+  checkTransferRecipientAccess,
+  isTransferOwnerRequest,
+} from "../utils/transferAccess.js";
+import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 // 🔐 Comparaison à temps constant du secret de partage (shareLink / accessKey).
 function timingSafeEq(a, b) {
@@ -375,27 +381,72 @@ export const markDownloadCompleted = async (req, res) => {
   }
 };
 
+/**
+ * Propriétaire du transfert, seul autorisé à voir le détail des
+ * téléchargements (adresses IP, e-mails, navigateurs) : jeton propriétaire
+ * (ownerToken en query ou en-tête x-owner-download-token, remis au tableau
+ * de bord et à l'app mobile), ou session de son auteur ayant encore la
+ * lecture des transferts dans l'espace du transfert (mêmes règles que
+ * fileTransferById).
+ */
+async function isTransferStatsOwner(fileTransfer, req) {
+  if (isTransferOwnerRequest(fileTransfer, req)) return true;
+
+  let user = null;
+  try {
+    user = await betterAuthJWTMiddleware(req);
+  } catch {
+    return false;
+  }
+  const userId = user?._id || user?.id;
+  if (!userId || String(userId) !== String(fileTransfer.userId)) return false;
+
+  if (!fileTransfer.workspaceId) return true;
+  return userHasWorkspaceLevel(
+    String(userId),
+    String(fileTransfer.workspaceId),
+    "fileTransfers",
+    "read",
+  );
+}
+
+// Détail d'un téléchargement pour le propriétaire : jamais l'URL signée du
+// fichier (elle le donne sans mot de passe tant qu'elle n'a pas expiré)
+const toOwnerDownloadEvent = ({ downloadUrl: _signedUrl, ...event }) => event;
+
 // Obtenir les statistiques de téléchargement
 export const getDownloadStats = async (req, res) => {
   try {
     const { transferId } = req.params;
 
-    // 🔐 Ces stats contiennent des PII de destinataires (emails, IP) : exiger le
-    // secret de partage du transfert (pas seulement un transferId devinable).
-    const fileTransfer = await FileTransfer.findById(transferId);
+    const fileTransfer = mongoose.isValidObjectId(transferId)
+      ? await FileTransfer.findById(transferId)
+      : null;
     if (!fileTransfer) {
       return res
         .status(404)
         .json({ success: false, error: "Transfert non trouvé" });
     }
-    const secretErr = checkTransferShareSecret(fileTransfer, req);
-    if (secretErr) {
-      return res
-        .status(secretErr.status)
-        .json({ success: false, error: secretErr.error });
+
+    // 🔐 Le détail des téléchargements (adresses IP, e-mails, navigateurs et
+    // URL signées des fichiers) était remis à tout détenteur du lien. Il est
+    // réservé au propriétaire ; avec le seul secret de partage (lien + clé),
+    // on ne reçoit plus que les compteurs.
+    const isOwner = await isTransferStatsOwner(fileTransfer, req);
+    if (!isOwner) {
+      const secretErr = checkTransferShareSecret(fileTransfer, req);
+      if (secretErr) {
+        return res
+          .status(secretErr.status)
+          .json({ success: false, error: secretErr.error });
+      }
     }
 
     const stats = await DownloadEvent.getDownloadStats(transferId);
+    if (!isOwner) {
+      return res.json({ success: true, stats });
+    }
+
     const recentDownloads = await DownloadEvent.getRecentDownloads(
       transferId,
       20,
@@ -404,7 +455,7 @@ export const getDownloadStats = async (req, res) => {
     res.json({
       success: true,
       stats,
-      recentDownloads,
+      recentDownloads: recentDownloads.map(toOwnerDownloadEvent),
     });
   } catch (error) {
     logger.error("❌ Erreur récupération stats:", error);

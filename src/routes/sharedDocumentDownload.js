@@ -9,6 +9,10 @@ import convert from "heic-convert";
 import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
+import { isObjectIdString } from "../utils/objectIdString.js";
+import { levelsAllowAction } from "../config/rolePermissions.js";
+import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
+import { loadSharedFolderAccess } from "../services/sharedFolderAccess.js";
 import {
   streamFolderAsZip,
   streamSelectionAsZip,
@@ -55,30 +59,108 @@ const s3Client = new S3Client({
 
 const router = express.Router();
 
+const NOT_MEMBER_MESSAGE = "Accès non autorisé à cet espace de travail";
+const NO_RIGHT_MESSAGE =
+  "Vous n'avez pas la permission d'effectuer cette action.";
+
 /**
- * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé.
- * Sans ce contrôle, le workspaceId fourni par le client suffisait à télécharger
- * les documents partagés de n'importe quelle organisation (IDOR).
- * Renvoie true si l'accès est autorisé, sinon répond 403 et renvoie false.
+ * 🔐 Vérifie que l'utilisateur authentifié est bien membre du workspace demandé
+ * ET que son rôle a « Voir » sur les documents partagés (grille des rôles,
+ * comme les queries GraphQL du module : requireRead("sharedDocuments")).
+ * Sans le premier contrôle, le workspaceId fourni par le client suffisait à
+ * télécharger les documents partagés de n'importe quelle organisation
+ * (IDOR) ; sans le second, un rôle sans accès aux documents partagés (page
+ * masquée, queries refusées) téléchargeait et prévisualisait quand même
+ * leurs fichiers par ces routes.
+ *
+ * Seule une chaîne d'ObjectId est acceptée : un objet `{ "$ne": … }` (corps
+ * JSON, ou query `?workspaceId[$ne]=…`) passait le contrôle d'appartenance
+ * et, réutilisé dans les filtres, ouvrait les documents de tous les espaces.
+ *
+ * Renvoie `{ workspaceId, canAccess }` : l'identifiant d'espace validé (à
+ * utiliser dans les filtres) et la visibilité des dossiers pour cet
+ * utilisateur (dossiers privés, même règle que les queries GraphQL : voir
+ * sharedFolderAccess.js). Sinon répond 403 et renvoie null.
  */
-async function ensureWorkspaceMember(user, workspaceId, res) {
+async function ensureSharedDocumentsView(user, workspaceId, res) {
+  const deny = (message) => {
+    res.status(403).json({ success: false, message });
+    return null;
+  };
+  if (!isObjectIdString(workspaceId)) return deny(NOT_MEMBER_MESSAGE);
   try {
     const org = await getActiveOrganization(String(user._id), workspaceId);
-    if (!org) {
-      res.status(403).json({
+    if (!org) return deny(NOT_MEMBER_MESSAGE);
+    const grid = await getEffectiveLevelsFor(org.id, org.memberRole);
+    if (!levelsAllowAction(grid, "sharedDocuments", "view")) {
+      logger.warn(
+        `Documents partagés (REST) : refus user=${user._id} workspace=${org.id} (${org.memberRole}) sans « Voir »`,
+      );
+      return deny(NO_RIGHT_MESSAGE);
+    }
+    const { canAccess } = await loadSharedFolderAccess(org.id, user._id);
+    return { workspaceId: org.id, canAccess };
+  } catch {
+    return deny(NOT_MEMBER_MESSAGE);
+  }
+}
+
+// Identifiants de dossiers et de documents : chaînes d'ObjectId seulement
+// (un objet { "$ne": … } deviendrait un opérateur dans les filtres)
+const isIdList = (value) =>
+  Array.isArray(value) && value.every((id) => isObjectIdString(id));
+
+const invalidId = (res) =>
+  res.status(400).json({ success: false, message: "Identifiant invalide" });
+
+const FOLDER_NOT_FOUND = "Dossier non trouvé ou accès non autorisé";
+const DOCUMENT_NOT_FOUND = "Document non trouvé ou accès non autorisé";
+
+/**
+ * Dossier de l'espace visible par l'utilisateur (un dossier privé auquel il
+ * n'a pas accès répond comme un dossier introuvable), sinon null.
+ */
+async function findAccessibleFolder(folderId, workspaceId, canAccess) {
+  const folder = await verifyFolderAccess(folderId, workspaceId);
+  return folder && canAccess(folder._id) ? folder : null;
+}
+
+/**
+ * Chaque dossier et document sélectionné existe dans l'espace et est visible
+ * par l'utilisateur ; sinon répond 404 et renvoie false.
+ */
+async function ensureSelectionAccessible(
+  { folderIds = [], documentIds = [] },
+  workspaceId,
+  canAccess,
+  res,
+) {
+  for (const folderId of folderIds) {
+    if (!(await findAccessibleFolder(folderId, workspaceId, canAccess))) {
+      res.status(404).json({
         success: false,
-        message: "Accès non autorisé à cet espace de travail",
+        message: `Dossier ${folderId} non trouvé ou accès non autorisé`,
       });
       return false;
     }
-    return true;
-  } catch {
-    res.status(403).json({
-      success: false,
-      message: "Accès non autorisé à cet espace de travail",
-    });
-    return false;
   }
+  if (documentIds.length > 0) {
+    const docs = await SharedDocument.find({
+      _id: { $in: documentIds },
+      workspaceId,
+    });
+    if (
+      docs.length !== new Set(documentIds).size ||
+      docs.some((doc) => !canAccess(doc.folderId))
+    ) {
+      res.status(404).json({
+        success: false,
+        message: "Un ou plusieurs documents non trouvés ou accès non autorisé",
+      });
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -97,17 +179,24 @@ router.get("/download-folder", async (req, res) => {
       });
     }
 
-    const { folderId, workspaceId } = req.query;
+    const { folderId, workspaceId: requestedWorkspaceId } = req.query;
 
     // Validation des paramètres
-    if (!folderId || !workspaceId) {
+    if (!folderId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "folderId et workspaceId sont requis",
       });
     }
+    if (!isObjectIdString(folderId)) return invalidId(res);
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
     logger.info("📥 Demande téléchargement dossier ZIP", {
       folderId,
@@ -115,17 +204,17 @@ router.get("/download-folder", async (req, res) => {
       userId: user._id,
     });
 
-    // Vérifier l'accès au dossier
-    const folder = await verifyFolderAccess(folderId, workspaceId);
+    // Vérifier l'accès au dossier (dossier privé compris)
+    const folder = await findAccessibleFolder(folderId, workspaceId, canAccess);
     if (!folder) {
       return res.status(404).json({
         success: false,
-        message: "Dossier non trouvé ou accès non autorisé",
+        message: FOLDER_NOT_FOUND,
       });
     }
 
-    // Générer et streamer le ZIP
-    await streamFolderAsZip(folderId, workspaceId, res);
+    // Générer et streamer le ZIP (sans les sous-dossiers privés inaccessibles)
+    await streamFolderAsZip(folderId, workspaceId, res, { canAccess });
   } catch (error) {
     logger.error("❌ Erreur téléchargement dossier ZIP:", error);
 
@@ -155,30 +244,37 @@ router.get("/folder-info", async (req, res) => {
       });
     }
 
-    const { folderId, workspaceId } = req.query;
+    const { folderId, workspaceId: requestedWorkspaceId } = req.query;
 
     // Validation des paramètres
-    if (!folderId || !workspaceId) {
+    if (!folderId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "folderId et workspaceId sont requis",
       });
     }
+    if (!isObjectIdString(folderId)) return invalidId(res);
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
-    // Vérifier l'accès au dossier
-    const folder = await verifyFolderAccess(folderId, workspaceId);
+    // Vérifier l'accès au dossier (dossier privé compris)
+    const folder = await findAccessibleFolder(folderId, workspaceId, canAccess);
     if (!folder) {
       return res.status(404).json({
         success: false,
-        message: "Dossier non trouvé ou accès non autorisé",
+        message: FOLDER_NOT_FOUND,
       });
     }
 
     // Récupérer les informations
     const { totalSize, totalFiles, rootFolderName } =
-      await getDocumentsWithPaths(folderId, workspaceId);
+      await getDocumentsWithPaths(folderId, workspaceId, { canAccess });
 
     return res.json({
       success: true,
@@ -218,14 +314,22 @@ router.post("/download-selection", async (req, res) => {
       folderIds = [],
       documentIds = [],
       excludedFolderIds = [],
-      workspaceId,
+      workspaceId: requestedWorkspaceId,
     } = req.body;
 
-    if (!workspaceId) {
+    if (!requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "workspaceId est requis",
       });
+    }
+
+    if (
+      !isIdList(folderIds) ||
+      !isIdList(documentIds) ||
+      !isIdList(excludedFolderIds)
+    ) {
+      return invalidId(res);
     }
 
     if (folderIds.length === 0 && documentIds.length === 0) {
@@ -235,7 +339,13 @@ router.post("/download-selection", async (req, res) => {
       });
     }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
     logger.info("📥 Demande téléchargement sélection ZIP", {
       folderIds,
@@ -245,34 +355,15 @@ router.post("/download-selection", async (req, res) => {
       userId: user._id,
     });
 
-    // Verify access to each folder
-    for (const folderId of folderIds) {
-      const folder = await verifyFolderAccess(folderId, workspaceId);
-      if (!folder) {
-        return res.status(404).json({
-          success: false,
-          message: `Dossier ${folderId} non trouvé ou accès non autorisé`,
-        });
-      }
+    if (
+      !(await ensureSelectionAccessible(req.body, workspaceId, canAccess, res))
+    ) {
+      return;
     }
 
-    // Verify access to each document
-    if (documentIds.length > 0) {
-      const docs = await SharedDocument.find({
-        _id: { $in: documentIds },
-        workspaceId,
-      });
-      if (docs.length !== documentIds.length) {
-        return res.status(404).json({
-          success: false,
-          message:
-            "Un ou plusieurs documents non trouvés ou accès non autorisé",
-        });
-      }
-    }
-
+    // Sous-dossiers privés inaccessibles exclus du ZIP
     await streamSelectionAsZip(
-      { folderIds, documentIds, excludedFolderIds, workspaceId },
+      { folderIds, documentIds, excludedFolderIds, workspaceId, canAccess },
       res,
     );
   } catch (error) {
@@ -301,32 +392,46 @@ router.post("/selection-info", async (req, res) => {
       });
     }
 
-    const { folderIds = [], documentIds = [], workspaceId } = req.body;
+    const {
+      folderIds = [],
+      documentIds = [],
+      workspaceId: requestedWorkspaceId,
+    } = req.body;
 
-    if (!workspaceId) {
+    if (!requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "workspaceId est requis",
       });
     }
+    if (!isIdList(folderIds) || !isIdList(documentIds)) {
+      return invalidId(res);
+    }
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
-    // Verify access
-    for (const folderId of folderIds) {
-      const folder = await verifyFolderAccess(folderId, workspaceId);
-      if (!folder) {
-        return res.status(404).json({
-          success: false,
-          message: `Dossier ${folderId} non trouvé ou accès non autorisé`,
-        });
-      }
+    if (
+      !(await ensureSelectionAccessible(
+        { folderIds, documentIds },
+        workspaceId,
+        canAccess,
+        res,
+      ))
+    ) {
+      return;
     }
 
     const info = await getSelectionInfo({
       folderIds,
       documentIds,
       workspaceId,
+      canAccess,
     });
 
     return res.json({
@@ -359,26 +464,34 @@ router.get("/download-file/:documentId", async (req, res) => {
     }
 
     const { documentId } = req.params;
-    const { workspaceId } = req.query;
+    const { workspaceId: requestedWorkspaceId } = req.query;
 
-    if (!documentId || !workspaceId) {
+    if (!documentId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "documentId et workspaceId sont requis",
       });
     }
+    if (!isObjectIdString(documentId)) return invalidId(res);
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
     });
 
-    if (!document) {
+    // Document d'un dossier privé inaccessible : comme introuvable
+    if (!document || !canAccess(document.folderId)) {
       return res.status(404).json({
         success: false,
-        message: "Document non trouvé ou accès non autorisé",
+        message: DOCUMENT_NOT_FOUND,
       });
     }
 
@@ -445,26 +558,34 @@ router.get("/preview-file/:documentId", async (req, res) => {
     }
 
     const { documentId } = req.params;
-    const { workspaceId } = req.query;
+    const { workspaceId: requestedWorkspaceId } = req.query;
 
-    if (!documentId || !workspaceId) {
+    if (!documentId || !requestedWorkspaceId) {
       return res.status(400).json({
         success: false,
         message: "documentId et workspaceId sont requis",
       });
     }
+    if (!isObjectIdString(documentId)) return invalidId(res);
 
-    if (!(await ensureWorkspaceMember(user, workspaceId, res))) return;
+    const access = await ensureSharedDocumentsView(
+      user,
+      requestedWorkspaceId,
+      res,
+    );
+    if (!access) return;
+    const { workspaceId, canAccess } = access;
 
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
     });
 
-    if (!document) {
+    // Document d'un dossier privé inaccessible : comme introuvable
+    if (!document || !canAccess(document.folderId)) {
       return res.status(404).json({
         success: false,
-        message: "Document non trouvé ou accès non autorisé",
+        message: DOCUMENT_NOT_FOUND,
       });
     }
 

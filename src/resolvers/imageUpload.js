@@ -5,6 +5,7 @@ import logger from "../utils/logger.js";
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { requireWorkspaceAction } from "../middlewares/rbac.js";
 import cloudflareService from "../services/cloudflareService.js";
 import User from "../models/User.js";
 import {
@@ -422,5 +423,23 @@ const imageUploadResolvers = {
     }),
   },
 };
+
+// Images des signatures de mail : droit d'écrire sur la page Signature de
+// mail dans l'espace actif (créer ou modifier une signature ; la suppression
+// d'une image accepte aussi « Supprimer »)
+const SIGNATURE_IMAGE_ACTIONS = {
+  uploadSignatureImage: ["create", "edit"],
+  uploadSocialLogo: ["create", "edit"],
+  deleteSignatureImage: ["create", "edit", "delete"],
+};
+Object.entries(SIGNATURE_IMAGE_ACTIONS).forEach(([name, actions]) => {
+  const original = imageUploadResolvers.Mutation[name];
+  if (original) {
+    imageUploadResolvers.Mutation[name] = requireWorkspaceAction(
+      "signatures",
+      actions,
+    )(original);
+  }
+});
 
 export default imageUploadResolvers;

@@ -1796,10 +1796,12 @@ const importedInvoiceResolvers = {
      * Achète des imports OCR supplémentaires
      * Note: Cette mutation enregistre l'achat. L'intégration Stripe est à implémenter
      * selon votre configuration de paiement existante.
+     * Un achat engage l'espace : droit « Gérer l'abonnement » (et non plus
+     * « Importer » des factures).
      */
     purchaseExtraOcrImports: requireAction(
-      "importedInvoices",
-      "import",
+      "billing",
+      "manage",
     )(
       async (
         _,
