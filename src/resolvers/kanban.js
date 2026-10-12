@@ -262,8 +262,9 @@ const notifyTaskAssignment = ({
   (async () => {
     try {
       const db = mongoose.connection.db;
-      const board = await Board.findById(task.boardId);
-      const column = await Column.findById(task.columnId);
+      // Titres lus dans l'espace de la tâche seulement
+      const board = await Board.findOne({ _id: task.boardId, workspaceId });
+      const column = await Column.findOne({ _id: task.columnId, workspaceId });
       const assignerName =
         actorData?.name || user?.name || user?.email || "Un membre de l'équipe";
       const assignerImage =
@@ -2020,6 +2021,15 @@ const resolvers = {
           });
         }
 
+        // Membres assignés : ceux de l'espace seulement (un id quelconque
+        // recevait e-mail et notification, et son identité s'affichait)
+        if (Array.isArray(cleanedInput.assignedMembers)) {
+          cleanedInput.assignedMembers = await keepWorkspaceMembers(
+            cleanedInput.assignedMembers,
+            finalWorkspaceId,
+          );
+        }
+
         // Calculer la position correcte en fonction des tâches existantes dans la colonne
         // Par défaut, ajouter en haut (position 0)
         let position = input.position !== undefined ? input.position : 0;
@@ -2169,8 +2179,14 @@ const resolvers = {
               const db = mongoose.connection.db;
 
               // Récupérer les infos du board et de la colonne
-              const board = await Board.findById(savedTask.boardId);
-              const column = await Column.findById(savedTask.columnId);
+              const board = await Board.findOne({
+                _id: savedTask.boardId,
+                workspaceId: finalWorkspaceId,
+              });
+              const column = await Column.findOne({
+                _id: savedTask.columnId,
+                workspaceId: finalWorkspaceId,
+              });
               const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
 
@@ -2581,7 +2597,18 @@ const resolvers = {
           };
 
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
-          const newMembers = normalizeMembers(updates.assignedMembers);
+          // Nouveaux membres : ceux de l'espace seulement (les membres déjà
+          // assignés restent, même partis de l'espace)
+          const requestedMembers = normalizeMembers(updates.assignedMembers);
+          const allowedNewMembers = new Set(
+            await keepWorkspaceMembers(
+              requestedMembers.filter((m) => !oldMembers.includes(m)),
+              finalWorkspaceId,
+            ),
+          );
+          const newMembers = requestedMembers.filter(
+            (m) => oldMembers.includes(m) || allowedNewMembers.has(m),
+          );
 
           logger.debug(
             `📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`,
@@ -2917,6 +2944,18 @@ const resolvers = {
           throw new AppError("Membre manquant", ERROR_CODES.VALIDATION_ERROR, {
             field: "memberId",
           });
+        }
+        // Un membre de l'espace seulement
+        const [workspaceMember] = await keepWorkspaceMembers(
+          [member],
+          finalWorkspaceId,
+        );
+        if (!workspaceMember) {
+          throw new AppError(
+            "Membre introuvable dans l'espace",
+            ERROR_CODES.NOT_FOUND,
+            { resource: "Member" },
+          );
         }
 
         const task = await applyAtomicTaskChange({
@@ -3601,7 +3640,12 @@ const resolvers = {
           }
 
           // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
-          const mentionedUserIds = input.mentionedUserIds || [];
+          // Mentions : membres de l'espace seulement (un id quelconque
+          // recevait e-mail et notification)
+          const mentionedUserIds = await keepWorkspaceMembers(
+            input.mentionedUserIds,
+            finalWorkspaceId,
+          );
           const comment = {
             userId: user.id,
             content: input.content || "",
@@ -3714,7 +3758,10 @@ const resolvers = {
                   null;
 
                 // Récupérer les infos du board
-                const board = await Board.findById(task.boardId);
+                const board = await Board.findOne({
+                  _id: task.boardId,
+                  workspaceId: finalWorkspaceId,
+                });
                 const boardName = board?.title || "Tableau sans nom";
 
                 // Extraire un extrait du commentaire (texte brut, sans HTML)
@@ -3894,10 +3941,14 @@ const resolvers = {
             throw new Error("Not authorized to edit this comment");
           }
 
-          // Détecter les nouvelles mentions (pas déjà présentes dans le commentaire)
+          // Détecter les nouvelles mentions (pas déjà présentes dans le
+          // commentaire), membres de l'espace seulement
           const previousMentions = comment.mentions || [];
-          const newMentionedUserIds = (mentionedUserIds || []).filter(
-            (id) => !previousMentions.includes(id),
+          const newMentionedUserIds = await keepWorkspaceMembers(
+            (mentionedUserIds || []).filter(
+              (id) => !previousMentions.includes(id),
+            ),
+            finalWorkspaceId,
           );
 
           comment.content = content;
@@ -3945,7 +3996,10 @@ const resolvers = {
                   authorData?.profile?.profilePicture ||
                   null;
 
-                const board = await Board.findById(task.boardId);
+                const board = await Board.findOne({
+                  _id: task.boardId,
+                  workspaceId: finalWorkspaceId,
+                });
                 const boardName = board?.title || "Tableau sans nom";
                 const commentExcerpt = (content || "")
                   .replace(/<[^>]*>/g, "")
