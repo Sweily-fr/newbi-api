@@ -48,6 +48,9 @@ export function canAccessFolder(userId, folder, effectiveVis) {
  *   ci-dessus ;
  * - `canAccessDocument(doc)` : dossier actuel et, pour un document mis à la
  *   corbeille, dossier d'origine tous deux accessibles ;
+ * - `canTarget(folderId)` : dossier cible fourni par le client (dépôt,
+ *   déplacement, dossier parent) : la racine, ou un dossier de l'espace
+ *   accessible. Un dossier introuvable (d'un autre espace) est refusé ;
  * - `inaccessibleFolderIds` : ObjectId des dossiers inaccessibles, pour
  *   exclure leurs éléments d'un filtre ($nin).
  */
@@ -74,11 +77,14 @@ export async function loadSharedFolderAccess(workspaceId, userId) {
   const canAccessDocument = (doc) =>
     Boolean(doc) && canAccess(doc.folderId) && canAccess(doc.originalFolderId);
 
+  const canTarget = (folderId) =>
+    !folderId || (folderMap.has(String(folderId)) && canAccess(folderId));
+
   const inaccessibleFolderIds = folders
     .filter((folder) => !canAccess(folder._id))
     .map((folder) => folder._id);
 
-  return { canAccess, canAccessDocument, inaccessibleFolderIds };
+  return { canAccess, canAccessDocument, canTarget, inaccessibleFolderIds };
 }
 
 /**
