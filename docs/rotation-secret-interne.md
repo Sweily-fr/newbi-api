@@ -58,22 +58,16 @@ Même chose avec `preview` pour le couple preview develop / API staging.
 
 ## Côté API (VPS, PM2)
 
-L'app `newbi` (cluster ×4) lit `~/api.newbi.fr/.env.production`. À chaque
-étape :
+L'app `newbi` (cluster ×4) relit `~/api.newbi.fr/.env.production` au
+démarrage de chaque instance, et ce fichier passe avant l'environnement
+mémorisé par PM2 (`src/config/env.js`). À chaque étape :
 
-1. Modifier `.env.production` (sinon le prochain déploiement, qui recrée l'app
-   depuis ce fichier, reviendrait en arrière).
-2. Recharger sans coupure en exportant les valeurs dans le shell, car
-   `pm2 reload ecosystem.config.cjs --update-env` ne rafraîchit pas l'env
-   stocké par PM2 :
+1. Modifier `.env.production`.
+2. Recharger sans coupure, chaque nouvelle instance relit le fichier :
 
 ```bash
 source ~/.nvm/nvm.sh && cd ~/api.newbi.fr
-read -rs INTERNAL_API_SECRET && export INTERNAL_API_SECRET          # étape 2
-read -rs INTERNAL_API_SECRET_ALT && export INTERNAL_API_SECRET_ALT  # étapes 1 et 2
-# Étape 3 : vider ALT (PM2 garde les clés absentes du shell, la vider suffit)
-export INTERNAL_API_SECRET_ALT=""
-pm2 reload newbi --update-env && pm2 save
+pm2 reload ecosystem.production.cjs && pm2 save
 ```
 
 Pendant le `reload`, les 4 instances basculent une par une : certaines sont à

@@ -15,4 +15,26 @@ export const envFile =
       ? ".env.staging"
       : ".env";
 
-dotenv.config({ path: path.resolve(process.cwd(), envFile) });
+// Sous PM2 en production, le fichier fait foi. PM2 redonne à chaque instance
+// relancée (pm2 reload) l'environnement mémorisé au dernier `pm2 start` ou
+// `--update-env` : sans `override`, une valeur changée dans .env.production
+// resterait masquée jusqu'à un arrêt complet de l'API, donc une coupure.
+// La numérotation des instances reste celle de PM2 : les crons ne tournent
+// que sur l'instance 0.
+const fileWinsOverPm2 =
+  process.env.NODE_ENV === "production" && process.env.pm_id !== undefined;
+const pm2Numbering = ["pm_id", "NODE_APP_INSTANCE"].map((key) => [
+  key,
+  process.env[key],
+]);
+
+dotenv.config({
+  path: path.resolve(process.cwd(), envFile),
+  override: fileWinsOverPm2,
+});
+
+if (fileWinsOverPm2) {
+  for (const [key, value] of pm2Numbering) {
+    if (value !== undefined) process.env[key] = value;
+  }
+}
