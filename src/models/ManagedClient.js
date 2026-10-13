@@ -53,6 +53,14 @@ const managedClientSchema = new mongoose.Schema(
       ip: String,
       userAgent: String,
     },
+    // Cabinet suspendu par Newbi : rôle temporaire « Cabinet en lecture
+    // seule » dans cet espace, et rôle d'origine rendu à la réactivation
+    // (src/services/accountManagerService.js)
+    suspension: {
+      previousRole: String,
+      roleKey: String,
+      at: Date,
+    },
     startedAt: { type: Date, default: Date.now },
     endedAt: { type: Date, default: null },
     endedBy: { type: String, default: null },

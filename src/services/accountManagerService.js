@@ -1,6 +1,18 @@
 import mongoose from "mongoose";
 import AccountManager from "../models/AccountManager.js";
 import logger from "../utils/logger.js";
+import {
+  CATALOG_VERSION,
+  CUSTOM_ROLE_PREFIX,
+  MODULE_KEYS,
+  getEffectivePermissions,
+  toBetterAuthPermission,
+} from "../config/rolePermissions.js";
+import {
+  invalidateOrganizationRoles,
+  loadOrganizationRoles,
+} from "./organizationRoleService.js";
+import { invalidateOrgCache } from "../middlewares/org-cache.js";
 
 /**
  * Comptes gestionnaires créés par Newbi depuis le back-office.
@@ -167,6 +179,15 @@ export async function updateAccountManager(id, patch, adminEmail) {
   manager.updatedByAdmin = adminEmail;
   await manager.save();
 
+  // Suspension : le cabinet passe en lecture seule chez ses clients ;
+  // réactivation : il retrouve ses droits
+  let readOnlySpaces = null;
+  if (before.status === "active" && manager.status === "suspended") {
+    readOnlySpaces = await setCabinetReadOnly(manager);
+  } else if (before.status === "suspended" && manager.status === "active") {
+    readOnlySpaces = await restoreCabinetRights(manager);
+  }
+
   const user = await mongoose.connection.db
     .collection("user")
     .findOne({ _id: manager.userId }, { projection: { email: 1 } });
@@ -182,8 +203,131 @@ export async function updateAccountManager(id, patch, adminEmail) {
       name: manager.name,
       discountPercent: manager.discountPercent,
       status: manager.status,
+      ...(readOnlySpaces !== null ? { spaces: readOnlySpaces } : {}),
     },
   });
 
   return toDto(manager, user);
+}
+
+const READ_ONLY_ROLE_NAME = "Cabinet en lecture seule";
+
+/**
+ * Suspension d'un cabinet par Newbi : il passe en LECTURE SEULE chez chacun
+ * de ses clients. Dans chaque espace, il reçoit un rôle « Cabinet en
+ * lecture seule » calculé depuis ses droits actuels (rôle Comptable, ajusté
+ * ou personnalisé par le client) réduits à « Voir » : il ne voit jamais plus
+ * qu'avant. Tous les contrôles (API, site, app) lisent le rôle du membre,
+ * la lecture seule s'applique donc partout. Le rôle d'origine est gardé sur
+ * la fiche managedclients pour la réactivation.
+ * @returns {Promise<number>} nombre d'espaces passés en lecture seule
+ */
+export async function setCabinetReadOnly(manager) {
+  const database = mongoose.connection.db;
+  const links = await database
+    .collection("managedclients")
+    .find({ managerId: manager._id, status: "active" })
+    .toArray();
+  const now = new Date();
+  let count = 0;
+
+  for (const link of links) {
+    const member = await database
+      .collection("member")
+      .findOne({ userId: manager.userId, organizationId: link.organizationId });
+    if (!member) continue;
+    if (link.suspension?.roleKey && member.role === link.suspension.roleKey) {
+      continue; // déjà en lecture seule
+    }
+
+    const stored = await loadOrganizationRoles(link.organizationId);
+    const actions = getEffectivePermissions(member.role, stored);
+    const readOnly = Object.fromEntries(
+      MODULE_KEYS.map((key) => [
+        key,
+        (actions[key] || []).includes("view") ? ["view"] : [],
+      ]),
+    );
+    const roleKey = `${CUSTOM_ROLE_PREFIX}${new mongoose.Types.ObjectId().toHexString()}`;
+    await database.collection("organizationRole").insertOne({
+      organizationId: link.organizationId,
+      role: roleKey,
+      permission: JSON.stringify(toBetterAuthPermission(readOnly)),
+      actions: readOnly,
+      catalogVersion: CATALOG_VERSION,
+      name: READ_ONLY_ROLE_NAME,
+      description:
+        `Rôle temporaire de ${manager.name}, suspendu par Newbi : consultation seulement. Son rôle d'origine lui sera rendu à sa réactivation.`.slice(
+          0,
+          200,
+        ),
+      cabinetSuspensionOf: manager._id,
+      createdBy: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await database
+      .collection("member")
+      .updateOne({ _id: member._id }, { $set: { role: roleKey } });
+    await database.collection("managedclients").updateOne(
+      { _id: link._id },
+      {
+        $set: {
+          suspension: { previousRole: member.role, roleKey, at: now },
+          updatedAt: now,
+        },
+      },
+    );
+    invalidateOrganizationRoles(link.organizationId);
+    count += 1;
+  }
+  invalidateOrgCache(String(manager.userId));
+  logger.info(
+    `[ACCOUNT-MANAGER] ${manager.name} suspendu : lecture seule dans ${count} espace(s)`,
+  );
+  return count;
+}
+
+/**
+ * Réactivation : le cabinet retrouve, dans chaque espace, le rôle qu'il
+ * avait avant la suspension. Si le client a changé son rôle entre-temps,
+ * son choix est gardé. Le rôle temporaire est supprimé.
+ * @returns {Promise<number>} nombre d'espaces où les droits sont rendus
+ */
+export async function restoreCabinetRights(manager) {
+  const database = mongoose.connection.db;
+  const links = await database
+    .collection("managedclients")
+    .find({ managerId: manager._id, "suspension.roleKey": { $exists: true } })
+    .toArray();
+  const now = new Date();
+  let count = 0;
+
+  for (const link of links) {
+    const { previousRole, roleKey } = link.suspension;
+    const restored = await database.collection("member").updateOne(
+      {
+        userId: manager.userId,
+        organizationId: link.organizationId,
+        role: roleKey,
+      },
+      { $set: { role: previousRole } },
+    );
+    count += restored.modifiedCount;
+    await database
+      .collection("organizationRole")
+      .deleteOne({ organizationId: link.organizationId, role: roleKey });
+    await database
+      .collection("managedclients")
+      .updateOne(
+        { _id: link._id },
+        { $unset: { suspension: "" }, $set: { updatedAt: now } },
+      );
+    invalidateOrganizationRoles(link.organizationId);
+  }
+  invalidateOrgCache(String(manager.userId));
+  logger.info(
+    `[ACCOUNT-MANAGER] ${manager.name} réactivé : droits rendus dans ${count} espace(s)`,
+  );
+  return count;
 }

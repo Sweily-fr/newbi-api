@@ -215,6 +215,114 @@ describe("modification", () => {
     expect(log.after.discountPercent).toBe(20);
   });
 
+  it("suspension : lecture seule chez chaque client, jamais plus de droits qu'avant ; réactivation : droits rendus", async () => {
+    const id = await createManager();
+    const db = mongoose.connection.db;
+    const manager = await db
+      .collection("accountmanagers")
+      .findOne({ _id: new mongoose.Types.ObjectId(id) });
+    const orgId = new mongoose.Types.ObjectId();
+    await db.collection("member").insertOne({
+      userId: manager.userId,
+      organizationId: orgId,
+      role: "accountant",
+    });
+    await db.collection("managedclients").insertOne({
+      managerId: manager._id,
+      organizationId: orgId,
+      status: "active",
+      payer: "client",
+    });
+
+    const suspend = await call(`/account-managers/${id}`, {
+      method: "PATCH",
+      body: { status: "suspended" },
+    });
+    expect(suspend.status).toBe(200);
+    const member = await db
+      .collection("member")
+      .findOne({ userId: manager.userId, organizationId: orgId });
+    expect(member.role).toMatch(/^role_/);
+    const role = await db
+      .collection("organizationRole")
+      .findOne({ organizationId: orgId, role: member.role });
+    expect(role.name).toBe("Cabinet en lecture seule");
+    // Consultation seulement, et rien de ce que le Comptable ne voyait pas
+    expect(role.actions.invoices).toEqual(["view"]);
+    expect(role.actions.banking).toEqual(["view"]);
+    expect(role.actions.kanban).toEqual([]);
+    expect(JSON.parse(role.permission)).toBeTruthy();
+    const link = await db
+      .collection("managedclients")
+      .findOne({ organizationId: orgId });
+    expect(link.suspension).toMatchObject({
+      previousRole: "accountant",
+      roleKey: member.role,
+    });
+
+    const reactivate = await call(`/account-managers/${id}`, {
+      method: "PATCH",
+      body: { status: "active" },
+    });
+    expect(reactivate.status).toBe(200);
+    expect(
+      (
+        await db
+          .collection("member")
+          .findOne({ userId: manager.userId, organizationId: orgId })
+      ).role,
+    ).toBe("accountant");
+    expect(
+      await db
+        .collection("organizationRole")
+        .countDocuments({ organizationId: orgId }),
+    ).toBe(0);
+    expect(
+      (await db.collection("managedclients").findOne({ organizationId: orgId }))
+        .suspension,
+    ).toBeUndefined();
+  });
+
+  it("réactivation : le rôle choisi par le client entre-temps est gardé", async () => {
+    const id = await createManager();
+    const db = mongoose.connection.db;
+    const manager = await db
+      .collection("accountmanagers")
+      .findOne({ _id: new mongoose.Types.ObjectId(id) });
+    const orgId = new mongoose.Types.ObjectId();
+    await db.collection("member").insertOne({
+      userId: manager.userId,
+      organizationId: orgId,
+      role: "accountant",
+    });
+    await db.collection("managedclients").insertOne({
+      managerId: manager._id,
+      organizationId: orgId,
+      status: "active",
+    });
+    await call(`/account-managers/${id}`, {
+      method: "PATCH",
+      body: { status: "suspended" },
+    });
+    await db
+      .collection("member")
+      .updateOne(
+        { userId: manager.userId, organizationId: orgId },
+        { $set: { role: "viewer" } },
+      );
+    await call(`/account-managers/${id}`, {
+      method: "PATCH",
+      body: { status: "active" },
+    });
+    expect(
+      (
+        await db
+          .collection("member")
+          .findOne({ userId: manager.userId, organizationId: orgId })
+      ).role,
+    ).toBe("viewer");
+  });
+
   it("refuse un statut inconnu et un id inexistant", async () => {
     const id = await createManager();
     expect(
