@@ -405,15 +405,17 @@ const resolvers = {
           };
         }
 
-        // Récupérer les colonnes
-        const columns = await Column.find({ boardId: share.boardId }).sort(
-          "order",
-        );
+        // Récupérer les colonnes et les tâches (celles de l'espace du partage
+        // seulement : un autre espace ne doit pas pouvoir s'y glisser)
+        const columns = await Column.find({
+          boardId: share.boardId,
+          workspaceId: share.workspaceId,
+        }).sort("order");
 
-        // Récupérer les tâches
-        const tasks = await Task.find({ boardId: share.boardId }).sort(
-          "position",
-        );
+        const tasks = await Task.find({
+          boardId: share.boardId,
+          workspaceId: share.workspaceId,
+        }).sort("position");
 
         // Récupérer les infos des membres assignés ET des auteurs de commentaires
         let membersMap = {};
@@ -1375,6 +1377,7 @@ const resolvers = {
         const task = await Task.findOne({
           _id: taskId,
           boardId: share.boardId,
+          workspaceId: share.workspaceId,
         });
 
         if (!task) {
@@ -2188,6 +2191,7 @@ const resolvers = {
         const task = await Task.findOne({
           _id: taskId,
           boardId: share.boardId,
+          workspaceId: share.workspaceId,
         });
 
         if (!task) {

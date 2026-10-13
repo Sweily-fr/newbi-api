@@ -167,35 +167,7 @@ const isAuthenticated = (resolver) => {
   };
 };
 
-/**
- * Wrapper pour les resolvers nécessitant une authentification et un workspace
- * Extrait le workspaceId depuis les headers ou les arguments
- */
-const withWorkspace = (resolver) => {
-  return async (parent, args, context, info) => {
-    if (!context.user) {
-      throw new AppError(
-        "Vous devez être connecté pour effectuer cette action",
-        ERROR_CODES.UNAUTHENTICATED,
-      );
-    }
-
-    // Extraire le workspaceId depuis les headers ou les arguments
-    let workspaceId =
-      args.workspaceId || context.req?.headers["x-workspace-id"];
-
-    if (!workspaceId) {
-      throw new AppError("WorkspaceId requis", ERROR_CODES.VALIDATION_ERROR);
-    }
-
-    // Ajouter le workspaceId au contexte
-    const enhancedContext = {
-      ...context,
-      workspaceId,
-    };
-
-    return resolver(parent, args, enhancedContext, info);
-  };
-};
-
-export { betterAuthMiddleware, isAuthenticated, withWorkspace };
+// Pas de withWorkspace ici : l'ancienne version posait l'espace demandé
+// (argument ou en-tête) sans vérifier l'appartenance. Le seul withWorkspace
+// est celui de better-auth-jwt.js, qui la vérifie.
+export { betterAuthMiddleware, isAuthenticated };

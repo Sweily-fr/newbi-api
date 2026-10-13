@@ -348,7 +348,12 @@ async function sendReminder(
     try {
       if (invoice.client?.id || invoice.client?._id) {
         const clientId = invoice.client.id || invoice.client._id;
-        const client = await Client.findById(clientId);
+        // client.id vient du client : seule une fiche de l'espace de la
+        // facture reçoit l'activité.
+        const client = await Client.findOne({
+          _id: clientId,
+          workspaceId: invoice.workspaceId,
+        });
 
         if (client) {
           const reminderLabel = reminderType === "first" ? "1ère" : "2ème";

@@ -32,6 +32,7 @@ import {
   searchLinkableTasks,
 } from "../services/kanbanTaskLinkService.js";
 import { getUsersPresence } from "../services/userActivityService.js";
+import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import {
   RESTRICTED_TEAM_VISIBILITY,
   filterOrganizationMembers,
@@ -145,9 +146,65 @@ const presenceIdentity = async (contextUser) => {
   return { id, name, image };
 };
 
+/**
+ * Identifiants (chaînes) des utilisateurs membres de l'espace, dans l'ordre
+ * reçu : les autres ids sont écartés (collection `member` de Better Auth).
+ */
+const keepWorkspaceMembers = async (userIds, workspaceId) => {
+  const ids = (userIds || []).map(String);
+  const orgId = toObjectIdOrNull(String(workspaceId || ""));
+  const objectIds = ids.map(toObjectIdOrNull).filter(Boolean);
+  if (!orgId || objectIds.length === 0) return [];
+  const members = await mongoose.connection.db
+    .collection("member")
+    .find(
+      { organizationId: orgId, userId: { $in: objectIds } },
+      { projection: { userId: 1 } },
+    )
+    .toArray();
+  const memberIds = new Set(members.map((m) => String(m.userId)));
+  return ids.filter((id) => memberIds.has(id));
+};
+
 const assertBoardInWorkspace = async (boardId, workspaceId) => {
-  const exists = await Board.exists({ _id: boardId, workspaceId });
+  const boardObjectId = toObjectIdOrNull(String(boardId || ""));
+  const exists =
+    boardObjectId && (await Board.exists({ _id: boardObjectId, workspaceId }));
   if (!exists) throw boardNotFoundError();
+};
+
+// Colonne et tableau fournis par le client : ceux de l'espace seulement.
+// Sinon un membre d'un autre espace ajoutait colonnes et tâches au tableau
+// d'autrui (visibles sur sa page publique).
+const assertColumnInBoard = async (columnId, boardId, workspaceId) => {
+  const columnObjectId = toObjectIdOrNull(String(columnId || ""));
+  const boardObjectId = toObjectIdOrNull(String(boardId || ""));
+  const exists =
+    columnObjectId &&
+    boardObjectId &&
+    (await Column.exists({
+      _id: columnObjectId,
+      boardId: boardObjectId,
+      workspaceId,
+    }));
+  if (!exists) {
+    throw new AppError("Column not found", ERROR_CODES.NOT_FOUND, {
+      resource: "Column",
+    });
+  }
+};
+
+// Client rattaché à un tableau : celui de l'espace seulement
+const assertClientInWorkspace = async (clientId, workspaceId) => {
+  const clientObjectId = toObjectIdOrNull(String(clientId || ""));
+  const exists =
+    clientObjectId &&
+    (await Client.exists({ _id: clientObjectId, workspaceId }));
+  if (!exists) {
+    throw new AppError("Client non trouvé", ERROR_CODES.NOT_FOUND, {
+      resource: "Client",
+    });
+  }
 };
 
 const publishTaskPresence = (boardId, workspaceId, viewers) => {
@@ -205,8 +262,9 @@ const notifyTaskAssignment = ({
   (async () => {
     try {
       const db = mongoose.connection.db;
-      const board = await Board.findById(task.boardId);
-      const column = await Column.findById(task.columnId);
+      // Titres lus dans l'espace de la tâche seulement
+      const board = await Board.findOne({ _id: task.boardId, workspaceId });
+      const column = await Column.findOne({ _id: task.columnId, workspaceId });
       const assignerName =
         actorData?.name || user?.name || user?.email || "Un membre de l'équipe";
       const assignerImage =
@@ -1209,14 +1267,17 @@ const resolvers = {
       { preferArgsWorkspace: true, passthroughErrors: true },
     ),
 
-    usersInfo: async (_, { userIds }, { db }) => {
+    // Nom, e-mail et photo des membres de l'espace validé (en-tête
+    // x-organization-id) : sans garde, n'importe qui, même sans compte,
+    // lisait ceux de n'importe quel utilisateur à partir de son id.
+    usersInfo: withRBAC(async (_, { userIds }, { db, workspaceId }) => {
       try {
         if (!userIds || userIds.length === 0) {
           return [];
         }
 
-        // Convertir les userIds en ObjectId
-        const objectIds = userIds
+        // Convertir les userIds des membres de l'espace en ObjectId
+        const objectIds = (await keepWorkspaceMembers(userIds, workspaceId))
           .map((id) => {
             try {
               return new ObjectId(id);
@@ -1279,7 +1340,7 @@ const resolvers = {
         );
         return [];
       }
-    },
+    }),
 
     board: requireWorkspaceLevel(
       "kanban",
@@ -1585,6 +1646,9 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        if (input.clientId) {
+          await assertClientInWorkspace(input.clientId, finalWorkspaceId);
+        }
 
         const board = new Board({
           ...input,
@@ -1647,6 +1711,9 @@ const resolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { boardMembers, ...rest } = input;
+        if (rest.clientId) {
+          await assertClientInWorkspace(rest.clientId, finalWorkspaceId);
+        }
 
         // Si on modifie la liste des membres (boardMembers), seul le créateur
         // du board peut le faire.
@@ -1768,6 +1835,7 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
 
         const column = new Column({
           ...input,
@@ -1933,6 +2001,12 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
+        await assertColumnInBoard(
+          input.columnId,
+          input.boardId,
+          finalWorkspaceId,
+        );
 
         // Nettoyer les IDs temporaires de la checklist
         const cleanedInput = { ...input };
@@ -1945,6 +2019,15 @@ const resolvers = {
             }
             return cleanedItem;
           });
+        }
+
+        // Membres assignés : ceux de l'espace seulement (un id quelconque
+        // recevait e-mail et notification, et son identité s'affichait)
+        if (Array.isArray(cleanedInput.assignedMembers)) {
+          cleanedInput.assignedMembers = await keepWorkspaceMembers(
+            cleanedInput.assignedMembers,
+            finalWorkspaceId,
+          );
         }
 
         // Calculer la position correcte en fonction des tâches existantes dans la colonne
@@ -2096,8 +2179,14 @@ const resolvers = {
               const db = mongoose.connection.db;
 
               // Récupérer les infos du board et de la colonne
-              const board = await Board.findById(savedTask.boardId);
-              const column = await Column.findById(savedTask.columnId);
+              const board = await Board.findOne({
+                _id: savedTask.boardId,
+                workspaceId: finalWorkspaceId,
+              });
+              const column = await Column.findOne({
+                _id: savedTask.columnId,
+                workspaceId: finalWorkspaceId,
+              });
               const boardName = board?.title || "Tableau sans nom";
               const columnName = column?.title || "Colonne";
 
@@ -2255,6 +2344,18 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
         });
         if (!oldTask) throw new Error("Task not found");
+
+        // Changement de colonne : une colonne du même tableau
+        if (
+          updates.columnId !== undefined &&
+          updates.columnId !== oldTask.columnId
+        ) {
+          await assertColumnInBoard(
+            updates.columnId,
+            oldTask.boardId,
+            finalWorkspaceId,
+          );
+        }
 
         // Fusionner timeTracking avec les valeurs existantes pour ne pas écraser startedBy, isRunning, entries, etc.
         if (updates.timeTracking) {
@@ -2496,7 +2597,18 @@ const resolvers = {
           };
 
           const oldMembers = normalizeMembers(oldTask.assignedMembers);
-          const newMembers = normalizeMembers(updates.assignedMembers);
+          // Nouveaux membres : ceux de l'espace seulement (les membres déjà
+          // assignés restent, même partis de l'espace)
+          const requestedMembers = normalizeMembers(updates.assignedMembers);
+          const allowedNewMembers = new Set(
+            await keepWorkspaceMembers(
+              requestedMembers.filter((m) => !oldMembers.includes(m)),
+              finalWorkspaceId,
+            ),
+          );
+          const newMembers = requestedMembers.filter(
+            (m) => oldMembers.includes(m) || allowedNewMembers.has(m),
+          );
 
           logger.debug(
             `📧 [UpdateTask] oldMembers: ${JSON.stringify(oldMembers)}, newMembers: ${JSON.stringify(newMembers)}`,
@@ -2832,6 +2944,18 @@ const resolvers = {
           throw new AppError("Membre manquant", ERROR_CODES.VALIDATION_ERROR, {
             field: "memberId",
           });
+        }
+        // Un membre de l'espace seulement
+        const [workspaceMember] = await keepWorkspaceMembers(
+          [member],
+          finalWorkspaceId,
+        );
+        if (!workspaceMember) {
+          throw new AppError(
+            "Membre introuvable dans l'espace",
+            ERROR_CODES.NOT_FOUND,
+            { resource: "Member" },
+          );
         }
 
         const task = await applyAtomicTaskChange({
@@ -3312,6 +3436,11 @@ const resolvers = {
 
           const oldColumnId = task.columnId;
 
+          // Changement de colonne : une colonne du même tableau
+          if (columnId !== oldColumnId) {
+            await assertColumnInBoard(columnId, task.boardId, finalWorkspaceId);
+          }
+
           // Nettoyer assignedMembers pour s'assurer qu'on ne stocke que les IDs
           let cleanedAssignedMembers = task.assignedMembers;
           if (cleanedAssignedMembers && Array.isArray(cleanedAssignedMembers)) {
@@ -3511,7 +3640,12 @@ const resolvers = {
           }
 
           // Stocker seulement l'userId, les infos (nom, avatar) seront récupérées dynamiquement au frontend
-          const mentionedUserIds = input.mentionedUserIds || [];
+          // Mentions : membres de l'espace seulement (un id quelconque
+          // recevait e-mail et notification)
+          const mentionedUserIds = await keepWorkspaceMembers(
+            input.mentionedUserIds,
+            finalWorkspaceId,
+          );
           const comment = {
             userId: user.id,
             content: input.content || "",
@@ -3624,7 +3758,10 @@ const resolvers = {
                   null;
 
                 // Récupérer les infos du board
-                const board = await Board.findById(task.boardId);
+                const board = await Board.findOne({
+                  _id: task.boardId,
+                  workspaceId: finalWorkspaceId,
+                });
                 const boardName = board?.title || "Tableau sans nom";
 
                 // Extraire un extrait du commentaire (texte brut, sans HTML)
@@ -3804,10 +3941,14 @@ const resolvers = {
             throw new Error("Not authorized to edit this comment");
           }
 
-          // Détecter les nouvelles mentions (pas déjà présentes dans le commentaire)
+          // Détecter les nouvelles mentions (pas déjà présentes dans le
+          // commentaire), membres de l'espace seulement
           const previousMentions = comment.mentions || [];
-          const newMentionedUserIds = (mentionedUserIds || []).filter(
-            (id) => !previousMentions.includes(id),
+          const newMentionedUserIds = await keepWorkspaceMembers(
+            (mentionedUserIds || []).filter(
+              (id) => !previousMentions.includes(id),
+            ),
+            finalWorkspaceId,
           );
 
           comment.content = content;
@@ -3855,7 +3996,10 @@ const resolvers = {
                   authorData?.profile?.profilePicture ||
                   null;
 
-                const board = await Board.findById(task.boardId);
+                const board = await Board.findOne({
+                  _id: task.boardId,
+                  workspaceId: finalWorkspaceId,
+                });
                 const boardName = board?.title || "Tableau sans nom";
                 const commentExcerpt = (content || "")
                   .replace(/<[^>]*>/g, "")

@@ -838,7 +838,6 @@ extend type Mutation {
   syncAccountBalance(accountId: String!): AccountBalance!
 
   # Administration
-  switchBankingProvider(provider: BankingProvider!): Boolean!
   syncTransactionHistory(accountId: String!): [Transaction!]!
 
   """

@@ -1032,7 +1032,12 @@ async function sendDocumentEmail({
   try {
     if (document.client?.id || document.client?._id) {
       const clientId = document.client.id || document.client._id;
-      const client = await Client.findById(clientId);
+      // client.id vient du client : seule une fiche de l'espace du document
+      // reçoit l'activité.
+      const client = await Client.findOne({
+        _id: clientId,
+        workspaceId: document.workspaceId,
+      });
 
       if (client) {
         const documentLabel =

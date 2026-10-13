@@ -982,20 +982,6 @@ const bankingResolvers = {
     ),
 
     // Administration
-    switchBankingProvider: manageBankAccounts(
-      async (parent, { provider }, { user, workspaceId }) => {
-        try {
-          await bankingService.switchProvider(provider.toLowerCase());
-          return true;
-        } catch (error) {
-          throw new AppError(
-            `Erreur lors du changement de provider: ${error.message}`,
-            ERROR_CODES.EXTERNAL_API_ERROR,
-          );
-        }
-      },
-    ),
-
     syncTransactionHistory: syncBanking(
       async (parent, { accountId }, { user, workspaceId }) => {
         try {

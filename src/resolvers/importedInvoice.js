@@ -44,6 +44,24 @@ import {
 import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
+
+/**
+ * Fichier d'import envoyé par URL et clé R2 : les deux doivent désigner le
+ * même objet du bucket des factures importées, sous `${workspaceId}/`.
+ */
+function assertImportedFileInWorkspace(url, key, workspaceId) {
+  const resolved = cloudflareService.resolveWorkspaceFileUrl(
+    url,
+    String(workspaceId),
+    ["importedInvoice"],
+  );
+  if (!resolved || (key && resolved.key !== String(key))) {
+    throw createValidationError(
+      "Clé de fichier invalide pour cet espace de travail",
+    );
+  }
+}
+
 const MAX_BATCH_IMPORT = 100;
 
 // Cache mémoire pour les plans utilisateurs (évite une requête MongoDB par import dans un batch)
@@ -987,17 +1005,15 @@ const importedInvoiceResolvers = {
           inputWorkspaceId,
           context.workspaceId,
         );
-        // 🔐 La clé R2 est fournie par le client : exiger qu'elle appartienne au
-        // préfixe de l'organisation (`${workspaceId}/…`). Sinon un attaquant
-        // pouvait stocker la clé d'un fichier d'une autre org puis la supprimer.
-        if (
-          cloudflareKey &&
-          !String(cloudflareKey).startsWith(`${workspaceId}/`)
-        ) {
-          throw createValidationError(
-            "Clé de fichier invalide pour cet espace de travail",
-          );
-        }
+        // 🔐 Clé et URL R2 fournies par le client : elles doivent désigner le
+        // même fichier, rangé sous le préfixe de l'organisation. Sinon un
+        // attaquant stockait la clé ou l'URL d'un fichier d'une autre org,
+        // que le serveur relisait (aperçu, automatisations) ou supprimait.
+        assertImportedFileInWorkspace(
+          cloudflareUrl,
+          cloudflareKey,
+          workspaceId,
+        );
         try {
           // Vérifier le quota utilisateur avant l'import
           const { plan } = await checkUserOcrQuota(user.id, workspaceId, 1);
@@ -1289,6 +1305,14 @@ const importedInvoiceResolvers = {
       if (files.length > MAX_BATCH_IMPORT) {
         throw createValidationError(
           `Maximum ${MAX_BATCH_IMPORT} factures par import`,
+        );
+      }
+      // Même contrôle que importInvoice, fichier par fichier
+      for (const file of files) {
+        assertImportedFileInWorkspace(
+          file.cloudflareUrl,
+          file.cloudflareKey,
+          workspaceId,
         );
       }
 

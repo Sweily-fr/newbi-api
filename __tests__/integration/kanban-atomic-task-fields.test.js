@@ -99,6 +99,8 @@ beforeEach(async () => {
   ]);
   await seedOrgMembership({ userId: alice, organizationId });
   await seedOrgMembership({ userId: bob, organizationId, role: "member" });
+  // Seuls les membres de l'espace peuvent être assignés
+  await seedOrgMembership({ userId: carol, organizationId, role: "member" });
   aliceCtx = buildContext({ userId: alice, organizationId });
   bobCtx = buildContext({ userId: bob, organizationId });
   board = await Board.create({
