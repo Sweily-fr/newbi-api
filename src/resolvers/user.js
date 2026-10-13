@@ -49,25 +49,76 @@ const userResolvers = {
     me: isAuthenticated(async (_, __, { user }) => {
       return await User.findById(user.id);
     }),
-    lookupUsersByEmails: isAuthenticated(async (_, { emails }, { db }) => {
-      const normalizedEmails = emails.map((e) => e.toLowerCase().trim());
-      const users = await db
-        .collection("user")
-        .find({
-          email: { $in: normalizedEmails },
-        })
-        .project({ email: 1, name: 1, image: 1, avatar: 1, profile: 1 })
-        .toArray();
+    // Avatars des invités au récapitulatif de création d'un espace. Seuls les
+    // comptes que l'appelant voit déjà (membres ou invités en attente de l'un
+    // de ses espaces) et au plus 30 e-mails (invitations possibles à la
+    // création) : la requête disait sinon, pour n'importe quelle liste
+    // d'e-mails, si un compte Newbi existe, avec son nom et sa photo.
+    lookupUsersByEmails: isAuthenticated(
+      async (_, { emails }, { db, user: caller }) => {
+        const MAX_LOOKUP_EMAILS = 30;
+        const normalizedEmails = [
+          ...new Set(emails.map((e) => e.toLowerCase().trim()).filter(Boolean)),
+        ].slice(0, MAX_LOOKUP_EMAILS);
+        const callerId = String(caller._id || caller.id);
+        if (
+          normalizedEmails.length === 0 ||
+          !mongoose.isValidObjectId(callerId)
+        ) {
+          return [];
+        }
 
-      return users.map((user) => ({
-        email: user.email,
-        name:
-          user.name ||
-          `${user.profile?.firstName || ""} ${user.profile?.lastName || ""}`.trim() ||
-          null,
-        image: user.image || user.avatar || null,
-      }));
-    }),
+        const orgIds = await db
+          .collection("member")
+          .distinct("organizationId", {
+            userId: new mongoose.Types.ObjectId(callerId),
+          });
+        if (orgIds.length === 0) return [];
+
+        const found = await db
+          .collection("user")
+          .find({
+            email: { $in: normalizedEmails },
+          })
+          .project({ email: 1, name: 1, image: 1, avatar: 1, profile: 1 })
+          .toArray();
+        if (found.length === 0) return [];
+
+        const [memberUserIds, invitedEmails] = await Promise.all([
+          db.collection("member").distinct("userId", {
+            organizationId: { $in: orgIds },
+            userId: { $in: found.map((u) => u._id) },
+          }),
+          db.collection("invitation").distinct("email", {
+            organizationId: { $in: orgIds },
+            email: {
+              $in: [
+                ...new Set([...normalizedEmails, ...found.map((u) => u.email)]),
+              ],
+            },
+            status: "pending",
+          }),
+        ]);
+        const memberSet = new Set(memberUserIds.map(String));
+        const invitedSet = new Set(
+          invitedEmails.map((e) => String(e).toLowerCase()),
+        );
+        const users = found.filter(
+          (u) =>
+            memberSet.has(String(u._id)) ||
+            invitedSet.has(String(u.email).toLowerCase()),
+        );
+
+        return users.map((user) => ({
+          email: user.email,
+          name:
+            user.name ||
+            `${user.profile?.firstName || ""} ${user.profile?.lastName || ""}`.trim() ||
+            null,
+          image: user.image || user.avatar || null,
+        }));
+      },
+    ),
   },
 
   Mutation: {
@@ -1027,28 +1078,24 @@ const userResolvers = {
           // Si on supprime le logo (logoUrl est null/vide), supprimer l'ancien fichier de Cloudflare R2
           if (!logoUrl && oldLogoUrl) {
             try {
-              // Extraire la clé R2 depuis l'URL publique
-              const publicUrl =
-                cloudflareService.companyImagesPublicUrl ||
-                cloudflareService.publicUrl;
-              const bucketName =
-                cloudflareService.companyImagesBucketName ||
-                cloudflareService.bucketName;
-              let fileKey = null;
+              // Le logo enregistré vient du client : on ne supprime que s'il
+              // est rangé sous le préfixe de cet espace. Sinon, un logo
+              // pointant vers l'objet d'un autre espace le faisait effacer.
+              const resolved = cloudflareService.resolveWorkspaceFileUrl(
+                oldLogoUrl,
+                String(workspaceId),
+                ["imgCompany"],
+              );
 
-              if (publicUrl && oldLogoUrl.startsWith(publicUrl)) {
-                fileKey = oldLogoUrl.replace(publicUrl + "/", "");
-              } else if (oldLogoUrl.includes("/")) {
-                // Fallback : extraire la clé depuis l'URL (format: .../orgId/filename)
-                const urlParts = new URL(oldLogoUrl).pathname
-                  .split("/")
-                  .filter(Boolean);
-                fileKey = urlParts.join("/");
-              }
-
-              if (fileKey) {
-                await cloudflareService.deleteImage(fileKey, bucketName);
-                logger.debug("✅ Logo supprimé de Cloudflare R2:", fileKey);
+              if (resolved) {
+                await cloudflareService.deleteImage(
+                  resolved.key,
+                  resolved.bucket,
+                );
+                logger.debug(
+                  "✅ Logo supprimé de Cloudflare R2:",
+                  resolved.key,
+                );
               }
             } catch (err) {
               console.error(

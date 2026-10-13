@@ -803,13 +803,14 @@ const sharedDocumentResolvers = {
             workspaceId,
           );
 
-          // Dossier cible privé inaccessible : comme introuvable
+          // Dossier cible d'un autre espace ou privé inaccessible : comme
+          // introuvable
           if (folderId) {
-            const { canAccess } = await sharedFolderAccessFor(
+            const { canTarget } = await sharedFolderAccessFor(
               context,
               workspaceId,
             );
-            if (!canAccess(folderId)) {
+            if (!canTarget(folderId)) {
               return {
                 success: false,
                 message: FOLDER_NOT_FOUND,
@@ -956,8 +957,9 @@ const sharedDocumentResolvers = {
               document: null,
             };
           }
-          // Déplacement vers un dossier privé inaccessible : refusé
-          if (input?.folderId && !access.canAccess(input.folderId)) {
+          // Déplacement vers un dossier d'un autre espace ou privé
+          // inaccessible : refusé
+          if (input?.folderId && !access.canTarget(input.folderId)) {
             return {
               success: false,
               message: FOLDER_NOT_FOUND,
@@ -1111,11 +1113,12 @@ const sharedDocumentResolvers = {
     moveSharedDocuments: scopedMutation(
       async (_, { ids, workspaceId, targetFolderId }, context) => {
         try {
-          const { canAccess } = await sharedFolderAccessFor(
+          // Dossier cible d'un autre espace ou privé inaccessible : refusé
+          const { canTarget } = await sharedFolderAccessFor(
             context,
             workspaceId,
           );
-          if (targetFolderId && !canAccess(targetFolderId)) {
+          if (targetFolderId && !canTarget(targetFolderId)) {
             return { success: false, message: FOLDER_NOT_FOUND, movedCount: 0 };
           }
           const visibleIds = await visibleDocumentIds(
@@ -1430,13 +1433,14 @@ const sharedDocumentResolvers = {
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
         try {
-          // Dossier parent privé inaccessible : comme introuvable
+          // Dossier parent d'un autre espace ou privé inaccessible : comme
+          // introuvable
           if (input.parentId) {
-            const { canAccess } = await sharedFolderAccessFor(
+            const { canTarget } = await sharedFolderAccessFor(
               context,
               workspaceId,
             );
-            if (!canAccess(input.parentId)) {
+            if (!canTarget(input.parentId)) {
               return {
                 success: false,
                 message: FOLDER_NOT_FOUND,
@@ -1501,7 +1505,7 @@ const sharedDocumentResolvers = {
       async (_, { id, workspaceId, input }, context) => {
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
-          const { canAccess } = await sharedFolderAccessFor(
+          const { canAccess, canTarget } = await sharedFolderAccessFor(
             context,
             workspaceId,
           );
@@ -1514,8 +1518,9 @@ const sharedDocumentResolvers = {
             };
           }
 
-          // Déplacement sous un dossier privé inaccessible : refusé
-          if (input.parentId && !canAccess(input.parentId)) {
+          // Déplacement sous un dossier d'un autre espace ou privé
+          // inaccessible : refusé
+          if (input.parentId && !canTarget(input.parentId)) {
             return { success: false, message: FOLDER_NOT_FOUND, folder: null };
           }
 
@@ -2101,9 +2106,13 @@ const sharedDocumentResolvers = {
   // Resolvers de champs
   SharedDocument: {
     id: (parent) => parent._id || parent.id,
+    // Dossier de l'espace du document seulement
     folder: async (parent) => {
       if (!parent.folderId) return null;
-      return await SharedFolder.findById(parent.folderId).lean();
+      return await SharedFolder.findOne({
+        _id: parent.folderId,
+        workspaceId: parent.workspaceId,
+      }).lean();
     },
     trashedAt: (parent) =>
       parent.trashedAt?.toISOString?.() || parent.trashedAt,
@@ -2124,7 +2133,11 @@ const sharedDocumentResolvers = {
     id: (parent) => parent._id || parent.id,
     parent: async (parent, _, context) => {
       if (!parent.parentId || !context?.user) return null;
-      const folder = await SharedFolder.findById(parent.parentId).lean();
+      // Parent de l'espace du dossier seulement
+      const folder = await SharedFolder.findOne({
+        _id: parent.parentId,
+        workspaceId: parent.workspaceId,
+      }).lean();
       if (!folder) return null;
       // Parent privé inaccessible (sous-dossier public d'un dossier privé) :
       // ni son nom ni son existence

@@ -141,10 +141,12 @@ export class BankingService {
     let cost = 0;
 
     try {
-      // Récupération de la transaction originale
-      const originalTransaction = await Transaction.findById(
-        refundOptions.transactionId,
-      );
+      // Récupération de la transaction originale, dans l'espace de l'appelant
+      // (workspaceId validé par le resolver ; chaîne sur Transaction)
+      const originalTransaction = await Transaction.findOne({
+        _id: refundOptions.transactionId,
+        workspaceId: String(refundOptions.workspaceId),
+      });
       if (!originalTransaction) {
         throw new Error("Transaction originale non trouvée");
       }

@@ -2706,11 +2706,14 @@ const financialAnalyticsResolvers = {
         }
 
         // Enrichir les entrées issues d'importées liées seules : nom canonique
-        // et type du client Newbi (sinon nom OCR et type inconnu).
+        // et type du client Newbi (sinon nom OCR et type inconnu). Clients de
+        // l'espace seulement : client.id ne doit pas révéler la fiche d'un
+        // client d'un autre espace.
         if (linkedOnlyIds.size > 0) {
           const ClientModel = mongoose.model("Client");
           const linkedClients = await ClientModel.find({
             _id: { $in: [...linkedOnlyIds] },
+            workspaceId: wId,
           })
             .select("name firstName lastName type")
             .lean();
@@ -2758,14 +2761,18 @@ const financialAnalyticsResolvers = {
 
         // Add clients that have time tracked but no paid invoices
         // Une seule lecture pour tous ces clients (au lieu d'un findById par
-        // client, en série) ; même ordre de parcours qu'avant.
+        // client, en série) ; même ordre de parcours qu'avant. Clients de
+        // l'espace seulement : Board.clientId n'est pas vérifié à l'écriture.
         const Client = mongoose.model("Client");
         const timeOnlyClientIds = [...clientTimeMap.keys()].filter(
           (id) => !matchedClientIds.has(id) && mongoose.isValidObjectId(id),
         );
         const timeOnlyClients =
           timeOnlyClientIds.length > 0
-            ? await Client.find({ _id: { $in: timeOnlyClientIds } })
+            ? await Client.find({
+                _id: { $in: timeOnlyClientIds },
+                workspaceId: wId,
+              })
                 .select("type firstName lastName name")
                 .lean()
             : [];

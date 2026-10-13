@@ -7,6 +7,7 @@ import cloudflareService from "../services/cloudflareService.js";
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { getActiveOrganizationCached } from "../middlewares/org-cache.js";
 import heicConvert from "heic-convert";
 import sharp from "sharp";
 
@@ -17,7 +18,7 @@ const documentUploadResolvers = {
     /**
      * Upload un document vers Cloudflare R2
      */
-    uploadDocument: async (_, { file, folderType }, { user }) => {
+    uploadDocument: async (_, { file, folderType }, { user, req }) => {
       try {
         logger.debug(
           "🚀 DocumentUpload - Début upload avec folderType:",
@@ -136,12 +137,32 @@ const documentUploadResolvers = {
           finalFolderType === "ocr" ||
           finalFolderType === "importedInvoice"
         ) {
+          // Espace actif envoyé par le client, appartenance vérifiée : sans
+          // lui, le fichier partait dans le premier espace de l'utilisateur,
+          // et non dans celui où il travaille (cabinets, multi-espaces)
+          const requestedOrgId =
+            req?.headers?.["x-organization-id"] ||
+            req?.headers?.["x-workspace-id"];
+          if (requestedOrgId) {
+            const activeOrg = await getActiveOrganizationCached(
+              user._id?.toString() || user.id,
+              requestedOrgId,
+            );
+            if (!activeOrg) {
+              throw new Error(
+                "Vous n'êtes pas membre de l'organisation demandée.",
+              );
+            }
+            organizationId = activeOrg.id;
+          }
+
           // Essayer différentes propriétés pour l'organizationId
           const rawOrgId =
-            user.organizationId ||
-            user.organization?.id ||
-            user.organization?._id ||
-            user.currentOrganizationId;
+            !organizationId &&
+            (user.organizationId ||
+              user.organization?.id ||
+              user.organization?._id ||
+              user.currentOrganizationId);
 
           // S'assurer que c'est une string et pas un objet
           if (rawOrgId) {

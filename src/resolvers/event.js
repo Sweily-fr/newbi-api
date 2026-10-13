@@ -469,26 +469,31 @@ const eventResolvers = {
           await event.save();
 
           // Ajouter l'activité "reminder_created" sur le client associé
+          // (un client de l'espace seulement : sinon on écrivait dans la
+          // chronologie du client d'un autre espace)
           if (input.clientId) {
             try {
-              await Client.findByIdAndUpdate(input.clientId, {
-                $push: {
-                  activity: {
-                    id: new mongoose.Types.ObjectId().toString(),
-                    type: "reminder_created",
-                    description: `a créé un rappel "${event.title}"`,
-                    userId: user.id,
-                    userName: user.name || user.email,
-                    userImage: user.image || null,
-                    metadata: {
-                      eventId: event._id.toString(),
-                      eventTitle: event.title,
-                      eventDate: event.start.toISOString(),
+              await Client.updateOne(
+                { _id: input.clientId, workspaceId: finalWorkspaceId },
+                {
+                  $push: {
+                    activity: {
+                      id: new mongoose.Types.ObjectId().toString(),
+                      type: "reminder_created",
+                      description: `a créé un rappel "${event.title}"`,
+                      userId: user.id,
+                      userName: user.name || user.email,
+                      userImage: user.image || null,
+                      metadata: {
+                        eventId: event._id.toString(),
+                        eventTitle: event.title,
+                        eventDate: event.start.toISOString(),
+                      },
+                      createdAt: new Date(),
                     },
-                    createdAt: new Date(),
                   },
                 },
-              });
+              );
             } catch (activityError) {
               logger.error(
                 "[createEvent] Erreur lors de l'ajout de l'activité client:",

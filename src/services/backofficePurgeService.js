@@ -67,6 +67,54 @@ const EXPLICIT_COLLECTIONS = new Set([
   "verification",
 ]);
 
+/**
+ * Utilisateurs des cabinets (comptes gestionnaires) qui suivent un espace,
+ * en variantes ObjectId + String.
+ */
+async function cabinetUserIdsOf(db, orgIdStr) {
+  const links = await db
+    .collection("managedclients")
+    .find(
+      { organizationId: { $in: idVariants(orgIdStr) }, status: "active" },
+      { projection: { managerId: 1 } },
+    )
+    .toArray();
+  if (links.length === 0) return [];
+  const managers = await db
+    .collection("accountmanagers")
+    .find(
+      { _id: { $in: links.map((l) => l.managerId) } },
+      { projection: { userId: 1 } },
+    )
+    .toArray();
+  return flatVariants(managers.map((m) => String(m.userId)));
+}
+
+/**
+ * Fiches des comptes gestionnaires liées à l'utilisateur, que le balayage
+ * générique ne voit pas (rattachées par managerId / invitedUserId) : les
+ * clients de son cabinet s'il en a un, et les invitations qu'il n'a pas
+ * traitées.
+ */
+function managedClientsFilter(userIdStr, managerIds) {
+  const or = [
+    { invitedUserId: { $in: idVariants(userIdStr) }, status: "pending" },
+  ];
+  if (managerIds.length > 0) or.push({ managerId: { $in: managerIds } });
+  return { $or: or };
+}
+
+async function ownManagerIds(db, userIdStr) {
+  const managers = await db
+    .collection("accountmanagers")
+    .find(
+      { userId: { $in: idVariants(userIdStr) } },
+      { projection: { _id: 1 } },
+    )
+    .toArray();
+  return managers.map((m) => m._id);
+}
+
 /** Retourne les variantes ObjectId + String d'un id. */
 function idVariants(id) {
   const str = String(id);
@@ -108,9 +156,12 @@ export async function resolveUserContext(userIdOrEmail) {
     const org = await db
       .collection("organization")
       .findOne({ _id: { $in: idVariants(orgIdStr) } });
+    // Le cabinet (compte gestionnaire) qui suit l'espace n'en fait pas un
+    // espace partagé : sans le client, l'espace n'a plus de raison d'être
+    const cabinetUserIds = await cabinetUserIdsOf(db, orgIdStr);
     const otherMembers = await db.collection("member").countDocuments({
       organizationId: { $in: idVariants(orgIdStr) },
-      userId: { $nin: idVariants(userIdStr) },
+      userId: { $nin: [...idVariants(userIdStr), ...cabinetUserIds] },
     });
     orgs.push({
       organizationId: orgIdStr,
@@ -347,6 +398,20 @@ export async function previewUserPurge(userIdOrEmail) {
         `[BACKOFFICE] Aperçu: comptage ${name} impossible: ${err.message}`,
       );
     }
+  }
+  try {
+    const linked = await db
+      .collection("managedclients")
+      .countDocuments(
+        managedClientsFilter(userIdStr, await ownManagerIds(db, userIdStr)),
+      );
+    if (linked > 0) {
+      mongoCounts.managedclients = (mongoCounts.managedclients || 0) + linked;
+    }
+  } catch (err) {
+    logger.warn(
+      `[BACKOFFICE] Aperçu: comptage managedclients impossible: ${err.message}`,
+    );
   }
   mongoCounts.user = 1;
   mongoCounts.member = orgs.length;
@@ -703,7 +768,21 @@ export async function purgeUser(userIdOrEmail, adminUser) {
     summary.errors.push(`Bridge: ${err.message}`);
   }
 
-  // 7. Suppression Mongo : balayage générique puis collections explicites
+  // 7. Suppression Mongo : fiches des comptes gestionnaires (hors balayage),
+  // balayage générique puis collections explicites
+  try {
+    const result = await db
+      .collection("managedclients")
+      .deleteMany(
+        managedClientsFilter(userIdStr, await ownManagerIds(db, userIdStr)),
+      );
+    if (result.deletedCount > 0) {
+      summary.mongo.managedclients = result.deletedCount;
+    }
+  } catch (err) {
+    summary.errors.push(`Mongo managedclients: ${err.message}`);
+  }
+
   for (const name of collections) {
     if (EXPLICIT_COLLECTIONS.has(name)) continue;
     try {
@@ -725,8 +804,16 @@ export async function purgeUser(userIdOrEmail, adminUser) {
       summary.mongo.member = memberResult.deletedCount;
     }
 
-    // Organisations dont l'utilisateur était le seul membre
+    // Organisations dont l'utilisateur était le seul membre (hors cabinet
+    // qui les suivait : ses adhésions partent avec elles)
     if (purgeOrgIds.length > 0) {
+      const cabinetMembers = await db
+        .collection("member")
+        .deleteMany({ organizationId: { $in: flatVariants(purgeOrgIds) } });
+      if (cabinetMembers.deletedCount > 0) {
+        summary.mongo.member =
+          (summary.mongo.member || 0) + cabinetMembers.deletedCount;
+      }
       const orgResult = await db
         .collection("organization")
         .deleteMany({ _id: { $in: flatVariants(purgeOrgIds) } });

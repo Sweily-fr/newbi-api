@@ -755,10 +755,24 @@ router.post("/chat/stream", async (req, res) => {
 // d'un workspace ne VOIT jamais les conversations d'un membre A — point 6
 // du plan validé (confidentialité intra-workspace).
 //
-// Pas d'appel à userBelongsToWorkspace ici : le filtre Mongo
-// {workspaceId, userId} est self-validant — un workspace inconnu retourne
-// simplement 0 résultats, pas d'info-leak.
+// Appartenance ACTUELLE à l'espace vérifiée comme sur /chat : le filtre
+// {workspaceId, userId} ne suffit pas, un ancien membre relisait ses
+// conversations (chiffres de l'espace) et, sur le détail, les noms à jour
+// des clients de l'espace.
 // ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Refuse (403) si l'utilisateur n'est plus membre de l'espace. Renvoie
+ * `true` si la réponse a été envoyée.
+ */
+async function rejectNonMember(res, userId, workspaceId, route) {
+  if (await userBelongsToWorkspace(userId, workspaceId)) return false;
+  logger.warn(
+    `assistant/${route}: cross-tenant attempt — user ${userId} → workspace ${workspaceId}`,
+  );
+  res.status(403).json({ error: "Workspace non autorisé" });
+  return true;
+}
 
 /**
  * Charge une conversation ET vérifie l'ownership ({workspaceId, userId}
@@ -785,6 +799,9 @@ router.get("/conversations", async (req, res) => {
       return res.status(400).json({ error: "WorkspaceId requis" });
     }
     const userId = user._id || user.id;
+    if (await rejectNonMember(res, userId, workspaceId, "conversations")) {
+      return;
+    }
 
     const limit = Math.min(
       Math.max(parseInt(req.query.limit, 10) || 20, 1),
@@ -828,6 +845,9 @@ router.get("/conversations/:id", async (req, res) => {
       return res.status(400).json({ error: "WorkspaceId requis" });
     }
     const userId = user._id || user.id;
+    if (await rejectNonMember(res, userId, workspaceId, "conversations/:id")) {
+      return;
+    }
 
     const conv = await loadOwnedConversation(
       req.params.id,
@@ -900,6 +920,9 @@ router.delete("/conversations/:id", async (req, res) => {
       return res.status(400).json({ error: "WorkspaceId requis" });
     }
     const userId = user._id || user.id;
+    if (await rejectNonMember(res, userId, workspaceId, "conversations/:id")) {
+      return;
+    }
 
     if (!mongoose.Types.ObjectId.isValid(String(req.params.id))) {
       return res.status(404).json({ error: "Conversation introuvable" });

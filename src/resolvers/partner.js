@@ -5,6 +5,7 @@ import User from "../models/User.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import { requireAction } from "../middlewares/rbac.js";
+import { isBackofficeAdmin } from "../utils/backofficeAdmin.js";
 
 // Paliers de commission
 const COMMISSION_TIERS = [
@@ -46,6 +47,20 @@ const calculateProgressToNextTier = (totalRevenue, currentTier) => {
       (nextTier.minRevenue - currentTier.minRevenue)) *
     100;
   return Math.min(Math.max(progress, 0), 100);
+};
+
+/**
+ * Administrateur du programme partenaire (retraits de tous les partenaires) :
+ * liste blanche par id BACKOFFICE_ADMIN_USER_IDS, fermée si absente. Le seul
+ * domaine de l'e-mail ne suffit pas : l'inscription ne vérifie pas l'adresse.
+ */
+const assertPartnerAdmin = async (user) => {
+  if (!(await isBackofficeAdmin(user._id || user.id))) {
+    throw new AppError(
+      "Accès refusé - Réservé aux administrateurs",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
 };
 
 /**
@@ -379,18 +394,7 @@ const partnerResolvers = {
         throw new AppError("Non authentifié", ERROR_CODES.UNAUTHORIZED);
       }
 
-      // Vérifier que l'utilisateur est admin
-      const adminDomains = ["@sweily.fr", "@newbi.fr"];
-      const isAdmin = adminDomains.some((domain) =>
-        user.email?.toLowerCase().endsWith(domain),
-      );
-
-      if (!isAdmin) {
-        throw new AppError(
-          "Accès refusé - Réservé aux administrateurs",
-          ERROR_CODES.FORBIDDEN,
-        );
-      }
+      await assertPartnerAdmin(user);
 
       try {
         const filter = status ? { status } : {};
@@ -823,18 +827,7 @@ const partnerResolvers = {
         throw new AppError("Non authentifié", ERROR_CODES.UNAUTHORIZED);
       }
 
-      // Vérifier que l'utilisateur est admin
-      const adminDomains = ["@sweily.fr", "@newbi.fr"];
-      const isAdmin = adminDomains.some((domain) =>
-        user.email?.toLowerCase().endsWith(domain),
-      );
-
-      if (!isAdmin) {
-        throw new AppError(
-          "Accès refusé - Réservé aux administrateurs",
-          ERROR_CODES.FORBIDDEN,
-        );
-      }
+      await assertPartnerAdmin(user);
 
       try {
         const withdrawal = await Withdrawal.findById(withdrawalId);
@@ -887,18 +880,7 @@ const partnerResolvers = {
         throw new AppError("Non authentifié", ERROR_CODES.UNAUTHORIZED);
       }
 
-      // Vérifier que l'utilisateur est admin
-      const adminDomains = ["@sweily.fr", "@newbi.fr"];
-      const isAdmin = adminDomains.some((domain) =>
-        user.email?.toLowerCase().endsWith(domain),
-      );
-
-      if (!isAdmin) {
-        throw new AppError(
-          "Accès refusé - Réservé aux administrateurs",
-          ERROR_CODES.FORBIDDEN,
-        );
-      }
+      await assertPartnerAdmin(user);
 
       try {
         const withdrawal = await Withdrawal.findById(withdrawalId);

@@ -1,18 +1,19 @@
 import express from "express";
-import mongoose from "mongoose";
 import {
   cleanupExpiredFiles,
   markExpiredTransfersAndDeleteR2,
   deleteExpiredLocalFiles,
 } from "../jobs/cleanupExpiredFiles.js";
 import logger from "../utils/logger.js";
+import { isBackofficeAdmin } from "../utils/backofficeAdmin.js";
 
 const router = express.Router();
 
 /**
  * Middleware pour vérifier que l'utilisateur est un admin interne (Sweily/Newbi).
  * validateJWT (appliqué au mount dans server.js) set req.user = userId string.
- * TODO: Replace with proper admin role check from DB (e.g. User.isSystemAdmin flag)
+ * Liste blanche par id BACKOFFICE_ADMIN_USER_IDS, fermée si absente : le seul
+ * domaine de l'e-mail ne suffit pas, l'inscription ne vérifie pas l'adresse.
  */
 async function requireInternalAdmin(req, res, next) {
   try {
@@ -20,12 +21,7 @@ async function requireInternalAdmin(req, res, next) {
     if (!userId) {
       return res.status(401).json({ error: "Non authentifié" });
     }
-    const User = mongoose.model("user");
-    const user = await User.findById(userId).select("email").lean();
-    if (
-      !user?.email ||
-      (!user.email.endsWith("@sweily.fr") && !user.email.endsWith("@newbi.fr"))
-    ) {
+    if (!(await isBackofficeAdmin(userId))) {
       return res
         .status(403)
         .json({ error: "Accès réservé aux administrateurs internes" });
@@ -39,7 +35,7 @@ async function requireInternalAdmin(req, res, next) {
 
 /**
  * Route admin pour déclencher manuellement le nettoyage des fichiers expirés
- * Accessible uniquement aux administrateurs internes (email @sweily.fr ou @newbi.fr)
+ * Accessible uniquement aux administrateurs internes (BACKOFFICE_ADMIN_USER_IDS)
  */
 router.post("/cleanup/run", requireInternalAdmin, async (req, res) => {
   try {

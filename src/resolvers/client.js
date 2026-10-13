@@ -24,6 +24,7 @@ import mongoose from "mongoose";
 import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -597,6 +598,26 @@ const clientResolvers = {
         const removedIds = previousMemberIds.filter(
           (mId) => !newMemberIds.includes(mId),
         );
+
+        // Seuls des membres actuels de l'espace peuvent être assignés : sinon
+        // l'activité affichait le nom, l'e-mail ou l'avatar de n'importe quel
+        // compte Newbi. Un membre déjà assigné reste toléré (départ de
+        // l'espace depuis l'assignation).
+        if (addedIds.length > 0) {
+          const addedObjectIds = [...new Set(addedIds)].map(toObjectIdOrNull);
+          if (addedObjectIds.some((oid) => !oid)) {
+            throw createNotFoundError("Membre");
+          }
+          const memberUserIds = await db
+            .collection("member")
+            .distinct("userId", {
+              organizationId: new mongoose.Types.ObjectId(workspaceId),
+              userId: { $in: addedObjectIds },
+            });
+          if (memberUserIds.length !== addedObjectIds.length) {
+            throw createNotFoundError("Membre");
+          }
+        }
 
         client.assignedMembers = memberIds;
 

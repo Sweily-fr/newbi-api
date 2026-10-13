@@ -27,9 +27,13 @@ const stripeConnectService = {
         });
       }
 
-      // Fallback: vérifier avec userId pour compatibilité
+      // Fallback: ancien compte de l'utilisateur sans organizationId. Un
+      // compte rattaché à un autre espace ne doit pas être réutilisé ici.
       if (!existingAccount && userId) {
-        existingAccount = await StripeConnectAccount.findOne({ userId });
+        existingAccount = await StripeConnectAccount.findOne({
+          userId,
+          organizationId: { $in: [null, ""] },
+        });
       }
 
       if (existingAccount) {
@@ -75,7 +79,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "Erreur lors de la création du compte Stripe Connect:",
-        error
+        error,
       );
       return {
         success: false,
@@ -156,7 +160,7 @@ const stripeConnectService = {
           chargesEnabled: stripeAccount.charges_enabled || false,
           payoutsEnabled: stripeAccount.payouts_enabled || false,
         },
-        { new: true }
+        { new: true },
       );
 
       if (!account) {
@@ -178,7 +182,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "Erreur lors de la vérification du statut du compte:",
-        error
+        error,
       );
       return {
         success: false,
@@ -210,7 +214,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "Erreur lors de la génération du lien de tableau de bord:",
-        error
+        error,
       );
       return {
         success: false,
@@ -288,7 +292,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "Erreur lors de la création de la session de paiement:",
-        error
+        error,
       );
       return {
         success: false,
@@ -372,7 +376,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "Erreur lors de la création de la session de paiement facture:",
-        error
+        error,
       );
       return {
         success: false,
@@ -393,7 +397,7 @@ const stripeConnectService = {
     accountId,
     amount,
     currency = "eur",
-    metadata = {}
+    metadata = {},
   ) {
     try {
       // Vérifier si le compte existe et peut recevoir des paiements
@@ -439,7 +443,7 @@ const stripeConnectService = {
     } catch (error) {
       logger.error(
         "❌ Erreur lors du virement de parrainage depuis Newbi:",
-        error
+        error,
       );
 
       // Messages d'erreur plus spécifiques
