@@ -33,13 +33,13 @@ function transporter() {
 
 const FROM =
   process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@newbi.fr";
-const APP_URL = process.env.FRONTEND_URL || "https://www.newbi.fr";
+export const APP_URL = process.env.FRONTEND_URL || "https://www.newbi.fr";
 // L'abonnement (choix des plans) s'ouvre via la modale de paramètres du
 // dashboard, pilotée par les query params lus par OAuthCallbackHandler.
 // `APP_URL` vient de FRONTEND_URL → s'adapte localhost / staging / prod.
-const SUBSCRIBE_URL = `${APP_URL}/dashboard?openSettings=true&settingsTab=subscription`;
+export const SUBSCRIBE_URL = `${APP_URL}/dashboard?openSettings=true&settingsTab=subscription`;
 
-function escapeHtml(value) {
+export function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -68,7 +68,7 @@ function formatTodayFr() {
  * emails (NewbiV2 src/lib/email-templates). All sub-templates feed it their
  * content so the header, card, CTA and footer stay identical everywhere.
  */
-function renderEmail({
+export function renderEmail({
   preheader,
   badge,
   icon,
@@ -80,6 +80,9 @@ function renderEmail({
   ctaLabel,
   ctaUrl,
   trustHtml,
+  // Ligne de pied de page à la place du rappel des paramètres de
+  // notification (ex. lien de désinscription des relances d'essai)
+  footerNoteHtml,
 }) {
   return `
     <!DOCTYPE html>
@@ -158,7 +161,7 @@ function renderEmail({
             Votre gestion, simplifiée.
           </p>
           <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
-            Vous pouvez gérer vos notifications dans les paramètres de votre compte • <a href="${APP_URL}/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+            ${footerNoteHtml || "Vous pouvez gérer vos notifications dans les paramètres de votre compte"} • <a href="${APP_URL}/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
           </p>
           <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
             <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
@@ -233,7 +236,8 @@ export function buildTrialEndedEmail({ orgName } = {}) {
   const subject =
     "Votre essai Newbi est terminé — vos données sont en sécurité";
   const html = renderEmail({
-    preheader: "Vos données sont en sécurité. Choisissez un plan pour reprendre.",
+    preheader:
+      "Vos données sont en sécurité. Choisissez un plan pour reprendre.",
     badge: "ESSAI TERMINÉ",
     icon: "🔒",
     iconLabel: "Accès lecture seule",

@@ -6,6 +6,13 @@ import {
   createAccountManager,
   updateAccountManager,
 } from "../services/accountManagerService.js";
+import {
+  TrialNudgeError,
+  listTrialNudgeSchedule,
+  renderTrialNudgePreview,
+  sendTrialNudgeTest,
+  updateTrialNudgeSettings,
+} from "../services/trialNudgeService.js";
 
 /**
  * Écritures du back-office newbi-admin (admin.newbi.fr), qui n'a qu'un accès
@@ -18,7 +25,10 @@ const router = express.Router();
 router.use(requireAdminServiceToken);
 
 function sendError(res, error, context) {
-  if (error instanceof AccountManagerError) {
+  if (
+    error instanceof AccountManagerError ||
+    error instanceof TrialNudgeError
+  ) {
     return res.status(error.status).json({ error: error.message });
   }
   logger.error(`[ADMIN-SERVICE] ${context} : ${error.message}`);
@@ -46,6 +56,47 @@ router.patch("/account-managers/:id", async (req, res) => {
     return res.json({ accountManager: manager });
   } catch (error) {
     return sendError(res, error, "modification d'un gestionnaire");
+  }
+});
+
+// ─── Relances de l'essai gratuit (page Relances) ───────────────────────────
+
+// Relances dues ou à venir, avec leur état ; les réglages et le journal sont
+// lus directement en base par l'admin
+router.get("/trial-nudges/schedule", async (req, res) => {
+  try {
+    return res.json(await listTrialNudgeSchedule());
+  } catch (error) {
+    return sendError(res, error, "calendrier des relances");
+  }
+});
+
+// Réglages : { mode?: "off" | "simulation" | "live", inactivityDays? }
+router.put("/trial-nudges/settings", async (req, res) => {
+  try {
+    const settings = await updateTrialNudgeSettings(req.body, req.adminEmail);
+    return res.json({ settings });
+  } catch (error) {
+    return sendError(res, error, "réglages des relances");
+  }
+});
+
+// Aperçu d'une relance avec des données d'exemple : { subject, html }
+router.get("/trial-nudges/preview/:step", (req, res) => {
+  try {
+    return res.json(renderTrialNudgePreview(req.params.step));
+  } catch (error) {
+    return sendError(res, error, "aperçu d'une relance");
+  }
+});
+
+// Envoi d'une relance d'exemple à l'admin connecté : { step }
+router.post("/trial-nudges/test", async (req, res) => {
+  try {
+    await sendTrialNudgeTest({ step: req.body?.step, to: req.adminEmail });
+    return res.json({ sentTo: req.adminEmail });
+  } catch (error) {
+    return sendError(res, error, "test d'une relance");
   }
 });
 

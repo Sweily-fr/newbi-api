@@ -21,6 +21,12 @@ vi.mock("../../src/utils/trialEmails.js", () => ({
   sendTrialEndedEmail: (...args) => sendEndedMock(...args),
 }));
 
+// Relance de fin d'essai (newbi-admin) : par défaut elle ne remplace rien
+const endNudgeMock = vi.fn().mockResolvedValue(false);
+vi.mock("../../src/services/trialNudgeService.js", () => ({
+  sendTrialEndNudgeIfInactive: (...args) => endNudgeMock(...args),
+}));
+
 // rbac cache invalidation
 const invalidateTrialCacheMock = vi.fn();
 vi.mock("../../src/middlewares/rbac.js", () => ({
@@ -103,6 +109,8 @@ const inPast = (days) =>
 beforeEach(() => {
   sendEndingMock.mockClear();
   sendEndedMock.mockClear();
+  endNudgeMock.mockReset();
+  endNudgeMock.mockResolvedValue(false);
   invalidateTrialCacheMock.mockClear();
   _fakeDb = null;
 });
@@ -175,6 +183,38 @@ describe("trialCleanupCron — J0 expiration (flag ON)", () => {
     });
   });
 
+  it("skips the standard J0 email when the inactivity nudge replaced it", async () => {
+    endNudgeMock.mockResolvedValue(true);
+    const orgUpdate = vi.fn().mockResolvedValue({});
+    _fakeDb = buildDb({
+      expired: [{ _id: orgId, isTrialActive: true, trialEndDate: inPast(1) }],
+      orgUpdate,
+      memberFindOne: vi.fn().mockResolvedValue({ userId: ownerId }),
+      userFindOne: vi.fn().mockResolvedValue({ email: "owner@acme.fr" }),
+    });
+
+    const result = await runTrialCleanup();
+    expect(result.expired).toBe(1);
+    expect(endNudgeMock).toHaveBeenCalledTimes(1);
+    expect(sendEndedMock).not.toHaveBeenCalled();
+    // Anti-doublon posé quand même : l'e-mail de fin d'essai est parti
+    expect(
+      orgUpdate.mock.calls[0][1].$set.trialEndedEmailSentAt,
+    ).toBeInstanceOf(Date);
+  });
+
+  it("falls back to the standard J0 email when the nudge throws", async () => {
+    endNudgeMock.mockRejectedValue(new Error("Mongo down"));
+    _fakeDb = buildDb({
+      expired: [{ _id: orgId, isTrialActive: true, trialEndDate: inPast(1) }],
+      memberFindOne: vi.fn().mockResolvedValue({ userId: ownerId }),
+      userFindOne: vi.fn().mockResolvedValue({ email: "owner@acme.fr" }),
+    });
+
+    await runTrialCleanup();
+    expect(sendEndedMock).toHaveBeenCalledTimes(1);
+  });
+
   it("SKIPS orgs with stripeTrialActive=true (Stripe trial, vigilance point)", async () => {
     // We rely on the Mongo query itself to filter — verify by passing an
     // empty expired cursor (because the production query has the filter).
@@ -210,6 +250,7 @@ describe("trialCleanupCron — J0 expiration (flag ON)", () => {
     // BUT does not refresh trialEndedEmailSentAt and does not call the mailer
     expect(setPatch.trialEndedEmailSentAt).toBeUndefined();
     expect(sendEndedMock).not.toHaveBeenCalled();
+    expect(endNudgeMock).not.toHaveBeenCalled();
   });
 });
 
