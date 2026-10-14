@@ -253,7 +253,10 @@ function roundBillingSide(side) {
 // Analytiques). L'accueil masque les cartes que le rôle ne peut pas lire.
 // Le cadre Facturation n'existe que sur l'accueil : il suit en plus la case
 // « Afficher le chiffre d'affaires et les achats du mois » de son rôle.
-const readBanking = requireWorkspaceLevel("banking", "read");
+const readTreasurySummary = requireWorkspaceLevel(
+  ["banking", "overview", "analytics"],
+  "read",
+);
 const readTreasury = requireWorkspaceLevel(["banking", "overview"], "read");
 const readBillingMonth = requireWorkspaceLevel(
   ["invoices", "overview"],
@@ -269,7 +272,9 @@ const dashboardAggregationResolvers = {
     /**
      * Stats résumées pour les cartes du dashboard
      */
-    dashboardSummary: readBanking(
+    // Solde, encaissements, décaissements : repris par la Vue d'ensemble et
+    // les Analytiques (comme la courbe de trésorerie)
+    dashboardSummary: readTreasurySummary(
       async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
         if (accountId) matchFilter.fromAccount = accountId;

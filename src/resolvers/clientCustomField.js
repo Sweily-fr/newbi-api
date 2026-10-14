@@ -10,8 +10,8 @@ import {
 // 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
 // requis sur le module « clientCustomFields ») et impose le workspace validé par RBAC à
 // la place de l'ID brut des args.
-const scopedQuery = (fn) =>
-  requireRead("clientCustomFields")(async (parent, args, context, info) =>
+const scopedQueryFor = (resource) => (fn) =>
+  requireRead(resource)(async (parent, args, context, info) =>
     fn(
       parent,
       {
@@ -22,6 +22,14 @@ const scopedQuery = (fn) =>
       info,
     ),
   );
+const scopedQuery = scopedQueryFor("clientCustomFields");
+const scopedDocumentQuery = scopedQueryFor([
+  "clientCustomFields",
+  "invoices",
+  "quotes",
+  "purchaseOrders",
+  "deliveryNotes",
+]);
 
 // action : « create » (créer), « edit » (modifier, réordonner) ou
 // « delete » (supprimer). Le contrôle d'abonnement reste ici.
@@ -65,8 +73,10 @@ export const clientCustomFieldResolvers = {
       }
     }),
 
-    // Champs du client à reprendre sur les documents (aperçu en direct des éditeurs)
-    clientDocumentFields: scopedQuery(
+    // Champs du client à reprendre sur les documents (aperçu en direct des
+    // éditeurs) : lus par les éditeurs de documents de vente, imprimés sur
+    // le document
+    clientDocumentFields: scopedDocumentQuery(
       async (_, { workspaceId, clientId }, context) =>
         (await buildDocumentFieldsForClientId(
           clientId,
