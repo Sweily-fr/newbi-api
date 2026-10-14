@@ -3,7 +3,11 @@ import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { bankingCacheService } from "../services/banking/BankingCacheService.js";
 import logger from "../utils/logger.js";
-import { requireWorkspaceMembership } from "../middlewares/require-workspace-membership.js";
+import {
+  requireWorkspaceMembership,
+  requireWorkspacePermission,
+} from "../middlewares/require-workspace-membership.js";
+import { BANK_ACCOUNT_MODULES } from "../config/rolePermissions.js";
 
 const router = express.Router();
 
@@ -145,6 +149,8 @@ router.post(
  */
 router.post(
   "/refresh",
+  // Renvoie comptes et solde total : mêmes pages que GET /banking/accounts
+  requireWorkspacePermission(BANK_ACCOUNT_MODULES, "read"),
   requireActiveSubscriptionREST({ failClosed: true }),
   async (req, res) => {
     try {

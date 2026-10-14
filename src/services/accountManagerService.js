@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import AccountManager from "../models/AccountManager.js";
 import logger from "../utils/logger.js";
 import {
+  ALWAYS_VISIBLE_MODULES,
   CATALOG_VERSION,
   CUSTOM_ROLE_PREFIX,
   MODULE_KEYS,
@@ -242,10 +243,16 @@ export async function setCabinetReadOnly(manager) {
 
     const stored = await loadOrganizationRoles(link.organizationId);
     const actions = getEffectivePermissions(member.role, stored);
+    // Consultation seulement : « Voir » des pages qu'il voyait, et l'accueil
+    // tel qu'il l'avait (ses cases ne font qu'afficher)
     const readOnly = Object.fromEntries(
       MODULE_KEYS.map((key) => [
         key,
-        (actions[key] || []).includes("view") ? ["view"] : [],
+        ALWAYS_VISIBLE_MODULES.has(key)
+          ? actions[key] || []
+          : (actions[key] || []).includes("view")
+            ? ["view"]
+            : [],
       ]),
     );
     const roleKey = `${CUSTOM_ROLE_PREFIX}${new mongoose.Types.ObjectId().toHexString()}`;

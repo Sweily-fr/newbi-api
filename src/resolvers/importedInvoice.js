@@ -945,39 +945,38 @@ const importedInvoiceResolvers = {
     ),
 
     /**
-     * Quota OCR de l'utilisateur courant
+     * Quota OCR de l'utilisateur courant (affiché aussi par les factures
+     * d'achat et l'onglet Facturation des paramètres)
      */
-    userOcrQuota: requireRead("importedInvoices")(
-      async (_, { workspaceId: inputWorkspaceId }, context) => {
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
-        const plan = await getUserPlan(user.id, workspaceId);
-        const stats = await UserOcrQuota.getUserStats(
-          user.id,
-          workspaceId,
-          plan,
-        );
+    userOcrQuota: requireRead([
+      "importedInvoices",
+      "purchaseInvoices",
+      "billing",
+    ])(async (_, { workspaceId: inputWorkspaceId }, context) => {
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+      const plan = await getUserPlan(user.id, workspaceId);
+      const stats = await UserOcrQuota.getUserStats(user.id, workspaceId, plan);
 
-        return {
-          plan: stats.plan,
-          monthlyQuota: stats.monthlyQuota,
-          usedQuota: stats.usedQuota,
-          remainingQuota: stats.remainingQuota,
-          extraImportsPurchased: stats.extraImportsPurchased,
-          extraImportsUsed: stats.extraImportsUsed,
-          extraImportsAvailable: stats.extraImportsAvailable,
-          extraImportPrice: stats.extraImportPrice,
-          totalUsedThisMonth: stats.totalUsedThisMonth,
-          totalAvailable: stats.totalAvailable,
-          month: stats.month,
-          resetDate: stats.resetDate?.toISOString() || null,
-          lastImports: stats.lastImports || [],
-        };
-      },
-    ),
+      return {
+        plan: stats.plan,
+        monthlyQuota: stats.monthlyQuota,
+        usedQuota: stats.usedQuota,
+        remainingQuota: stats.remainingQuota,
+        extraImportsPurchased: stats.extraImportsPurchased,
+        extraImportsUsed: stats.extraImportsUsed,
+        extraImportsAvailable: stats.extraImportsAvailable,
+        extraImportPrice: stats.extraImportPrice,
+        totalUsedThisMonth: stats.totalUsedThisMonth,
+        totalAvailable: stats.totalAvailable,
+        month: stats.month,
+        resetDate: stats.resetDate?.toISOString() || null,
+        lastImports: stats.lastImports || [],
+      };
+    }),
   },
 
   Mutation: {

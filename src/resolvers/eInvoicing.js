@@ -34,6 +34,9 @@ const requireEInvoicingVatRegime = requireAction(
 // e-reporting et factures d'un espace B en passant workspaceId: B.
 const ARGS_WORKSPACE = { preferArgsWorkspace: true };
 const readInvoices = requireRead("invoices", ARGS_WORKSPACE);
+// Réglages et statistiques : aussi lus par « Applications et banques »
+// (activation de la facturation électronique)
+const readSettings = requireRead(["invoices", "integrations"], ARGS_WORKSPACE);
 
 const eInvoicingResolvers = {
   Query: {
@@ -156,7 +159,7 @@ const eInvoicingResolvers = {
     /**
      * Récupérer les paramètres e-invoicing d'une organisation
      */
-    eInvoicingSettings: readInvoices(async (_, { workspaceId }, context) => {
+    eInvoicingSettings: readSettings(async (_, { workspaceId }, context) => {
       try {
         const settings =
           await EInvoicingSettingsService.getEInvoicingSettings(workspaceId);
@@ -173,7 +176,7 @@ const eInvoicingResolvers = {
     /**
      * Récupérer les statistiques e-invoicing d'une organisation
      */
-    eInvoicingStats: readInvoices(async (_, { workspaceId }, context) => {
+    eInvoicingStats: readSettings(async (_, { workspaceId }, context) => {
       try {
         // Compter les factures par statut e-invoicing
         const stats = await Invoice.aggregate([

@@ -68,7 +68,8 @@ async function workspaceMemberGrid(userId, workspaceId) {
 
 /**
  * Le rôle de l'utilisateur dans le workspace donne-t-il ce niveau sur ce
- * module (grille des rôles, prédéfinis ou personnalisés) ? `false` si
+ * module (grille des rôles, prédéfinis ou personnalisés) ? Une liste de
+ * modules : l'un suffit (données reprises par plusieurs pages). `false` si
  * l'utilisateur n'est pas membre. Pour les routes REST, qui ne passent pas
  * par withRBAC.
  */
@@ -81,10 +82,13 @@ export async function userHasWorkspaceLevel(
   try {
     const member = await workspaceMemberGrid(userId, workspaceId);
     if (!member) return false;
-    const allowed = levelsAllowLevel(member.grid, moduleKey, level);
+    const modules = Array.isArray(moduleKey) ? moduleKey : [moduleKey];
+    const allowed = modules.some((m) =>
+      levelsAllowLevel(member.grid, m, level),
+    );
     if (!allowed) {
       logger.warn(
-        `userHasWorkspaceLevel: refus user=${userId} workspace=${workspaceId} (${member.role}) ${level} sur ${moduleKey}`,
+        `userHasWorkspaceLevel: refus user=${userId} workspace=${workspaceId} (${member.role}) ${level} sur ${modules.join("|")}`,
       );
     }
     return allowed;

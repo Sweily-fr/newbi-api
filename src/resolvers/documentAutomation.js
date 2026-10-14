@@ -9,10 +9,48 @@ import {
   resolveWorkspaceId,
   checkSubscriptionActive,
 } from "../middlewares/rbac.js";
-import { createNotFoundError, createValidationError } from "../utils/errors.js";
+import {
+  AppError,
+  ERROR_CODES,
+  createNotFoundError,
+  createValidationError,
+} from "../utils/errors.js";
+import { MODULES } from "../config/rolePermissions.js";
 import documentAutomationService, {
   getAutomationProgress,
 } from "../services/documentAutomationService.js";
+
+// Page d'où viennent les documents classés par un déclencheur
+const SOURCE_MODULES = {
+  invoice: "invoices",
+  quote: "quotes",
+  creditNote: "creditNotes",
+  importedInvoice: "importedInvoices",
+  importedQuote: "importedQuotes",
+  purchaseOrder: "purchaseOrders",
+  purchaseInvoice: "purchaseInvoices",
+  transaction: "banking",
+};
+
+/**
+ * Une automatisation copie les PDF de sa page source dans un dossier
+ * partagé : la créer, la modifier, l'activer ou la lancer exige aussi de
+ * voir cette page (sinon un rôle sans les factures les ferait copier dans
+ * un dossier qu'il voit).
+ */
+function assertSourceReadable(context, triggerType) {
+  const docType =
+    documentAutomationService._getTriggerConfig(triggerType)?.docType;
+  const moduleKey = SOURCE_MODULES[docType];
+  if (!moduleKey) return;
+  if (!context?.permissions?.hasPermission?.(moduleKey, "view")) {
+    const label = MODULES.find((m) => m.key === moduleKey)?.label || moduleKey;
+    throw new AppError(
+      `Votre rôle ne permet pas de voir la page « ${label} » : impossible d'en classer les documents.`,
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+}
 
 // Wrapper lecture : valide l'appartenance à l'organisation et le droit de
 // lecture du module « sharedDocuments » (automatisations de classement des
@@ -86,7 +124,7 @@ const documentAutomationResolvers = {
     ),
 
     documentsForAutomation: scopedQuery(
-      async (_, { workspaceId, automationId }) => {
+      async (_, { workspaceId, automationId }, context) => {
         const automation = await DocumentAutomation.findOne({
           _id: automationId,
           workspaceId,
@@ -95,6 +133,7 @@ const documentAutomationResolvers = {
         if (!automation) {
           throw createNotFoundError("Automatisation");
         }
+        assertSourceReadable(context, automation.triggerType);
 
         return documentAutomationService.getDocumentsForAutomation(
           automation,
@@ -125,6 +164,7 @@ const documentAutomationResolvers = {
     createDocumentAutomation: scopedMutation(
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
+        assertSourceReadable(context, input.triggerType);
 
         // Vérifier que le dossier cible existe (et qu'il est visible : un
         // dossier privé inaccessible est traité comme inexistant)
@@ -184,6 +224,10 @@ const documentAutomationResolvers = {
         if (!automation) {
           throw createNotFoundError("Automatisation");
         }
+        assertSourceReadable(
+          context,
+          input.triggerType ?? automation.triggerType,
+        );
 
         // Vérifier le dossier cible si modifié (dossier privé inaccessible :
         // comme inexistant)
@@ -288,23 +332,26 @@ const documentAutomationResolvers = {
       },
     ),
 
-    toggleDocumentAutomation: scopedMutation(async (_, { workspaceId, id }) => {
-      const automation = await DocumentAutomation.findOne({
-        _id: id,
-        workspaceId,
-      });
+    toggleDocumentAutomation: scopedMutation(
+      async (_, { workspaceId, id }, context) => {
+        const automation = await DocumentAutomation.findOne({
+          _id: id,
+          workspaceId,
+        });
 
-      if (!automation) {
-        throw createNotFoundError("Automatisation");
-      }
+        if (!automation) {
+          throw createNotFoundError("Automatisation");
+        }
+        assertSourceReadable(context, automation.triggerType);
 
-      automation.isActive = !automation.isActive;
-      await automation.save();
+        automation.isActive = !automation.isActive;
+        await automation.save();
 
-      return await DocumentAutomation.findById(automation._id).populate(
-        "createdBy",
-      );
-    }),
+        return await DocumentAutomation.findById(automation._id).populate(
+          "createdBy",
+        );
+      },
+    ),
 
     testDocumentAutomation: scopedMutation(async (_, { workspaceId, id }) => {
       const automation = await DocumentAutomation.findOne({
@@ -348,6 +395,7 @@ const documentAutomationResolvers = {
         if (!automation) {
           throw createNotFoundError("Automatisation");
         }
+        assertSourceReadable(context, automation.triggerType);
 
         try {
           const result =
@@ -420,6 +468,7 @@ const documentAutomationResolvers = {
             "L'automatisation doit être active pour être exécutée",
           );
         }
+        assertSourceReadable(context, automation.triggerType);
 
         // Vérifier que le dossier cible existe
         const targetFolder = await SharedFolder.findOne({

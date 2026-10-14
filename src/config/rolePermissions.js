@@ -11,6 +11,8 @@
  * (voir, créer, modifier, supprimer, envoyer, exporter…), chacune cochée
  * indépendamment dans l'éditeur de rôles. Une page sans « Voir »
  * n'apparaît pas du tout ; cocher une autre action ajoute « Voir ».
+ * L'accueil, lui, est toujours visible : ses cases masquent des cadres
+ * (solde, chiffre d'affaires du mois…).
  *
  * Les contrôles par niveau encore utilisés (`requireRead/Write/Delete`)
  * sont dérivés des actions : lire = « view », écrire = action d'écriture du
@@ -68,10 +70,51 @@ export const MODULE_GROUPS = [
 /**
  * Une entrée par page du menu ; `parent` = partie d'une page, affichée
  * dans son menu déroulant. `writeAction` : action qui vaut « écrire » pour
- * les contrôles par niveau (« edit » par défaut).
+ * les contrôles par niveau (« edit » par défaut). `alwaysVisible` : page
+ * que tout membre voit (« Voir » imposé), ses autres actions choisissent
+ * seulement ce qu'elle affiche.
  */
 export const MODULES = [
   // Pilotage
+  {
+    key: "home",
+    group: "pilotage",
+    label: "Accueil",
+    alwaysVisible: true,
+    // Cadres de l'accueil, chacun masquable. Ils suivent aussi les droits
+    // des pages d'où viennent leurs données (le solde exige Transactions…).
+    actions: [
+      action("view", "Voir l'accueil", "read", {
+        description: "Toujours permis : c'est la page d'arrivée de l'espace.",
+      }),
+      action("bankBalance", "Afficher le solde des comptes", "read", {
+        description: "Solde, encaissements et décaissements.",
+      }),
+      action(
+        "billingMonth",
+        "Afficher le chiffre d'affaires et les achats du mois",
+        "read",
+        { description: "Ventes et achats TTC du mois, en cours et en retard." },
+      ),
+      action("toProcess", "Afficher les éléments à traiter", "read", {
+        description:
+          "Rapprochements, factures en retard ou à envoyer, devis en attente, achats à payer, notifications non lues.",
+      }),
+      action(
+        "recentTransactions",
+        "Afficher les dernières transactions",
+        "read",
+      ),
+      action(
+        "recentInvoices",
+        "Afficher les dernières factures de vente",
+        "read",
+        {
+          description: "Avec leur montant HT.",
+        },
+      ),
+    ],
+  },
   {
     key: "banking",
     group: "pilotage",
@@ -376,6 +419,11 @@ export const MODULES = [
 
 export const MODULE_KEYS = MODULES.map((m) => m.key);
 
+/** Pages vues par tout membre (« Voir » imposé). */
+export const ALWAYS_VISIBLE_MODULES = new Set(
+  MODULES.filter((m) => m.alwaysVisible).map((m) => m.key),
+);
+
 const MODULES_BY_KEY = new Map(MODULES.map((m) => [m.key, m]));
 
 const ACCOUNT_MODULES = new Set(
@@ -400,6 +448,20 @@ export const RESOURCE_ALIASES = {
   payments: "banking",
   reports: "analytics",
 };
+
+/**
+ * Routes REST bancaires : comptes et soldes lisibles avec une page de
+ * Pilotage qui les affiche ou « Applications et banques » (connexion des
+ * comptes) ; transactions avec les mêmes pages que la requête GraphQL.
+ */
+export const BANK_ACCOUNT_MODULES = [
+  "banking",
+  "overview",
+  "forecast",
+  "analytics",
+  "integrations",
+];
+export const TRANSACTION_LIST_MODULES = ["banking", "overview", "analytics"];
 
 /**
  * Ancienne fonctionnalité devenue action d'une page : `requireWrite(
@@ -484,19 +546,22 @@ export function actionsFromLevels(levels = {}, base = null) {
 /**
  * Normalise une grille d'actions reçue (création/modification de rôle) :
  * actions inconnues ignorées, « Voir » ajouté dès qu'une autre action est
- * cochée, parties d'une page vidées si la page n'est pas visible. Modules
- * absents : repris de `base` (ou aucune action).
+ * cochée (toujours pour une page `alwaysVisible`), parties d'une page
+ * vidées si la page n'est pas visible. Modules absents : repris de `base`,
+ * sinon aucune action, sauf une page `alwaysVisible` qui affiche tout
+ * (grilles enregistrées avant son ajout : rien ne change pour elles).
  */
 export function normalizeActions(input = {}, base = null) {
   const grid = {};
   for (const module of MODULES) {
+    const all = module.actions.map((a) => a.key);
     const raw = Array.isArray(input?.[module.key])
       ? input[module.key]
-      : base?.[module.key] || [];
-    const kept = module.actions
-      .map((a) => a.key)
-      .filter((key) => raw.includes(key));
-    if (kept.length && !kept.includes("view")) kept.unshift("view");
+      : base?.[module.key] || (module.alwaysVisible ? all : []);
+    const kept = all.filter((key) => raw.includes(key));
+    if ((kept.length || module.alwaysVisible) && !kept.includes("view")) {
+      kept.unshift("view");
+    }
     grid[module.key] = kept;
   }
   for (const module of MODULES) {
@@ -533,6 +598,8 @@ const isAccount = (m) => m.group === "account";
  *     (équivaut à la supprimer), ni régler ce qui vaut pour tout l'espace
  *     (relances automatiques, champs personnalisés), ni toucher au compte ;
  *   - Membre : voit tout, sans rien modifier ni exporter ;
+ *   - tous : l'accueil complet (ses cadres suivent aussi les droits des
+ *     pages d'où viennent leurs données) ;
  *   - Comptable : ses droits d'avant les rôles personnalisés, à l'identique
  *     (ancienne matrice de rbac.js + ce que permettaient les resolvers sans
  *     contrôle de rôle : banque, rapprochement, calendrier, documents
@@ -578,8 +645,11 @@ const PREDEFINED_ACTIONS = {
     // Signatures de mail : documents personnels, chacun supprime les siennes
     return a !== "delete" || m.key === "signatures";
   }),
+  // Membre : « Voir » partout, et tout ce qu'affiche l'accueil
   viewer: buildActions(
-    (m, a) => a === "view" && !["billing", "integrations"].includes(m.key),
+    (m, a) =>
+      (a === "view" || m.alwaysVisible) &&
+      !["billing", "integrations"].includes(m.key),
   ),
   accountant: actionsFromLevels(ACCOUNTANT_LEVELS),
 };
@@ -776,6 +846,9 @@ export function levelsAllowAction(grid, resource, actionKey) {
   const legacy = LEGACY_FEATURES[resource];
   const moduleKey = legacy ? legacy.module : resolveModule(resource);
   if (!moduleKey || !grid || !Array.isArray(grid[moduleKey])) return false;
+  // L'action du catalogue prime sur un ancien nom (« remove » des membres
+  // n'est pas « delete »)
+  if (!legacy && grid[moduleKey].includes(actionKey)) return true;
   const wanted = legacy
     ? legacy.action
     : actionKey === "manage" || actionKey === "admin"
@@ -838,6 +911,7 @@ export function catalogModules() {
     parent: m.parent || null,
     label: m.label,
     description: m.description || null,
+    alwaysVisible: Boolean(m.alwaysVisible),
     actions: m.actions.map((a) => ({
       key: a.key,
       label: a.label,

@@ -1,11 +1,10 @@
 import express from "express";
-import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import Invoice from "../models/Invoice.js";
 import cloudflareService from "../services/cloudflareService.js";
 import superPdpService from "../services/superPdpService.js";
-import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -26,13 +25,15 @@ router.get("/:id/document-pdf", validateJWT, async (req, res) => {
       return res.status(404).json({ error: "Facture introuvable" });
     }
 
-    // Vérifier l'appartenance de l'utilisateur à l'organisation de la facture
-    const member =
-      await EInvoicingSettingsService.getMemberCollection().findOne({
-        userId: new mongoose.Types.ObjectId(userId),
-        organizationId: invoice.workspaceId,
-      });
-    if (!member) {
+    // Membre de l'organisation de la facture, avec « Voir » des factures
+    if (
+      !(await userHasWorkspaceLevel(
+        userId,
+        invoice.workspaceId,
+        "invoices",
+        "read",
+      ))
+    ) {
       return res.status(403).json({ error: "Accès refusé" });
     }
 

@@ -99,6 +99,23 @@ async function getLatestSignature(parent, documentType, extraFilter = {}) {
     .lean();
 }
 
+// Page de chaque type de document signable : lire une demande de signature
+// exige « Voir » sur la page du document (les devis surtout)
+const SIGNABLE_MODULES = {
+  quote: "quotes",
+  invoice: "invoices",
+  credit_note: "creditNotes",
+};
+const SIGNABLE_PAGES = Object.values(SIGNABLE_MODULES);
+const readSignatures = requireRead(SIGNABLE_PAGES);
+
+function canReadSigned(context, documentType) {
+  const moduleKey = SIGNABLE_MODULES[documentType];
+  return Boolean(
+    moduleKey && context.permissions?.hasPermission?.(moduleKey, "view"),
+  );
+}
+
 const esignatureResolvers = {
   // Field resolvers pour Quote
   Quote: {
@@ -154,21 +171,30 @@ const esignatureResolvers = {
     /**
      * Signatures électroniques consommées ce mois-ci et reste du quota du plan
      */
-    esignatureQuota: requireRead("invoices")(async (_, __, context) => {
-      const quota = await getEsignatureQuota(context.workspaceId);
-      return { ...quota, resetsAt: quota.resetsAt.toISOString() };
-    }),
+    esignatureQuota: requireRead([...SIGNABLE_PAGES, "billing"])(
+      async (_, __, context) => {
+        const quota = await getEsignatureQuota(context.workspaceId);
+        return { ...quota, resetsAt: quota.resetsAt.toISOString() };
+      },
+    ),
 
     /**
      * Récupérer une demande de signature par ID
      */
-    getSignatureRequest: requireRead("invoices")(async (_, { id }, context) => {
+    getSignatureRequest: readSignatures(async (_, { id }, context) => {
       try {
         const signatureRequest = await SignatureRequest.findOne({
           _id: id,
           organizationId: context.organizationId,
         });
 
+        // Demande d'un document dont le rôle ne voit pas la page : absente
+        if (
+          signatureRequest &&
+          !canReadSigned(context, signatureRequest.documentType)
+        ) {
+          return null;
+        }
         return signatureRequest;
       } catch (error) {
         logger.error("Erreur récupération signature:", error);
@@ -182,15 +208,20 @@ const esignatureResolvers = {
     /**
      * Lister les demandes de signature avec filtres
      */
-    getSignatureRequests: requireRead("invoices")(
+    getSignatureRequests: readSignatures(
       async (_, { documentId, documentType, status }, context) => {
+        // Seulement les documents dont le rôle voit la page
+        const readableTypes = Object.keys(SIGNABLE_MODULES).filter((type) =>
+          canReadSigned(context, type),
+        );
+        if (documentType && !readableTypes.includes(documentType)) return [];
         try {
           const filter = {
             organizationId: context.organizationId,
           };
 
           if (documentId) filter.documentId = documentId;
-          if (documentType) filter.documentType = documentType;
+          filter.documentType = documentType || { $in: readableTypes };
           if (status) filter.status = status;
 
           const signatureRequests = await SignatureRequest.find(filter)
@@ -211,8 +242,14 @@ const esignatureResolvers = {
     /**
      * Récupérer le statut de signature le plus récent d'un document
      */
-    getDocumentSignatureStatus: requireRead("invoices")(
+    getDocumentSignatureStatus: readSignatures(
       async (_, { documentType, documentId }, context) => {
+        if (!canReadSigned(context, documentType)) {
+          throw new AppError(
+            "Vous n'avez pas la permission d'effectuer cette action.",
+            ERROR_CODES.FORBIDDEN,
+          );
+        }
         try {
           const signatureRequest = await SignatureRequest.findOne({
             documentType,

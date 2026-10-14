@@ -8,7 +8,14 @@ const emailSettingsResolvers = {
     /**
      * Récupérer les paramètres email pour le workspace actuel
      */
-    getEmailSettings: requireRead("invoices")(async (_, __, context) => {
+    // Textes d'e-mail des documents : lus par la fenêtre d'envoi de chaque
+    // document de vente
+    getEmailSettings: requireRead([
+      "invoices",
+      "quotes",
+      "purchaseOrders",
+      "deliveryNotes",
+    ])(async (_, __, context) => {
       const { user, workspaceId, organization } = context;
 
       logger.debug("📧 [EmailSettings] Context:", {
