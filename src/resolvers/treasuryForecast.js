@@ -1146,62 +1146,77 @@ const treasuryForecastResolvers = {
         const QuoteModel = mongoose.model("Quote");
         const TransactionModel = mongoose.model("Transaction");
 
+        // Détail document par document : seulement les pages que le rôle
+        // voit (les totaux du tableau, eux, restent complets)
+        const canSee = (moduleKey) =>
+          Boolean(context.permissions?.canRead?.(moduleKey));
+        const hidden = Promise.resolve([]);
         const [invoices, purchaseInvoices, quotes, transactions] =
           await Promise.all([
-            InvoiceModel.find({
-              workspaceId: wId,
-              status: { $ne: "DRAFT" },
-              issueDate: { $gte: start, $lt: end },
-            })
-              .select("number prefix client finalTotalTTC issueDate status")
-              .sort({ issueDate: 1 })
-              .lean(),
-            PurchaseInvoiceModel.find({
-              workspaceId: wId,
-              issueDate: { $gte: start, $lt: end },
-            })
-              .select("invoiceNumber supplierName amountTTC issueDate status")
-              .sort({ issueDate: 1 })
-              .lean(),
-            QuoteModel.find({
-              workspaceId: wId,
-              status: "COMPLETED",
-              $or: [
-                { convertedToInvoice: { $exists: false } },
-                { convertedToInvoice: null },
-              ],
-              issueDate: { $gte: start, $lt: end },
-            })
-              .select("number prefix client finalTotalTTC issueDate status")
-              .sort({ issueDate: 1 })
-              .lean(),
+            !canSee("invoices")
+              ? hidden
+              : InvoiceModel.find({
+                  workspaceId: wId,
+                  status: { $ne: "DRAFT" },
+                  issueDate: { $gte: start, $lt: end },
+                })
+                  .select("number prefix client finalTotalTTC issueDate status")
+                  .sort({ issueDate: 1 })
+                  .lean(),
+            !canSee("purchaseInvoices")
+              ? hidden
+              : PurchaseInvoiceModel.find({
+                  workspaceId: wId,
+                  issueDate: { $gte: start, $lt: end },
+                })
+                  .select(
+                    "invoiceNumber supplierName amountTTC issueDate status",
+                  )
+                  .sort({ issueDate: 1 })
+                  .lean(),
+            !canSee("quotes")
+              ? hidden
+              : QuoteModel.find({
+                  workspaceId: wId,
+                  status: "COMPLETED",
+                  $or: [
+                    { convertedToInvoice: { $exists: false } },
+                    { convertedToInvoice: null },
+                  ],
+                  issueDate: { $gte: start, $lt: end },
+                })
+                  .select("number prefix client finalTotalTTC issueDate status")
+                  .sort({ issueDate: 1 })
+                  .lean(),
             // Bank transactions: use same "effective date" fallback as the
             // main resolver (date → processedAt → createdAt) so amounts line
             // up with the chart aggregate.
-            TransactionModel.aggregate([
-              {
-                $match: {
-                  workspaceId: workspaceId,
-                  status: "completed",
-                },
-              },
-              {
-                $addFields: {
-                  _effectiveDate: {
-                    $ifNull: [
-                      "$date",
-                      { $ifNull: ["$processedAt", "$createdAt"] },
-                    ],
+            !canSee("banking")
+              ? hidden
+              : TransactionModel.aggregate([
+                  {
+                    $match: {
+                      workspaceId: workspaceId,
+                      status: "completed",
+                    },
                   },
-                },
-              },
-              {
-                $match: {
-                  _effectiveDate: { $gte: start, $lt: end },
-                },
-              },
-              { $sort: { _effectiveDate: 1 } },
-            ]),
+                  {
+                    $addFields: {
+                      _effectiveDate: {
+                        $ifNull: [
+                          "$date",
+                          { $ifNull: ["$processedAt", "$createdAt"] },
+                        ],
+                      },
+                    },
+                  },
+                  {
+                    $match: {
+                      _effectiveDate: { $gte: start, $lt: end },
+                    },
+                  },
+                  { $sort: { _effectiveDate: 1 } },
+                ]),
           ]);
 
         const resolveClientName = (client) =>

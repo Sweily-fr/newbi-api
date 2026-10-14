@@ -450,6 +450,20 @@ export const RESOURCE_ALIASES = {
 };
 
 /**
+ * Routes REST bancaires : comptes et soldes lisibles avec une page de
+ * Pilotage qui les affiche ou « Applications et banques » (connexion des
+ * comptes) ; transactions avec les mêmes pages que la requête GraphQL.
+ */
+export const BANK_ACCOUNT_MODULES = [
+  "banking",
+  "overview",
+  "forecast",
+  "analytics",
+  "integrations",
+];
+export const TRANSACTION_LIST_MODULES = ["banking", "overview", "analytics"];
+
+/**
  * Ancienne fonctionnalité devenue action d'une page : `requireWrite(
  * "invoicePayments")` ou `can("invoicePayments", "write")` = marquer payé.
  */
@@ -832,6 +846,9 @@ export function levelsAllowAction(grid, resource, actionKey) {
   const legacy = LEGACY_FEATURES[resource];
   const moduleKey = legacy ? legacy.module : resolveModule(resource);
   if (!moduleKey || !grid || !Array.isArray(grid[moduleKey])) return false;
+  // L'action du catalogue prime sur un ancien nom (« remove » des membres
+  // n'est pas « delete »)
+  if (!legacy && grid[moduleKey].includes(actionKey)) return true;
   const wanted = legacy
     ? legacy.action
     : actionKey === "manage" || actionKey === "admin"

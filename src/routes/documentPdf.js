@@ -1,22 +1,30 @@
 import express from "express";
-import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import Quote from "../models/Quote.js";
 import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import DeliveryNote from "../models/DeliveryNote.js";
 import cloudflareService from "../services/cloudflareService.js";
-import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
-// Config par type : modèle + statut brouillon (null = pas de notion de brouillon)
+// Config par type : modèle, statut brouillon (null = pas de notion de
+// brouillon) et page dont « Voir » est exigé
 const DOC_CONFIG = {
-  quote: { Model: Quote, draftStatus: "DRAFT" },
-  creditNote: { Model: CreditNote, draftStatus: null },
-  purchaseOrder: { Model: PurchaseOrder, draftStatus: "DRAFT" },
-  deliveryNote: { Model: DeliveryNote, draftStatus: "DRAFT" },
+  quote: { Model: Quote, draftStatus: "DRAFT", module: "quotes" },
+  creditNote: { Model: CreditNote, draftStatus: null, module: "creditNotes" },
+  purchaseOrder: {
+    Model: PurchaseOrder,
+    draftStatus: "DRAFT",
+    module: "purchaseOrders",
+  },
+  deliveryNote: {
+    Model: DeliveryNote,
+    draftStatus: "DRAFT",
+    module: "deliveryNotes",
+  },
 };
 
 /**
@@ -42,13 +50,15 @@ router.get("/:docType/:id/document-pdf", validateJWT, async (req, res) => {
       return res.status(404).json({ error: "Document introuvable" });
     }
 
-    // Vérifier l'appartenance de l'utilisateur à l'organisation du document
-    const member =
-      await EInvoicingSettingsService.getMemberCollection().findOne({
-        userId: new mongoose.Types.ObjectId(userId),
-        organizationId: doc.workspaceId,
-      });
-    if (!member) {
+    // Membre de l'organisation du document, avec « Voir » de sa page
+    if (
+      !(await userHasWorkspaceLevel(
+        userId,
+        doc.workspaceId,
+        config.module,
+        "read",
+      ))
+    ) {
       return res.status(403).json({ error: "Accès refusé" });
     }
 

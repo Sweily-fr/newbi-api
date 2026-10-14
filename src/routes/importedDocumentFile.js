@@ -8,23 +8,35 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Transaction from "../models/Transaction.js";
 import { findTransactionReceiptFile } from "../utils/transactionReceiptFiles.js";
 import cloudflareService from "../services/cloudflareService.js";
-import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
-// Config par type : modèle + extraction du fichier stocké sur R2.
+// Config par type : modèle, page dont « Voir » est exigé (une liste : l'une
+// suffit) et extraction du fichier stocké sur R2.
 // Les documents importés portent un fichier unique (doc.file) ; les factures
 // d'achat portent un tableau de justificatifs → sélection via ?fileId=.
 const DOC_CONFIG = {
-  importedInvoice: { Model: ImportedInvoice, getFile: (doc) => doc.file },
-  importedQuote: { Model: ImportedQuote, getFile: (doc) => doc.file },
+  // Factures importées : aussi l'antichambre des factures d'achat (Gmail)
+  importedInvoice: {
+    Model: ImportedInvoice,
+    module: ["importedInvoices", "purchaseInvoices"],
+    getFile: (doc) => doc.file,
+  },
+  importedQuote: {
+    Model: ImportedQuote,
+    module: "importedQuotes",
+    getFile: (doc) => doc.file,
+  },
   importedPurchaseOrder: {
     Model: ImportedPurchaseOrder,
+    module: "importedPurchaseOrders",
     getFile: (doc) => doc.file,
   },
   purchaseInvoice: {
     Model: PurchaseInvoice,
+    module: "purchaseInvoices",
     getFile: (doc, fileId) => (fileId ? doc.files?.id(fileId) : doc.files?.[0]),
   },
   // Justificatifs attachés directement à une transaction bancaire. Les
@@ -33,6 +45,7 @@ const DOC_CONFIG = {
   // `<tx>-receipt-<n>`, et ?index=<n> reste possible.
   transaction: {
     Model: Transaction,
+    module: "banking",
     getFile: (doc, fileId, index) => {
       if (fileId) return findTransactionReceiptFile(doc, fileId);
       if (index !== undefined) return doc.receiptFiles?.[index];
@@ -74,12 +87,14 @@ router.get("/imported/:docType/:id/file", validateJWT, async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(doc.workspaceId)) {
       return res.status(403).json({ error: "Accès refusé" });
     }
-    const member =
-      await EInvoicingSettingsService.getMemberCollection().findOne({
-        userId: new mongoose.Types.ObjectId(userId),
-        organizationId: new mongoose.Types.ObjectId(String(doc.workspaceId)),
-      });
-    if (!member) {
+    if (
+      !(await userHasWorkspaceLevel(
+        userId,
+        String(doc.workspaceId),
+        config.module,
+        "read",
+      ))
+    ) {
       return res.status(403).json({ error: "Accès refusé" });
     }
 

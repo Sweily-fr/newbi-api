@@ -4,6 +4,7 @@ import Invoice from "../models/Invoice.js";
 import Client from "../models/Client.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import {
+  assertPermissionAction,
   checkSubscriptionActive,
   requireWorkspaceAction,
   requireWorkspaceLevel,
@@ -18,6 +19,19 @@ import {
 import { publishCalendarEventsChanged } from "../services/calendar/CalendarWebhookService.js";
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
+
+// Événements créés depuis un document (client et montant dans le titre) :
+// visibles seulement avec « Voir » sur la page du document
+const DOCUMENT_EVENT_MODULES = {
+  INVOICE_DUE: "invoices",
+  CREDIT_NOTE_CREATED: "creditNotes",
+};
+
+function hiddenDocumentEventTypes(permissions) {
+  return Object.entries(DOCUMENT_EVENT_MODULES)
+    .filter(([, moduleKey]) => !permissions?.hasPermission?.(moduleKey, "view"))
+    .map(([type]) => type);
+}
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const CALENDAR_EVENTS_CHANGED = "CALENDAR_EVENTS_CHANGED";
@@ -208,11 +222,20 @@ const eventResolvers = {
           includeExternalCalendars = false,
           sources,
         },
-        { user, workspaceId: contextWorkspaceId, db },
+        { user, workspaceId: contextWorkspaceId, db, permissions },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           const userId = user?.id || user?._id;
+          const hiddenTypes = hiddenDocumentEventTypes(permissions);
+          if (type && hiddenTypes.includes(type)) {
+            return {
+              success: true,
+              events: [],
+              totalCount: 0,
+              message: "0 événement(s) récupéré(s)",
+            };
+          }
 
           // Construire le filtre avec le modèle de confidentialité multi-membres
           // Événements workspace (visibles par tous) + événements privés (seulement le propriétaire)
@@ -240,6 +263,8 @@ const eventResolvers = {
 
           if (type) {
             filter.type = type;
+          } else if (hiddenTypes.length > 0) {
+            filter.type = { $nin: hiddenTypes };
           }
 
           if (sources && sources.length > 0) {
@@ -391,7 +416,7 @@ const eventResolvers = {
       async (
         _,
         { id, workspaceId },
-        { user, workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -410,7 +435,10 @@ const eventResolvers = {
             ],
           }).populate("invoiceId");
 
-          if (!event) {
+          if (
+            !event ||
+            hiddenDocumentEventTypes(permissions).includes(event.type)
+          ) {
             return {
               success: false,
               event: null,
@@ -749,7 +777,10 @@ const eventResolvers = {
     syncInvoiceEvents: requireWorkspaceLevel(
       "calendar",
       "write",
-    )(async (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
+    )(async (_, { workspaceId }, context) => {
+      const { user, workspaceId: contextWorkspaceId } = context;
+      // Les échéances reprennent client et montant des factures
+      assertPermissionAction(context, "invoices", "view");
       try {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
