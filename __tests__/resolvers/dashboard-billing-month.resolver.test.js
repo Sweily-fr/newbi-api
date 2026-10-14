@@ -4,7 +4,9 @@ import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 
+import mongoose from "mongoose";
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
+import { invalidateOrganizationRoles } from "../../src/services/organizationRoleService.js";
 import Invoice from "../../src/models/Invoice.js";
 import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
@@ -24,6 +26,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await clearMongo();
   invalidateOrgCache();
+  invalidateOrganizationRoles();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
 });
 
@@ -139,5 +142,42 @@ describe("dashboardBillingMonth", () => {
     expect(purchases.pendingCount).toBe(3);
     expect(purchases.overdue).toBe(100);
     expect(purchases.overdueCount).toBe(2);
+  });
+
+  it("refusé au rôle qui masque le chiffre d'affaires de l'accueil", async () => {
+    const member = buildUserId();
+    await seedOrgMembership({
+      userId: member,
+      organizationId,
+      role: "role_sans_ca",
+    });
+    await mongoose.connection.db.collection("organizationRole").insertOne({
+      organizationId,
+      role: "role_sans_ca",
+      name: "Sans CA",
+      permission: "{}",
+      actions: { invoices: ["view"], home: ["view", "bankBalance"] },
+      createdAt: new Date(),
+    });
+    const asMember = () =>
+      dashboardAggregationResolvers.Query.dashboardBillingMonth(
+        null,
+        { workspaceId: organizationId.toString() },
+        buildContext({ userId: member, organizationId }),
+      );
+    await expect(asMember()).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // Case recochée : le cadre revient
+    await mongoose.connection.db
+      .collection("organizationRole")
+      .updateOne(
+        { role: "role_sans_ca" },
+        { $set: { "actions.home": ["view", "billingMonth"] } },
+      );
+    invalidateOrganizationRoles();
+    invalidateOrgCache();
+    await expect(asMember()).resolves.toMatchObject({
+      sales: expect.any(Object),
+    });
   });
 });
