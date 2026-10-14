@@ -150,6 +150,40 @@ describe("runTrialNudges", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
+  it("souhaite la bienvenue au début de l'essai, une seule fois", async () => {
+    await setMode("live");
+    await seedTrialOrg({ startedDaysAgo: 0.01, lastSeenDaysAgo: 0 });
+
+    const summary = await runTrialNudges({ now: NOW, steps: ["welcome"] });
+    expect(summary.sent).toBe(1);
+    const payload = sendMock.mock.calls[0][0];
+    expect(payload.subject).toBe("Bienvenue sur Newbi, votre espace est prêt");
+    expect(payload.html).toContain("mailto:contact@newbi.fr");
+    // Fin d'essai = début + 30 jours (13 novembre 2026)
+    expect(payload.html).toContain("13 novembre 2026");
+    expect(payload.html).toContain("vous avez créé un compte Newbi");
+    expect((await logs())[0]).toMatchObject({
+      step: "welcome",
+      status: "sent",
+    });
+
+    // Passage suivant (10 min plus tard) puis passage quotidien : rien de plus
+    await runTrialNudges({
+      now: new Date(NOW.getTime() + 10 * 60 * 1000),
+      steps: ["welcome"],
+    });
+    await runTrialNudges({ now: NOW });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("le passage de bienvenue n'envoie pas les autres relances", async () => {
+    await setMode("live");
+    await seedTrialOrg({ startedDaysAgo: 7.1 });
+    const summary = await runTrialNudges({ now: NOW, steps: ["welcome"] });
+    expect(summary.due).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("ne relance pas à J+7 un espace actif récemment", async () => {
     await setMode("live");
     await seedTrialOrg({ startedDaysAgo: 7.1, lastSeenDaysAgo: 1 });
@@ -355,7 +389,7 @@ describe("désinscription et suivi", () => {
 });
 
 describe("gabarits", () => {
-  it.each(["inactive_d7", "feedback_d14", "inactive_d30"])(
+  it.each(["welcome", "inactive_d7", "feedback_d14", "inactive_d30"])(
     "%s : lien de désinscription, pas de tiret cadratin",
     (step) => {
       const { subject, html } = buildTrialNudgeEmail(step, {

@@ -1,7 +1,9 @@
 /**
  * Relances de l'essai gratuit (pilotées depuis newbi-admin, page Relances).
  *
- * Trois e-mails, envoyés par services/trialNudgeService.js :
+ * Quatre e-mails, envoyés par services/trialNudgeService.js :
+ *   - welcome      : bienvenue, au début de l'essai (fin d'onboarding), avec
+ *                    l'adresse à qui écrire si une fonctionnalité manque
  *   - inactive_d7  : J+7, si l'espace est inactif depuis quelques jours
  *   - feedback_d14 : J+14, à tous les essais, « qu'est-ce qui vous manque ? »
  *   - inactive_d30 : fin d'essai, remplace l'e-mail standard de fin d'essai
@@ -18,7 +20,12 @@ import {
   renderEmail,
 } from "./trialEmails.js";
 
-export const NUDGE_STEPS = ["inactive_d7", "feedback_d14", "inactive_d30"];
+export const NUDGE_STEPS = [
+  "welcome",
+  "inactive_d7",
+  "feedback_d14",
+  "inactive_d30",
+];
 
 export const TRIAL_NUDGE_REPLY_TO =
   process.env.TRIAL_NUDGE_REPLY_TO || "contact@newbi.fr";
@@ -35,16 +42,34 @@ const list = (items) =>
     .map((item) => `<li style="${LI_STYLE}">${item}</li>`)
     .join("")}</ul>`;
 const strong = (html) => `<strong style="${STRONG_STYLE}">${html}</strong>`;
+// Encadré violet clair (couleur Newbi), dans la carte
+const callout = (html) =>
+  `<div style="background-color: #f4f3ff; border: 1px solid #dcd9ff; border-radius: 8px; padding: 16px; margin: 4px 0 24px 0;"><p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6;">${html}</p></div>`;
+const mailtoLink = (address) =>
+  `<a href="mailto:${address}" style="color: #5a50ff; text-decoration: none; font-weight: 500;">${address}</a>`;
+
+/** « 13 novembre 2026 », ou null si la date est absente ou invalide. */
+function longDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/Paris",
+  });
+}
 
 function greeting(firstName) {
   const name = String(firstName || "").trim();
   return paragraph(name ? `Bonjour ${escapeHtml(name)},` : "Bonjour,");
 }
 
-function footerNote(unsubscribeUrl) {
+function footerNote(unsubscribeUrl, reason = "vous testez Newbi") {
   if (!unsubscribeUrl) return undefined;
   const href = String(unsubscribeUrl).replace(/&/g, "&amp;");
-  return `Vous recevez cet e-mail car vous testez Newbi • <a href="${href}" style="color: #9ca3af; text-decoration: underline;">Ne plus recevoir ces e-mails</a>`;
+  return `Vous recevez cet e-mail car ${reason} • <a href="${href}" style="color: #9ca3af; text-decoration: underline;">Ne plus recevoir ces e-mails</a>`;
 }
 
 function daysLabel(days) {
@@ -56,12 +81,48 @@ function daysLabel(days) {
  *
  * @param {string} step une valeur de NUDGE_STEPS
  * @param {{ firstName?: string, orgName?: string, daysRemaining?: number,
- *   unsubscribeUrl?: string }} data
+ *   trialEndDate?: Date|string, unsubscribeUrl?: string }} data
  * @returns {{ subject: string, html: string }}
  */
 export function buildTrialNudgeEmail(step, data = {}) {
   const org = strong(escapeHtml(data.orgName || "votre entreprise"));
   const footerNoteHtml = footerNote(data.unsubscribeUrl);
+
+  if (step === "welcome") {
+    const end = longDate(data.trialEndDate);
+    return {
+      subject: "Bienvenue sur Newbi, votre espace est prêt",
+      html: renderEmail({
+        preheader:
+          "30 jours pour tout essayer gratuitement, et une adresse pour nous dire ce qui vous manque.",
+        badge: "BIENVENUE",
+        icon: "🎉",
+        iconLabel: end
+          ? `Essai gratuit jusqu'au ${end}`
+          : "30 jours d'essai gratuit",
+        iconBg: "#dcfce7",
+        iconColor: "#166534",
+        title: "Bienvenue sur Newbi",
+        bodyHtml: `
+          ${greeting(data.firstName)}
+          ${paragraph(`Votre espace ${org} est prêt. Pendant 30 jours, vous avez accès à toutes les fonctionnalités de Newbi gratuitement${end ? `, jusqu'au ${strong(end)}` : ""}, sans carte bancaire ni engagement.`)}
+          ${paragraph("Pour bien démarrer\u00a0:")}
+          ${list([
+            `${strong("Personnalisez vos documents")}\u00a0: logo, coordonnées et mentions légales, une fois pour toutes.`,
+            `${strong("Créez votre premier devis ou votre première facture")} en quelques clics.`,
+            `${strong("Connectez votre compte bancaire")} pour suivre votre trésorerie et rapprocher vos paiements.`,
+            `${strong("Déposez vos factures fournisseurs")}\u00a0: elles sont lues automatiquement, sans ressaisie.`,
+          ])}
+          ${callout(`💡 ${strong("Une fonctionnalité vous manque\u00a0?")}<br>Écrivez-nous à ${mailtoLink(TRIAL_NUDGE_REPLY_TO)} ou répondez simplement à cet e-mail. Nous lisons chaque message, et vos retours nous aident à choisir les prochaines évolutions de Newbi.`)}`,
+        ctaLabel: "Accéder à mon espace",
+        ctaUrl: `${APP_URL}/dashboard`,
+        footerNoteHtml: footerNote(
+          data.unsubscribeUrl,
+          "vous avez créé un compte Newbi",
+        ),
+      }),
+    };
+  }
 
   if (step === "inactive_d7") {
     const days = Number.isFinite(data.daysRemaining)

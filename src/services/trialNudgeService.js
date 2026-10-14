@@ -2,6 +2,8 @@
  * Relances automatiques de l'essai gratuit, pilotées depuis newbi-admin
  * (page Relances, via /api/admin-service/trial-nudges).
  *
+ *   - welcome      : bienvenue au début de l'essai (fin d'onboarding), vérifiée
+ *                    toutes les 10 minutes pour partir vite
  *   - inactive_d7  : J+7 après le début de l'essai, si l'espace est inactif
  *                    depuis `inactivityDays` jours (3 par défaut)
  *   - feedback_d14 : J+14, à tous les essais, demande de suggestions
@@ -53,8 +55,9 @@ export const INACTIVITY_DAYS_MIN = 2;
 export const INACTIVITY_DAYS_MAX = 7;
 export const DEFAULT_SETTINGS = { mode: "off", inactivityDays: 3 };
 
-// Relances du cron quotidien, comptées depuis le début de l'essai
+// Relances planifiées, comptées depuis le début de l'essai
 export const SCHEDULED_STEPS = {
+  welcome: { dayOffset: 0, requiresInactivity: false },
   inactive_d7: { dayOffset: 7, requiresInactivity: true },
   feedback_d14: { dayOffset: 14, requiresInactivity: false },
 };
@@ -155,15 +158,13 @@ export async function updateTrialNudgeSettings(patch = {}, adminEmail, db) {
   }
 
   const database = getDb(db);
-  await database
-    .collection(SETTINGS_COLLECTION)
-    .updateOne(
-      { _id: SETTINGS_ID },
-      {
-        $set: { ...$set, updatedAt: new Date(), updatedBy: adminEmail || null },
-      },
-      { upsert: true },
-    );
+  await database.collection(SETTINGS_COLLECTION).updateOne(
+    { _id: SETTINGS_ID },
+    {
+      $set: { ...$set, updatedAt: new Date(), updatedBy: adminEmail || null },
+    },
+    { upsert: true },
+  );
   logger.info(
     `[TrialNudge] réglages modifiés par ${adminEmail} : ${JSON.stringify($set)}`,
   );
@@ -580,6 +581,7 @@ async function deliver(db, ctx, step, { now, simulated }) {
       firstName: ctx.owner.firstName,
       orgName: ctx.orgName,
       daysRemaining: daysUntil(ctx.trialEnd, now),
+      trialEndDate: ctx.trialEnd,
       unsubscribeUrl,
     });
     const resendId = await sendNudgeEmail({
@@ -621,13 +623,13 @@ async function deliver(db, ctx, step, { now, simulated }) {
   }
 }
 
-async function writeHeartbeat(db, summary, startedAt) {
+async function writeHeartbeat(db, summary, startedAt, key) {
   try {
     await db.collection("_health").updateOne(
-      { key: "trialNudgeCron" },
+      { key },
       {
         $set: {
-          key: "trialNudgeCron",
+          key,
           lastRunAt: startedAt,
           lastRunDurationMs: Date.now() - startedAt.getTime(),
           lastSummary: summary,
@@ -642,11 +644,17 @@ async function writeHeartbeat(db, summary, startedAt) {
 }
 
 /**
- * Passage quotidien : relances J+7 et J+14 dont la date est atteinte (dans la
- * fenêtre de rattrapage). La relance de fin d'essai part avec l'expiration,
- * voir sendTrialEndNudgeIfInactive.
+ * Passage des relances planifiées (`steps`, toutes par défaut) dont la date
+ * est atteinte, dans la fenêtre de rattrapage. Le cron quotidien les passe
+ * toutes ; celui de la bienvenue ne passe que `welcome`, toutes les 10 min.
+ * La relance de fin d'essai part avec l'expiration, voir
+ * sendTrialEndNudgeIfInactive.
  */
-export async function runTrialNudges({ now = new Date(), db } = {}) {
+export async function runTrialNudges({
+  now = new Date(),
+  db,
+  steps = Object.keys(SCHEDULED_STEPS),
+} = {}) {
   if (!isAppTrialEnabled()) return { skipped: true, reason: "flag-off" };
   const database = getDb(db);
   const settings = await getTrialNudgeSettings(database);
@@ -664,7 +672,8 @@ export async function runTrialNudges({ now = new Date(), db } = {}) {
   for (const org of orgs) {
     const start = toDate(org.trialStartDate);
     if (!start) continue;
-    for (const [step, { dayOffset }] of Object.entries(SCHEDULED_STEPS)) {
+    for (const step of steps) {
+      const { dayOffset } = SCHEDULED_STEPS[step];
       if (inSendWindow(new Date(start.getTime() + dayOffset * DAY_MS), now)) {
         due.push({ org, step });
       }
@@ -702,8 +711,16 @@ export async function runTrialNudges({ now = new Date(), db } = {}) {
     else if (outcome === "failed") summary.failed++;
   }
 
-  logger.info(`[TrialNudge] passage terminé : ${JSON.stringify(summary)}`);
-  await writeHeartbeat(database, summary, startedAt);
+  // Le passage de la bienvenue tourne toutes les 10 min : pas de log quand
+  // il n'y a rien à faire
+  if (due.length > 0) {
+    logger.info(
+      `[TrialNudge] passage ${steps.join("+")} : ${JSON.stringify(summary)}`,
+    );
+  }
+  const heartbeatKey =
+    steps.length === 1 ? `trialNudgeCron:${steps[0]}` : "trialNudgeCron";
+  await writeHeartbeat(database, summary, startedAt, heartbeatKey);
   return summary;
 }
 
@@ -797,6 +814,10 @@ const SAMPLE = {
   orgName: "Atelier Martin",
   daysRemaining: 23,
 };
+const sampleData = () => ({
+  ...SAMPLE,
+  trialEndDate: new Date(Date.now() + 30 * DAY_MS),
+});
 
 function assertStep(step) {
   if (!NUDGE_STEPS.includes(step)) {
@@ -806,7 +827,7 @@ function assertStep(step) {
 
 export function renderTrialNudgePreview(step) {
   assertStep(step);
-  return buildTrialNudgeEmail(step, { ...SAMPLE, unsubscribeUrl: "#" });
+  return buildTrialNudgeEmail(step, { ...sampleData(), unsubscribeUrl: "#" });
 }
 
 /** Envoie une relance d'exemple à l'admin (rien n'est journalisé). */
@@ -816,7 +837,7 @@ export async function sendTrialNudgeTest({ step, to }) {
   // Lien de désinscription factice : la page répond « lien invalide »
   const unsubscribeUrl = `${apiBaseUrl()}/api/trial-nudges/unsubscribe?t=apercu`;
   const { subject, html } = buildTrialNudgeEmail(step, {
-    ...SAMPLE,
+    ...sampleData(),
     unsubscribeUrl,
   });
   try {

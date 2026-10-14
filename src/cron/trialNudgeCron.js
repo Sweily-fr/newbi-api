@@ -1,7 +1,8 @@
 /**
- * Relances de l'essai gratuit (J+7 inactif, J+14 suggestions), tous les
- * jours à 10:00 Europe/Paris. Le mode (off / simulation / live) se règle
- * dans newbi-admin et se relit à chaque passage : rien à redémarrer.
+ * Relances de l'essai gratuit : J+7 inactif et J+14 suggestions tous les
+ * jours à 10:00 Europe/Paris, bienvenue toutes les 10 minutes (elle doit
+ * arriver juste après l'onboarding). Le mode (off / simulation / live) se
+ * règle dans newbi-admin et se relit à chaque passage : rien à redémarrer.
  *
  * Câblé dans server.js derrière le garde `instanceId === 0` (une seule
  * instance PM2) et derrière ENABLE_APP_TRIAL, comme trialCleanupCron.
@@ -17,6 +18,17 @@ export function startTrialNudgeCron() {
     logger.info("[trialNudgeCron] ENABLE_APP_TRIAL est OFF, cron non planifié");
     return null;
   }
+  cron.schedule(
+    "*/10 * * * *",
+    async () => {
+      try {
+        await runTrialNudges({ steps: ["welcome"] });
+      } catch (error) {
+        logger.error(`[trialNudgeCron] bienvenue, erreur : ${error.message}`);
+      }
+    },
+    { scheduled: true, timezone: "Europe/Paris" },
+  );
   const task = cron.schedule(
     "0 10 * * *",
     async () => {
@@ -28,6 +40,8 @@ export function startTrialNudgeCron() {
     },
     { scheduled: true, timezone: "Europe/Paris" },
   );
-  logger.info("[trialNudgeCron] planifié tous les jours à 10:00 Europe/Paris");
+  logger.info(
+    "[trialNudgeCron] planifié tous les jours à 10:00 Europe/Paris (bienvenue toutes les 10 min)",
+  );
   return task;
 }
