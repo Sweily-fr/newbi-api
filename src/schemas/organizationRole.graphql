@@ -24,6 +24,9 @@ type RoleCatalogModule {
   parent: String
   label: String!
   description: String
+  # Page vue par tout membre (« Voir » imposé, ex. l'accueil) : ses autres
+  # actions choisissent seulement ce qu'elle affiche
+  alwaysVisible: Boolean!
   # Actions qu'on peut cocher pour cette page
   actions: [RoleCatalogAction!]!
   # Ancien sélecteur par niveau (déprécié)

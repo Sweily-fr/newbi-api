@@ -543,6 +543,108 @@ describe("Rôles d'un espace", () => {
     expect(stored.catalogVersion).toBeGreaterThanOrEqual(2);
   });
 
+  it("garde l'accueil visible et choisit les cadres qu'il affiche", async () => {
+    const catalog = await Query.roleCatalog(null, {}, ctx(viewer));
+    const home = catalog.modules.find((m) => m.key === "home");
+    expect(home.group).toBe("pilotage");
+    expect(home.alwaysVisible).toBe(true);
+    expect(home.actions.map((a) => a.key)).toEqual([
+      "view",
+      "bankBalance",
+      "billingMonth",
+      "toProcess",
+      "recentTransactions",
+      "recentInvoices",
+    ]);
+    expect(
+      catalog.modules.filter((m) => m.alwaysVisible).map((m) => m.key),
+    ).toEqual(["home"]);
+
+    // Rôles prédéfinis : accueil complet, Membre et Comptable compris
+    const all = home.actions.map((a) => a.key);
+    const roles = await Query.organizationRoles(null, {}, ctx(owner));
+    for (const role of roles) expect(role.actions.home).toEqual(all);
+
+    // Tout décoché : « Voir » reste
+    const hidden = await Mutation.createOrganizationRole(
+      null,
+      { input: { name: "Sans chiffres", actions: { home: [] } } },
+      ctx(owner),
+    );
+    expect(hidden.actions.home).toEqual(["view"]);
+    const partial = await Mutation.createOrganizationRole(
+      null,
+      { input: { name: "Solde seul", actions: { home: ["bankBalance"] } } },
+      ctx(owner),
+    );
+    expect(partial.actions.home).toEqual(["view", "bankBalance"]);
+    await mongoose.connection.db
+      .collection("member")
+      .updateOne(
+        { userId: editor, organizationId },
+        { $set: { role: hidden.key } },
+      );
+    invalidateOrgCache();
+    const mine = await Query.myPermissions(null, {}, ctx(editor));
+    expect(mine.actions.home).toEqual(["view"]);
+    await expect(
+      probe(requireAction("home", "billingMonth"))(null, {}, ctx(editor)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("affiche tout l'accueil aux rôles enregistrés avant son ajout", async () => {
+    const db = mongoose.connection.db;
+    await db.collection("organizationRole").insertMany([
+      {
+        organizationId,
+        role: "role_avant_accueil",
+        name: "Commercial",
+        permission: "{}",
+        actions: { quotes: ["view", "create"] },
+        catalogVersion: 2,
+        createdAt: new Date(),
+      },
+      {
+        organizationId,
+        role: "role_niveaux",
+        name: "Ancien format",
+        permission: "{}",
+        levels: { invoices: "read" },
+        createdAt: new Date(),
+      },
+      {
+        organizationId,
+        role: "viewer",
+        permission: "{}",
+        actions: { invoices: ["view"] },
+        catalogVersion: 2,
+        createdAt: new Date(),
+      },
+    ]);
+    invalidateOrganizationRoles();
+    const roles = await Query.organizationRoles(null, {}, ctx(owner));
+    const byKey = Object.fromEntries(roles.map((r) => [r.key, r.actions]));
+    const all = [
+      "view",
+      "bankBalance",
+      "billingMonth",
+      "toProcess",
+      "recentTransactions",
+      "recentInvoices",
+    ];
+    expect(byKey.role_avant_accueil.home).toEqual(all);
+    expect(byKey.role_niveaux.home).toEqual(all);
+    expect(byKey.viewer.home).toEqual(all);
+
+    // Modification d'une autre page : l'accueil garde ses cases
+    const saved = await Mutation.updateOrganizationRole(
+      null,
+      { key: "role_avant_accueil", input: { actions: { quotes: ["view"] } } },
+      ctx(owner),
+    );
+    expect(saved.actions.home).toEqual(all);
+  });
+
   it("vide les parties d'une page sans « Voir »", async () => {
     const role = await Mutation.createOrganizationRole(
       null,
