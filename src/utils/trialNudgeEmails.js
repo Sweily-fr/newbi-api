@@ -67,9 +67,12 @@ function greeting(firstName) {
 }
 
 function footerNote(unsubscribeUrl, reason = "vous testez Newbi") {
-  if (!unsubscribeUrl) return undefined;
+  if (!unsubscribeUrl) return {};
   const href = String(unsubscribeUrl).replace(/&/g, "&amp;");
-  return `Vous recevez cet e-mail car ${reason} • <a href="${href}" style="color: #9ca3af; text-decoration: underline;">Ne plus recevoir ces e-mails</a>`;
+  return {
+    footerNoteHtml: `Vous recevez cet e-mail car ${reason}.`,
+    footerLinkHtml: `<a href="${href}" style="color: #9ca3af; text-decoration: underline;">Ne plus recevoir ces e-mails</a>`,
+  };
 }
 
 function daysLabel(days) {
@@ -86,7 +89,7 @@ function daysLabel(days) {
  */
 export function buildTrialNudgeEmail(step, data = {}) {
   const org = strong(escapeHtml(data.orgName || "votre entreprise"));
-  const footerNoteHtml = footerNote(data.unsubscribeUrl);
+  const footer = footerNote(data.unsubscribeUrl);
 
   if (step === "welcome") {
     const end = longDate(data.trialEndDate);
@@ -96,7 +99,6 @@ export function buildTrialNudgeEmail(step, data = {}) {
         preheader:
           "30 jours pour tout essayer gratuitement, et une adresse pour nous dire ce qui vous manque.",
         badge: "BIENVENUE",
-        icon: "🎉",
         iconLabel: end
           ? `Essai gratuit jusqu'au ${end}`
           : "30 jours d'essai gratuit",
@@ -113,13 +115,10 @@ export function buildTrialNudgeEmail(step, data = {}) {
             `${strong("Connectez votre compte bancaire")} pour suivre votre trésorerie et rapprocher vos paiements.`,
             `${strong("Déposez vos factures fournisseurs")}\u00a0: elles sont lues automatiquement, sans ressaisie.`,
           ])}
-          ${callout(`💡 ${strong("Une fonctionnalité vous manque\u00a0?")}<br>Écrivez-nous à ${mailtoLink(TRIAL_NUDGE_REPLY_TO)} ou répondez simplement à cet e-mail. Nous lisons chaque message, et vos retours nous aident à choisir les prochaines évolutions de Newbi.`)}`,
+          ${callout(`${strong("Une fonctionnalité vous manque\u00a0?")}<br>Écrivez-nous à ${mailtoLink(TRIAL_NUDGE_REPLY_TO)} ou répondez simplement à cet e-mail. Nous lisons chaque message, et vos retours nous aident à choisir les prochaines évolutions de Newbi.`)}`,
         ctaLabel: "Accéder à mon espace",
         ctaUrl: `${APP_URL}/dashboard`,
-        footerNoteHtml: footerNote(
-          data.unsubscribeUrl,
-          "vous avez créé un compte Newbi",
-        ),
+        ...footerNote(data.unsubscribeUrl, "vous avez créé un compte Newbi"),
       }),
     };
   }
@@ -134,7 +133,6 @@ export function buildTrialNudgeEmail(step, data = {}) {
         preheader:
           "Trois choses à faire en quelques minutes pour profiter de votre essai.",
         badge: "VOTRE ESSAI",
-        icon: "👋",
         iconLabel: days
           ? `Encore ${daysLabel(days)} d'essai`
           : "Essai gratuit en cours",
@@ -152,7 +150,7 @@ export function buildTrialNudgeEmail(step, data = {}) {
           ${paragraph("Une question, un blocage\u00a0? Répondez simplement à cet e-mail, l'équipe vous répond.")}`,
         ctaLabel: "Reprendre mon essai",
         ctaUrl: `${APP_URL}/dashboard`,
-        footerNoteHtml,
+        ...footer,
       }),
     };
   }
@@ -165,7 +163,6 @@ export function buildTrialNudgeEmail(step, data = {}) {
         preheader:
           "Votre avis nous aide à choisir les prochaines fonctionnalités.",
         badge: "VOTRE AVIS",
-        icon: "💡",
         iconLabel: "2 semaines d'essai",
         iconBg: "#fef9c3",
         iconColor: "#854d0e",
@@ -181,7 +178,7 @@ export function buildTrialNudgeEmail(step, data = {}) {
           ${paragraph("Répondez simplement à cet e-mail, même en une phrase\u00a0: chaque message est lu par l'équipe.")}`,
         ctaLabel: "Partager mon idée",
         ctaUrl: mailto,
-        footerNoteHtml,
+        ...footer,
       }),
     };
   }
@@ -192,7 +189,6 @@ export function buildTrialNudgeEmail(step, data = {}) {
       html: renderEmail({
         preheader: "Vos données sont conservées. Reprenez quand vous voulez.",
         badge: "ESSAI TERMINÉ",
-        icon: "🔒",
         iconLabel: "Accès lecture seule",
         iconBg: "#f1f5f9",
         iconColor: "#475569",
@@ -206,7 +202,7 @@ export function buildTrialNudgeEmail(step, data = {}) {
         ctaUrl: SUBSCRIBE_URL,
         trustHtml:
           "<strong>Vos données vous appartiennent\u00a0:</strong> elles sont conservées en sécurité et restent accessibles en lecture seule, sans limite de durée.",
-        footerNoteHtml,
+        ...footer,
       }),
     };
   }

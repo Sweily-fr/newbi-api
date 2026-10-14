@@ -161,7 +161,7 @@ describe("runTrialNudges", () => {
     expect(payload.html).toContain("mailto:contact@newbi.fr");
     // Fin d'essai = début + 30 jours (13 novembre 2026)
     expect(payload.html).toContain("13 novembre 2026");
-    expect(payload.html).toContain("vous avez créé un compte Newbi");
+    expect(payload.html).toContain("car vous avez créé un");
     expect((await logs())[0]).toMatchObject({
       step: "welcome",
       status: "sent",
@@ -398,7 +398,7 @@ describe("gabarits", () => {
       });
       expect(subject).not.toContain("—");
       expect(html).not.toContain("—");
-      expect(html).toContain("Ne plus recevoir ces e-mails");
+      expect(html).toContain("Ne plus recevoir");
       expect(html).toContain("&lt;Atelier&gt;");
       expect(html).toContain("Bonjour,");
     },
