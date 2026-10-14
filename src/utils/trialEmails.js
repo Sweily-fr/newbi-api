@@ -48,6 +48,79 @@ export function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+const NOWRAP = '<span style="white-space: nowrap;">';
+// Fin de bloc de texte : le dernier mot y est lié au précédent
+const BLOCK_TAG = /^<\/?(p|li|ul|ol|div|h[1-6]|br)\b/i;
+const PUNCTUATION_ONLY = /^[\s.,;:!?)»\u00a0]*$/;
+
+/**
+ * Typographie des e-mails : jamais de « : », « ; », « ? » ou « ! » seul en
+ * début de ligne, jamais de dernier mot seul sur la dernière ligne d'un
+ * paragraphe. Certaines messageries ignorent l'espace insécable (constaté le
+ * 14/10/2026, « : » renvoyé à la ligne malgré U+00A0) : les mots à garder
+ * ensemble sont donc aussi placés dans un `white-space: nowrap`, respecté
+ * partout. Seul le texte entre les balises est modifié, jamais les attributs.
+ */
+export function typo(html) {
+  // Ponctuation juste après une mise en forme (« </strong> : ») : elle entre
+  // dans la balise, pour pouvoir être collée au dernier mot
+  const source = String(html ?? "").replace(
+    /(<\/(?:strong|b|em|a|span)>)[ \u00a0]*([:;?!»])/gi,
+    "\u00a0$2$1",
+  );
+  const parts = source.split(/(<[^>]+>)/);
+  // Le découpage alterne texte (indices pairs) et balises (indices impairs) ;
+  // un texte modifié peut ensuite commencer par une balise ajoutée
+  const isTag = (index) => index % 2 === 1;
+
+  // 1. Ponctuation double rattachée au mot qui précède (espace insécable)
+  for (let i = 0; i < parts.length; i += 1) {
+    if (!isTag(i)) {
+      parts[i] = parts[i].replace(/[ \u00a0]+([:;?!»])/g, "\u00a0$1");
+    }
+  }
+
+  // 2. Les deux derniers mots de chaque bloc ne se séparent pas
+  const tieLastWords = (from, to) => {
+    for (let i = to - 1; i >= from; i -= 1) {
+      const part = parts[i];
+      if (isTag(i) || part.trim() === "") continue;
+      const text = part.replace(/\s+$/, "");
+      const lastSpace = text.lastIndexOf(" ");
+      if (lastSpace > 0) {
+        const start = text.lastIndexOf(" ", lastSpace - 1) + 1;
+        parts[i] =
+          `${text.slice(0, start)}${NOWRAP}${text.slice(start)}</span>${part.slice(text.length)}`;
+        return;
+      }
+      // Ponctuation seule après une balise (« </strong>. ») : mot précédent
+      if (!PUNCTUATION_ONLY.test(part)) return;
+    }
+  };
+  let blockStart = 0;
+  for (let i = 0; i < parts.length; i += 1) {
+    if (isTag(i) && BLOCK_TAG.test(parts[i])) {
+      tieLastWords(blockStart, i);
+      blockStart = i + 1;
+    }
+  }
+  tieLastWords(blockStart, parts.length);
+
+  // 3. Mot + ponctuation dans un même nowrap : un nowrap qui ne contiendrait
+  //    que « &nbsp;: » laisse Chrome couper juste avant (mesuré)
+  for (let i = 0; i < parts.length; i += 1) {
+    if (!isTag(i)) {
+      parts[i] = parts[i]
+        .replace(
+          /([^ \u00a0<>]*)\u00a0([:;?!»])/g,
+          `${NOWRAP}$1&nbsp;$2</span>`,
+        )
+        .replace(/\u00a0/g, "&nbsp;");
+    }
+  }
+  return parts.join("");
+}
+
 const LOGO_BLACK =
   "https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png";
 const LOGO_PURPLE =
@@ -64,6 +137,23 @@ function formatTodayFr() {
 }
 
 /**
+ * Ligne de pied de page. Avec un lien en plus (désinscription) : la phrase,
+ * puis les liens sur leur propre ligne. Sans : « FAQ » reste collé au
+ * dernier mot de la phrase, jamais seul sur sa ligne.
+ */
+function footerLine({ footerNoteHtml, footerLinkHtml }) {
+  const faq = `<a href="${APP_URL}/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>`;
+  if (footerLinkHtml) {
+    return `${typo(footerNoteHtml || "")}<br>\n            ${NOWRAP}${footerLinkHtml} • ${faq}</span>`;
+  }
+  const note =
+    footerNoteHtml ||
+    "Vous pouvez gérer vos notifications dans les paramètres de votre compte";
+  const lastSpace = note.lastIndexOf(" ");
+  return `${note.slice(0, lastSpace)} ${NOWRAP}${note.slice(lastSpace + 1)} • ${faq}</span>`;
+}
+
+/**
  * Shared Newbi email layout — mirrors the design used across the product
  * emails (NewbiV2 src/lib/email-templates). All sub-templates feed it their
  * content so the header, card, CTA and footer stay identical everywhere.
@@ -71,7 +161,7 @@ function formatTodayFr() {
 export function renderEmail({
   preheader,
   badge,
-  icon,
+  // Pastille de couleur au-dessus du titre (texte seul : pas d'icône)
   iconLabel,
   iconBg,
   iconColor,
@@ -80,9 +170,10 @@ export function renderEmail({
   ctaLabel,
   ctaUrl,
   trustHtml,
-  // Ligne de pied de page à la place du rappel des paramètres de
-  // notification (ex. lien de désinscription des relances d'essai)
+  // Phrase de pied de page à la place du rappel des paramètres de
+  // notification, et lien placé avant « FAQ » (désinscription des relances)
   footerNoteHtml,
+  footerLinkHtml,
 }) {
   return `
     <!DOCTYPE html>
@@ -117,23 +208,20 @@ export function renderEmail({
         <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
 
           ${
-            icon
-              ? `<!-- Badge d'icône -->
+            iconLabel
+              ? `<!-- Pastille -->
           <div style="margin-bottom: 20px;">
-            <div style="display: inline-flex; align-items: center; background-color: ${iconBg}; border-radius: 6px; padding: 8px 12px;">
-              <span style="font-size: 16px; margin-right: 8px;">${icon}</span>
-              <span style="font-size: 11px; font-weight: 500; color: ${iconColor}; letter-spacing: 0.3px; text-transform: uppercase;">${escapeHtml(iconLabel)}</span>
-            </div>
+            <span style="display: inline-block; background-color: ${iconBg}; border-radius: 6px; padding: 8px 12px; font-size: 11px; font-weight: 500; color: ${iconColor}; letter-spacing: 0.3px; text-transform: uppercase;">${escapeHtml(iconLabel)}</span>
           </div>`
               : ""
           }
 
           <!-- Titre -->
           <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-            ${escapeHtml(title)}
+            ${typo(escapeHtml(title))}
           </h1>
 
-          ${bodyHtml}
+          ${typo(bodyHtml)}
 
           <!-- Bouton CTA -->
           <a href="${String(ctaUrl).replace(/&/g, "&amp;")}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center; margin-top: 8px;">
@@ -145,7 +233,7 @@ export function renderEmail({
           trustHtml
             ? `<!-- Encart confiance -->
         <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin-bottom: 32px;">
-          <p style="font-size: 14px; color: #166534; margin: 0; line-height: 1.6;">${trustHtml}</p>
+          <p style="font-size: 14px; color: #166534; margin: 0; line-height: 1.6;">${typo(trustHtml)}</p>
         </div>`
             : ""
         }
@@ -161,7 +249,7 @@ export function renderEmail({
             Votre gestion, simplifiée.
           </p>
           <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
-            ${footerNoteHtml || "Vous pouvez gérer vos notifications dans les paramètres de votre compte"} • <a href="${APP_URL}/aide" style="color: #9ca3af; text-decoration: underline;">FAQ</a>
+            ${footerLine({ footerNoteHtml, footerLinkHtml })}
           </p>
           <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
             <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
@@ -187,7 +275,6 @@ export function buildTrialEndingEmail({ orgName, daysRemaining } = {}) {
   const html = renderEmail({
     preheader: `Il vous reste ${dayLabel} pour choisir votre plan Newbi.`,
     badge: "FIN D'ESSAI IMMINENTE",
-    icon: "⏰",
     iconLabel: `${dayLabel} restant${safeDays > 1 ? "s" : ""}`,
     iconBg: "#fef3c7",
     iconColor: "#92400e",
@@ -233,13 +320,11 @@ export async function sendTrialEndingEmail({ to, orgName, daysRemaining }) {
  */
 export function buildTrialEndedEmail({ orgName } = {}) {
   const safeOrg = escapeHtml(orgName || "votre organisation");
-  const subject =
-    "Votre essai Newbi est terminé — vos données sont en sécurité";
+  const subject = "Votre essai Newbi est terminé, vos données sont en sécurité";
   const html = renderEmail({
     preheader:
       "Vos données sont en sécurité. Choisissez un plan pour reprendre.",
     badge: "ESSAI TERMINÉ",
-    icon: "🔒",
     iconLabel: "Accès lecture seule",
     iconBg: "#f1f5f9",
     iconColor: "#475569",
@@ -247,7 +332,7 @@ export function buildTrialEndedEmail({ orgName } = {}) {
     bodyHtml: `
           <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">Bonjour,</p>
           <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">
-            L'essai gratuit de <strong style="color: #1a1a1a;">${safeOrg}</strong> vient de se terminer. Vos données restent <strong style="color: #1a1a1a;">en sécurité et consultables</strong> à tout moment — rien n'est perdu, vous gardez l'accès en lecture seule.
+            L'essai gratuit de <strong style="color: #1a1a1a;">${safeOrg}</strong> vient de se terminer. Vos données restent <strong style="color: #1a1a1a;">en sécurité et consultables</strong> à tout moment : rien n'est perdu, vous gardez l'accès en lecture seule.
           </p>
           <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
             Pour reprendre la création et la modification de vos factures, devis, clients et automatisations, il vous suffit de choisir un plan :
