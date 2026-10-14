@@ -7,6 +7,7 @@ import DeliveryNote from "../models/DeliveryNote.js";
 import CreditNote from "../models/CreditNote.js";
 import logger from "../utils/logger.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
+import { recordTrialNudgeEmailEvent } from "../services/trialNudgeService.js";
 
 const router = express.Router();
 
@@ -140,6 +141,18 @@ router.post("/", express.raw({ type: "*/*" }), async (req, res) => {
     logger.info(
       `[ResendWebhook] Événement reçu: ${type} (email_id: ${data.email_id})`,
     );
+
+    // Relances de l'essai gratuit (trial_nudge_log) : suivi à part des
+    // documents, best-effort
+    try {
+      if (await recordTrialNudgeEmailEvent(type, data.email_id)) {
+        return res.status(200).json({ received: true });
+      }
+    } catch (nudgeError) {
+      logger.warn(
+        `[ResendWebhook] suivi de relance d'essai en échec: ${nudgeError.message}`,
+      );
+    }
 
     // Traiter les événements pertinents
     if (type === "email.opened") {

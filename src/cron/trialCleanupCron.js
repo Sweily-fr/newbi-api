@@ -30,6 +30,7 @@ import {
   sendTrialEndingEmail,
   sendTrialEndedEmail,
 } from "../utils/trialEmails.js";
+import { sendTrialEndNudgeIfInactive } from "../services/trialNudgeService.js";
 
 const J3_REMINDER_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
@@ -130,7 +131,20 @@ export async function runTrialCleanup() {
       // on next protected mutation rather than waiting for the 30s TTL.
       invalidateTrialCache(org._id.toString());
 
+      // Espace inactif et relances activées dans newbi-admin : la relance de
+      // fin d'essai part À LA PLACE de l'e-mail standard (jamais les deux)
+      let replacedByNudge = false;
       if (!alreadyEmailed) {
+        try {
+          replacedByNudge = await sendTrialEndNudgeIfInactive({ org, now, db });
+        } catch (nudgeErr) {
+          logger.error(
+            `[trialCleanupCron] relance de fin d'essai en échec pour l'org ${org._id}: ${nudgeErr.message}`,
+          );
+        }
+      }
+
+      if (!alreadyEmailed && !replacedByNudge) {
         const owner = await lookupOrgOwner(db, org._id);
         if (owner) {
           try {

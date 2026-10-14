@@ -79,6 +79,7 @@ import fileDownloadRoutes from "./routes/fileDownload.js";
 import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
 import backofficeAdminRoutes from "./routes/backofficeAdmin.js";
 import adminServiceRoutes from "./routes/adminService.js";
+import trialNudgeRoutes from "./routes/trialNudges.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -113,6 +114,7 @@ import { startCalendarWebhookRenewalCron } from "./cron/calendarWebhookRenewalCr
 import { startGmailSyncCron } from "./cron/gmailSyncCron.js";
 import { startOverdueAutomationCron } from "./cron/overdueAutomationCron.js";
 import { startTrialCleanupCron } from "./cron/trialCleanupCron.js";
+import { startTrialNudgeCron } from "./cron/trialNudgeCron.js";
 import { startEInvoiceStatusSyncCron } from "./cron/eInvoiceStatusSyncCron.js";
 import { startEReportingRetryCron } from "./cron/eReportingRetryCron.js";
 import { startPurchaseInvoiceReceptionCron } from "./cron/purchaseInvoiceReceptionCron.js";
@@ -424,6 +426,9 @@ async function startServer() {
 
   // Routes leads guides (publique, sans auth)
   app.use("/api/leads", guideLeadsRoutes);
+
+  // Désinscription des relances d'essai (publique, jeton signé)
+  app.use("/api/trial-nudges", trialNudgeRoutes);
 
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
@@ -743,6 +748,10 @@ async function startServer() {
       // Démarrer le cron de nettoyage des trials app-managed
       // (no-op si ENABLE_APP_TRIAL=false ; vérifié dans startTrialCleanupCron)
       startTrialCleanupCron();
+
+      // Relances de l'essai (J+7 inactif, J+14 suggestions), mode réglé dans
+      // newbi-admin (no-op si ENABLE_APP_TRIAL=false)
+      startTrialNudgeCron();
 
       // Démarrer le cron de suivi des statuts e-invoicing (SuperPDP, pas de webhook)
       startEInvoiceStatusSyncCron();
