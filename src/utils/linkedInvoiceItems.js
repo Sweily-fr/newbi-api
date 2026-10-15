@@ -41,7 +41,18 @@ const FALLBACK_VAT_RATE = 20;
  */
 export const REVERSE_CHARGE_MENTION =
   "Autoliquidation - TVA due par le preneur (art. 283-2 du CGI)";
-export const VAT_EXEMPT_MENTION = "TVA non applicable, art. L. 223-3 du CIBS";
+export const VAT_EXEMPT_MENTION = "TVA non applicable, art. 293 B du CGI";
+
+// « L. 223-3 du CIBS » a été écrit du 01/09 au 15/10/2026 alors que cet
+// article n'est jamais entré en vigueur : l'ordonnance n° 2026-671 a reporté
+// la recodification de la TVA au 01/01/2027 et placé la franchise à
+// l'article L. 233-3. Une facture liée créée depuis un devis de cette période
+// reprend la référence en vigueur (art. 293 B du CGI jusqu'au 31/12/2026).
+const LEGACY_EXEMPTION_TEXTS = {
+  "Article L. 223-3 du CIBS": "Article 293 B du CGI",
+  "TVA non applicable, art. L. 223-3 du CIBS": VAT_EXEMPT_MENTION,
+};
+const currentExemptionText = (text) => LEGACY_EXEMPTION_TEXTS[text] ?? text;
 
 const toNumber = (value) => {
   const n = Number(value);
@@ -154,7 +165,10 @@ export function buildLinkedInvoiceItems({ quote, amountTTC, description }) {
     unitPrice,
     vatRate,
     // Obligatoire à 0 %, interdit sinon (cf. models/schemas/item.js).
-    vatExemptionText: vatRate === 0 ? exemptionText || VAT_EXEMPT_MENTION : "",
+    vatExemptionText:
+      vatRate === 0
+        ? currentExemptionText(exemptionText) || VAT_EXEMPT_MENTION
+        : "",
   });
 
   // Auto-liquidation / franchise en base : la facture liée ne porte pas de TVA,

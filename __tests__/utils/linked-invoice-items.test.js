@@ -308,6 +308,26 @@ describe("buildLinkedInvoiceItems", () => {
     expect(items[0].vatExemptionText).toBe("Exonération art. 261-4-4° du CGI");
   });
 
+  it("remplace l'ancienne référence L. 223-3 du CIBS par l'article 293 B du CGI", () => {
+    expect(VAT_EXEMPT_MENTION).toBe("TVA non applicable, art. 293 B du CGI");
+    const items = buildLinkedInvoiceItems({
+      quote: {
+        items: [
+          {
+            quantity: 1,
+            unitPrice: 200,
+            vatRate: 0,
+            vatExemptionText: "Article L. 223-3 du CIBS",
+          },
+        ],
+      },
+      amountTTC: 200,
+      description: DESCRIPTION,
+    });
+
+    expect(items[0].vatExemptionText).toBe("Article 293 B du CGI");
+  });
+
   it("laisse vatExemptionText vide sur une ligne taxée (contrainte du modèle)", () => {
     const items = buildLinkedInvoiceItems({
       quote: { items: [{ quantity: 1, unitPrice: 100, vatRate: 5.5 }] },
