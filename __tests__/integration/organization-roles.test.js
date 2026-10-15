@@ -546,7 +546,9 @@ describe("Rôles d'un espace", () => {
   it("garde l'accueil visible et choisit les cadres qu'il affiche", async () => {
     const catalog = await Query.roleCatalog(null, {}, ctx(viewer));
     const home = catalog.modules.find((m) => m.key === "home");
-    expect(home.group).toBe("pilotage");
+    // Section à part, en tête (comme dans le menu)
+    expect(home.group).toBe("dashboard");
+    expect(catalog.groups[0]).toEqual({ key: "dashboard", label: "Accueil" });
     expect(home.alwaysVisible).toBe(true);
     expect(home.actions.map((a) => a.key)).toEqual([
       "view",
