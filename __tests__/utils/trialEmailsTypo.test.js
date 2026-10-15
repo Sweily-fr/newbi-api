@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   typo,
+  formatTodayFr,
   buildTrialEndingEmail,
   buildTrialEndedEmail,
 } from "../../src/utils/trialEmails.js";
@@ -80,5 +81,18 @@ describe("parcours d'essai : six e-mails sans icône ni orphelin", () => {
     // Aucune ponctuation double précédée d'une espace sécable dans le texte
     const text = html.replace(/<[^>]+>/g, "");
     expect(text).not.toMatch(/ [:;?!]/);
+  });
+});
+
+describe("formatTodayFr", () => {
+  it("donne la date de Paris, même juste après minuit (serveur en UTC)", () => {
+    // 15/10 à 00:30 à Paris = 14/10 22:30 UTC
+    expect(formatTodayFr(new Date("2026-10-14T22:30:00Z"))).toBe(
+      "15 OCT. 2026",
+    );
+    // Hiver : 01/01 à 00:30 à Paris = 31/12 23:30 UTC
+    expect(formatTodayFr(new Date("2025-12-31T23:30:00Z"))).toBe(
+      "01 JANV. 2026",
+    );
   });
 });

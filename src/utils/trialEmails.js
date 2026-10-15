@@ -126,12 +126,15 @@ const LOGO_BLACK =
 const LOGO_PURPLE =
   "https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png";
 
-function formatTodayFr() {
-  return new Date()
+// Date du jour en heure de Paris : le VPS est en UTC, et la bienvenue part
+// aussi la nuit (une inscription à 00:30 affichait la veille)
+export function formatTodayFr(now = new Date()) {
+  return now
     .toLocaleDateString("fr-FR", {
       day: "2-digit",
       month: "short",
       year: "numeric",
+      timeZone: "Europe/Paris",
     })
     .toUpperCase();
 }
