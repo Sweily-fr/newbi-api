@@ -7,6 +7,8 @@
  *   - inactive_d7  : J+7 après le début de l'essai, si l'espace est inactif
  *                    depuis `inactivityDays` jours (3 par défaut)
  *   - feedback_d14 : J+14, à tous les essais, demande de suggestions
+ *   J+7 et J+14 partent du lundi au vendredi à 10 h (heure de Paris) : une
+ *   relance qui tombe un samedi ou un dimanche part le lundi.
  *   - inactive_d30 : à l'expiration de l'essai, si l'espace est inactif ;
  *                    envoyée par trialCleanupCron À LA PLACE de l'e-mail
  *                    standard de fin d'essai (jamais deux e-mails le même jour)
@@ -19,8 +21,8 @@
  * Garde-fous :
  *   - une relance par organisation et par étape, garantie par l'index unique
  *     du journal (trial_nudge_log), écrit AVANT l'envoi ;
- *   - rattrapage limité à SEND_WINDOW_DAYS : à l'activation, les essais
- *     anciens ne reçoivent rien ;
+ *   - rattrapage limité à SEND_WINDOW_DAYS (jours ouvrés pour J+7 et J+14) :
+ *     à l'activation, les essais anciens ne reçoivent rien ;
  *   - exclus : abonnés, clients d'un cabinet gestionnaire, e-mails non
  *     vérifiés, comptes internes, désinscrits ;
  *   - lien de désinscription signé dans chaque e-mail (+ en-têtes
@@ -55,17 +57,27 @@ export const INACTIVITY_DAYS_MIN = 2;
 export const INACTIVITY_DAYS_MAX = 7;
 export const DEFAULT_SETTINGS = { mode: "off", inactivityDays: 3 };
 
-// Relances planifiées, comptées depuis le début de l'essai
+// Relances planifiées, comptées depuis le début de l'essai. `weekdaysOnly` :
+// envoyée seulement du lundi au vendredi, au passage de DAILY_RUN_HOUR h
+// (la bienvenue, elle, part dès la fin de l'onboarding, à toute heure)
 export const SCHEDULED_STEPS = {
   welcome: { dayOffset: 0, requiresInactivity: false },
-  inactive_d7: { dayOffset: 7, requiresInactivity: true },
-  feedback_d14: { dayOffset: 14, requiresInactivity: false },
+  inactive_d7: { dayOffset: 7, requiresInactivity: true, weekdaysOnly: true },
+  feedback_d14: {
+    dayOffset: 14,
+    requiresInactivity: false,
+    weekdaysOnly: true,
+  },
 };
 // Relance de fin d'essai, déclenchée par l'expiration (trialCleanupCron)
 export const END_STEP = "inactive_d30";
 
-// Une relance manquée (cron arrêté, mode coupé) part encore pendant ce délai
+// Une relance manquée (cron arrêté, mode coupé) part encore pendant ce délai,
+// compté en jours ouvrés pour les relances `weekdaysOnly`
 export const SEND_WINDOW_DAYS = 2;
+
+// Heure (Paris) du passage quotidien, du lundi au vendredi (trialNudgeCron)
+export const DAILY_RUN_HOUR = 10;
 
 const INTERNAL_DOMAINS = ["sweily.fr", "newbi.fr", "newbi.sweily.fr"];
 
@@ -499,10 +511,100 @@ function dueDateOf(ctx, step) {
   );
 }
 
-const inSendWindow = (due, now) =>
-  Boolean(due) &&
-  due.getTime() <= now.getTime() &&
-  now.getTime() < due.getTime() + SEND_WINDOW_DAYS * DAY_MS;
+// ─── Jours ouvrés, heure de Paris (le VPS est en UTC) ───────────────────────
+
+const parisFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Europe/Paris",
+  weekday: "short",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function parisParts(date) {
+  const parts = {};
+  for (const { type, value } of parisFormatter.formatToParts(date)) {
+    parts[type] = value;
+  }
+  return {
+    weekday: parts.weekday,
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+export const isWeekendInParis = (date) =>
+  ["Sat", "Sun"].includes(parisParts(date).weekday);
+
+// Écart entre l'heure de Paris et UTC à cet instant (1 h l'hiver, 2 h l'été)
+function parisOffsetMs(date) {
+  const p = parisParts(date);
+  const wallClock = Date.UTC(
+    p.year,
+    p.month - 1,
+    p.day,
+    p.hour,
+    p.minute,
+    p.second,
+  );
+  return wallClock - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+// `hour` h pile, heure de Paris, le jour (à Paris) de `date`
+function parisAt(date, hour) {
+  const p = parisParts(date);
+  const wallClock = Date.UTC(p.year, p.month - 1, p.day, hour);
+  const first = wallClock - parisOffsetMs(new Date(wallClock));
+  return new Date(wallClock - parisOffsetMs(new Date(first)));
+}
+
+/** Premier passage du lundi au vendredi à `hour` h (Paris) à partir de `date`. */
+export function nextWeekdaySlot(date, hour = DAILY_RUN_HOUR) {
+  let slot = parisAt(date, hour);
+  if (slot < date) slot = parisAt(new Date(slot.getTime() + DAY_MS), hour);
+  while (isWeekendInParis(slot)) {
+    slot = parisAt(new Date(slot.getTime() + DAY_MS), hour);
+  }
+  return slot;
+}
+
+const isWeekdaysOnly = (step) => Boolean(SCHEDULED_STEPS[step]?.weekdaysOnly);
+
+/**
+ * Fin (exclue) du rattrapage d'une relance due à `due`. En jours ouvrés, on
+ * compte en passages et non en heures : la relance part au premier passage de
+ * semaine après sa date, ou au suivant si celui-ci a été manqué (un vendredi
+ * après 10 h → lundi, sinon mardi). Compter en heures faisait sauter le
+ * rattrapage du mardi le week-end du changement d'heure.
+ */
+function sendWindowEnd(step, due) {
+  if (!isWeekdaysOnly(step)) {
+    return new Date(due.getTime() + SEND_WINDOW_DAYS * DAY_MS);
+  }
+  let slot = nextWeekdaySlot(due);
+  for (let i = 0; i < SEND_WINDOW_DAYS; i += 1) {
+    slot = nextWeekdaySlot(new Date(slot.getTime() + 60 * 1000));
+  }
+  return slot;
+}
+
+/**
+ * La relance peut-elle partir maintenant ? Date atteinte, rattrapage pas
+ * dépassé, et pas un samedi ni un dimanche pour les relances en jours ouvrés
+ * (elles partent alors le lundi, toujours dans leur rattrapage).
+ */
+function isSendable(step, due, now) {
+  if (!due || due > now || now >= sendWindowEnd(step, due)) return false;
+  return !(isWeekdaysOnly(step) && isWeekendInParis(now));
+}
 
 // ─── Envoi ─────────────────────────────────────────────────────────────────
 
@@ -674,7 +776,8 @@ export async function runTrialNudges({
     if (!start) continue;
     for (const step of steps) {
       const { dayOffset } = SCHEDULED_STEPS[step];
-      if (inSendWindow(new Date(start.getTime() + dayOffset * DAY_MS), now)) {
+      const dueAt = new Date(start.getTime() + dayOffset * DAY_MS);
+      if (isSendable(step, dueAt, now)) {
         due.push({ org, step });
       }
     }
@@ -745,7 +848,7 @@ export async function sendTrialEndNudgeIfInactive({
   const settings = await getTrialNudgeSettings(database);
   if (settings.mode === "off") return false;
   // Rattrapage d'un essai expiré depuis longtemps : e-mail standard
-  if (!inSendWindow(toDate(org.trialEndDate), now)) return false;
+  if (!isSendable(END_STEP, toDate(org.trialEndDate), now)) return false;
 
   const simulated = settings.mode === "simulation";
   const [ctx] = await loadContexts(database, [org], { simulated });
@@ -775,7 +878,6 @@ export async function listTrialNudgeSchedule({
     .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
     .toArray();
 
-  const from = now.getTime() - SEND_WINDOW_DAYS * DAY_MS;
   const to = now.getTime() + horizonDays * DAY_MS;
   const simulated = settings.mode === "simulation";
   const contexts = await loadContexts(database, orgs, { simulated });
@@ -784,7 +886,11 @@ export async function listTrialNudgeSchedule({
   for (const ctx of contexts) {
     for (const step of [...Object.keys(SCHEDULED_STEPS), END_STEP]) {
       const due = dueDateOf(ctx, step);
-      if (!due || due.getTime() < from || due.getTime() > to) continue;
+      // Rattrapage dépassé : la relance ne partira plus
+      if (!due || now >= sendWindowEnd(step, due)) continue;
+      // Jours ouvrés : date d'envoi réelle (un samedi → le lundi à 10 h)
+      const sendAt = isWeekdaysOnly(step) ? nextWeekdaySlot(due) : due;
+      if (sendAt.getTime() > to) continue;
       // Fin d'essai déjà traitée par le cron (e-mail standard parti)
       if (step === END_STEP && ctx.org.trialEndedEmailSentAt) continue;
       const reason = exclusionReason(ctx, step, {
@@ -793,11 +899,11 @@ export async function listTrialNudgeSchedule({
       });
       // L'activité d'une relance à venir n'est qu'indicative : elle sera
       // réévaluée le jour J, la relance n'est donc pas exclue pour autant
-      const pending = due > now;
+      const pending = sendAt > now;
       const excluded = Boolean(reason) && !(pending && reason === "active");
       items.push({
         step,
-        dueAt: due.toISOString(),
+        dueAt: sendAt.toISOString(),
         orgId: ctx.orgId,
         orgName: ctx.orgName,
         ownerEmail: ctx.owner?.email || null,
