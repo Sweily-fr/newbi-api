@@ -575,6 +575,78 @@ describe("PurchaseInvoice Resolver - TVA à plusieurs taux", () => {
   });
 });
 
+// Incident du 15/10/2026 : une facture enregistrée avec amountTVA null
+// faisait échouer toute la liste purchaseInvoices de l'espace (Float!).
+describe("PurchaseInvoice Resolver - montants à null", () => {
+  const create = purchaseInvoiceResolvers.Mutation.createPurchaseInvoice;
+  const update = purchaseInvoiceResolvers.Mutation.updatePurchaseInvoice;
+
+  it("création avec HT / TVA / taux à null : valeurs par défaut enregistrées", async () => {
+    const invoice = await create(
+      null,
+      {
+        input: {
+          workspaceId: organizationId.toString(),
+          supplierName: "Meta Platforms Ireland",
+          issueDate: "2024-05-17",
+          amountHT: null,
+          amountTVA: null,
+          vatRate: null,
+          amountTTC: 85.7,
+          forceCreate: true,
+        },
+      },
+      ctx(),
+    );
+
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved.amountHT).toBe(0);
+    expect(saved.amountTVA).toBe(0);
+    expect(saved.vatRate).toBe(20);
+    expect(saved.amountTTC).toBe(85.7);
+  });
+
+  it("mise à jour avec HT / TVA / taux à null : montants inchangés", async () => {
+    const { insertedId } = await insertPurchaseInvoice({
+      amountHT: 70,
+      amountTVA: 15.7,
+      vatRate: 22.43,
+      amountTTC: 85.7,
+    });
+
+    await update(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { amountHT: null, amountTVA: null, vatRate: null, notes: "vu" },
+      },
+      ctx(),
+    );
+
+    const saved = await PurchaseInvoice.findById(insertedId).lean();
+    expect(saved.amountHT).toBe(70);
+    expect(saved.amountTVA).toBe(15.7);
+    expect(saved.vatRate).toBe(22.43);
+    expect(saved.notes).toBe("vu");
+  });
+
+  it("facture déjà enregistrée avec des montants null : lue avec les valeurs par défaut", () => {
+    const stored = {
+      amountHT: null,
+      amountTVA: null,
+      vatRate: null,
+      amountTTC: null,
+    };
+    const fields = purchaseInvoiceResolvers.PurchaseInvoice;
+    expect(fields.amountHT(stored)).toBe(0);
+    expect(fields.amountTVA(stored)).toBe(0);
+    expect(fields.vatRate(stored)).toBe(20);
+    expect(fields.amountTTC(stored)).toBe(0);
+    // Un taux de 0 % reste 0 %
+    expect(fields.vatRate({ vatRate: 0 })).toBe(0);
+  });
+});
+
 describe("PurchaseInvoice Resolver - Mutation.markPurchaseInvoiceAsPaid", () => {
   const resolver = purchaseInvoiceResolvers.Mutation.markPurchaseInvoiceAsPaid;
 

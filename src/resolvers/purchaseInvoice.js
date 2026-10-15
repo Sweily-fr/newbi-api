@@ -47,6 +47,9 @@ import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconci
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 
+// Champs historiques de TVA, résumé du détail par taux quand il existe
+const VAT_SCALAR_FIELDS = new Set(["amountHT", "amountTVA", "vatRate"]);
+
 // Montant dans la devise de la facture (EUR par défaut ou si le code est
 // invalide) : une facture en dollars n'est pas affichée en euros.
 const formatAmount = (value, currency) => {
@@ -884,10 +887,12 @@ const purchaseInvoiceResolvers = {
           (vatBreakdown === undefined || vatBreakdown === null) &&
           scalarVatEditBreaksBreakdown(invoice, fields);
 
+        // HT / TVA / taux à null : inchangés, comme pour le détail par taux
+        // ci-dessus (le modèle les remettrait sinon à leur valeur par défaut)
         Object.keys(fields).forEach((key) => {
-          if (fields[key] !== undefined) {
-            invoice[key] = fields[key];
-          }
+          if (fields[key] === undefined) return;
+          if (fields[key] === null && VAT_SCALAR_FIELDS.has(key)) return;
+          invoice[key] = fields[key];
         });
 
         if (vatBreakdown !== undefined && vatBreakdown !== null) {
@@ -2088,6 +2093,13 @@ const purchaseInvoiceResolvers = {
     source: (parent) => parent.source || "MANUAL",
     // Factures antérieures au détail par taux (lues en .lean()) : liste vide
     vatBreakdown: (parent) => parent.vatBreakdown || [],
+    // Montants non-nullables : une seule facture enregistrée avec un montant
+    // null (champ vidé avant le setter du modèle, script) faisait tomber toute
+    // la liste de l'espace (incident du 15/10/2026). Défauts du modèle.
+    amountHT: (parent) => parent.amountHT ?? 0,
+    amountTVA: (parent) => parent.amountTVA ?? 0,
+    vatRate: (parent) => parent.vatRate ?? 20,
+    amountTTC: (parent) => parent.amountTTC ?? 0,
     // Même cas que source : .lean() n'applique pas le défaut Mongoose, un
     // document écrit en brut (seed, script) sans ce champ ferait tomber la liste.
     isReconciled: (parent) =>
