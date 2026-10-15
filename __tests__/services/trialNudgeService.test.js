@@ -80,6 +80,7 @@ async function setMode(mode, inactivityDays = 3) {
  */
 async function seedTrialOrg({
   startedDaysAgo,
+  startedAt = null,
   email = "client@exemple.fr",
   emailVerified = true,
   lastSeenDaysAgo = null,
@@ -87,7 +88,7 @@ async function seedTrialOrg({
 } = {}) {
   const orgId = new mongoose.Types.ObjectId();
   const userId = new mongoose.Types.ObjectId();
-  const start = ago(startedDaysAgo);
+  const start = startedAt ? new Date(startedAt) : ago(startedDaysAgo);
   await db.collection("organization").insertOne({
     _id: orgId,
     name: "Atelier Test",
@@ -273,6 +274,74 @@ describe("runTrialNudges", () => {
     sendMock.mockResolvedValue({ data: { id: "x" }, error: null });
     await runTrialNudges({ now: NOW });
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("jours ouvrés (J+7 et J+14 du lundi au vendredi à 10 h)", () => {
+  // Octobre 2026 : samedi 17, dimanche 18, lundi 19, mardi 20, mercredi 21 ;
+  // passage à l'heure d'hiver dans la nuit du samedi 24 au dimanche 25
+  const DAY_MS = 86_400_000;
+  const startFor = (dueIso, dayOffset) =>
+    new Date(new Date(dueIso).getTime() - dayOffset * DAY_MS);
+  const run = (iso, steps) => runTrialNudges({ now: new Date(iso), steps });
+
+  it("J+14 tombé un samedi : rien le week-end, envoi le lundi à 10 h", async () => {
+    await setMode("live");
+    // J+14 = samedi 17/10 à 11 h (Paris)
+    await seedTrialOrg({ startedAt: startFor("2026-10-17T09:00:00Z", 14) });
+
+    expect((await run("2026-10-18T08:00:00Z")).due).toBe(0); // dimanche 10 h
+    const monday = await run("2026-10-19T08:00:00Z"); // lundi 10 h
+    expect(monday.sent).toBe(1);
+    expect(sendMock.mock.calls[0][0].subject).toContain("manque");
+  });
+
+  it("J+7 dû un vendredi après 10 h : lundi, ou mardi en rattrapage, jamais mercredi", async () => {
+    await setMode("live");
+    // J+7 = vendredi 16/10 à 10 h 30 (Paris) : trop tard pour le passage du vendredi
+    const start = startFor("2026-10-16T08:30:00Z", 7);
+    await seedTrialOrg({ startedAt: start, email: "a@exemple.fr" });
+    expect((await run("2026-10-16T08:00:00Z")).due).toBe(0); // vendredi 10 h
+    expect((await run("2026-10-19T08:00:00Z")).sent).toBe(1); // lundi 10 h
+
+    await clearMongo();
+    await setMode("live");
+    await seedTrialOrg({ startedAt: start, email: "b@exemple.fr" });
+    // Passage du lundi manqué : rattrapé le mardi
+    expect((await run("2026-10-20T08:00:00Z")).sent).toBe(1);
+
+    await clearMongo();
+    await setMode("live");
+    await seedTrialOrg({ startedAt: start, email: "c@exemple.fr" });
+    // Lundi et mardi manqués : plus rien le mercredi
+    expect((await run("2026-10-21T08:00:00Z")).due).toBe(0);
+  });
+
+  it("le week-end du changement d'heure ne fait pas sauter le rattrapage", async () => {
+    await setMode("live");
+    // J+7 = vendredi 23/10 à 11 h (heure d'été) ; lundi et mardi à 10 h = 09:00Z
+    await seedTrialOrg({ startedAt: startFor("2026-10-23T09:00:00Z", 7) });
+    expect((await run("2026-10-27T09:00:00Z")).sent).toBe(1); // mardi 10 h
+  });
+
+  it("la bienvenue part aussi le week-end", async () => {
+    await setMode("live");
+    await seedTrialOrg({ startedAt: "2026-10-17T13:00:00Z" }); // samedi 15 h
+    const summary = await run("2026-10-17T13:10:00Z", ["welcome"]);
+    expect(summary.sent).toBe(1);
+  });
+
+  it("le calendrier de l'admin affiche la date d'envoi réelle", async () => {
+    await setMode("live");
+    await seedTrialOrg({ startedAt: startFor("2026-10-17T09:00:00Z", 14) });
+    const { items } = await listTrialNudgeSchedule({
+      now: new Date("2026-10-17T14:00:00Z"), // samedi 16 h
+    });
+    const d14 = items.find((i) => i.step === "feedback_d14");
+    expect(d14).toMatchObject({
+      dueAt: "2026-10-19T08:00:00.000Z", // lundi 10 h (Paris)
+      status: "upcoming",
+    });
   });
 });
 
