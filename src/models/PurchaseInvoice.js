@@ -74,6 +74,13 @@ const vatLineSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// HT / TVA / taux reçus à null (champ vidé dans un formulaire) : Mongoose
+// n'applique le défaut qu'à un champ absent et enregistrait null, que le
+// schéma GraphQL (Float!) refuse : toute la liste de l'espace tombait
+// (incident du 15/10/2026). Le setter vaut aussi pour les mises à jour.
+const nullToDefault = (fallback) => (value) =>
+  value === null ? fallback : value;
+
 const PURCHASE_INVOICE_STATUS = {
   TO_PROCESS: "TO_PROCESS",
   TO_PAY: "TO_PAY",
@@ -140,14 +147,17 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     amountHT: {
       type: Number,
       default: 0,
+      set: nullToDefault(0),
     },
     amountTVA: {
       type: Number,
       default: 0,
+      set: nullToDefault(0),
     },
     vatRate: {
       type: Number,
       default: 20,
+      set: nullToDefault(20),
     },
     vatBreakdown: {
       type: [vatLineSchema],
