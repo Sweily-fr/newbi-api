@@ -9,8 +9,9 @@ import logger from "../utils/logger.js";
  * 2. Google Document AI (si configuré) - Gratuit 1000/mois, précis pour les factures
  * 3. Mistral OCR (fallback) - Bon pour le texte général
  * 4. Tesseract (dernier recours) - Gratuit et local, sans quota : images via
- *    OCR, PDF via leur couche texte. Champs extraits par regex (qualité
- *    "partial", à vérifier par l'utilisateur).
+ *    OCR, PDF via leur couche texte ou, pour les pages scannées, par OCR de
+ *    la page rendue. Champs extraits par regex (qualité "partial", à vérifier
+ *    par l'utilisateur).
  *
  * Variables d'environnement:
  * - OCR_PROVIDER: Provider par défaut ("claude-vision", "mindee", "google-document-ai", "mistral-ocr")
