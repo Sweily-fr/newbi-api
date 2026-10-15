@@ -711,9 +711,13 @@ export async function runTrialNudges({
     else if (outcome === "failed") summary.failed++;
   }
 
-  // Le passage de la bienvenue tourne toutes les 10 min : pas de log quand
-  // il n'y a rien à faire
-  if (due.length > 0) {
+  // Le passage de la bienvenue tourne toutes les 10 min : il ne journalise
+  // que s'il a envoyé (ou simulé) quelque chose. Les espaces déjà accueillis
+  // restent « dus » pendant toute la fenêtre de rattrapage (2 jours), ce qui
+  // écrivait une ligne toutes les 10 min. Le passage quotidien, lui, journalise
+  // toujours.
+  const acted = summary.sent + summary.simulated + summary.failed > 0;
+  if (steps.length > 1 || acted) {
     logger.info(
       `[TrialNudge] passage ${steps.join("+")} : ${JSON.stringify(summary)}`,
     );
