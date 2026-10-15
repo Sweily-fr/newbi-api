@@ -57,6 +57,7 @@ const CRUD = [VIEW, CREATE, EDIT, DELETE];
 
 // Sections du menu de l'application, dans le même ordre
 export const MODULE_GROUPS = [
+  { key: "dashboard", label: "Accueil" },
   { key: "pilotage", label: "Pilotage" },
   { key: "sales", label: "Ventes" },
   { key: "clients", label: "Clients" },
@@ -75,10 +76,10 @@ export const MODULE_GROUPS = [
  * seulement ce qu'elle affiche.
  */
 export const MODULES = [
-  // Pilotage
+  // Accueil (sa propre section, comme dans le menu)
   {
     key: "home",
-    group: "pilotage",
+    group: "dashboard",
     label: "Accueil",
     alwaysVisible: true,
     // Cadres de l'accueil, chacun masquable. Ils suivent aussi les droits
@@ -115,6 +116,7 @@ export const MODULES = [
       ),
     ],
   },
+  // Pilotage
   {
     key: "banking",
     group: "pilotage",
