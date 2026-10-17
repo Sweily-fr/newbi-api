@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   requireAction,
   requireRead,
@@ -140,8 +140,8 @@ export const clientListResolvers = {
               { _id: { $in: clientIds } },
               {
                 $or: [
-                  { name: { $regex: escapeRegex(search), $options: "i" } },
-                  { email: { $regex: escapeRegex(search), $options: "i" } },
+                  { name: buildSearchRegex(search) },
+                  { email: buildSearchRegex(search) },
                 ],
               },
             ];

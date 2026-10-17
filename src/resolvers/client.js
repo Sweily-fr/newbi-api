@@ -23,7 +23,7 @@ import {
 import mongoose from "mongoose";
 import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import { automationService } from "./clientAutomation.js";
 
@@ -77,7 +77,13 @@ const clientResolvers = {
     clients: requireRead("clients")(
       async (
         _,
-        { page = 1, limit = 10, search, workspaceId: inputWorkspaceId },
+        {
+          page = 1,
+          limit = 10,
+          search,
+          searchExact = false,
+          workspaceId: inputWorkspaceId,
+        },
         context,
       ) => {
         const workspaceId = resolveWorkspaceId(
@@ -90,19 +96,19 @@ const clientResolvers = {
         };
 
         if (search) {
-          // Saisie échappée : « ( » ou « + » faisaient planter la recherche
-          const safeSearch = escapeRegex(search);
+          // Saisie échappée, sans accents ni majuscules sauf searchExact
+          const searchRegex = buildSearchRegex(search, { exact: searchExact });
           query.$or = [
-            { name: { $regex: safeSearch, $options: "i" } },
-            { email: { $regex: safeSearch, $options: "i" } },
-            { "address.city": { $regex: safeSearch, $options: "i" } },
-            { "address.country": { $regex: safeSearch, $options: "i" } },
-            { "address.postalCode": { $regex: safeSearch, $options: "i" } },
-            { "address.street": { $regex: safeSearch, $options: "i" } },
-            { firstName: { $regex: safeSearch, $options: "i" } },
-            { lastName: { $regex: safeSearch, $options: "i" } },
-            { siret: { $regex: safeSearch, $options: "i" } },
-            { vatNumber: { $regex: safeSearch, $options: "i" } },
+            { name: searchRegex },
+            { email: searchRegex },
+            { "address.city": searchRegex },
+            { "address.country": searchRegex },
+            { "address.postalCode": searchRegex },
+            { "address.street": searchRegex },
+            { firstName: searchRegex },
+            { lastName: searchRegex },
+            { siret: searchRegex },
+            { vatNumber: searchRegex },
           ];
         }
 

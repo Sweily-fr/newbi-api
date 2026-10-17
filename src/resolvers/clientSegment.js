@@ -9,6 +9,7 @@ import {
 } from "../middlewares/rbac.js";
 import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 
 /**
  * Escape special regex characters in a string
@@ -140,6 +141,7 @@ export const clientSegmentResolvers = {
           page = 1,
           limit = 10,
           search,
+          searchExact = false,
         },
         context,
       ) => {
@@ -162,10 +164,10 @@ export const clientSegmentResolvers = {
 
         // Add search if provided
         if (search) {
-          const escapedSearch = escapeRegex(search);
+          const searchRegex = buildSearchRegex(search, { exact: searchExact });
           const searchConditions = [
-            { name: { $regex: escapedSearch, $options: "i" } },
-            { email: { $regex: escapedSearch, $options: "i" } },
+            { name: searchRegex },
+            { email: searchRegex },
           ];
           if (query.$and) {
             query.$and.push({ $or: searchConditions });

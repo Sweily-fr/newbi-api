@@ -115,6 +115,25 @@ describe("buildBaseQuery", () => {
     ]);
   });
 
+  it("recherche sans accents ni majuscules, exacte avec searchExact", async () => {
+    const accented = await createTx({ description: "Prlv Méta Ads" });
+    const plain = await createTx({ description: "PRLV META ADS" });
+    await createTx({ description: "Canva" });
+
+    const ids = async (filters) =>
+      (await Transaction.find(buildBaseQuery(workspaceId, filters)))
+        .map((t) => t.externalId)
+        .sort();
+
+    expect(await ids({ search: "meta" })).toEqual(
+      [accented.externalId, plain.externalId].sort(),
+    );
+    expect(await ids({ search: "Méta", searchExact: true })).toEqual([
+      accented.externalId,
+    ]);
+    expect(await ids({ search: "meta", searchExact: true })).toEqual([]);
+  });
+
   it("filtre source MANUAL/BANK et catégorie", async () => {
     const manual = await createTx({ provider: "manual" });
     const bank = await createTx({ expenseCategory: "MEALS" });

@@ -7,7 +7,7 @@
 // concurrentes convergent au lieu de s'écraser.
 import mongoose from "mongoose";
 import { Board, Column, Task } from "../models/kanban.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -84,9 +84,7 @@ async function loadBoardsAndColumns(tasks, workspaceId) {
   ]);
   return {
     boardsById: Object.fromEntries(boards.map((b) => [b._id.toString(), b])),
-    columnsById: Object.fromEntries(
-      columns.map((c) => [c._id.toString(), c]),
-    ),
+    columnsById: Object.fromEntries(columns.map((c) => [c._id.toString(), c])),
   };
 }
 
@@ -172,7 +170,8 @@ export async function searchLinkableTasks({
     query._id = { $ne: excludeTaskId };
   }
   if (trimmed) {
-    query.title = { $regex: escapeRegex(trimmed, 100), $options: "i" };
+    // Sans accents ni majuscules, saisie bornée à 100 caractères
+    query.title = buildSearchRegex(trimmed.slice(0, 100));
   }
   if (hasColumn) {
     query.columnId = String(columnId);

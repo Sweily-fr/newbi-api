@@ -1,6 +1,6 @@
 import logger from "../utils/logger.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegExp } from "../utils/searchRegex.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
 import {
   loadWorkspaceInvoice,
@@ -414,7 +414,7 @@ const deliveryNoteResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(escapeRegex(search), "i");
+          const searchRegex = buildSearchRegExp(search);
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
