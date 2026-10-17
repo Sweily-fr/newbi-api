@@ -136,6 +136,80 @@ export function deriveVatRate({ amountHT, amountTVA, amountTTC } = {}) {
   );
 }
 
+const isLegalVatRate = (rate) => LEGAL_VAT_RATES.includes(rate);
+
+// Taux qui redonne la TVA au centime près (en centimes entiers)
+const rateMatchesAmounts = (rate, ht, tva) =>
+  Math.abs(Math.round(Math.abs(ht) * rate) - Math.round(Math.abs(tva) * 100)) <=
+  1;
+
+/**
+ * Complète des montants de TVA partiels (lecture OCR, saisie) de façon
+ * cohérente : HT + TVA = TTC, et un taux qui redonne la TVA. null = inconnu
+ * (0 est une valeur connue). Le TTC prime, c'est le débit :
+ * - TVA connue : HT = TTC - TVA ; HT connu : TVA = TTC - HT ;
+ * - HT et TVA connus mais incohérents avec le TTC : la lecture qui donne un
+ *   taux légal est gardée, la TVA à défaut ;
+ * - seul le taux connu (fromRate) : HT = TTC / (1 + taux), TVA = TTC - HT ;
+ * - rien de connu (fillMissingVat) : sans TVA, HT = TTC et 0 %.
+ * Le taux fourni n'est gardé que s'il redonne la TVA (les moteurs OCR en
+ * fabriquent : 5,5 % arrondi à 6, 0 % par défaut), et un taux légal qui la
+ * redonne aussi lui est préféré (20,05 % devient 20 %). Sinon il est déduit
+ * des montants (deriveVatRate).
+ */
+export function completeVatAmounts(
+  { amountHT, amountTVA, amountTTC, vatRate } = {},
+  { fillMissingVat = false, fromRate = true } = {},
+) {
+  let ht = toNumber(amountHT);
+  let tva = toNumber(amountTVA);
+  let ttc = toNumber(amountTTC);
+  let rate = toNumber(vatRate);
+
+  if (ttc === null && ht !== null && tva !== null) ttc = round2(ht + tva);
+  if (ttc !== null && ttc > 0) {
+    // Lecture plus grande que le TTC : impossible, donc inconnue
+    if (tva !== null && tva > ttc) tva = null;
+    if (ht !== null && ht > ttc) ht = null;
+    if (ht !== null && tva !== null) {
+      if (Math.abs(round2(ht + tva) - ttc) > 0.01) {
+        const tvaFromHT = round2(ttc - ht);
+        const htFromTVA = round2(ttc - tva);
+        const legalFromHT = isLegalVatRate(
+          deriveVatRate({ amountHT: ht, amountTVA: tvaFromHT }),
+        );
+        const legalFromTVA = isLegalVatRate(
+          deriveVatRate({ amountHT: htFromTVA, amountTVA: tva }),
+        );
+        if (legalFromHT && !legalFromTVA) tva = tvaFromHT;
+        else ht = htFromTVA;
+      }
+    } else if (tva !== null) {
+      ht = round2(ttc - tva);
+    } else if (ht !== null) {
+      tva = round2(ttc - ht);
+    } else if (fromRate && rate !== null) {
+      ht = round2(ttc / (1 + rate / 100));
+      tva = round2(ttc - ht);
+    } else if (fillMissingVat) {
+      ht = ttc;
+      tva = 0;
+    }
+  }
+
+  if (ht !== null && tva !== null) {
+    const derived = deriveVatRate({ amountHT: ht, amountTVA: tva });
+    const matches =
+      rate !== null &&
+      (tva === 0 ? rate === 0 : ht !== 0 && rateMatchesAmounts(rate, ht, tva));
+    const keep =
+      matches &&
+      (rate === 0 || isLegalVatRate(rate) || !isLegalVatRate(derived));
+    rate = keep ? rate : derived;
+  }
+  return { amountHT: ht, amountTVA: tva, amountTTC: ttc, vatRate: rate };
+}
+
 /** Ventilation ramenée dans une autre devise (taux de change ou prorata). */
 export function scaleVatBreakdown(lines, ratio) {
   if (!Number.isFinite(ratio) || ratio <= 0) return [];

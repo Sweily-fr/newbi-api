@@ -8,6 +8,7 @@ import {
   applyVatBreakdown,
   scalarVatEditBreaksBreakdown,
   deriveVatRate,
+  completeVatAmounts,
 } from "../../src/utils/purchaseInvoiceVat.js";
 
 // Ticket de restaurant : plats à 10 %, boissons alcoolisées à 20 %
@@ -268,5 +269,133 @@ describe("deriveVatRate", () => {
 
   it("TVA connue sans aucune base : 20 % en dernier recours", () => {
     expect(deriveVatRate({ amountTVA: 5 })).toBe(20);
+  });
+});
+
+describe("completeVatAmounts", () => {
+  const fill = { fillMissingVat: true };
+
+  it("TTC seul : sans TVA (HT = TTC, 0 %) seulement si demandé", () => {
+    expect(completeVatAmounts({ amountTTC: 10 }, fill)).toEqual({
+      amountHT: 10,
+      amountTVA: 0,
+      amountTTC: 10,
+      vatRate: 0,
+    });
+    expect(completeVatAmounts({ amountTTC: 10 })).toEqual({
+      amountHT: null,
+      amountTVA: null,
+      amountTTC: 10,
+      vatRate: null,
+    });
+  });
+
+  it("TTC et TVA : HT = TTC - TVA, taux légal", () => {
+    expect(
+      completeVatAmounts({ amountTTC: 10.59, amountTVA: 1.76 }),
+    ).toMatchObject({ amountHT: 8.83, amountTVA: 1.76, vatRate: 20 });
+  });
+
+  it("TTC et HT, TVA non lue : TVA = TTC - HT (pas 0 %)", () => {
+    expect(
+      completeVatAmounts({ amountTTC: 120, amountHT: 100 }, fill),
+    ).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+    // TVA lue à 0 alors que TTC > HT : la lecture du HT donne un taux légal
+    expect(
+      completeVatAmounts({ amountTTC: 120, amountHT: 100, amountTVA: 0 }, fill),
+    ).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+  });
+
+  it("HT et TVA incohérents avec le TTC : la lecture au taux légal est gardée", () => {
+    // HT mal lu (90) : la TVA (20) redonne 20 % sur 100
+    expect(
+      completeVatAmounts({ amountTTC: 120, amountHT: 90, amountTVA: 20 }),
+    ).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+  });
+
+  it("TTC et taux seuls : HT = TTC / (1 + taux), sauf fromRate: false", () => {
+    expect(
+      completeVatAmounts({ amountTTC: 120, vatRate: 20 }, fill),
+    ).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+    expect(
+      completeVatAmounts({ amountTTC: 120, vatRate: 20 }, { fromRate: false }),
+    ).toMatchObject({ amountHT: null, amountTVA: null, vatRate: 20 });
+  });
+
+  it("taux fabriqué par l'OCR : remplacé par celui des montants", () => {
+    // Claude arrondit 5,5 à 6, Mistral met 0, le secours garde 20,05
+    expect(
+      completeVatAmounts({
+        amountHT: 100,
+        amountTVA: 5.5,
+        amountTTC: 105.5,
+        vatRate: 6,
+      }).vatRate,
+    ).toBe(5.5);
+    expect(
+      completeVatAmounts({
+        amountHT: 100,
+        amountTVA: 20,
+        amountTTC: 120,
+        vatRate: 0,
+      }).vatRate,
+    ).toBe(20);
+    expect(
+      completeVatAmounts({
+        amountHT: 8.33,
+        amountTVA: 1.67,
+        amountTTC: 10,
+        vatRate: 20.05,
+      }).vatRate,
+    ).toBe(20);
+  });
+
+  it("« TVA 0 € à 20 % » : le taux suit la TVA", () => {
+    expect(
+      completeVatAmounts(
+        { amountHT: null, amountTVA: 0, amountTTC: 120.5, vatRate: 20 },
+        fill,
+      ),
+    ).toEqual({
+      amountHT: 120.5,
+      amountTVA: 0,
+      amountTTC: 120.5,
+      vatRate: 0,
+    });
+  });
+
+  it("taux cohérent gardé : légal, 0 %, ou mixte sans taux légal", () => {
+    expect(
+      completeVatAmounts({
+        amountHT: 100,
+        amountTVA: 10,
+        amountTTC: 110,
+        vatRate: 10,
+      }).vatRate,
+    ).toBe(10);
+    expect(
+      completeVatAmounts({ amountHT: 50, amountTTC: 50, vatRate: 0 }),
+    ).toMatchObject({ amountTVA: 0, vatRate: 0 });
+    expect(
+      completeVatAmounts({
+        amountHT: 100,
+        amountTVA: 12.34,
+        amountTTC: 112.34,
+        vatRate: 12.34,
+      }).vatRate,
+    ).toBe(12.34);
+  });
+
+  it("HT et TVA sans TTC : TTC = HT + TVA", () => {
+    expect(completeVatAmounts({ amountHT: 100, amountTVA: 20 })).toMatchObject({
+      amountTTC: 120,
+      vatRate: 20,
+    });
+  });
+
+  it("lecture plus grande que le TTC : ignorée", () => {
+    expect(
+      completeVatAmounts({ amountTTC: 10, amountTVA: 15 }, fill),
+    ).toMatchObject({ amountHT: 10, amountTVA: 0, vatRate: 0 });
   });
 });
