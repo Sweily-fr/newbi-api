@@ -4,7 +4,7 @@ import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 
 // Taux aligné sur la TVA avant validation, quel que soit le chemin
 // d'enregistrement (justificatif, formulaire, app mobile, imports).
-const validated = async (amounts) => {
+const validated = async (amounts, { existing = false } = {}) => {
   const invoice = new PurchaseInvoice({
     supplierName: "Fournisseur",
     issueDate: new Date("2026-10-17"),
@@ -13,6 +13,8 @@ const validated = async (amounts) => {
     createdBy: new mongoose.Types.ObjectId(),
     ...amounts,
   });
+  // Facture déjà enregistrée, réenregistrée (rapprochement, synchronisation)
+  if (existing) invoice.isNew = false;
   await invoice.validate();
   return invoice;
 };
@@ -83,5 +85,20 @@ describe("PurchaseInvoice : taux aligné sur la TVA", () => {
       amountTTC: 120,
     });
     expect(credit.vatRate).toBe(20);
+  });
+
+  it("facture existante réenregistrée : taux du client gardé tel quel", async () => {
+    // « TVA 0 € à 20 % » laissée par le client (ex. autoliquidation notée à
+    // 20 %) : ni un rapprochement ni une synchronisation n'y touchent
+    const kept = await validated(
+      { amountHT: 100, amountTVA: 0, vatRate: 20, amountTTC: 100 },
+      { existing: true },
+    );
+    expect(kept.vatRate).toBe(20);
+    const keptZero = await validated(
+      { amountHT: 100, amountTVA: 20, vatRate: 0, amountTTC: 120 },
+      { existing: true },
+    );
+    expect(keptZero.vatRate).toBe(0);
   });
 });

@@ -327,13 +327,16 @@ purchaseInvoiceSchema.index(
   { sparse: true },
 );
 
-// Taux cohérent avec la TVA, quel que soit le chemin d'enregistrement
+// Taux cohérent avec la TVA à la création, quel que soit le chemin
 // (justificatif, formulaire, app mobile, imports, facture électronique) :
 // une TVA nulle est à 0 % (plus de « TVA 0 € à 20 % » laissées par le taux
-// par défaut), une TVA positive sans taux prend celui des montants. Un détail
-// par taux (au moins deux lignes) porte son propre résumé ; un avoir (TVA
-// négative) n'est pas touché.
+// par défaut), une TVA positive sans taux prend celui des montants. Une
+// facture existante n'est jamais réalignée : réenregistrée par un
+// rapprochement, une synchronisation ou une tâche automatique, elle garde le
+// taux choisi par le client. Un détail par taux (au moins deux lignes) porte
+// son propre résumé ; un avoir (TVA négative) n'est pas touché.
 purchaseInvoiceSchema.pre("validate", function alignVatRateWithAmount() {
+  if (!this.isNew) return;
   if ((this.vatBreakdown?.length || 0) >= 2) return;
   const tva = Number(this.amountTVA) || 0;
   if (tva === 0) {
