@@ -25,7 +25,7 @@ import {
   getOrganizationInfo,
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex, buildSearchRegExp } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
   inputOrStored,
@@ -556,7 +556,7 @@ const invoiceResolvers = {
         }
 
         if (search) {
-          const searchRegex = new RegExp(escapeRegex(search), "i");
+          const searchRegex = buildSearchRegExp(search);
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },
@@ -953,10 +953,7 @@ const invoiceResolvers = {
 
         // Ajouter le filtre de recherche si fourni
         if (search && search.trim() !== "") {
-          matchFilter.situationReference = {
-            $regex: escapeRegex(search.trim()),
-            $options: "i",
-          };
+          matchFilter.situationReference = buildSearchRegex(search);
         }
 
         // Agréger les références uniques avec la première facture pour calculer le contrat

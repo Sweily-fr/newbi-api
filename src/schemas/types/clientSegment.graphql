@@ -82,7 +82,15 @@ input UpdateClientSegmentInput {
 extend type Query {
   clientSegments(workspaceId: String!): [ClientSegment!]!
   clientSegment(workspaceId: String!, id: ID!): ClientSegment!
-  clientsInSegment(workspaceId: String!, segmentId: ID!, page: Int, limit: Int, search: String): ClientsResult!
+  clientsInSegment(
+    workspaceId: String!
+    segmentId: ID!
+    page: Int
+    limit: Int
+    search: String
+    # Majuscules et accents respectés (sinon « meta » trouve « Méta »)
+    searchExact: Boolean
+  ): ClientsResult!
 }
 
 extend type Mutation {

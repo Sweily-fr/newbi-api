@@ -553,6 +553,8 @@ enum TransactionSourceFilter {
 
 input TransactionPageFiltersInput {
   search: String
+  # Majuscules et accents respectés (sinon « meta » trouve « Méta »)
+  searchExact: Boolean
   accountId: String
   source: TransactionSourceFilter
   category: String

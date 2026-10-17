@@ -5,6 +5,7 @@ import {
   withoutWorkspaceIdentifiers,
 } from "../utils/supplierResolution.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 import { ocrMetadataFromOcrData } from "../utils/purchaseInvoiceOcrMetadata.js";
 import mongoose from "mongoose";
 import cloudflareService from "../services/cloudflareService.js";
@@ -153,6 +154,7 @@ const purchaseInvoiceResolvers = {
         page = 1,
         limit = 20,
         search,
+        searchExact = false,
         status,
         statuses,
         category,
@@ -220,11 +222,11 @@ const purchaseInvoiceResolvers = {
       }
 
       if (search) {
-        // Saisie échappée : « ( » ou « + » faisaient planter la recherche
-        const safeSearch = escapeRegex(search);
+        // Saisie échappée, sans accents ni majuscules sauf searchExact
+        const searchRegex = buildSearchRegex(search, { exact: searchExact });
         query.$or = [
-          { supplierName: { $regex: safeSearch, $options: "i" } },
-          { invoiceNumber: { $regex: safeSearch, $options: "i" } },
+          { supplierName: searchRegex },
+          { invoiceNumber: searchRegex },
         ];
         const numSearch = parseFloat(search);
         if (!isNaN(numSearch)) {
