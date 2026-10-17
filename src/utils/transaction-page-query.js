@@ -1,4 +1,5 @@
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
+import { buildSearchRegex } from "./searchRegex.js";
 /**
  * Construction des requêtes Mongo de la liste paginée de transactions
  * (query GraphQL transactionsPage). Fonctions pures, testées unitairement.
@@ -12,8 +13,6 @@ import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
  *   amount < 0) sans justificatif ni facture liée
  * - LAST_MONTH : transactions du dernier mois glissant
  */
-
-const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // "1 200,50" → 1200.5 ; null si la saisie n'est pas un montant
 const parseAmountSearch = (term) => {
@@ -96,7 +95,10 @@ export function buildBaseQuery(workspaceId, filters = {}) {
 
   const term = (filters.search || "").trim();
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    // Sans accents ni majuscules, sauf bouton « Aa » coché (searchExact)
+    const regex = buildSearchRegex(term, {
+      exact: Boolean(filters.searchExact),
+    });
     const searchOr = [
       { description: regex },
       { reference: regex },

@@ -1,5 +1,5 @@
 import logger from "../utils/logger.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 /**
  * Resolvers GraphQL pour les factures importées
  */
@@ -824,9 +824,7 @@ const importedInvoiceResolvers = {
           query.category = filters.category;
         }
         if (filters.vendorName) {
-          query["vendor.name"] = {
-            $regex: new RegExp(escapeRegex(filters.vendorName), "i"),
-          };
+          query["vendor.name"] = buildSearchRegex(filters.vendorName);
         }
         if (filters.dateFrom || filters.dateTo) {
           query.invoiceDate = {};

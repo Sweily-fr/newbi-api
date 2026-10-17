@@ -496,6 +496,9 @@ extend type Query {
     page: Int
     limit: Int
     search: String
+    # true : recherche exacte (majuscules et accents respectés) ; par défaut
+    # « meta » trouve aussi « Méta »
+    searchExact: Boolean
     status: PurchaseInvoiceStatus
     # Plusieurs statuts à la fois (combiné avec status s'il est aussi fourni)
     statuses: [PurchaseInvoiceStatus!]

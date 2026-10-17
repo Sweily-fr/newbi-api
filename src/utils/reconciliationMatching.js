@@ -16,6 +16,7 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "./transactionLinks.js";
 import { invoiceReferenceMatches } from "./invoiceReferenceMatch.js";
+import { buildSearchRegex } from "./searchRegex.js";
 import {
   earliestTransactionDateForInvoice,
   latestInvoiceIssueDateForTransaction,
@@ -247,7 +248,7 @@ export async function findTransactionsForInvoice(invoice, workspaceId, search) {
   // à ±1 % si la saisie est numérique. Permet de retrouver une transaction
   // hors du top scoré ou hors fenêtre de dates.
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const regex = buildSearchRegex(term);
     const or = [{ description: regex }, { reference: regex }];
     const searchAmount = parseAmountSearch(term);
     if (searchAmount !== null) {
@@ -329,7 +330,7 @@ export async function findInvoicesForTransaction(
   // Recherche serveur : numéro de facture, nom du client, et montant TTC à
   // ±1 % si la saisie est numérique.
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const regex = buildSearchRegex(term);
     const or = [
       { number: regex },
       { "client.name": regex },
@@ -496,7 +497,7 @@ export async function findTransactionsForPurchaseInvoice(
 
   let transactions;
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const regex = buildSearchRegex(term);
     const or = [{ description: regex }, { reference: regex }];
     const searchAmount = parseAmountSearch(term);
     if (searchAmount !== null) {
@@ -658,7 +659,7 @@ export async function findPurchaseInvoicesForTransaction(
   const clauses = [];
 
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const regex = buildSearchRegex(term);
     const or = [{ supplierName: regex }, { invoiceNumber: regex }];
     const searchAmount = parseAmountSearch(term);
     if (searchAmount !== null) {
@@ -765,7 +766,7 @@ export async function findImportedInvoicesForTransaction(
   }
 
   if (term) {
-    const regex = { $regex: escapeRegex(term), $options: "i" };
+    const regex = buildSearchRegex(term);
     const or = [
       { originalInvoiceNumber: regex },
       { "client.name": regex },

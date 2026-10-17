@@ -7,7 +7,14 @@ extend type Query {
   client(workspaceId: String, id: ID!): Client!
   
   # Get all clients for the current user's company with pagination
-  clients(workspaceId: String, page: Int, limit: Int, search: String): ClientsResult!
+  # searchExact : majuscules et accents respectés (sinon « meta » trouve « Méta »)
+  clients(
+    workspaceId: String
+    page: Int
+    limit: Int
+    search: String
+    searchExact: Boolean
+  ): ClientsResult!
 }
 
 # Type pour les résultats paginés des clients

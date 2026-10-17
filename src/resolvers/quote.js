@@ -1,5 +1,5 @@
 import logger from "../utils/logger.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegExp } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
   inputOrStored,
@@ -316,7 +316,7 @@ const quoteResolvers = {
         if (status) query.status = status;
 
         if (search) {
-          const searchRegex = new RegExp(escapeRegex(search), "i");
+          const searchRegex = buildSearchRegExp(search);
           query.$or = [
             { number: searchRegex },
             { "client.name": searchRegex },

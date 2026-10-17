@@ -1,5 +1,5 @@
 import logger from "../utils/logger.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
   inputOrStored,
@@ -159,11 +159,11 @@ const creditNoteResolvers = {
 
       // Recherche textuelle
       if (search) {
-        const safeSearch = escapeRegex(search);
+        const searchRegex = buildSearchRegex(search);
         query.$or = [
-          { number: { $regex: safeSearch, $options: "i" } },
-          { "client.name": { $regex: safeSearch, $options: "i" } },
-          { reason: { $regex: safeSearch, $options: "i" } },
+          { number: searchRegex },
+          { "client.name": searchRegex },
+          { reason: searchRegex },
         ];
       }
 

@@ -8,7 +8,7 @@ import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import SharedTag, { getDefaultTagColor } from "../models/SharedTag.js";
 import cloudflareService from "../services/cloudflareService.js";
-import { escapeRegex } from "../utils/escapeRegex.js";
+import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   requireAction,
   requireRead,
@@ -255,12 +255,14 @@ const sharedDocumentResolvers = {
               query.tags = { $in: filter.tags };
             }
             if (filter.search) {
-              // Saisie échappée : « ( » ou « + » faisaient planter la recherche
-              const safeSearch = escapeRegex(filter.search);
+              // Saisie échappée, sans accents ni majuscules sauf searchExact
+              const searchRegex = buildSearchRegex(filter.search, {
+                exact: Boolean(filter.searchExact),
+              });
               query.$or = [
-                { name: { $regex: safeSearch, $options: "i" } },
-                { description: { $regex: safeSearch, $options: "i" } },
-                { tags: { $regex: safeSearch, $options: "i" } },
+                { name: searchRegex },
+                { description: searchRegex },
+                { tags: searchRegex },
               ];
             }
 
