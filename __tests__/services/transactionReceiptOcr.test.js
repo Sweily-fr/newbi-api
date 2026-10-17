@@ -411,7 +411,13 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(invoice.currency).toBe("EUR");
     expect(invoice.ocrMetadata.amountTTC).toBe(3577.78);
     expect(invoice.ocrMetadata.currency).toBe("USD");
-    expect(invoice.vatRate).toBe(8.25);
+    // Lecture regex incohérente : HT lu (3 847) supérieur au total, donc
+    // ignoré ; HT = TTC - TVA, et 8,25 % ne redonne pas la TVA lue sur ce
+    // HT : taux déduit des montants. Le tout ramené au débit, HT + TVA = TTC
+    // (avant : HT 3 731,24 au-dessus du débit, TVA 0 € à 8,25 %).
+    expect(invoice.amountHT).toBe(3168.69);
+    expect(invoice.amountTVA).toBe(301.43);
+    expect(invoice.vatRate).toBe(9.51);
     expect(invoice.ocrMetadata.provider).toBe("tesseract");
     expect(invoice.ocrMetadata.extractionQuality).toBe("partial");
     expect(invoice.files[0].ocrProcessed).toBe(true);
@@ -1280,6 +1286,29 @@ describe("confirmation : taux de TVA et HT vidés", () => {
     const saved = await PurchaseInvoice.findById(invoice._id).lean();
     expect(saved.vatRate).toBe(5.5);
   });
+
+  it("proposition enregistrée avant le calcul du taux (HT 0, TVA 0, 20 %) : HT = TTC et 0 %", async () => {
+    const analyzed = await analyze();
+    // Ancienne proposition : montants non lus enregistrés à 0, taux à 20 %
+    await Transaction.updateOne(
+      { _id: analyzed.params.transactionId },
+      {
+        $set: {
+          "receiptFiles.0.ocrProposal.values.amountHT": 0,
+          "receiptFiles.0.ocrProposal.values.amountTVA": 0,
+          "receiptFiles.0.ocrProposal.values.vatRate": 20,
+        },
+      },
+    );
+    const { invoice } = await create(analyzed, {});
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved).toMatchObject({
+      amountTTC: 120.5,
+      amountHT: 120.5,
+      amountTVA: 0,
+      vatRate: 0,
+    });
+  });
 });
 
 describe("transactionReceiptOcrService.isExpenseTransaction", () => {
@@ -1499,17 +1528,17 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
     });
   });
 
-  it("taux lu à 0 % : gardé tel quel", () => {
+  it("taux lu à 0 % qui redonne la TVA : gardé", () => {
     const r = resolveReceiptAmounts({
       transaction: tx,
       financial: {
         transaction_data: { amount: 50, amount_ht: 50, tax_rate: 0 },
       },
     });
-    expect(r.vatRate).toBe(0);
+    expect(r).toMatchObject({ amountHT: 50, amountTVA: 0, vatRate: 0 });
   });
 
-  it("devise étrangère, HT non lu : débit converti moins la TVA au prorata", () => {
+  it("devise étrangère, HT non lu : HT = TTC - TVA au prorata du débit, TVA = débit - HT", () => {
     const r = resolveReceiptAmounts({
       transaction: { amount: -100, currency: "EUR" },
       financial: {
@@ -1523,6 +1552,83 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
       vatRate: 20,
       currency: "EUR",
     });
+  });
+
+  // Les moteurs OCR écrivent 0 pour un montant non lu et fabriquent des
+  // taux : la règle commune (completeVatAmounts) les recale sur les montants.
+  it("TTC et HT lus, TVA non lue (0 chez Claude) : TVA = TTC - HT, 20 %", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: {
+          amount: 120,
+          amount_ht: 100,
+          tax_amount: 0,
+          tax_rate: null,
+        },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 120,
+      amountHT: 100,
+      amountTVA: 20,
+      vatRate: 20,
+    });
+  });
+
+  it("taux lu sans TVA ni HT : HT = TTC / 1,2, et non « TVA 0 € à 20 % »", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: { amount: 120, tax_amount: 0, tax_rate: 20 },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 120,
+      amountHT: 100,
+      amountTVA: 20,
+      vatRate: 20,
+    });
+  });
+
+  it("taux 0 fabriqué (Mistral, taux absent) avec une TVA lue : taux déduit", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: { amount: 120, tax_amount: 20, tax_rate: 0 },
+      },
+    });
+    expect(r).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+  });
+
+  it("taux arrondi à l'entier (Claude : 6 pour 5,5) : 5,5 %", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: {
+          amount: 105.5,
+          amount_ht: 100,
+          tax_amount: 5.5,
+          tax_rate: 6,
+        },
+      },
+    });
+    expect(r.vatRate).toBe(5.5);
+  });
+
+  it("quotient brut du secours regex (20,05 pour 8,33 / 1,67) : 20 %", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: {
+          amount: 10,
+          amount_ht: 8.33,
+          tax_amount: 1.67,
+          tax_rate: 20.05,
+        },
+      },
+    });
+    expect(r).toMatchObject({ amountHT: 8.33, amountTVA: 1.67, vatRate: 20 });
   });
 });
 
@@ -1667,5 +1773,93 @@ describe("analyzePurchaseInvoiceFiles : fournisseur de la proposition", () => {
         { rate: 5.5, baseHT: 20, amountTVA: 1.1 },
       ],
     });
+  });
+});
+
+/**
+ * Relance de l'OCR d'une facture existante (dialogue « Relancer l'analyse »,
+ * script reocr) : les valeurs relues peuvent remplacer celles de la facture,
+ * rien n'y est donc fabriqué (ni HT = TTC, ni HT déduit du seul taux).
+ */
+describe("analyzePurchaseInvoiceFiles : montants relus sans rien fabriquer", () => {
+  const reanalyze = () =>
+    transactionReceiptOcrService.analyzePurchaseInvoiceFiles({
+      files: [
+        {
+          fileId: "f1",
+          filename: "ticket.pdf",
+          receiptFile: {
+            url: "https://receipts.newbi.fr/ticket.pdf",
+            filename: "ticket.pdf",
+            mimetype: "application/pdf",
+          },
+          fileBuffer: Buffer.from("fake-pdf"),
+        },
+      ],
+      workspaceId,
+      targetCurrency: "EUR",
+    });
+
+  it("8,33 € de HT et 1,67 € de TVA lus par le secours regex (20,05 %) : 20 %", async () => {
+    // Moteurs IA indisponibles : champs de Tesseract + regex, taux = quotient brut
+    processFromBase64.mockRejectedValue(new Error("Crédit Anthropic épuisé"));
+    processDocumentFromUrl.mockResolvedValue({
+      success: true,
+      provider: "tesseract",
+      extractionQuality: "partial",
+      extractedText: "Parking Indigo ... Total TTC 10,00",
+      transaction_data: {
+        vendor_name: "Indigo",
+        document_number: "IND-2026-0042",
+        amount: 10,
+        amount_ht: 8.33,
+        tax_amount: 1.67,
+        tax_rate: 20.05,
+        currency: "EUR",
+      },
+      extracted_fields: {},
+    });
+    analyzeDocument.mockResolvedValue({ success: false });
+
+    const result = await reanalyze();
+
+    expect(result.files[0].proposal).toMatchObject({
+      amountHT: 8.33,
+      amountTVA: 1.67,
+      vatRate: 20,
+    });
+    expect(result.combined).toMatchObject({
+      amountTTC: 10,
+      amountHT: 8.33,
+      amountTVA: 1.67,
+      vatRate: 20,
+    });
+  });
+
+  it("TTC seul lu : HT, TVA et taux restent null (« Non lu »)", async () => {
+    mockClaudeSuccess();
+    // Claude écrit 0 pour une TVA non lue
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        document_number: "SFR-2026-0099",
+        vendor_name: "SFR Business",
+        amount: 45.99,
+        tax_amount: 0,
+        currency: "EUR",
+      },
+      extracted_fields: { totals: { total_ttc: 45.99 } },
+      document_analysis: { confidence: 0.9 },
+    });
+
+    const result = await reanalyze();
+
+    const nothingMade = {
+      amountTTC: 45.99,
+      amountHT: null,
+      amountTVA: null,
+      vatRate: null,
+    };
+    expect(result.files[0].proposal).toMatchObject(nothingMade);
+    expect(result.combined).toMatchObject(nothingMade);
   });
 });

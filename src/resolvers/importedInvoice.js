@@ -41,7 +41,10 @@ import {
   clientDisplayName,
   suggestClientForImportedInvoice,
 } from "../utils/clientMatching.js";
-import { deriveVatRate } from "../utils/purchaseInvoiceVat.js";
+import {
+  completeVatAmounts,
+  deriveVatRate,
+} from "../utils/purchaseInvoiceVat.js";
 import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
@@ -742,6 +745,19 @@ async function convertSingleImportedInvoice(
     confidenceScore: importedInvoice.ocrData?.confidence || null,
   };
 
+  // HT ou TVA non lus (enregistrés à 0 sur la facture importée) : complétés
+  // par la règle commune, le TTC primant (HT = TTC - TVA, TVA = TTC - HT,
+  // rien de lu : HT = TTC et 0 %). Pas de taux sur une facture importée : il
+  // est déduit des montants.
+  const vat = completeVatAmounts(
+    {
+      amountHT: importedInvoice.totalHT || null,
+      amountTVA: importedInvoice.totalVAT || null,
+      amountTTC: importedInvoice.totalTTC,
+    },
+    { fillMissingVat: true },
+  );
+
   const purchaseInvoice = await PurchaseInvoice.create({
     supplierName:
       supplier?.name || importedInvoice.vendor?.name || "Fournisseur inconnu",
@@ -751,15 +767,11 @@ async function convertSingleImportedInvoice(
       ? new Date(importedInvoice.invoiceDate)
       : new Date(),
     dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
-    amountHT: importedInvoice.totalHT || 0,
-    amountTVA: importedInvoice.totalVAT || 0,
-    // Pas de taux sur une facture importée : déduit des montants, plutôt que
-    // le défaut du modèle (20 %, même sans TVA)
-    vatRate: deriveVatRate({
-      amountHT: importedInvoice.totalHT,
-      amountTVA: importedInvoice.totalVAT,
-      amountTTC: importedInvoice.totalTTC,
-    }),
+    amountHT: vat.amountHT ?? 0,
+    amountTVA: vat.amountTVA ?? 0,
+    // TTC à 0 (rien à compléter) : taux déduit quand même, plutôt que le
+    // défaut du modèle (20 %, même sans TVA)
+    vatRate: vat.vatRate ?? deriveVatRate(vat),
     amountTTC: importedInvoice.totalTTC,
     currency: importedInvoice.currency || "EUR",
     status: "TO_PROCESS",

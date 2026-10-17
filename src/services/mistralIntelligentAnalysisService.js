@@ -252,7 +252,7 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
         currency: analysis.transaction_data?.currency || "EUR",
         tax_amount:
           this.parseAmount(analysis.transaction_data?.tax_amount) || 0,
-        tax_rate: this.parseAmount(analysis.transaction_data?.tax_rate) || 0,
+        tax_rate: this.parseRate(analysis.transaction_data?.tax_rate),
         transaction_date: this.validateDate(
           analysis.transaction_data?.transaction_date,
         ),
@@ -314,7 +314,9 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
         tax_details: Array.isArray(analysis.extracted_fields?.tax_details)
           ? analysis.extracted_fields.tax_details.map((tax) => ({
               type: tax.type || "TVA",
-              rate: this.parseAmount(tax.rate) || 0,
+              // Sans taux, la ligne est écartée du détail par taux
+              // (normalizeVatBreakdown) au lieu d'une ligne à 0 % avec TVA
+              rate: this.parseRate(tax.rate),
               base_amount: this.parseAmount(tax.base_amount) || null,
               tax_amount: this.parseAmount(tax.tax_amount) || 0,
             }))
@@ -371,6 +373,18 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
       return isNaN(parsed) ? 0 : parsed;
     }
     return 0;
+  }
+
+  /**
+   * Taux lu sur le document, null s'il est absent ou illisible (0 % reste un
+   * taux lu) : la règle commune le déduit des montants en aval
+   * (completeVatAmounts, utils/purchaseInvoiceVat.js), plutôt qu'un 0 %
+   * fabriqué
+   */
+  parseRate(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    if (typeof value !== "string" || !/\d/.test(value)) return null;
+    return this.parseAmount(value);
   }
 
   /**
@@ -476,7 +490,8 @@ STRUCTURE JSON ATTENDUE (réponds UNIQUEMENT avec ce JSON, rien d'autre):
         amount: 0,
         currency: "EUR",
         tax_amount: 0,
-        tax_rate: 0,
+        // Rien de lu : taux inconnu, pas 0 %
+        tax_rate: null,
         transaction_date: null,
         due_date: null,
         payment_date: null,

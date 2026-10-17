@@ -17,7 +17,10 @@
  *     sinon 0 ;
  *   - HT : TTC - TVA quand la TVA est connue et ne dépasse pas le TTC, 0
  *     sinon ;
- *   - taux : TVA / HT quand le HT est connu (> 0), sinon 20 % (défaut) ;
+ *   - taux : déduit des montants par la règle commune (deriveVatRate,
+ *     src/utils/purchaseInvoiceVat.js) : le taux légal qui redonne la TVA au
+ *     centime (8,33 € et 1,67 € : 20 %, pas 20,05 %), 0 % sans TVA (et non
+ *     « TVA 0 € à 20 % ») ;
  *   - TTC : HT + TVA quand les deux sont connus, sinon laissé tel quel et
  *     signalé (⚠️), à corriger dans l'appli.
  *
@@ -41,6 +44,7 @@
 
 import mongoose from "mongoose";
 import PurchaseInvoice from "../src/models/PurchaseInvoice.js";
+import { deriveVatRate } from "../src/utils/purchaseInvoiceVat.js";
 import {
   applyEntry,
   connectFromEnv,
@@ -92,7 +96,11 @@ export function computeAmountFixes(invoice) {
     fixes.amountHT = ht;
   }
   if (value("vatRate") === null) {
-    fixes.vatRate = ht > 0 ? round2((tva / ht) * 100) : 20;
+    fixes.vatRate = deriveVatRate({
+      amountHT: ht,
+      amountTVA: tva,
+      amountTTC: ttc,
+    });
   }
   if (ttc === null) {
     // HT et TVA enregistrés tous les deux : le TTC s'en déduit. Sinon,

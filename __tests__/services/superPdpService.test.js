@@ -173,3 +173,101 @@ describe("superPdpService._computeVatGroups", () => {
     expect(g.taxAmount).toBeCloseTo(20, 2);
   });
 });
+
+describe("superPdpService.transformReceivedInvoiceToPurchaseInvoice : taux de TVA", () => {
+  // Facture reçue au format EN16931 (détail SuperPDP)
+  const received = ({ breakDown, ht, tva, ttc }) => ({
+    id: "spdp-42",
+    en_invoice: {
+      number: "F-2026-0042",
+      issue_date: "2026-10-01",
+      currency_code: "EUR",
+      seller: { name: "Tricatel" },
+      totals: {
+        total_without_vat: ht,
+        total_vat_amount: tva,
+        total_with_vat: ttc,
+      },
+      vat_break_down: breakDown,
+    },
+  });
+  const transform = (invoice) =>
+    superPdpService.transformReceivedInvoiceToPurchaseInvoice(
+      invoice,
+      "workspace",
+      "user",
+    );
+  const line = (code, rate, base, amount) => ({
+    vat_category_code: code,
+    ...(rate === undefined ? {} : { vat_category_rate: rate }),
+    vat_category_taxable_amount: base,
+    vat_category_tax_amount: amount,
+  });
+
+  it("0 % est un taux valide (autoliquidation), plus 20 %", () => {
+    const data = transform(
+      received({
+        breakDown: [line("AE", "0.00", "100.00", "0.00")],
+        ht: "100.00",
+        tva: "0.00",
+        ttc: "100.00",
+      }),
+    );
+    expect(data).toMatchObject({ amountTVA: 0, vatRate: 0 });
+    expect(data.ocrMetadata.vatRate).toBe(0);
+  });
+
+  it("taux de la plus grosse base, détail gardé à plusieurs taux", () => {
+    const data = transform(
+      received({
+        breakDown: [
+          line("S", "20.00", "25.00", "5.00"),
+          line("S", "10.00", "60.00", "6.00"),
+        ],
+        ht: "85.00",
+        tva: "11.00",
+        ttc: "96.00",
+      }),
+    );
+    expect(data.vatRate).toBe(10);
+    expect(data.vatBreakdown).toHaveLength(2);
+  });
+
+  it("taux absent (hors champ, sans BT-119) : déduit des montants, 0 %", () => {
+    const data = transform(
+      received({
+        breakDown: [line("O", undefined, "250.00", "0.00")],
+        ht: "250.00",
+        tva: "0.00",
+        ttc: "250.00",
+      }),
+    );
+    expect(data).toMatchObject({ amountHT: 250, amountTVA: 0, vatRate: 0 });
+  });
+
+  it("taux illisible ou sans ventilation : déduit des montants", () => {
+    expect(
+      transform(
+        received({
+          breakDown: [line("S", "n/a", "100.00", "5.50")],
+          ht: "100.00",
+          tva: "5.50",
+          ttc: "105.50",
+        }),
+      ).vatRate,
+    ).toBe(5.5);
+    expect(
+      transform(
+        received({
+          breakDown: [],
+          ht: "8.33",
+          tva: { value: "1.67" },
+          ttc: "10.00",
+        }),
+      ).vatRate,
+    ).toBe(20);
+    expect(
+      transform(received({ ht: "40.00", tva: "0.00", ttc: "40.00" })).vatRate,
+    ).toBe(0);
+  });
+});

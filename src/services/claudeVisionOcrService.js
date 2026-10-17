@@ -722,11 +722,11 @@ Ne retourne QUE le JSON, rien d'autre.`,
         amount: data.totals?.total_ttc || data.totals?.total_ht || 0,
         amount_ht: data.totals?.total_ht,
         tax_amount: data.totals?.total_vat || 0,
-        tax_rate:
-          data.tax_details?.[0]?.rate ||
-          (data.totals?.total_vat && data.totals?.total_ht
-            ? Math.round((data.totals.total_vat / data.totals.total_ht) * 100)
-            : null),
+        // Taux imprimé (0 % compris), sinon null : plus de quotient TVA / HT
+        // arrondi à l'entier (5,5 % devenait 6 %). La règle commune le
+        // déduit des montants en aval (completeVatAmounts,
+        // utils/purchaseInvoiceVat.js).
+        tax_rate: data.tax_details?.[0]?.rate ?? null,
         currency: data.currency || "EUR",
         category: data.category || "OTHER",
         payment_method: data.payment_details?.method?.toLowerCase() || "card",

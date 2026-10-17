@@ -31,7 +31,7 @@ import {
   mergeVatBreakdowns,
   scalarVatEditBreaksBreakdown,
   applyVatBreakdown,
-  deriveVatRate,
+  completeVatAmounts,
 } from "../utils/purchaseInvoiceVat.js";
 
 /**
@@ -133,27 +133,33 @@ function resolveReceiptAmounts({ transaction, financial }) {
 
   const ocrTTC =
     toPositiveNumber(td.amount) || toPositiveNumber(totals.total_ttc) || null;
+  // Montant non lu : null (inconnu), les moteurs OCR y écrivent 0
   const ocrHT =
-    toPositiveNumber(td.amount_ht) || toPositiveNumber(totals.total_ht) || 0;
+    toPositiveNumber(td.amount_ht) || toPositiveNumber(totals.total_ht) || null;
   const ocrTVA =
-    toPositiveNumber(td.tax_amount) || toPositiveNumber(totals.total_tax) || 0;
+    toPositiveNumber(td.tax_amount) ||
+    toPositiveNumber(totals.total_tax) ||
+    null;
   const ocrCurrency = normalizeCurrency(td.currency);
   const txCurrency = normalizeCurrency(transaction?.currency) || "EUR";
   const txAmount =
     typeof transaction?.amount === "number" ? Math.abs(transaction.amount) : 0;
+  const amountTTC = ocrTTC || txAmount || null;
 
-  // Un taux de 0 % est valide (autoliquidation, franchise...) : ne pas
-  // l'écraser par le défaut. À défaut de taux extrait, on le dérive des
-  // montants (deriveVatRate : sans TVA lue, 0 % et non 20 %).
-  const extractedVatRate = toNonNegativeNumber(td.tax_rate);
-  const vatRate =
-    extractedVatRate !== null
-      ? extractedVatRate
-      : deriveVatRate({
-          amountHT: ocrHT,
-          amountTVA: ocrTVA,
-          amountTTC: ocrTTC || txAmount,
-        });
+  // Montants du document complétés par la règle commune, dans sa devise. Le
+  // taux lu n'est qu'un indice (Claude arrondit 5,5 à 6, Mistral met 0 quand
+  // il est absent, le secours regex garde 20,05) : gardé s'il redonne la TVA,
+  // sinon déduit des montants. Rien de lu : HT = TTC et 0 % (et non « TVA
+  // 0 € à 20 % »).
+  const read = completeVatAmounts(
+    {
+      amountHT: ocrHT,
+      amountTVA: ocrTVA,
+      amountTTC,
+      vatRate: toNonNegativeNumber(td.tax_rate),
+    },
+    { fillMissingVat: true },
+  );
 
   const foreignCurrency =
     Boolean(ocrCurrency) &&
@@ -162,31 +168,23 @@ function resolveReceiptAmounts({ transaction, financial }) {
     txAmount > 0;
 
   const ocrBreakdown = vatBreakdownFromOcr(financial, {
-    expectedTVA: ocrTVA || null,
+    expectedTVA: ocrTVA,
   });
 
   if (foreignCurrency) {
     const ratio = txAmount / ocrTTC;
     const vatBreakdown = scaleVatBreakdown(ocrBreakdown, ratio);
     const summary = summarizeVatBreakdown(vatBreakdown);
-    // HT non lu : débit converti moins la TVA ramenée au prorata
-    const amountHT = summary
-      ? summary.amountHT
-      : ocrHT > 0
-        ? round2(ocrHT * ratio)
-        : round2(Math.max(txAmount - round2(ocrTVA * ratio), 0));
+    // HT ramené au prorata du débit, TVA = débit - HT, même taux
+    const amountHT = summary ? summary.amountHT : round2(read.amountHT * ratio);
     const amountTVA = summary
       ? summary.amountTVA
-      : ocrTVA > 0
-        ? amountHT > 0
-          ? round2(Math.max(txAmount - amountHT, 0))
-          : round2(ocrTVA * ratio)
-        : 0;
+      : round2(Math.max(txAmount - amountHT, 0));
     return {
       amountTTC: txAmount,
       amountHT,
       amountTVA,
-      vatRate: summary ? summary.vatRate : vatRate,
+      vatRate: summary ? summary.vatRate : read.vatRate,
       vatBreakdown,
       currency: txCurrency,
       conversion: { originalAmountTTC: ocrTTC, originalCurrency: ocrCurrency },
@@ -194,18 +192,11 @@ function resolveReceiptAmounts({ transaction, financial }) {
   }
 
   const summary = summarizeVatBreakdown(ocrBreakdown);
-  const amountTTC = ocrTTC || txAmount || null;
   return {
     amountTTC,
-    // HT non lu : TTC - TVA, comme à la relance OCR d'une facture d'achat
-    // (reconcileAmounts), plutôt que 0 €
-    amountHT: summary
-      ? summary.amountHT
-      : ocrHT > 0
-        ? ocrHT
-        : round2(Math.max((amountTTC || 0) - ocrTVA, 0)),
-    amountTVA: summary ? summary.amountTVA : ocrTVA,
-    vatRate: summary ? summary.vatRate : vatRate,
+    amountHT: summary ? summary.amountHT : read.amountHT,
+    amountTVA: summary ? summary.amountTVA : read.amountTVA,
+    vatRate: summary ? summary.vatRate : read.vatRate,
     vatBreakdown: ocrBreakdown,
     currency: ocrCurrency || txCurrency,
     conversion: null,
@@ -584,35 +575,33 @@ async function createPurchaseInvoiceFromProposal({
     throw new Error("Montant TTC manquant sur la facture d'achat à créer");
   }
 
-  // HT ou taux vidés à la confirmation : déduits des montants (TTC - TVA,
-  // deriveVatRate) plutôt que les défauts du modèle, 0 € et 20 %. Un détail
+  // HT manquant (null ou 0) ou taux vidé à la confirmation : complétés par la
+  // règle commune plutôt que les défauts du modèle (0 € et 20 %), ce qui
+  // valide aussi le taux fourni (proposition enregistrée avant ce calcul :
+  // HT 0, TVA 0, 20 %). Tout fourni : valeurs confirmées gardées. Un détail
   // par taux (vatBreakdown, plus bas) reste prioritaire.
-  const amountHT =
-    Number(values.amountHT) > 0
-      ? values.amountHT
-      : round2(
-          Math.max(
-            Number(values.amountTTC) - (Number(values.amountTVA) || 0),
-            0,
-          ),
-        );
-  const vatRate =
-    values.vatRate === null || values.vatRate === undefined
-      ? deriveVatRate({
-          amountHT,
-          amountTVA: values.amountTVA,
-          amountTTC: values.amountTTC,
-        })
-      : values.vatRate;
+  const htMissing = !(Number(values.amountHT) > 0);
+  const vat =
+    htMissing || values.vatRate === null || values.vatRate === undefined
+      ? completeVatAmounts(
+          {
+            amountHT: htMissing ? null : values.amountHT,
+            amountTVA: values.amountTVA,
+            amountTTC: values.amountTTC,
+            vatRate: values.vatRate,
+          },
+          { fillMissingVat: true },
+        )
+      : values;
 
   const invoice = new PurchaseInvoice({
     supplierName: values.supplierName || "Fournisseur inconnu",
     invoiceNumber: values.invoiceNumber || undefined,
     issueDate: values.issueDate || transaction.date || new Date(),
     dueDate: values.dueDate || undefined,
-    amountHT,
-    amountTVA: values.amountTVA,
-    vatRate,
+    amountHT: vat.amountHT,
+    amountTVA: vat.amountTVA,
+    vatRate: vat.vatRate,
     amountTTC: values.amountTTC,
     currency: values.currency,
     // Le débit bancaire a déjà eu lieu : la facture est payée et rapprochée
@@ -1213,15 +1202,6 @@ async function processReceiptsForTransaction({
 }
 
 /**
- * Rend HT / TVA / TTC cohérents entre eux. Le TTC (montant dû) et la TVA
- * (ligne explicite) sont les valeurs les plus fiables d'une facture ; le
- * « HT » lu est souvent un sous-total avant remise, frais ou avoir. Donc :
- *  - TTC et TVA connus → HT = TTC − TVA ;
- *  - TTC et HT connus sans TVA → TVA = TTC − HT ;
- *  - HT et TVA connus sans TTC → TTC = HT + TVA.
- * Le taux explicite est gardé, sinon dérivé de TVA / HT.
- */
-/**
  * Applique la décision de l'utilisateur sur une facture d'achat proposée.
  *
  * - CREATE : crée la facture avec les valeurs confirmées (corrections
@@ -1417,24 +1397,19 @@ async function confirmReceiptInvoiceProposal({
   return { action, invoice };
 }
 
-function reconcileAmounts({ amountHT, amountTVA, amountTTC, vatRate }) {
-  let ht = amountHT;
-  let tva = amountTVA;
-  let ttc = amountTTC;
-  if (ttc !== null && tva !== null && ttc >= tva) {
-    ht = round2(ttc - tva);
-  } else if (ttc !== null && ht !== null && ttc >= ht) {
-    tva = round2(ttc - ht);
-  } else if (ttc === null && ht !== null && tva !== null) {
-    ttc = round2(ht + tva);
-  }
-  const rate =
-    vatRate !== null && vatRate !== undefined
-      ? vatRate
-      : ht && tva !== null
-        ? round2((tva / ht) * 100)
-        : null;
-  return { amountHT: ht, amountTVA: tva, amountTTC: ttc, vatRate: rate };
+/**
+ * Rend HT / TVA / TTC cohérents entre eux à la relance OCR d'une facture
+ * existante (« Relancer l'analyse », script reocr), par la règle commune
+ * (completeVatAmounts) : le TTC prime, HT = TTC - TVA ou TVA = TTC - HT, et
+ * le taux est recalé sur les montants quand HT et TVA sont connus (20,05
+ * devient 20). Rien n'est fabriqué pour ne pas écraser la facture : ce qui
+ * n'est pas lu reste null (« Non lu »), ni HT = TTC ni HT déduit du seul taux.
+ */
+function reconcileAmounts(amounts) {
+  return completeVatAmounts(amounts, {
+    fillMissingVat: false,
+    fromRate: false,
+  });
 }
 
 /**

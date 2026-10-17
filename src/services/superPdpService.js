@@ -1,6 +1,9 @@
 import logger from "../utils/logger.js";
 import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
-import { normalizeVatBreakdown } from "../utils/purchaseInvoiceVat.js";
+import {
+  normalizeVatBreakdown,
+  deriveVatRate,
+} from "../utils/purchaseInvoiceVat.js";
 
 /**
  * Service pour interagir avec l'API SuperPDP
@@ -1361,9 +1364,12 @@ class SuperPdpService {
         ? parseFloat(totals.total_vat_amount.value) || 0
         : parseFloat(totals.total_vat_amount) || 0;
 
-    // Calculer le taux de TVA principal
+    // Calculer le taux de TVA principal. 0 % est un taux valide (franchise,
+    // autoliquidation, intracommunautaire) ; sans ventilation, ou taux absent
+    // (catégorie « hors champ », sans BT-119) ou illisible, il est déduit des
+    // montants plutôt que fixé à 20 % (« TVA 0 € à 20 % »).
     const vatBreakDown = invoice.vat_break_down || [];
-    let mainVatRate = 20;
+    let mainVatRate = null;
     if (vatBreakDown.length > 0) {
       // Prendre le taux du plus gros montant imposable
       const largest = vatBreakDown.reduce((a, b) =>
@@ -1372,7 +1378,15 @@ class SuperPdpService {
           ? a
           : b,
       );
-      mainVatRate = parseFloat(largest.vat_category_rate) || 20;
+      const rate = parseFloat(largest.vat_category_rate);
+      if (Number.isFinite(rate)) mainVatRate = rate;
+    }
+    if (mainVatRate === null) {
+      mainVatRate = deriveVatRate({
+        amountHT,
+        amountTVA: vatAmount,
+        amountTTC,
+      });
     }
     // Détail par taux (BG-23) gardé dès que la facture en mêle plusieurs
     const vatLines = normalizeVatBreakdown(vatBreakDown);

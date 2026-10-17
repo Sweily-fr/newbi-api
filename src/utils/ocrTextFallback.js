@@ -279,13 +279,17 @@ export function extractInvoiceFieldsFromText(text) {
   const amountHT = frHT || enHT || 0;
 
   // Taux : d'abord un pourcentage accolé à un libellé de taxe (Sales tax
-  // 10.25 %), sinon le taux FR ("TVA 20 %"), sinon dérivé des montants. Le
+  // 10.25 %), sinon le taux FR ("TVA 20 %"), sinon null : pas de quotient
+  // TVA / HT (20,05 % pour 8,33 € et 1,67 €), la règle commune le déduit des
+  // montants en aval (completeVatAmounts, utils/purchaseInvoiceVat.js). Le
   // motif FR seul prendrait le premier "%" venu (remise 3 %...).
   let taxRate = null;
   let taxAmount = parseLocalizedAmount(fr?.tvaAmount) || 0;
   const taxWithRate = raw.match(EN_TAX_WITH_RATE);
   if (taxWithRate) {
-    taxRate = parseLocalizedAmount(taxWithRate[1]);
+    // Virgule décimale d'un taux : « 5,5 % » vaut 5,5 (lu comme un montant,
+    // il donnait 55)
+    taxRate = parseFloat(taxWithRate[1].replace(",", "."));
     if (!taxAmount) taxAmount = parseLocalizedAmount(taxWithRate[2]) || 0;
   } else if (!taxAmount) {
     taxAmount = firstMatch(raw, [EN_TAX], parseLocalizedAmount) || 0;
@@ -296,9 +300,6 @@ export function extractInvoiceFieldsFromText(text) {
   if (fr?.isReverseCharge) {
     taxRate = 0;
     taxAmount = 0;
-  }
-  if (taxRate === null && amountHT > 0 && taxAmount > 0) {
-    taxRate = Math.round((taxAmount / amountHT) * 10000) / 100;
   }
 
   const documentNumber = pickInvoiceNumber(raw, fr?.invoiceNumber);

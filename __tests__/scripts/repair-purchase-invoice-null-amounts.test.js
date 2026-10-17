@@ -87,7 +87,7 @@ describe("computeAmountFixes", () => {
     ).toEqual({ amountHT: 42.87, amountTVA: 0, vatRate: 0 });
   });
 
-  it("taux null : déduit de la TVA et du HT, 20 % sans HT", () => {
+  it("taux null : déduit de la TVA et du HT, taux légal au centime", () => {
     expect(
       computeAmountFixes({
         amountHT: 100,
@@ -96,9 +96,29 @@ describe("computeAmountFixes", () => {
         amountTTC: 105.5,
       }).fixes,
     ).toEqual({ vatRate: 5.5 });
+    // 1,67 / 8,33 = 20,05 % : le taux légal qui redonne la TVA l'emporte
+    expect(
+      computeAmountFixes({
+        amountHT: 8.33,
+        amountTVA: 1.67,
+        vatRate: null,
+        amountTTC: 10,
+      }).fixes,
+    ).toEqual({ vatRate: 20 });
+  });
+
+  it("taux null sans TVA : 0 %, plus « TVA 0 € à 20 % »", () => {
     expect(
       computeAmountFixes({ amountHT: 0, amountTVA: 0, amountTTC: 10 }).fixes,
-    ).toEqual({ vatRate: 20 });
+    ).toEqual({ vatRate: 0 });
+    expect(
+      computeAmountFixes({
+        amountHT: 0,
+        amountTVA: null,
+        vatRate: null,
+        amountTTC: 85.7,
+      }).fixes,
+    ).toEqual({ amountTVA: 0, vatRate: 0 });
   });
 
   it("TTC null : HT + TVA s'ils sont enregistrés, sinon signalé", () => {

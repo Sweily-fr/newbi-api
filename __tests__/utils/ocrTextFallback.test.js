@@ -147,6 +147,31 @@ describe("ocrTextFallback.extractInvoiceFieldsFromText", () => {
     );
   });
 
+  it("taux non imprimé : null, pas le quotient brut TVA / HT (20,05 %)", () => {
+    const r = extractInvoiceFieldsFromText(`SNACK DU COIN
+Date : 12/08/2026
+Total HT 8,33 €
+Montant TVA 1,67 €
+TOTAL TTC 10,00 €`);
+    expect(r.transaction_data).toMatchObject({
+      amount: 10,
+      amount_ht: 8.33,
+      tax_amount: 1.67,
+      tax_rate: null,
+    });
+  });
+
+  it("taux imprimé avec une virgule : 5,5 % et 2,1 % (et non 55 % et 21 %)", () => {
+    const rate = (line) =>
+      extractInvoiceFieldsFromText(`BOULANGERIE DUPAIN
+Date : 12/08/2026
+Total HT 100,00 €
+${line}`).transaction_data.tax_rate;
+    expect(rate("TVA 5,5 % 5,50 €")).toBe(5.5);
+    expect(rate("TVA 2,1 % 2,10 €")).toBe(2.1);
+    expect(rate("TVA 20 % 20,00 €")).toBe(20);
+  });
+
   it("texte vide ou sans rien d'exploitable : found = false", () => {
     expect(extractInvoiceFieldsFromText("").found).toBe(false);
     expect(extractInvoiceFieldsFromText("   \n  ").found).toBe(false);
