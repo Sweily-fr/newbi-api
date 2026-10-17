@@ -31,6 +31,7 @@ import {
   mergeVatBreakdowns,
   scalarVatEditBreaksBreakdown,
   applyVatBreakdown,
+  deriveVatRate,
 } from "../utils/purchaseInvoiceVat.js";
 
 /**
@@ -143,14 +144,17 @@ function resolveReceiptAmounts({ transaction, financial }) {
 
   // Un taux de 0 % est valide (autoliquidation, franchise...) : ne pas
   // l'écraser par le défaut. À défaut de taux extrait, on le dérive des
-  // montants, et en dernier recours 20 %.
+  // montants, et en dernier recours 20 % s'il y a de la TVA, 0 % sinon
+  // (plus de « TVA 0 € à 20 % » quand rien n'est lu).
   const extractedVatRate = toNonNegativeNumber(td.tax_rate);
   const vatRate =
     extractedVatRate !== null
       ? extractedVatRate
       : ocrHT > 0
         ? Math.round((ocrTVA / ocrHT) * 10000) / 100
-        : 20;
+        : ocrTVA > 0
+          ? 20
+          : 0;
 
   const foreignCurrency =
     Boolean(ocrCurrency) &&
@@ -573,14 +577,32 @@ async function createPurchaseInvoiceFromProposal({
     throw new Error("Montant TTC manquant sur la facture d'achat à créer");
   }
 
+  // HT non lu (0) ou vidé : TTC - TVA plutôt que 0 €, comme à la relance OCR
+  // (reconcileAmounts). Taux vidé : déduit des montants ; le modèle aligne
+  // ensuite le taux sur la TVA (0 % sans TVA).
+  const amountTVA = Number(values.amountTVA) || 0;
+  const amountHT =
+    Number(values.amountHT) > 0
+      ? values.amountHT
+      : Math.round(Math.max(Number(values.amountTTC) - amountTVA, 0) * 100) /
+        100;
+  const vatRate =
+    values.vatRate === null || values.vatRate === undefined
+      ? deriveVatRate({
+          amountHT,
+          amountTVA,
+          amountTTC: values.amountTTC,
+        })
+      : values.vatRate;
+
   const invoice = new PurchaseInvoice({
     supplierName: values.supplierName || "Fournisseur inconnu",
     invoiceNumber: values.invoiceNumber || undefined,
     issueDate: values.issueDate || transaction.date || new Date(),
     dueDate: values.dueDate || undefined,
-    amountHT: values.amountHT,
+    amountHT,
     amountTVA: values.amountTVA,
-    vatRate: values.vatRate,
+    vatRate,
     amountTTC: values.amountTTC,
     currency: values.currency,
     // Le débit bancaire a déjà eu lieu : la facture est payée et rapprochée

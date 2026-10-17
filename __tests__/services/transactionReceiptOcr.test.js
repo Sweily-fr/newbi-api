@@ -411,7 +411,10 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(invoice.currency).toBe("EUR");
     expect(invoice.ocrMetadata.amountTTC).toBe(3577.78);
     expect(invoice.ocrMetadata.currency).toBe("USD");
-    expect(invoice.vatRate).toBe(8.25);
+    // Lecture incohérente (HT au-dessus du débit) : TVA ramenée à 0 €, donc
+    // 0 % (avant : « TVA 0 € à 8,25 % »)
+    expect(invoice.amountTVA).toBe(0);
+    expect(invoice.vatRate).toBe(0);
     expect(invoice.ocrMetadata.provider).toBe("tesseract");
     expect(invoice.ocrMetadata.extractionQuality).toBe("partial");
     expect(invoice.files[0].ocrProcessed).toBe(true);
@@ -1381,10 +1384,19 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
     expect(r.conversion).toBeNull();
   });
 
-  it("OCR en échec : montant de la transaction dans sa devise", () => {
+  it("OCR en échec : montant de la transaction dans sa devise, sans TVA", () => {
     const r = resolveReceiptAmounts({ transaction: tx, financial: null });
     expect(r.amountTTC).toBe(9.25);
     expect(r.currency).toBe("EUR");
+    // Rien de lu : 0 %, plus « TVA 0 € à 20 % »
+    expect(r.vatRate).toBe(0);
+  });
+
+  it("TVA lue sans HT ni taux : 20 % en dernier recours, comme avant", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: { transaction_data: { amount: 12, tax_amount: 2 } },
+    });
     expect(r.vatRate).toBe(20);
   });
 });

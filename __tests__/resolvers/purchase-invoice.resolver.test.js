@@ -602,7 +602,8 @@ describe("PurchaseInvoice Resolver - montants à null", () => {
     const saved = await PurchaseInvoice.findById(invoice._id).lean();
     expect(saved.amountHT).toBe(0);
     expect(saved.amountTVA).toBe(0);
-    expect(saved.vatRate).toBe(20);
+    // Taux aligné sur la TVA : sans TVA, 0 % (plus « TVA 0 € à 20 % »)
+    expect(saved.vatRate).toBe(0);
     expect(saved.amountTTC).toBe(85.7);
   });
 

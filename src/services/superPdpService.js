@@ -1372,7 +1372,9 @@ class SuperPdpService {
           ? a
           : b,
       );
-      mainVatRate = parseFloat(largest.vat_category_rate) || 20;
+      // 0 % est un taux valide (franchise, autoliquidation, intracommunautaire)
+      const rate = parseFloat(largest.vat_category_rate);
+      mainVatRate = Number.isFinite(rate) ? rate : 20;
     }
     // Détail par taux (BG-23) gardé dès que la facture en mêle plusieurs
     const vatLines = normalizeVatBreakdown(vatBreakDown);

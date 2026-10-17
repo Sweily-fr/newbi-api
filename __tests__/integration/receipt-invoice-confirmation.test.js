@@ -245,6 +245,38 @@ describe("confirmReceiptInvoiceProposal", () => {
     expect(saved.amountHT).toBe(9.99);
   });
 
+  it("CREATE avec HT à 0 et taux vidé : HT = TTC - TVA, taux des montants", async () => {
+    const tx = await makeTransactionWithProposal();
+    const { invoice } = await confirmReceiptInvoiceProposal({
+      transactionId: tx._id,
+      workspaceId: workspaceId.toString(),
+      userId,
+      fileId: tx.receiptFiles[0]._id,
+      action: "CREATE",
+      values: { amountHT: 0, vatRate: null },
+    });
+
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved.amountHT).toBe(9.99);
+    expect(saved.amountTVA).toBe(2);
+    expect(saved.vatRate).toBe(20);
+  });
+
+  it("CREATE sans TVA avec le taux proposé de 20 % : enregistrée à 0 %", async () => {
+    const tx = await makeTransactionWithProposal();
+    const { invoice } = await confirmReceiptInvoiceProposal({
+      transactionId: tx._id,
+      workspaceId: workspaceId.toString(),
+      userId,
+      fileId: tx.receiptFiles[0]._id,
+      action: "CREATE",
+      values: { amountHT: 11.99, amountTVA: 0, vatRate: 20 },
+    });
+
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved).toMatchObject({ amountHT: 11.99, amountTVA: 0, vatRate: 0 });
+  });
+
   it("CREATE crée bien la facture même quand une existante lui ressemble", async () => {
     // Le cas qui bloquait : numéro identique lu à tort sur deux factures
     // différentes, la seconde n'était jamais créée.
