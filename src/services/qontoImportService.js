@@ -424,10 +424,15 @@ export async function importSupplierInvoices(account, userId) {
 
         const mappedStatus = SUPPLIER_STATUS_MAP[si.status] || "TO_PROCESS";
         const amountTTC = num(si.total_amount);
-        const amountHT = num(si.total_amount_excluding_taxes);
+        const htGiven = num(si.total_amount_excluding_taxes);
+        // Sans HT ni TVA donnés, la TVA valait le TTC (TVA déductible
+        // gonflée) : TVA non donnée = TTC - HT seulement si le HT l'est, sinon
+        // 0 ; HT non donné = TTC - TVA
         const amountTVA =
           num(si.total_tax_amount) ||
-          Math.round((amountTTC - amountHT) * 100) / 100;
+          (htGiven > 0 ? Math.round((amountTTC - htGiven) * 100) / 100 : 0);
+        const amountHT =
+          htGiven || Math.round((amountTTC - amountTVA) * 100) / 100;
 
         const existing = await PurchaseInvoice.findOne({
           workspaceId: workspaceObjectId,

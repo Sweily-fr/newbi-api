@@ -448,6 +448,29 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     );
   });
 
+  it("TTC seul : TVA 0 et HT = TTC, plus une TVA égale au TTC", async () => {
+    const account = await createAccount();
+    listSupplierInvoicesMock.mockResolvedValue(
+      pages([
+        supplierInvoice({
+          id: "si-ttc",
+          total_amount: { value: "120.00", currency: "EUR" },
+          total_amount_excluding_taxes: null,
+          total_tax_amount: null,
+        }),
+      ]),
+    );
+    await importSupplierInvoices(account, String(userId));
+
+    const pi = await PurchaseInvoice.findOne({ qontoId: "si-ttc" });
+    expect(pi).toMatchObject({
+      amountTTC: 120,
+      amountHT: 120,
+      amountTVA: 0,
+      vatRate: 0,
+    });
+  });
+
   it("réutilise un fournisseur existant (insensible à la casse)", async () => {
     const account = await createAccount();
     const existing = await Supplier.create({

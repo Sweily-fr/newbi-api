@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { isPositiveAmount, URL_REGEX } from "../utils/validators.js";
+import { deriveVatRate } from "../utils/purchaseInvoiceVat.js";
 
 const fileSchema = new mongoose.Schema(
   {
@@ -325,6 +326,26 @@ purchaseInvoiceSchema.index(
   { workspaceId: 1, superPdpInvoiceId: 1 },
   { sparse: true },
 );
+
+// Taux cohérent avec la TVA, quel que soit le chemin d'enregistrement
+// (justificatif, formulaire, app mobile, imports, facture électronique) :
+// une TVA nulle est à 0 % (plus de « TVA 0 € à 20 % » laissées par le taux
+// par défaut), une TVA positive sans taux prend celui des montants. Un détail
+// par taux (au moins deux lignes) porte son propre résumé ; un avoir (TVA
+// négative) n'est pas touché.
+purchaseInvoiceSchema.pre("validate", function alignVatRateWithAmount() {
+  if ((this.vatBreakdown?.length || 0) >= 2) return;
+  const tva = Number(this.amountTVA) || 0;
+  if (tva === 0) {
+    if (this.vatRate !== 0) this.vatRate = 0;
+  } else if (tva > 0 && !(this.vatRate > 0)) {
+    this.vatRate = deriveVatRate({
+      amountHT: this.amountHT,
+      amountTVA: tva,
+      amountTTC: this.amountTTC,
+    });
+  }
+});
 
 purchaseInvoiceSchema.statics.PURCHASE_INVOICE_STATUS = PURCHASE_INVOICE_STATUS;
 purchaseInvoiceSchema.statics.PURCHASE_INVOICE_CATEGORY =

@@ -173,3 +173,30 @@ describe("superPdpService._computeVatGroups", () => {
     expect(g.taxAmount).toBeCloseTo(20, 2);
   });
 });
+
+describe("superPdpService.transformReceivedInvoiceToPurchaseInvoice : taux", () => {
+  it("facture reçue à 0 % (franchise, autoliquidation) : 0 %, plus 20 %", () => {
+    const pi = superPdpService.transformReceivedInvoiceToPurchaseInvoice(
+      {
+        en_invoice: {
+          totals: {
+            total_without_vat: 500,
+            total_with_vat: 500,
+            total_vat_amount: { value: "0.00" },
+          },
+          vat_break_down: [
+            {
+              vat_category_code: "E",
+              vat_category_rate: "0",
+              vat_category_taxable_amount: "500.00",
+              vat_category_tax_amount: "0.00",
+            },
+          ],
+        },
+      },
+      "507f1f77bcf86cd799439011",
+      "507f1f77bcf86cd799439012",
+    );
+    expect(pi.vatRate).toBe(0);
+  });
+});

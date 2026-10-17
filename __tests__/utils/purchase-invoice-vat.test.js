@@ -7,6 +7,7 @@ import {
   vatBreakdownFromOcr,
   applyVatBreakdown,
   scalarVatEditBreaksBreakdown,
+  deriveVatRate,
 } from "../../src/utils/purchaseInvoiceVat.js";
 
 // Ticket de restaurant : plats à 10 %, boissons alcoolisées à 20 %
@@ -229,5 +230,31 @@ describe("scalarVatEditBreaksBreakdown", () => {
     expect(scalarVatEditBreaksBreakdown({ vatRate: 20 }, { vatRate: 10 })).toBe(
       false,
     );
+  });
+});
+
+describe("deriveVatRate", () => {
+  it("sans TVA : 0 %, pas 20 % (« TVA 0 € à 20 % »)", () => {
+    expect(deriveVatRate({ amountHT: 10, amountTVA: 0, amountTTC: 10 })).toBe(
+      0,
+    );
+    expect(deriveVatRate({ amountTTC: 10 })).toBe(0);
+    expect(deriveVatRate()).toBe(0);
+  });
+
+  it("TVA ÷ HT, avec le taux légal qui redonne la TVA au centime", () => {
+    expect(deriveVatRate({ amountHT: 100, amountTVA: 20 })).toBe(20);
+    expect(deriveVatRate({ amountHT: 8.33, amountTVA: 1.67 })).toBe(20);
+    expect(deriveVatRate({ amountHT: 100, amountTVA: 5.5 })).toBe(5.5);
+    expect(deriveVatRate({ amountHT: 100, amountTVA: 8.5 })).toBe(8.5);
+  });
+
+  it("HT absent : base = TTC - TVA", () => {
+    expect(deriveVatRate({ amountTVA: 1.76, amountTTC: 10.59 })).toBe(20);
+  });
+
+  it("taux mixte : quotient arrondi ; TVA sans base : 20 %", () => {
+    expect(deriveVatRate({ amountHT: 100, amountTVA: 12.34 })).toBe(12.34);
+    expect(deriveVatRate({ amountTVA: 5 })).toBe(20);
   });
 });
