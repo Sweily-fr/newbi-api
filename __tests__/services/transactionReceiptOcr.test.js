@@ -1200,6 +1200,88 @@ describe("confirmation : nom du fournisseur corrigé et TVA de l'organisation", 
   });
 });
 
+describe("confirmation : taux de TVA et HT vidés", () => {
+  const analyze = async () => {
+    processFromBase64.mockResolvedValue({
+      success: true,
+      extractedText: "Parking Indigo",
+      data: {},
+    });
+    toInvoiceFormat.mockReturnValue({
+      transaction_data: {
+        transaction_date: "18/06/2025",
+        vendor_name: "Indigo",
+        amount: 120.5,
+        currency: "EUR",
+      },
+      extracted_fields: {},
+      document_analysis: { confidence: 0.9 },
+    });
+    const tx = await createExpenseTransaction({ description: "CB INDIGO" });
+    const params = {
+      transactionId: tx._id.toString(),
+      workspaceId,
+      userId,
+      buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+    };
+    const [proposal] =
+      await transactionReceiptOcrService.processReceiptsForTransaction(params);
+    return { params, proposal };
+  };
+
+  const create = ({ params, proposal }, values) =>
+    transactionReceiptOcrService.confirmReceiptInvoiceProposal({
+      transactionId: params.transactionId,
+      workspaceId,
+      userId,
+      fileId: proposal.receiptFile._id,
+      action: "CREATE",
+      values,
+      acknowledgedDuplicateId: null,
+    });
+
+  it("total seul lu : proposition à HT = TTC et 0 %, facture créée ainsi", async () => {
+    const analyzed = await analyze();
+    expect(analyzed.proposal.proposal.values).toMatchObject({
+      amountTTC: 120.5,
+      amountHT: 120.5,
+      amountTVA: 0,
+      vatRate: 0,
+    });
+
+    const { invoice } = await create(analyzed, {});
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved).toMatchObject({ amountHT: 120.5, amountTVA: 0, vatRate: 0 });
+  });
+
+  it("taux vidé et HT à 0 : déduits des montants confirmés, pas 20 % ni 0 €", async () => {
+    const analyzed = await analyze();
+    const { invoice } = await create(analyzed, {
+      amountHT: 0,
+      amountTVA: 20.08,
+      vatRate: null,
+    });
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved).toMatchObject({
+      amountTTC: 120.5,
+      amountHT: 100.42,
+      amountTVA: 20.08,
+      vatRate: 20,
+    });
+  });
+
+  it("taux saisi à la confirmation : gardé tel quel", async () => {
+    const analyzed = await analyze();
+    const { invoice } = await create(analyzed, {
+      amountHT: 114.22,
+      amountTVA: 6.28,
+      vatRate: 5.5,
+    });
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved.vatRate).toBe(5.5);
+  });
+});
+
 describe("transactionReceiptOcrService.isExpenseTransaction", () => {
   it("détecte une dépense par montant négatif ou type debit", () => {
     expect(
@@ -1381,11 +1463,66 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
     expect(r.conversion).toBeNull();
   });
 
-  it("OCR en échec : montant de la transaction dans sa devise", () => {
+  it("OCR en échec : montant de la transaction dans sa devise, sans TVA", () => {
     const r = resolveReceiptAmounts({ transaction: tx, financial: null });
     expect(r.amountTTC).toBe(9.25);
     expect(r.currency).toBe("EUR");
-    expect(r.vatRate).toBe(20);
+    // Rien de lu : HT = TTC et 0 %, plus « TVA 0 € à 20 % » avec un HT à 0
+    expect(r.amountHT).toBe(9.25);
+    expect(r.amountTVA).toBe(0);
+    expect(r.vatRate).toBe(0);
+  });
+
+  it("total seul lu : HT = TTC, TVA 0 €, taux 0 %", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -10, currency: "EUR" },
+      financial: { transaction_data: { amount: 10, currency: "EUR" } },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 10,
+      amountHT: 10,
+      amountTVA: 0,
+      vatRate: 0,
+    });
+  });
+
+  it("TTC et TVA lus sans HT ni taux : HT = TTC - TVA, taux légal déduit", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: { transaction_data: { amount: 10.59, tax_amount: 1.76 } },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 10.59,
+      amountHT: 8.83,
+      amountTVA: 1.76,
+      vatRate: 20,
+    });
+  });
+
+  it("taux lu à 0 % : gardé tel quel", () => {
+    const r = resolveReceiptAmounts({
+      transaction: tx,
+      financial: {
+        transaction_data: { amount: 50, amount_ht: 50, tax_rate: 0 },
+      },
+    });
+    expect(r.vatRate).toBe(0);
+  });
+
+  it("devise étrangère, HT non lu : débit converti moins la TVA au prorata", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -100, currency: "EUR" },
+      financial: {
+        transaction_data: { amount: 120, tax_amount: 20, currency: "USD" },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 100,
+      amountHT: 83.33,
+      amountTVA: 16.67,
+      vatRate: 20,
+      currency: "EUR",
+    });
   });
 });
 

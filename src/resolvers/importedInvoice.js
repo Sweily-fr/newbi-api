@@ -41,6 +41,7 @@ import {
   clientDisplayName,
   suggestClientForImportedInvoice,
 } from "../utils/clientMatching.js";
+import { deriveVatRate } from "../utils/purchaseInvoiceVat.js";
 import stripe from "../utils/stripe.js";
 
 // Limite maximale d'import en lot
@@ -752,6 +753,13 @@ async function convertSingleImportedInvoice(
     dueDate: importedInvoice.dueDate ? new Date(importedInvoice.dueDate) : null,
     amountHT: importedInvoice.totalHT || 0,
     amountTVA: importedInvoice.totalVAT || 0,
+    // Pas de taux sur une facture importée : déduit des montants, plutôt que
+    // le défaut du modèle (20 %, même sans TVA)
+    vatRate: deriveVatRate({
+      amountHT: importedInvoice.totalHT,
+      amountTVA: importedInvoice.totalVAT,
+      amountTTC: importedInvoice.totalTTC,
+    }),
     amountTTC: importedInvoice.totalTTC,
     currency: importedInvoice.currency || "EUR",
     status: "TO_PROCESS",

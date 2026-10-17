@@ -156,6 +156,8 @@ const purchaseInvoiceSchema = new mongoose.Schema(
     },
     vatRate: {
       type: Number,
+      // Filet de sécurité : une création sans taux connu le déduit des
+      // montants avant (deriveVatRate, utils/purchaseInvoiceVat.js)
       default: 20,
       set: nullToDefault(20),
     },

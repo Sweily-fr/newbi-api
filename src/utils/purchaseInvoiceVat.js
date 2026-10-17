@@ -107,6 +107,35 @@ export function summarizeVatBreakdown(lines) {
   };
 }
 
+// Taux légaux (métropole, Corse, DOM), préférés au quotient brut quand ils
+// redonnent la TVA au centime près
+const LEGAL_VAT_RATES = [20, 10, 5.5, 2.1, 13, 0.9, 8.5, 1.75, 1.05];
+
+/**
+ * Taux d'une facture dont le taux n'est pas connu (non lu par l'OCR, champ
+ * vidé), déduit des montants plutôt que fixé à 20 % : sans TVA, 0 % (et non
+ * « TVA 0 € à 20 % »). Base : le HT, sinon TTC - TVA. 8,33 € de HT pour
+ * 1,67 € de TVA donnent 20 % et non 20,05 %. 20 % ne reste qu'en dernier
+ * recours : TVA connue sans aucune base.
+ */
+export function deriveVatRate({ amountHT, amountTVA, amountTTC } = {}) {
+  const tva = Math.abs(toNumber(amountTVA) ?? 0);
+  if (tva === 0) return 0;
+  const ht = Math.abs(toNumber(amountHT) ?? 0);
+  const ttc = Math.abs(toNumber(amountTTC) ?? 0);
+  const base = ht > 0 ? ht : ttc > tva ? round2(ttc - tva) : 0;
+  if (base === 0) return 20;
+  const raw = (tva / base) * 100;
+  // Comparaison en centimes entiers (1,77 - 1,76 ne vaut pas 0,01 en flottant)
+  const legal = LEGAL_VAT_RATES.filter(
+    (rate) => Math.abs(Math.round(base * rate) - Math.round(tva * 100)) <= 1,
+  );
+  if (legal.length === 0) return round2(raw);
+  return legal.reduce((a, b) =>
+    Math.abs(b - raw) < Math.abs(a - raw) ? b : a,
+  );
+}
+
 /** Ventilation ramenée dans une autre devise (taux de change ou prorata). */
 export function scaleVatBreakdown(lines, ratio) {
   if (!Number.isFinite(ratio) || ratio <= 0) return [];

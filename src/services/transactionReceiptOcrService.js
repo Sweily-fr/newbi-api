@@ -31,6 +31,7 @@ import {
   mergeVatBreakdowns,
   scalarVatEditBreaksBreakdown,
   applyVatBreakdown,
+  deriveVatRate,
 } from "../utils/purchaseInvoiceVat.js";
 
 /**
@@ -143,14 +144,16 @@ function resolveReceiptAmounts({ transaction, financial }) {
 
   // Un taux de 0 % est valide (autoliquidation, franchise...) : ne pas
   // l'écraser par le défaut. À défaut de taux extrait, on le dérive des
-  // montants, et en dernier recours 20 %.
+  // montants (deriveVatRate : sans TVA lue, 0 % et non 20 %).
   const extractedVatRate = toNonNegativeNumber(td.tax_rate);
   const vatRate =
     extractedVatRate !== null
       ? extractedVatRate
-      : ocrHT > 0
-        ? Math.round((ocrTVA / ocrHT) * 10000) / 100
-        : 20;
+      : deriveVatRate({
+          amountHT: ocrHT,
+          amountTVA: ocrTVA,
+          amountTTC: ocrTTC || txAmount,
+        });
 
   const foreignCurrency =
     Boolean(ocrCurrency) &&
@@ -166,11 +169,12 @@ function resolveReceiptAmounts({ transaction, financial }) {
     const ratio = txAmount / ocrTTC;
     const vatBreakdown = scaleVatBreakdown(ocrBreakdown, ratio);
     const summary = summarizeVatBreakdown(vatBreakdown);
+    // HT non lu : débit converti moins la TVA ramenée au prorata
     const amountHT = summary
       ? summary.amountHT
       : ocrHT > 0
         ? round2(ocrHT * ratio)
-        : 0;
+        : round2(Math.max(txAmount - round2(ocrTVA * ratio), 0));
     const amountTVA = summary
       ? summary.amountTVA
       : ocrTVA > 0
@@ -190,9 +194,16 @@ function resolveReceiptAmounts({ transaction, financial }) {
   }
 
   const summary = summarizeVatBreakdown(ocrBreakdown);
+  const amountTTC = ocrTTC || txAmount || null;
   return {
-    amountTTC: ocrTTC || txAmount || null,
-    amountHT: summary ? summary.amountHT : ocrHT,
+    amountTTC,
+    // HT non lu : TTC - TVA, comme à la relance OCR d'une facture d'achat
+    // (reconcileAmounts), plutôt que 0 €
+    amountHT: summary
+      ? summary.amountHT
+      : ocrHT > 0
+        ? ocrHT
+        : round2(Math.max((amountTTC || 0) - ocrTVA, 0)),
     amountTVA: summary ? summary.amountTVA : ocrTVA,
     vatRate: summary ? summary.vatRate : vatRate,
     vatBreakdown: ocrBreakdown,
@@ -573,14 +584,35 @@ async function createPurchaseInvoiceFromProposal({
     throw new Error("Montant TTC manquant sur la facture d'achat à créer");
   }
 
+  // HT ou taux vidés à la confirmation : déduits des montants (TTC - TVA,
+  // deriveVatRate) plutôt que les défauts du modèle, 0 € et 20 %. Un détail
+  // par taux (vatBreakdown, plus bas) reste prioritaire.
+  const amountHT =
+    Number(values.amountHT) > 0
+      ? values.amountHT
+      : round2(
+          Math.max(
+            Number(values.amountTTC) - (Number(values.amountTVA) || 0),
+            0,
+          ),
+        );
+  const vatRate =
+    values.vatRate === null || values.vatRate === undefined
+      ? deriveVatRate({
+          amountHT,
+          amountTVA: values.amountTVA,
+          amountTTC: values.amountTTC,
+        })
+      : values.vatRate;
+
   const invoice = new PurchaseInvoice({
     supplierName: values.supplierName || "Fournisseur inconnu",
     invoiceNumber: values.invoiceNumber || undefined,
     issueDate: values.issueDate || transaction.date || new Date(),
     dueDate: values.dueDate || undefined,
-    amountHT: values.amountHT,
+    amountHT,
     amountTVA: values.amountTVA,
-    vatRate: values.vatRate,
+    vatRate,
     amountTTC: values.amountTTC,
     currency: values.currency,
     // Le débit bancaire a déjà eu lieu : la facture est payée et rapprochée
