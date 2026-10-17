@@ -143,19 +143,42 @@ const rateMatchesAmounts = (rate, ht, tva) =>
   Math.abs(Math.round(Math.abs(ht) * rate) - Math.round(Math.abs(tva) * 100)) <=
   1;
 
+// HT et TVA positifs qui donnent un taux légal
+const formsLegalRate = (ht, tva) =>
+  ht > 0 &&
+  tva > 0 &&
+  isLegalVatRate(deriveVatRate({ amountHT: ht, amountTVA: tva }));
+
+// Taux final : celui fourni s'il redonne la TVA (un taux légal qui la redonne
+// aussi lui est préféré : 20,05 % devient 20 %), sinon celui des montants
+const settleVatRate = (rate, ht, tva) => {
+  const derived = deriveVatRate({ amountHT: ht, amountTVA: tva });
+  const matches =
+    rate !== null &&
+    (tva === 0 ? rate === 0 : ht !== 0 && rateMatchesAmounts(rate, ht, tva));
+  const keep =
+    matches && (rate === 0 || isLegalVatRate(rate) || !isLegalVatRate(derived));
+  return keep ? rate : derived;
+};
+
 /**
  * Complète des montants de TVA partiels (lecture OCR, saisie) de façon
- * cohérente : HT + TVA = TTC, et un taux qui redonne la TVA. null = inconnu
- * (0 est une valeur connue). Le TTC prime, c'est le débit :
- * - TVA connue : HT = TTC - TVA ; HT connu : TVA = TTC - HT ;
- * - HT et TVA connus mais incohérents avec le TTC : la lecture qui donne un
- *   taux légal est gardée, la TVA à défaut ;
- * - seul le taux connu (fromRate) : HT = TTC / (1 + taux), TVA = TTC - HT ;
- * - rien de connu (fillMissingVat) : sans TVA, HT = TTC et 0 %.
+ * cohérente. null = inconnu, 0 = valeur connue.
+ * - HT et TVA connus et cohérents entre eux (relié par le taux fourni, ou
+ *   formant un taux légal) : gardés même si le TTC diffère, qui peut porter
+ *   une part hors TVA (taxe de séjour, débours, acompte déduit). Incohérents
+ *   et en désaccord avec le TTC : le TTC corrige la lecture qui redonne alors
+ *   un taux légal.
+ * - TVA connue seule : HT = TVA / taux si un taux légal est fourni (le reste
+ *   du TTC est hors TVA), sinon TTC - TVA.
+ * - HT connu seul : TVA = HT x taux si un taux légal est fourni ; sinon TTC -
+ *   HT s'il forme un taux légal (une taxe d'assurance n'est pas de la TVA),
+ *   à défaut 0 (fillMissingVat) ou inconnue.
+ * - Ni HT ni TVA : HT = TTC / (1 + taux) si un taux est fourni (fromRate),
+ *   sinon sans TVA, HT = TTC et 0 % (fillMissingVat).
  * Le taux fourni n'est gardé que s'il redonne la TVA (les moteurs OCR en
- * fabriquent : 5,5 % arrondi à 6, 0 % par défaut), et un taux légal qui la
- * redonne aussi lui est préféré (20,05 % devient 20 %). Sinon il est déduit
- * des montants (deriveVatRate).
+ * fabriquent : 5,5 % arrondi à 6, 0 % par défaut), un taux légal qui la
+ * redonne aussi lui étant préféré ; sinon il est déduit (deriveVatRate).
  */
 export function completeVatAmounts(
   { amountHT, amountTVA, amountTTC, vatRate } = {},
@@ -165,29 +188,39 @@ export function completeVatAmounts(
   let tva = toNumber(amountTVA);
   let ttc = toNumber(amountTTC);
   let rate = toNumber(vatRate);
+  if (rate !== null && (rate < 0 || rate > 100)) rate = null;
+  // TVA plus grande que le TTC : lecture impossible, donc inconnue
+  if (ttc !== null && ttc > 0 && tva !== null && tva > ttc) tva = null;
+  const legalRateGiven = rate !== null && (rate === 0 || isLegalVatRate(rate));
 
-  if (ttc === null && ht !== null && tva !== null) ttc = round2(ht + tva);
-  if (ttc !== null && ttc > 0) {
-    // Lecture plus grande que le TTC : impossible, donc inconnue
-    if (tva !== null && tva > ttc) tva = null;
-    if (ht !== null && ht > ttc) ht = null;
-    if (ht !== null && tva !== null) {
-      if (Math.abs(round2(ht + tva) - ttc) > 0.01) {
-        const tvaFromHT = round2(ttc - ht);
-        const htFromTVA = round2(ttc - tva);
-        const legalFromHT = isLegalVatRate(
-          deriveVatRate({ amountHT: ht, amountTVA: tvaFromHT }),
-        );
-        const legalFromTVA = isLegalVatRate(
-          deriveVatRate({ amountHT: htFromTVA, amountTVA: tva }),
-        );
-        if (legalFromHT && !legalFromTVA) tva = tvaFromHT;
-        else ht = htFromTVA;
-      }
-    } else if (tva !== null) {
-      ht = round2(ttc - tva);
+  if (ht !== null && tva !== null) {
+    if (ttc === null) ttc = round2(ht + tva);
+    const coherent =
+      (rate !== null &&
+        (tva === 0 ? rate === 0 : rateMatchesAmounts(rate, ht, tva))) ||
+      formsLegalRate(ht, tva);
+    if (!coherent && ttc > 0 && Math.abs(round2(ht + tva) - ttc) > 0.01) {
+      if (formsLegalRate(round2(ttc - tva), tva)) ht = round2(ttc - tva);
+      else if (formsLegalRate(ht, round2(ttc - ht))) tva = round2(ttc - ht);
+    }
+  } else if (ttc !== null && ttc > 0) {
+    if (tva !== null) {
+      const htFromRate =
+        legalRateGiven && rate > 0 && tva > 0
+          ? round2((tva * 100) / rate)
+          : null;
+      ht =
+        htFromRate !== null && htFromRate <= round2(ttc - tva) + 0.01
+          ? htFromRate
+          : round2(ttc - tva);
     } else if (ht !== null) {
-      tva = round2(ttc - ht);
+      if (legalRateGiven) {
+        tva = round2((ht * rate) / 100);
+      } else {
+        const rest = round2(ttc - ht);
+        if (rest === 0 || formsLegalRate(ht, rest)) tva = rest;
+        else if (fillMissingVat) tva = 0;
+      }
     } else if (fromRate && rate !== null) {
       ht = round2(ttc / (1 + rate / 100));
       tva = round2(ttc - ht);
@@ -197,16 +230,7 @@ export function completeVatAmounts(
     }
   }
 
-  if (ht !== null && tva !== null) {
-    const derived = deriveVatRate({ amountHT: ht, amountTVA: tva });
-    const matches =
-      rate !== null &&
-      (tva === 0 ? rate === 0 : ht !== 0 && rateMatchesAmounts(rate, ht, tva));
-    const keep =
-      matches &&
-      (rate === 0 || isLegalVatRate(rate) || !isLegalVatRate(derived));
-    rate = keep ? rate : derived;
-  }
+  if (ht !== null && tva !== null) rate = settleVatRate(rate, ht, tva);
   return { amountHT: ht, amountTVA: tva, amountTTC: ttc, vatRate: rate };
 }
 

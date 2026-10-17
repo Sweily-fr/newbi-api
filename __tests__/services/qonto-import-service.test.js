@@ -448,6 +448,44 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     );
   });
 
+  it("montants partiels : TVA déduite des montants, plus TVA = TTC ni quotient brut", async () => {
+    const account = await createAccount();
+    listSupplierInvoicesMock.mockResolvedValue(
+      pages([
+        // TTC seul : sans TVA (avant : TVA = TTC, 120 € de TVA déductible)
+        supplierInvoice({
+          id: "si-ttc",
+          total_amount: { value: "120.00", currency: "EUR" },
+          total_amount_excluding_taxes: null,
+          total_tax_amount: null,
+        }),
+        // 8,33 € + 1,67 € : 20 % (avant : 20,05 %)
+        supplierInvoice({
+          id: "si-ticket",
+          invoice_number: "FA-43",
+          total_amount: { value: "10.00", currency: "EUR" },
+          total_amount_excluding_taxes: { value: "8.33", currency: "EUR" },
+          total_tax_amount: { value: "1.67", currency: "EUR" },
+        }),
+      ]),
+    );
+    await importSupplierInvoices(account, String(userId));
+
+    const ttcOnly = await PurchaseInvoice.findOne({ qontoId: "si-ttc" });
+    expect(ttcOnly).toMatchObject({
+      amountTTC: 120,
+      amountHT: 120,
+      amountTVA: 0,
+      vatRate: 0,
+    });
+    const ticket = await PurchaseInvoice.findOne({ qontoId: "si-ticket" });
+    expect(ticket).toMatchObject({
+      amountHT: 8.33,
+      amountTVA: 1.67,
+      vatRate: 20,
+    });
+  });
+
   it("réutilise un fournisseur existant (insensible à la casse)", async () => {
     const account = await createAccount();
     const existing = await Supplier.create({

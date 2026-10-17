@@ -55,3 +55,17 @@ describe("claudeVisionOcrService.toInvoiceFormat : taux de TVA", () => {
     ).toBe(5.5);
   });
 });
+
+describe("claudeVisionOcrService.toInvoiceFormat : montant", () => {
+  const amount = (data) =>
+    claudeVisionOcrService.toInvoiceFormat({ data }).transaction_data.amount;
+
+  it("TTC lu, à défaut HT + TVA (le HT seul ne passe plus pour le TTC)", () => {
+    expect(
+      amount({ totals: { total_ht: 100, total_vat: 20, total_ttc: 120 } }),
+    ).toBe(120);
+    expect(amount({ totals: { total_ht: 100, total_vat: 20 } })).toBe(120);
+    expect(amount({ totals: { total_ht: 100 } })).toBe(100);
+    expect(amount({})).toBe(0);
+  });
+});

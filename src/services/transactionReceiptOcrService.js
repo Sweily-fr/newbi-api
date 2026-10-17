@@ -175,11 +175,16 @@ function resolveReceiptAmounts({ transaction, financial }) {
     const ratio = txAmount / ocrTTC;
     const vatBreakdown = scaleVatBreakdown(ocrBreakdown, ratio);
     const summary = summarizeVatBreakdown(vatBreakdown);
-    // HT ramené au prorata du débit, TVA = débit - HT, même taux
+    // HT et TVA ramenés au prorata du débit, même taux. Sans part hors TVA
+    // dans le TTC du document, TVA = débit - HT pour que la somme tombe juste.
     const amountHT = summary ? summary.amountHT : round2(read.amountHT * ratio);
+    const withoutExtra =
+      Math.abs(round2(read.amountHT + read.amountTVA) - ocrTTC) <= 0.01;
     const amountTVA = summary
       ? summary.amountTVA
-      : round2(Math.max(txAmount - amountHT, 0));
+      : withoutExtra
+        ? round2(Math.max(txAmount - amountHT, 0))
+        : round2(read.amountTVA * ratio);
     return {
       amountTTC: txAmount,
       amountHT,
@@ -575,24 +580,22 @@ async function createPurchaseInvoiceFromProposal({
     throw new Error("Montant TTC manquant sur la facture d'achat à créer");
   }
 
-  // HT manquant (null ou 0) ou taux vidé à la confirmation : complétés par la
-  // règle commune plutôt que les défauts du modèle (0 € et 20 %), ce qui
-  // valide aussi le taux fourni (proposition enregistrée avant ce calcul :
-  // HT 0, TVA 0, 20 %). Tout fourni : valeurs confirmées gardées. Un détail
-  // par taux (vatBreakdown, plus bas) reste prioritaire.
+  // Montants confirmés passés par la règle commune plutôt que les défauts du
+  // modèle (0 € et 20 %) : HT manquant (null ou 0) ou taux vidé déduits, et
+  // une proposition enregistrée avant ce calcul corrigée (« TVA 0 € à 20 % »,
+  // 20,05 %). Des montants cohérents entre eux sont gardés tels quels, même
+  // si le TTC porte une part hors TVA. Un détail par taux (vatBreakdown, plus
+  // bas) reste prioritaire.
   const htMissing = !(Number(values.amountHT) > 0);
-  const vat =
-    htMissing || values.vatRate === null || values.vatRate === undefined
-      ? completeVatAmounts(
-          {
-            amountHT: htMissing ? null : values.amountHT,
-            amountTVA: values.amountTVA,
-            amountTTC: values.amountTTC,
-            vatRate: values.vatRate,
-          },
-          { fillMissingVat: true },
-        )
-      : values;
+  const vat = completeVatAmounts(
+    {
+      amountHT: htMissing ? null : values.amountHT,
+      amountTVA: values.amountTVA,
+      amountTTC: values.amountTTC,
+      vatRate: values.vatRate,
+    },
+    { fillMissingVat: true },
+  );
 
   const invoice = new PurchaseInvoice({
     supplierName: values.supplierName || "Fournisseur inconnu",

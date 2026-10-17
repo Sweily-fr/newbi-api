@@ -398,4 +398,83 @@ describe("completeVatAmounts", () => {
       completeVatAmounts({ amountTTC: 10, amountTVA: 15 }, fill),
     ).toMatchObject({ amountHT: 10, amountTVA: 0, vatRate: 0 });
   });
+  it("part hors TVA dans le TTC : HT, TVA et taux cohérents gardés", () => {
+    // Hôtel avec taxe de séjour (10 %), garage avec débours de carte grise
+    expect(
+      completeVatAmounts({
+        amountHT: 90.91,
+        amountTVA: 9.09,
+        amountTTC: 101.65,
+        vatRate: 10,
+      }),
+    ).toEqual({
+      amountHT: 90.91,
+      amountTVA: 9.09,
+      amountTTC: 101.65,
+      vatRate: 10,
+    });
+    expect(
+      completeVatAmounts({
+        amountHT: 90.91,
+        amountTVA: 9.09,
+        amountTTC: 101.65,
+      }).vatRate,
+    ).toBe(10);
+    expect(
+      completeVatAmounts({
+        amountHT: 500,
+        amountTVA: 100,
+        amountTTC: 900,
+        vatRate: 20,
+      }),
+    ).toMatchObject({ amountHT: 500, amountTVA: 100, vatRate: 20 });
+    // Facture de solde : acompte déduit du TTC
+    expect(
+      completeVatAmounts({
+        amountHT: 1000,
+        amountTVA: 200,
+        amountTTC: 600,
+        vatRate: 20,
+      }),
+    ).toMatchObject({ amountHT: 1000, amountTVA: 200, vatRate: 20 });
+  });
+
+  it("TVA non lue sur une assurance : pas de TVA inventée", () => {
+    // 9 € de taxe d'assurance sur 100 € : 9 % n'est pas un taux légal
+    expect(
+      completeVatAmounts(
+        { amountHT: 100, amountTVA: null, amountTTC: 109 },
+        { fillMissingVat: true },
+      ),
+    ).toMatchObject({ amountHT: 100, amountTVA: 0, vatRate: 0 });
+  });
+
+  it("TVA connue et taux légal fourni : HT = TVA / taux, le reste est hors TVA", () => {
+    expect(
+      completeVatAmounts({ amountTVA: 9.09, amountTTC: 101.65, vatRate: 10 }),
+    ).toMatchObject({ amountHT: 90.9, amountTVA: 9.09, vatRate: 10 });
+  });
+
+  it("HT connu et taux légal fourni : TVA = HT x taux", () => {
+    expect(
+      completeVatAmounts({ amountHT: 90.91, amountTTC: 101.65, vatRate: 10 }),
+    ).toMatchObject({ amountHT: 90.91, amountTVA: 9.09, vatRate: 10 });
+  });
+
+  it("anciennes propositions « TVA 0 € à 20 % »", () => {
+    // TVA non lue (0) avec un TTC qui la contient : TVA rétablie
+    expect(
+      completeVatAmounts(
+        { amountHT: 100, amountTVA: 0, amountTTC: 120, vatRate: 20 },
+        { fillMissingVat: true },
+      ),
+    ).toMatchObject({ amountHT: 100, amountTVA: 20, vatRate: 20 });
+    // Assurance : pas de TVA, le taux suit (0 %)
+    expect(
+      completeVatAmounts(
+        { amountHT: 100, amountTVA: 0, amountTTC: 109, vatRate: 20 },
+        { fillMissingVat: true },
+      ),
+    ).toMatchObject({ amountHT: 100, amountTVA: 0, vatRate: 0 });
+  });
 });

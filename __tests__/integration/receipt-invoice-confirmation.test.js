@@ -227,9 +227,11 @@ describe("confirmReceiptInvoiceProposal", () => {
     });
   });
 
-  it("CREATE avec le champ TVA vidé : TVA enregistrée à 0, jamais null", async () => {
+  it("CREATE avec le champ TVA vidé : TVA recalculée (HT x taux), jamais null", async () => {
     // Incident du 15/10/2026 : null enregistré tel quel, puis toute la
     // liste des factures d'achat de l'espace en erreur (amountTVA: Float!).
+    // Depuis le calcul du taux : TVA vidée = inconnue, complétée par la
+    // règle commune (9,99 € à 20 %), plus « TVA 0 € à 20 % ».
     const tx = await makeTransactionWithProposal();
     const { invoice } = await confirmReceiptInvoiceProposal({
       transactionId: tx._id,
@@ -241,8 +243,9 @@ describe("confirmReceiptInvoiceProposal", () => {
     });
 
     const saved = await PurchaseInvoice.findById(invoice._id).lean();
-    expect(saved.amountTVA).toBe(0);
+    expect(saved.amountTVA).toBe(2);
     expect(saved.amountHT).toBe(9.99);
+    expect(saved.vatRate).toBe(20);
   });
 
   it("CREATE crée bien la facture même quand une existante lui ressemble", async () => {

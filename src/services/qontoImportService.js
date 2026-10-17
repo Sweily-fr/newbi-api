@@ -7,6 +7,7 @@ import Quote from "../models/Quote.js";
 import ImportedQuote from "../models/ImportedQuote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
+import { completeVatAmounts } from "../utils/purchaseInvoiceVat.js";
 import qontoService from "./qontoService.js";
 import cloudflareService from "./cloudflareService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
@@ -424,10 +425,19 @@ export async function importSupplierInvoices(account, userId) {
 
         const mappedStatus = SUPPLIER_STATUS_MAP[si.status] || "TO_PROCESS";
         const amountTTC = num(si.total_amount);
-        const amountHT = num(si.total_amount_excluding_taxes);
-        const amountTVA =
-          num(si.total_tax_amount) ||
-          Math.round((amountTTC - amountHT) * 100) / 100;
+        // Montants absents chez Qonto : inconnus (null), complétés par la
+        // règle commune. Avant, sans HT, la TVA valait le TTC (TVA déductible
+        // gonflée) et le taux était un quotient brut (20,05 %).
+        const vat = completeVatAmounts(
+          {
+            amountHT: num(si.total_amount_excluding_taxes) || null,
+            amountTVA: num(si.total_tax_amount) || null,
+            amountTTC: amountTTC || null,
+          },
+          { fillMissingVat: true },
+        );
+        const amountHT = vat.amountHT ?? 0;
+        const amountTVA = vat.amountTVA ?? 0;
 
         const existing = await PurchaseInvoice.findOne({
           workspaceId: workspaceObjectId,
@@ -442,10 +452,7 @@ export async function importSupplierInvoices(account, userId) {
             existing.amountTTC = amountTTC;
             existing.amountHT = amountHT;
             existing.amountTVA = amountTVA;
-            if (amountHT > 0) {
-              existing.vatRate =
-                Math.round((amountTVA / amountHT) * 10000) / 100;
-            }
+            if (vat.vatRate !== null) existing.vatRate = vat.vatRate;
             changed = true;
           }
           // Numéro provisoire « QONTO-xxxxxxxx » remplacé par le vrai numéro
@@ -623,8 +630,7 @@ export async function importSupplierInvoices(account, userId) {
           amountHT,
           amountTVA,
           amountTTC,
-          vatRate:
-            amountHT > 0 ? Math.round((amountTVA / amountHT) * 10000) / 100 : 0,
+          vatRate: vat.vatRate ?? 0,
           currency: si.total_amount?.currency || "EUR",
           description: si.description || undefined,
           files: [

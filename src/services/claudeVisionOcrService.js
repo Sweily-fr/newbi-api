@@ -719,7 +719,17 @@ Ne retourne QUE le JSON, rien d'autre.`,
         vendor_name: data.vendor?.name,
         client_name: data.client?.name,
         client_number: data.client?.client_number,
-        amount: data.totals?.total_ttc || data.totals?.total_ht || 0,
+        // TTC lu, à défaut HT + TVA : le HT seul passait pour le TTC, et la
+        // règle commune en tirait HT = TTC - TVA avec un faux taux
+        amount:
+          data.totals?.total_ttc ||
+          (data.totals?.total_ht && data.totals?.total_vat
+            ? Math.round(
+                (Number(data.totals.total_ht) + Number(data.totals.total_vat)) *
+                  100,
+              ) / 100
+            : data.totals?.total_ht) ||
+          0,
         amount_ht: data.totals?.total_ht,
         tax_amount: data.totals?.total_vat || 0,
         // Taux imprimé (0 % compris), sinon null : plus de quotient TVA / HT

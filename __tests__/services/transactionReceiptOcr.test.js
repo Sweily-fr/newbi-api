@@ -411,13 +411,12 @@ describe("transactionReceiptOcrService.processReceiptsForTransaction", () => {
     expect(invoice.currency).toBe("EUR");
     expect(invoice.ocrMetadata.amountTTC).toBe(3577.78);
     expect(invoice.ocrMetadata.currency).toBe("USD");
-    // Lecture regex incohérente : HT lu (3 847) supérieur au total, donc
-    // ignoré ; HT = TTC - TVA, et 8,25 % ne redonne pas la TVA lue sur ce
-    // HT : taux déduit des montants. Le tout ramené au débit, HT + TVA = TTC
-    // (avant : HT 3 731,24 au-dessus du débit, TVA 0 € à 8,25 %).
-    expect(invoice.amountHT).toBe(3168.69);
+    // HT et taxe lus gardés (le solde dû peut être inférieur au HT : paiement
+    // déduit), ramenés au débit chacun au prorata. 8,25 % ne redonne pas la
+    // taxe lue sur ce HT : taux déduit des montants (avant : TVA 0 € à 8,25 %).
+    expect(invoice.amountHT).toBe(3731.24);
     expect(invoice.amountTVA).toBe(301.43);
-    expect(invoice.vatRate).toBe(9.51);
+    expect(invoice.vatRate).toBe(8.08);
     expect(invoice.ocrMetadata.provider).toBe("tesseract");
     expect(invoice.ocrMetadata.extractionQuality).toBe("partial");
     expect(invoice.files[0].ocrProcessed).toBe(true);
@@ -1276,6 +1275,21 @@ describe("confirmation : taux de TVA et HT vidés", () => {
     });
   });
 
+  it("proposition d'avant le calcul (HT lu, TVA 0, 20 %) : TVA rétablie depuis le TTC", async () => {
+    const analyzed = await analyze();
+    const { invoice } = await create(analyzed, {
+      amountHT: 100.42,
+      amountTVA: 0,
+      vatRate: 20,
+    });
+    const saved = await PurchaseInvoice.findById(invoice._id).lean();
+    expect(saved).toMatchObject({
+      amountHT: 100.42,
+      amountTVA: 20.08,
+      vatRate: 20,
+    });
+  });
+
   it("taux saisi à la confirmation : gardé tel quel", async () => {
     const analyzed = await analyze();
     const { invoice } = await create(analyzed, {
@@ -1629,6 +1643,58 @@ describe("transactionReceiptOcrService.resolveReceiptAmounts", () => {
       },
     });
     expect(r).toMatchObject({ amountHT: 8.33, amountTVA: 1.67, vatRate: 20 });
+  });
+});
+
+describe("resolveReceiptAmounts : part hors TVA dans le TTC", () => {
+  const { resolveReceiptAmounts } = transactionReceiptOcrService;
+
+  it("hôtel avec taxe de séjour : HT, TVA et 10 % lus gardés", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -101.65, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 101.65,
+          amount_ht: 90.91,
+          tax_amount: 9.09,
+          tax_rate: 10,
+        },
+      },
+    });
+    expect(r).toMatchObject({
+      amountTTC: 101.65,
+      amountHT: 90.91,
+      amountTVA: 9.09,
+      vatRate: 10,
+    });
+  });
+
+  it("assurance (taxe hors TVA, TVA non lue) : pas de TVA inventée", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -109, currency: "EUR" },
+      financial: { transaction_data: { amount: 109, amount_ht: 100 } },
+    });
+    expect(r).toMatchObject({ amountHT: 100, amountTVA: 0, vatRate: 0 });
+  });
+
+  it("devise étrangère avec part hors TVA : HT et TVA ramenés chacun au prorata", () => {
+    const r = resolveReceiptAmounts({
+      transaction: { amount: -95, currency: "EUR" },
+      financial: {
+        transaction_data: {
+          amount: 101.65,
+          amount_ht: 90.91,
+          tax_amount: 9.09,
+          tax_rate: 10,
+          currency: "USD",
+        },
+      },
+    });
+    const ratio = 95 / 101.65;
+    expect(r.amountTTC).toBe(95);
+    expect(r.amountHT).toBe(Math.round(90.91 * ratio * 100) / 100);
+    expect(r.amountTVA).toBe(Math.round(9.09 * ratio * 100) / 100);
+    expect(r.vatRate).toBe(10);
   });
 });
 
