@@ -2,10 +2,12 @@ name: CI — newbi-api
 
 on:
   # Tests CI only on develop — never on main/prod.
+  # Une seule fois par changement : sur la PR. Le passage après fusion sur
+  # develop relançait les mêmes tests sur le même code (environ 60 % des
+  # minutes de CI, payantes si le dépôt est privé). Lancement manuel possible.
   pull_request:
     branches: [develop]
-  push:
-    branches: [develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
