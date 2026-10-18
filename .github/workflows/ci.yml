@@ -14,6 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Recherche de secrets (clés, mots de passe) dans les commits de la PR.
+  # Remplace la surveillance de GitHub, payante depuis le passage du dépôt en
+  # privé (18/10/2026) ; même contrôle que la CI du site.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
