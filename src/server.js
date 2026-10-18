@@ -308,9 +308,15 @@ async function startServer() {
   // terminées par cors et ne consomment plus le quota, et une réponse 429
   // porte les en-têtes CORS (sinon le navigateur la masque en erreur réseau
   // et l'Apollo RetryLink relance la requête).
+  // Plafonds réglables pour les tests de bout en bout (toutes les requêtes y
+  // viennent de 127.0.0.1) ; sans variable, ceux de la prod.
+  const plafond = (nom, defaut) => {
+    const valeur = Number.parseInt(process.env[nom], 10);
+    return Number.isFinite(valeur) && valeur > 0 ? valeur : defaut;
+  };
   const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // limit each IP to 1000 requests per windowMs
+    max: plafond("RATE_LIMIT_MAX", 1000), // limit each IP to 1000 requests per windowMs
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later." },
@@ -320,7 +326,7 @@ async function startServer() {
   // Strict rate limiter for auth routes
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20, // strict limit for auth
+    max: plafond("RATE_LIMIT_AUTH_MAX", 20), // strict limit for auth
     standardHeaders: true,
     legacyHeaders: false,
     message: {
