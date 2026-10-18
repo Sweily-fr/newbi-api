@@ -27,6 +27,7 @@ import {
   LOG_COLLECTION,
   OPTOUT_COLLECTION,
   SETTINGS_COLLECTION,
+  SIGNUP_STEP,
   createUnsubscribeToken,
   verifyUnsubscribeToken,
   runTrialNudges,
@@ -109,6 +110,39 @@ async function seedTrialOrg({
       lastSeenAt: ago(lastSeenDaysAgo),
     });
   }
+  return { orgId, userId };
+}
+
+/**
+ * Inscription arrêtée à l'étape « entreprise » il y a `signedUpDaysAgo` jours :
+ * compte, espace provisoire sans essai, adhésion propriétaire.
+ */
+async function seedIncompleteSignup({
+  signedUpDaysAgo,
+  email = "nouveau@exemple.fr",
+  emailVerified = false,
+  onboardingStep = "workspace",
+  name = "",
+} = {}) {
+  const orgId = new mongoose.Types.ObjectId();
+  const userId = new mongoose.Types.ObjectId();
+  await db.collection("organization").insertOne({
+    _id: orgId,
+    name: name || "Mon entreprise",
+    companyName: name || "Mon entreprise",
+    createdAt: ago(signedUpDaysAgo),
+  });
+  await db.collection("user").insertOne({
+    _id: userId,
+    email,
+    name,
+    emailVerified,
+    onboardingStep,
+    createdAt: ago(signedUpDaysAgo),
+  });
+  await db
+    .collection("member")
+    .insertOne({ organizationId: orgId, userId, role: "owner" });
   return { orgId, userId };
 }
 
@@ -274,6 +308,115 @@ describe("runTrialNudges", () => {
     sendMock.mockResolvedValue({ data: { id: "x" }, error: null });
     await runTrialNudges({ now: NOW });
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("inscriptions à finaliser", () => {
+  const runSignup = (now = NOW) =>
+    runTrialNudges({ now, steps: [SIGNUP_STEP] });
+
+  it("invite à finir l'inscription un jour après, une seule fois, adresse non vérifiée comprise", async () => {
+    await setMode("live");
+    const { orgId } = await seedIncompleteSignup({ signedUpDaysAgo: 1.05 });
+
+    const summary = await runSignup();
+    expect(summary.sent).toBe(1);
+    const payload = sendMock.mock.calls[0][0];
+    expect(payload.to).toEqual(["nouveau@exemple.fr"]);
+    expect(payload.subject).toBe("Finalisez votre inscription sur Newbi");
+    expect(payload.html).toContain("mailto:contact@newbi.fr");
+    expect(payload.html).toContain("/dashboard");
+    expect(payload.html).toContain("Bonjour,");
+    // Nom d'espace provisoire jamais affiché
+    expect(payload.html).not.toContain("Mon entreprise");
+    expect(payload.headers["List-Unsubscribe-Post"]).toBe(
+      "List-Unsubscribe=One-Click",
+    );
+    const [entry] = await logs();
+    expect(entry).toMatchObject({ step: SIGNUP_STEP, status: "sent" });
+    expect(String(entry.orgId)).toBe(String(orgId));
+
+    // Passage suivant : rien de plus
+    await runSignup(new Date(NOW.getTime() + 10 * 60 * 1000));
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("attend un jour, et ne rattrape pas au-delà de deux jours", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({ signedUpDaysAgo: 0.9, email: "a@exemple.fr" });
+    await seedIncompleteSignup({ signedUpDaysAgo: 3.1, email: "b@exemple.fr" });
+    const summary = await runSignup();
+    expect(summary.due).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("ignore les inscriptions terminées et les comptes déjà membres d'un autre espace", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({
+      signedUpDaysAgo: 1.05,
+      email: "fini@exemple.fr",
+      onboardingStep: "completed",
+    });
+    const { userId } = await seedIncompleteSignup({
+      signedUpDaysAgo: 1.05,
+      email: "invite@exemple.fr",
+    });
+    await db.collection("member").insertOne({
+      organizationId: new mongoose.Types.ObjectId(),
+      userId,
+      role: "member",
+    });
+    const trial = await seedIncompleteSignup({
+      signedUpDaysAgo: 1.05,
+      email: "essai@exemple.fr",
+    });
+    await db
+      .collection("organization")
+      .updateOne({ _id: trial.orgId }, { $set: { isTrialActive: true } });
+
+    const summary = await runSignup();
+    expect(summary.due).toBe(0);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("exclut les comptes internes et les désinscrits", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({
+      signedUpDaysAgo: 1.05,
+      email: "dev@sweily.fr",
+    });
+    const optout = await seedIncompleteSignup({ signedUpDaysAgo: 1.05 });
+    await unsubscribeFromTrialNudges(String(optout.userId));
+    const summary = await runSignup();
+    expect(summary.sent).toBe(0);
+    expect(summary.excluded).toEqual({ internal: 1, optout: 1 });
+  });
+
+  it("ni le passage quotidien ni celui de la bienvenue ne l'envoient", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({ signedUpDaysAgo: 1.05 });
+    expect((await runTrialNudges({ now: NOW })).due).toBe(0);
+    expect((await runTrialNudges({ now: NOW, steps: ["welcome"] })).due).toBe(
+      0,
+    );
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("apparaît dans le calendrier de l'admin, à sa date d'envoi", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({ signedUpDaysAgo: 0.25 });
+    await seedIncompleteSignup({
+      signedUpDaysAgo: 1.5,
+      email: "deja@exemple.fr",
+    });
+    const { items } = await listTrialNudgeSchedule({ now: NOW });
+    expect(items.map((i) => [i.step, i.status, i.reason])).toEqual([
+      [SIGNUP_STEP, "due", null],
+      [SIGNUP_STEP, "upcoming", null],
+    ]);
+    expect(items[1].dueAt).toBe(
+      new Date(ago(0.25).getTime() + DAY).toISOString(),
+    );
   });
 });
 
@@ -472,6 +615,19 @@ describe("gabarits", () => {
       expect(html).toContain("Bonjour,");
     },
   );
+
+  it("signup_incomplete : lien de désinscription, pas de tiret cadratin", () => {
+    const { subject, html } = buildTrialNudgeEmail("signup_incomplete", {
+      firstName: "<Camille>",
+      orgName: "Mon entreprise",
+      unsubscribeUrl: "https://api.example.test/u?t=a&b",
+    });
+    expect(subject).not.toContain("—");
+    expect(html).not.toContain("—");
+    expect(html).toContain("Ne plus recevoir");
+    expect(html).toContain("Bonjour &lt;Camille&gt;,");
+    expect(html).not.toContain("Mon entreprise");
+  });
 
   it("refuse une étape inconnue", () => {
     expect(() => buildTrialNudgeEmail("inconnue")).toThrow();
