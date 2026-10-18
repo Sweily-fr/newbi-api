@@ -55,7 +55,7 @@ describe("typo", () => {
   });
 });
 
-describe("parcours d'essai : six e-mails sans icône ni orphelin", () => {
+describe("parcours d'essai : sept e-mails sans icône ni orphelin", () => {
   const data = {
     firstName: "Camille",
     orgName: "Atelier Martin",
