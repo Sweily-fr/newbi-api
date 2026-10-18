@@ -28,7 +28,10 @@ const logFormat = printf(({ level, message, timestamp, ...metadata }) => {
 
 // Création du logger
 const logger = winston.createLogger({
-  level: process.env.NODE_ENV === "production" ? "info" : "debug",
+  // LOG_LEVEL : réglable (ex. « warn » pour les tests de bout en bout).
+  level:
+    process.env.LOG_LEVEL ||
+    (process.env.NODE_ENV === "production" ? "info" : "debug"),
   format: combine(timestamp({ format: "YYYY-MM-DD HH:mm:ss" }), logFormat),
   transports: [
     // Console en mode développement
@@ -36,7 +39,7 @@ const logger = winston.createLogger({
       format: combine(
         colorize(),
         timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-        logFormat
+        logFormat,
       ),
     }),
     // Fichier pour tous les logs
