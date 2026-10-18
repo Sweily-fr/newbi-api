@@ -1,7 +1,10 @@
 /**
  * Relances de l'essai gratuit (pilotées depuis newbi-admin, page Relances).
  *
- * Quatre e-mails, envoyés par services/trialNudgeService.js :
+ * Cinq e-mails, envoyés par services/trialNudgeService.js :
+ *   - signup_incomplete : inscription restée à l'étape « entreprise », avec
+ *                    le lien pour la finir et la même adresse que la
+ *                    bienvenue si une fonctionnalité manque
  *   - welcome      : bienvenue, au début de l'essai (fin d'onboarding), avec
  *                    l'adresse à qui écrire si une fonctionnalité manque
  *   - inactive_d7  : J+7, si l'espace est inactif depuis quelques jours
@@ -21,6 +24,7 @@ import {
 } from "./trialEmails.js";
 
 export const NUDGE_STEPS = [
+  "signup_incomplete",
   "welcome",
   "inactive_d7",
   "feedback_d14",
@@ -47,6 +51,11 @@ const callout = (html) =>
   `<div style="background-color: #f4f3ff; border: 1px solid #dcd9ff; border-radius: 8px; padding: 16px; margin: 4px 0 24px 0;"><p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6;">${html}</p></div>`;
 const mailtoLink = (address) =>
   `<a href="mailto:${address}" style="color: #5a50ff; text-decoration: none; font-weight: 500;">${address}</a>`;
+// Encadré commun à la bienvenue et à l'inscription à finaliser
+const missingFeatureCallout = (extra = "") =>
+  callout(
+    `${strong("Une fonctionnalité vous manque\u00a0?")}<br>Écrivez-nous à ${mailtoLink(TRIAL_NUDGE_REPLY_TO)} ou répondez simplement à cet e-mail${extra}. Nous lisons chaque message, et vos retours nous aident à choisir les prochaines évolutions de Newbi.`,
+  );
 
 /** « 13 novembre 2026 », ou null si la date est absente ou invalide. */
 function longDate(value) {
@@ -91,6 +100,33 @@ export function buildTrialNudgeEmail(step, data = {}) {
   const org = strong(escapeHtml(data.orgName || "votre entreprise"));
   const footer = footerNote(data.unsubscribeUrl);
 
+  // Pas de nom d'espace ici : celui de l'inscription est provisoire (le nom
+  // de la personne, ou « Mon entreprise »)
+  if (step === "signup_incomplete") {
+    return {
+      subject: "Finalisez votre inscription sur Newbi",
+      html: renderEmail({
+        preheader:
+          "Il ne reste qu'à renseigner votre entreprise pour démarrer vos 30 jours d'essai gratuit.",
+        badge: "INSCRIPTION",
+        iconLabel: "Plus qu'une étape",
+        iconBg: "#fef3c7",
+        iconColor: "#92400e",
+        title: "Finalisez votre inscription",
+        bodyHtml: `
+          ${greeting(data.firstName)}
+          ${paragraph(`Vous avez créé votre compte Newbi, mais votre inscription n'est pas tout à fait terminée\u00a0: il ne reste qu'à renseigner votre entreprise. C'est l'affaire d'une minute, et vos ${strong("30 jours d'essai gratuit")} démarrent aussitôt, sans carte bancaire ni engagement.`)}
+          ${paragraph(`${strong("Pas de numéro de SIRET sous la main\u00a0?")} Vous pouvez continuer sans et le renseigner plus tard, avant votre premier devis ou votre première facture.`)}
+          ${missingFeatureCallout(", y\u00a0compris si quelque chose vous a bloqué pendant l'inscription")}`,
+        ctaLabel: "Finaliser l'inscription",
+        // Connecté, le tableau de bord renvoie à l'étape « entreprise » ;
+        // sinon il passe par la connexion, qui y ramène ensuite
+        ctaUrl: `${APP_URL}/dashboard`,
+        ...footerNote(data.unsubscribeUrl, "vous avez créé un compte Newbi"),
+      }),
+    };
+  }
+
   if (step === "welcome") {
     const end = longDate(data.trialEndDate);
     return {
@@ -115,7 +151,7 @@ export function buildTrialNudgeEmail(step, data = {}) {
             `${strong("Connectez votre compte bancaire")} pour suivre votre trésorerie et rapprocher vos paiements.`,
             `${strong("Déposez vos factures fournisseurs")}\u00a0: elles sont lues automatiquement, sans ressaisie.`,
           ])}
-          ${callout(`${strong("Une fonctionnalité vous manque\u00a0?")}<br>Écrivez-nous à ${mailtoLink(TRIAL_NUDGE_REPLY_TO)} ou répondez simplement à cet e-mail. Nous lisons chaque message, et vos retours nous aident à choisir les prochaines évolutions de Newbi.`)}`,
+          ${missingFeatureCallout()}`,
         ctaLabel: "Accéder à mon espace",
         ctaUrl: `${APP_URL}/dashboard`,
         ...footerNote(data.unsubscribeUrl, "vous avez créé un compte Newbi"),

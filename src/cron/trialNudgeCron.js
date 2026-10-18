@@ -2,7 +2,8 @@
  * Relances de l'essai gratuit : J+7 inactif et J+14 suggestions du lundi au
  * vendredi à 10:00 Europe/Paris (un samedi ou un dimanche, le lundi), bienvenue
  * toutes les 10 minutes, tous les jours (elle doit arriver juste après
- * l'onboarding). Le mode (off / simulation / live) se
+ * l'onboarding), suivie de l'e-mail des inscriptions à finaliser. Le mode
+ * (off / simulation / live) se
  * règle dans newbi-admin et se relit à chaque passage : rien à redémarrer.
  *
  * Câblé dans server.js derrière le garde `instanceId === 0` (une seule
@@ -14,6 +15,7 @@ import logger from "../utils/logger.js";
 import { isAppTrialEnabled } from "../utils/featureFlags.js";
 import {
   DAILY_RUN_HOUR,
+  SIGNUP_STEP,
   runTrialNudges,
 } from "../services/trialNudgeService.js";
 
@@ -30,6 +32,13 @@ export function startTrialNudgeCron() {
       } catch (error) {
         logger.error(`[trialNudgeCron] bienvenue, erreur : ${error.message}`);
       }
+      try {
+        await runTrialNudges({ steps: [SIGNUP_STEP] });
+      } catch (error) {
+        logger.error(
+          `[trialNudgeCron] inscriptions à finaliser, erreur : ${error.message}`,
+        );
+      }
     },
     { scheduled: true, timezone: "Europe/Paris" },
   );
@@ -45,7 +54,7 @@ export function startTrialNudgeCron() {
     { scheduled: true, timezone: "Europe/Paris" },
   );
   logger.info(
-    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue toutes les 10 min)`,
+    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue et inscriptions à finaliser toutes les 10 min)`,
   );
   return task;
 }

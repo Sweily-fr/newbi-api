@@ -2,6 +2,11 @@
  * Relances automatiques de l'essai gratuit, pilotées depuis newbi-admin
  * (page Relances, via /api/admin-service/trial-nudges).
  *
+ *   - signup_incomplete : inscription restée à l'étape « entreprise » (essai
+ *                    pas commencé, donc ni bienvenue ni relances d'essai),
+ *                    un jour après la création du compte, vérifiée toutes les
+ *                    10 minutes avec la bienvenue ; part aussi aux adresses
+ *                    pas encore vérifiées
  *   - welcome      : bienvenue au début de l'essai (fin d'onboarding), vérifiée
  *                    toutes les 10 minutes pour partir vite
  *   - inactive_d7  : J+7 après le début de l'essai, si l'espace est inactif
@@ -71,6 +76,11 @@ export const SCHEDULED_STEPS = {
 };
 // Relance de fin d'essai, déclenchée par l'expiration (trialCleanupCron)
 export const END_STEP = "inactive_d30";
+
+// Inscription restée à l'étape « entreprise », comptée depuis la création du
+// compte : le temps de revenir de soi-même avant d'être relancé
+export const SIGNUP_STEP = "signup_incomplete";
+export const SIGNUP_STEP_DELAY_MS = DAY_MS;
 
 // Une relance manquée (cron arrêté, mode coupé) part encore pendant ce délai,
 // compté en jours ouvrés pour les relances `weekdaysOnly`
@@ -315,6 +325,56 @@ function trialOrgsQuery() {
   return { isTrialActive: true, stripeTrialActive: { $ne: true } };
 }
 
+/**
+ * Espaces provisoires des inscriptions restées à l'étape « entreprise », pour
+ * les comptes créés entre `from` (inclus) et `to` (exclu). L'espace est créé
+ * à l'inscription, sans essai : l'essai démarre quand l'étape est validée.
+ * Seuls comptent les comptes membres de ce seul espace, dont ils sont
+ * propriétaires (un compte déjà membre d'un autre espace se sert de Newbi).
+ */
+async function incompleteSignupOrgs(db, { from, to }) {
+  const users = await db
+    .collection("user")
+    .find(
+      {
+        onboardingStep: "workspace",
+        createdAt: { $gte: from, $lt: to },
+        banned: { $ne: true },
+      },
+      { projection: { _id: 1 } },
+    )
+    .toArray();
+  if (users.length === 0) return [];
+
+  const memberships = await db
+    .collection("member")
+    .find(
+      { userId: { $in: idVariants(users.map((u) => u._id)) } },
+      { projection: { organizationId: 1, userId: 1, role: 1 } },
+    )
+    .toArray();
+  const byUser = new Map();
+  for (const m of memberships) {
+    const key = String(m.userId);
+    byUser.set(key, [...(byUser.get(key) || []), m]);
+  }
+  const orgIds = [...byUser.values()]
+    .filter((list) => list.length === 1 && isOwnerRole(list[0].role))
+    .map((list) => String(list[0].organizationId));
+  if (orgIds.length === 0) return [];
+
+  return db
+    .collection("organization")
+    .find(
+      {
+        _id: { $in: idVariants(orgIds).filter((v) => typeof v !== "string") },
+        isTrialActive: { $ne: true },
+      },
+      { projection: ORG_PROJECTION },
+    )
+    .toArray();
+}
+
 const isOwnerRole = (role) =>
   String(role || "")
     .split(",")
@@ -373,6 +433,8 @@ async function loadContexts(db, orgs, { simulated }) {
               name: 1,
               emailVerified: 1,
               "profile.firstName": 1,
+              createdAt: 1,
+              onboardingStep: 1,
             },
           },
         )
@@ -467,6 +529,8 @@ async function loadContexts(db, orgs, { simulated }) {
             email: owner.email ? String(owner.email).toLowerCase() : null,
             firstName: firstNameOf(owner),
             emailVerified: owner.emailVerified === true,
+            signedUpAt: toDate(owner.createdAt),
+            onboardingStep: owner.onboardingStep || null,
           }
         : null,
       lastActivityAt,
@@ -484,11 +548,20 @@ async function loadContexts(db, orgs, { simulated }) {
  */
 export function exclusionReason(ctx, step, { now, inactivityDays }) {
   if (!ctx.owner?.email) return "no_owner";
-  if (!ctx.owner.emailVerified) return "unverified";
+  // L'inscription par e-mail mène à l'étape « entreprise » sans attendre la
+  // vérification de l'adresse : l'exiger écarterait la plupart des comptes
+  // à qui l'on demande justement de finir leur inscription
+  if (!ctx.owner.emailVerified && step !== SIGNUP_STEP) return "unverified";
   if (isInternalEmail(ctx.owner.email)) return "internal";
   if (ctx.optedOut) return "optout";
   if (ctx.subscribed) return "subscribed";
   if (ctx.managed) return "managed";
+  if (
+    step === SIGNUP_STEP &&
+    (ctx.trialStart || ctx.owner.onboardingStep !== "workspace")
+  ) {
+    return "signup_completed";
+  }
   if (ctx.sentSteps.has(`${ctx.orgId}:${step}`)) return "already_sent";
   const requiresInactivity =
     step === END_STEP || SCHEDULED_STEPS[step]?.requiresInactivity;
@@ -505,6 +578,12 @@ function isActive(ctx, { now, inactivityDays }) {
 
 function dueDateOf(ctx, step) {
   if (step === END_STEP) return ctx.trialEnd;
+  if (step === SIGNUP_STEP) {
+    const signedUpAt = ctx.owner?.signedUpAt;
+    return signedUpAt
+      ? new Date(signedUpAt.getTime() + SIGNUP_STEP_DELAY_MS)
+      : null;
+  }
   if (!ctx.trialStart) return null;
   return new Date(
     ctx.trialStart.getTime() + SCHEDULED_STEPS[step].dayOffset * DAY_MS,
@@ -746,11 +825,11 @@ async function writeHeartbeat(db, summary, startedAt, key) {
 }
 
 /**
- * Passage des relances planifiées (`steps`, toutes par défaut) dont la date
- * est atteinte, dans la fenêtre de rattrapage. Le cron quotidien les passe
- * toutes ; celui de la bienvenue ne passe que `welcome`, toutes les 10 min.
- * La relance de fin d'essai part avec l'expiration, voir
- * sendTrialEndNudgeIfInactive.
+ * Passage des relances planifiées (`steps`, toutes les relances d'essai par
+ * défaut) dont la date est atteinte, dans la fenêtre de rattrapage. Le cron
+ * quotidien passe les relances d'essai ; toutes les 10 min, un passage pour
+ * `welcome`, puis un pour SIGNUP_STEP (inscriptions à finaliser). La relance
+ * de fin d'essai part avec l'expiration, voir sendTrialEndNudgeIfInactive.
  */
 export async function runTrialNudges({
   now = new Date(),
@@ -764,22 +843,33 @@ export async function runTrialNudges({
   const simulated = settings.mode === "simulation";
   const startedAt = new Date();
 
-  const orgs = await database
-    .collection("organization")
-    .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
-    .toArray();
-
   // Ne charger le contexte que des espaces qui ont une relance à faire
   const due = [];
-  for (const org of orgs) {
-    const start = toDate(org.trialStartDate);
-    if (!start) continue;
-    for (const step of steps) {
-      const { dayOffset } = SCHEDULED_STEPS[step];
-      const dueAt = new Date(start.getTime() + dayOffset * DAY_MS);
-      if (isSendable(step, dueAt, now)) {
-        due.push({ org, step });
+  const trialSteps = steps.filter((step) => SCHEDULED_STEPS[step]);
+  if (trialSteps.length > 0) {
+    const orgs = await database
+      .collection("organization")
+      .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
+      .toArray();
+    for (const org of orgs) {
+      const start = toDate(org.trialStartDate);
+      if (!start) continue;
+      for (const step of trialSteps) {
+        const { dayOffset } = SCHEDULED_STEPS[step];
+        const dueAt = new Date(start.getTime() + dayOffset * DAY_MS);
+        if (isSendable(step, dueAt, now)) {
+          due.push({ org, step });
+        }
       }
+    }
+  }
+  if (steps.includes(SIGNUP_STEP)) {
+    // La date dépend de la création du compte : la requête ne retient que
+    // les comptes dont la relance est due et encore dans le rattrapage
+    const to = new Date(now.getTime() - SIGNUP_STEP_DELAY_MS);
+    const from = new Date(to.getTime() - SEND_WINDOW_DAYS * DAY_MS);
+    for (const org of await incompleteSignupOrgs(database, { from, to })) {
+      due.push({ org, step: SIGNUP_STEP });
     }
   }
 
@@ -814,11 +904,11 @@ export async function runTrialNudges({
     else if (outcome === "failed") summary.failed++;
   }
 
-  // Le passage de la bienvenue tourne toutes les 10 min : il ne journalise
-  // que s'il a envoyé (ou simulé) quelque chose. Les espaces déjà accueillis
-  // restent « dus » pendant toute la fenêtre de rattrapage (2 jours), ce qui
-  // écrivait une ligne toutes les 10 min. Le passage quotidien, lui, journalise
-  // toujours.
+  // Les passages de la bienvenue et des inscriptions à finaliser tournent
+  // toutes les 10 min : ils ne journalisent que s'ils ont envoyé (ou simulé)
+  // quelque chose. Les espaces déjà relancés restent « dus » pendant toute la
+  // fenêtre de rattrapage (2 jours), ce qui écrivait une ligne toutes les
+  // 10 min. Le passage quotidien, lui, journalise toujours.
   const acted = summary.sent + summary.simulated + summary.failed > 0;
   if (steps.length > 1 || acted) {
     logger.info(
@@ -873,45 +963,65 @@ export async function listTrialNudgeSchedule({
 } = {}) {
   const database = getDb(db);
   const settings = await getTrialNudgeSettings(database);
-  const orgs = await database
-    .collection("organization")
-    .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
-    .toArray();
-
   const to = now.getTime() + horizonDays * DAY_MS;
+  const [orgs, signupOrgs] = await Promise.all([
+    database
+      .collection("organization")
+      .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
+      .toArray(),
+    // Comptes dont la relance n'a pas dépassé son rattrapage et tombe avant
+    // la fin de l'horizon
+    incompleteSignupOrgs(database, {
+      from: new Date(
+        now.getTime() - SIGNUP_STEP_DELAY_MS - SEND_WINDOW_DAYS * DAY_MS,
+      ),
+      to: new Date(to - SIGNUP_STEP_DELAY_MS + 1),
+    }),
+  ]);
+
   const simulated = settings.mode === "simulation";
-  const contexts = await loadContexts(database, orgs, { simulated });
+  const [contexts, signupContexts] = await Promise.all([
+    loadContexts(database, orgs, { simulated }),
+    loadContexts(database, signupOrgs, { simulated }),
+  ]);
+  const candidates = [
+    ...contexts.flatMap((ctx) =>
+      [...Object.keys(SCHEDULED_STEPS), END_STEP].map((step) => ({
+        ctx,
+        step,
+      })),
+    ),
+    ...signupContexts.map((ctx) => ({ ctx, step: SIGNUP_STEP })),
+  ];
 
   const items = [];
-  for (const ctx of contexts) {
-    for (const step of [...Object.keys(SCHEDULED_STEPS), END_STEP]) {
-      const due = dueDateOf(ctx, step);
-      // Rattrapage dépassé : la relance ne partira plus
-      if (!due || now >= sendWindowEnd(step, due)) continue;
-      // Jours ouvrés : date d'envoi réelle (un samedi → le lundi à 10 h)
-      const sendAt = isWeekdaysOnly(step) ? nextWeekdaySlot(due) : due;
-      if (sendAt.getTime() > to) continue;
-      // Fin d'essai déjà traitée par le cron (e-mail standard parti)
-      if (step === END_STEP && ctx.org.trialEndedEmailSentAt) continue;
-      const reason = exclusionReason(ctx, step, {
-        now,
-        inactivityDays: settings.inactivityDays,
-      });
-      // L'activité d'une relance à venir n'est qu'indicative : elle sera
-      // réévaluée le jour J, la relance n'est donc pas exclue pour autant
-      const pending = sendAt > now;
-      const excluded = Boolean(reason) && !(pending && reason === "active");
-      items.push({
-        step,
-        dueAt: sendAt.toISOString(),
-        orgId: ctx.orgId,
-        orgName: ctx.orgName,
-        ownerEmail: ctx.owner?.email || null,
-        lastActivityAt: ctx.lastActivityAt?.toISOString() || null,
-        status: excluded ? "excluded" : pending ? "upcoming" : "due",
-        reason,
-      });
-    }
+  for (const { ctx, step } of candidates) {
+    const due = dueDateOf(ctx, step);
+    // Rattrapage dépassé : la relance ne partira plus
+    if (!due || now >= sendWindowEnd(step, due)) continue;
+    // Jours ouvrés : date d'envoi réelle (un samedi → le lundi à 10 h)
+    const sendAt = isWeekdaysOnly(step) ? nextWeekdaySlot(due) : due;
+    if (sendAt.getTime() > to) continue;
+    // Fin d'essai déjà traitée par le cron (e-mail standard parti)
+    if (step === END_STEP && ctx.org.trialEndedEmailSentAt) continue;
+    const reason = exclusionReason(ctx, step, {
+      now,
+      inactivityDays: settings.inactivityDays,
+    });
+    // L'activité d'une relance à venir n'est qu'indicative : elle sera
+    // réévaluée le jour J, la relance n'est donc pas exclue pour autant
+    const pending = sendAt > now;
+    const excluded = Boolean(reason) && !(pending && reason === "active");
+    items.push({
+      step,
+      dueAt: sendAt.toISOString(),
+      orgId: ctx.orgId,
+      orgName: ctx.orgName,
+      ownerEmail: ctx.owner?.email || null,
+      lastActivityAt: ctx.lastActivityAt?.toISOString() || null,
+      status: excluded ? "excluded" : pending ? "upcoming" : "due",
+      reason,
+    });
   }
   items.sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   return { settings, items, now: now.toISOString() };

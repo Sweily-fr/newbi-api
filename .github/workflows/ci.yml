@@ -2,16 +2,36 @@ name: CI — newbi-api
 
 on:
   # Tests CI only on develop — never on main/prod.
+  # Une seule fois par changement : sur la PR. Le passage après fusion sur
+  # develop relançait les mêmes tests sur le même code (environ 60 % des
+  # minutes de CI, payantes si le dépôt est privé). Lancement manuel possible.
   pull_request:
     branches: [develop]
-  push:
-    branches: [develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Recherche de secrets (clés, mots de passe) dans les commits de la PR.
+  # Remplace la surveillance de GitHub, payante depuis le passage du dépôt en
+  # privé (18/10/2026) ; même contrôle que la CI du site.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    # L'action lit la liste des commits de la PR.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
