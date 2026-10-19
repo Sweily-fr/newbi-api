@@ -1,76 +1,86 @@
 name: CI — newbi-api
 
 on:
-  # Tests CI only on develop — never on main/prod.
-  # Une seule fois par changement : sur la PR. Le passage après fusion sur
-  # develop relançait les mêmes tests sur le même code (environ 60 % des
-  # minutes de CI, payantes si le dépôt est privé). Lancement manuel possible.
+  # Une seule fois par changement : sur sa PR (vers develop, ou vers main pour
+  # une release ou un hotfix). Le passage après fusion relançait les mêmes
+  # tests sur le même code (environ 60 % des minutes de CI, payantes si le
+  # dépôt est privé). La PR de release est le premier passage sur l'ensemble
+  # des tickets fusionnés dans develop, et un hotfix part de main : d'où les
+  # PR vers main. Lancement manuel possible.
   pull_request:
-    branches: [develop]
+    branches: [develop, main]
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  # gitleaks lit la liste des commits de la PR.
+  pull-requests: read
+
 jobs:
-  # Recherche de secrets (clés, mots de passe) dans les commits de la PR.
-  # Remplace la surveillance de GitHub, payante depuis le passage du dépôt en
-  # privé (18/10/2026) ; même contrôle que la CI du site.
-  secret-scan:
-    name: Secret scan (gitleaks)
+  # Secrets, lint et tests unitaires sur une seule machine (une installation
+  # au lieu de trois) ; chaque contrôle tourne même si un autre échoue.
+  checks:
+    name: Contrôles (secrets, lint, tests unitaires)
     runs-on: ubuntu-latest
-    # L'action lit la liste des commits de la PR.
-    permissions:
-      contents: read
-      pull-requests: read
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          # gitleaks parcourt les commits de la PR.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Installer les dépendances
+        id: installation
+        run: npm ci
+
+      # Recherche de secrets (clés, mots de passe) dans les commits de la PR.
+      # Remplace la surveillance de GitHub, payante pour un dépôt privé.
+      - name: Recherche de secrets (gitleaks)
+        if: ${{ !cancelled() }}
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Le résumé du job suffit ; l'artefact SARIF ne sert à personne.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "npm"
-      - run: npm ci
-      - run: npm run lint
+      - name: Lint
+        if: ${{ !cancelled() && steps.installation.outcome == 'success' }}
+        run: npm run lint
 
-  unit-tests:
-    name: Tests unitaires (Vitest)
-    runs-on: ubuntu-latest
-    needs: lint
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "npm"
-      - run: npm ci
       # Les services lisent leur config au chargement du module (dotenv) :
       # les valeurs placeholder de .env.example suffisent aux tests unitaires
-      - run: cp .env.example .env
-      - run: npm run test:run -- --coverage
+      - name: Tests unitaires (Vitest)
+        id: tests
+        if: ${{ !cancelled() && steps.installation.outcome == 'success' }}
+        run: |
+          cp .env.example .env
+          npm run test:run -- --coverage
         env:
           NODE_ENV: test
+
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         with:
           name: api-coverage-report
           path: coverage/
+          # Sans durée, GitHub gardait chaque rapport 90 jours (1 Go cumulé).
+          retention-days: 7
+          if-no-files-found: ignore
 
+  # En parallèle des contrôles : le résultat complet arrive plus tôt.
   integration-tests:
     name: Tests intégration GraphQL
     runs-on: ubuntu-latest
-    needs: unit-tests
+    timeout-minutes: 20
     services:
       mongodb:
         image: mongo:7
