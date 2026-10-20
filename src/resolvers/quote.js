@@ -5,6 +5,7 @@ import {
   inputOrStored,
 } from "../utils/documentTotals.js";
 import { loadWorkspaceClient } from "../utils/loadWorkspaceClient.js";
+import { startOfParisDay } from "../utils/parisDate.js";
 import {
   loadQuoteDeliveryNotes,
   loadWorkspaceInvoice,
@@ -436,8 +437,21 @@ const quoteResolvers = {
           context.workspaceId,
         );
         const wid = new mongoose.Types.ObjectId(workspaceId);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        // Un devis dont la validité est passée est « Expiré » dans la liste
+        // des devis : il ne compte plus parmi les devis en attente (jour
+        // calendaire à Paris, comme la liste)
+        const today = startOfParisDay();
+        const isStillPending = {
+          $and: [
+            { $in: ["$status", ["PENDING", "IMPORTED"]] },
+            {
+              $or: [
+                { $eq: [{ $ifNull: ["$validUntil", null] }, null] },
+                { $gte: ["$validUntil", today] },
+              ],
+            },
+          ],
+        };
 
         // Agrégation des devis créés sur Newbi
         const [quoteStats] = await Quote.aggregate([
@@ -470,7 +484,7 @@ const quoteResolvers = {
               pendingAmount: {
                 $sum: {
                   $cond: [
-                    { $in: ["$status", ["PENDING", "IMPORTED"]] },
+                    isStillPending,
                     {
                       $ifNull: ["$finalTotalHT", { $ifNull: ["$totalHT", 0] }],
                     },
@@ -480,7 +494,7 @@ const quoteResolvers = {
               },
               pendingCount: {
                 $sum: {
-                  $cond: [{ $in: ["$status", ["PENDING", "IMPORTED"]] }, 1, 0],
+                  $cond: [isStillPending, 1, 0],
                 },
               },
             },
