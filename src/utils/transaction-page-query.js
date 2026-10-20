@@ -85,6 +85,17 @@ export function buildTabPredicate(tab, now = new Date()) {
 }
 
 /**
+ * Transactions à catégoriser (accueil) : transactions bancaires sans
+ * catégorie fine ni catégorie large. Les espèces (saisies à la main) en
+ * sont exclues, comme du compteur des justificatifs manquants.
+ */
+export const UNCATEGORIZED_PREDICATE = {
+  provider: { $ne: "manual" },
+  category: { $in: [null, ""] },
+  expenseCategory: { $in: [null, ""] },
+};
+
+/**
  * Filtre de base (hors onglet) : recherche texte, compte, source, catégorie,
  * moyen de paiement, plage de montants et de dates.
  */
