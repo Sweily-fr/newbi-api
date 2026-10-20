@@ -3,6 +3,7 @@ import addressSchema from "./schemas/address.js";
 import {
   PHONE_REGEX,
   NAME_REGEX,
+  isValidPersonName,
   isValidEmail,
   isValidSIRET,
   isValidVATNumberEU,
@@ -19,23 +20,21 @@ const clientSchema = new mongoose.Schema(
       required: [true, "Le nom est requis"],
       trim: true,
       validate: {
-        validator: function (v) {
+        // Le message dépend du type de client : le validateur le choisit (il
+        // voit le document). Une fonction `message` est appelée hors du
+        // document : y lire `this.type` levait une exception hors de la
+        // promesse de save(), et la requête restait sans réponse.
+        propsParameter: true,
+        validator: function (v, props) {
           if (this.type === "COMPANY") {
+            props.message =
+              "Le nom de l'entreprise doit contenir entre 2 et 200 caractères (< et > interdits)";
             return v && v.length >= 2 && v.length <= 200 && NAME_REGEX.test(v);
           } else {
-            return (
-              v &&
-              v.length >= 2 &&
-              v.length <= 50 &&
-              /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v)
-            );
-          }
-        },
-        message: function (props) {
-          if (this.type === "COMPANY") {
-            return "Le nom de l'entreprise doit contenir entre 2 et 200 caractères (< et > interdits)";
-          } else {
-            return "Le nom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)";
+            props.message =
+              "Le nom doit contenir au moins 2 caractères (lettres, espaces, apostrophes, points et tirets uniquement)";
+            // Particulier : « Prénom Nom » généré, chaque partie pouvant faire 50 caractères
+            return isValidPersonName(v, 101);
           }
         },
       },
@@ -151,20 +150,14 @@ const clientSchema = new mongoose.Schema(
       type: String,
       trim: true,
       validate: {
-        validator: function (v) {
-          return (
-            !v ||
-            (v.length >= 2 &&
-              v.length <= 50 &&
-              /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
-          );
-        },
-        message: function (props) {
-          if (this.type === "INDIVIDUAL") {
-            return "Le prénom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)";
-          } else {
-            return "Le nom du contact doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)";
-          }
+        // Message choisi selon le type par le validateur (voir le nom ci-dessus)
+        propsParameter: true,
+        validator: function (v, props) {
+          props.message =
+            this.type === "INDIVIDUAL"
+              ? "Le prénom doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes, points et tirets uniquement)"
+              : "Le nom du contact doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes, points et tirets uniquement)";
+          return !v || isValidPersonName(v);
         },
       },
     },
@@ -173,15 +166,10 @@ const clientSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
-          return (
-            !v ||
-            (v.length >= 2 &&
-              v.length <= 50 &&
-              /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
-          );
+          return !v || isValidPersonName(v);
         },
         message:
-          "Le nom de famille doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)",
+          "Le nom de famille doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes, points et tirets uniquement)",
       },
     },
     createdBy: {
@@ -281,12 +269,7 @@ const clientSchema = new mongoose.Schema(
           trim: true,
           validate: {
             validator: function (v) {
-              return (
-                !v ||
-                (v.length >= 2 &&
-                  v.length <= 50 &&
-                  /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
-              );
+              return !v || isValidPersonName(v);
             },
             message: "Le prénom doit contenir entre 2 et 50 caractères",
           },
@@ -296,12 +279,7 @@ const clientSchema = new mongoose.Schema(
           trim: true,
           validate: {
             validator: function (v) {
-              return (
-                !v ||
-                (v.length >= 2 &&
-                  v.length <= 50 &&
-                  /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
-              );
+              return !v || isValidPersonName(v);
             },
             message: "Le nom doit contenir entre 2 et 50 caractères",
           },

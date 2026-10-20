@@ -37,9 +37,9 @@ const invoiceSchema = new mongoose.Schema(
         validator: function (value) {
           // Un préfixe vide est autorisé : les documents importés conservent
           // leur référence d'origine (dans `number`) sans préfixe.
-          return !value || value.length <= 10;
+          return !value || value.length <= 20;
         },
-        message: "Le préfixe ne doit pas dépasser 10 caractères",
+        message: "Le préfixe ne doit pas dépasser 20 caractères",
       },
     },
     number: {
