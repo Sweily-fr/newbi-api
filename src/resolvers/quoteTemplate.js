@@ -6,6 +6,7 @@ import {
   requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+import { assertDocumentTemplateCapacity } from "../services/planLimits.js";
 
 // Modèles : mêmes droits que le module « quotes »
 const readTemplates = requireWorkspaceLevel("quotes", "read");
@@ -34,6 +35,9 @@ const quoteTemplateResolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { quoteId, name, description } = input;
+
+        // Plafond de l'offre (10 modèles sur l'offre d'entrée)
+        await assertDocumentTemplateCapacity(finalWorkspaceId);
 
         const quote = await Quote.findOne({
           _id: quoteId,
