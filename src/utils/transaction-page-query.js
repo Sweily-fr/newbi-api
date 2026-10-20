@@ -25,6 +25,33 @@ const parseAmountSearch = (term) => {
 // Source unique des clauses "aucun document lié" : utils/transactionLinks.js
 const NO_LINKED_INVOICES = NO_LINKED_DOCUMENTS_CLAUSES;
 
+// Moyens de paiement enregistrés affichés sous le même libellé par la liste
+// (« Carte », « Virement », « Prélèvement »)
+const PAYMENT_METHOD_ALIASES = {
+  CARD: ["CARD", "CREDIT_CARD"],
+  BANK_TRANSFER: ["BANK_TRANSFER", "TRANSFER"],
+  DIRECT_DEBIT: ["DIRECT_DEBIT", "SEPA_DEBIT"],
+};
+
+/**
+ * Filtre « Méthode de paiement » : ce que la liste affiche. Une transaction
+ * bancaire n'a le plus souvent aucun moyen enregistré ; le site l'affiche
+ * alors « Carte » pour une sortie d'argent et « Virement » pour une entrée
+ * (mapTransactionToExpense). Le filtre « Carte » ne retrouvait aucune des
+ * dépenses par carte affichées comme telles.
+ */
+export function buildPaymentMethodClause(paymentMethod) {
+  const stored = PAYMENT_METHOD_ALIASES[paymentMethod] || [paymentMethod];
+  const clauses = [{ "metadata.paymentMethod": { $in: stored } }];
+  const withoutMethod = { "metadata.paymentMethod": { $in: [null, ""] } };
+  if (paymentMethod === "CARD") {
+    clauses.push({ ...withoutMethod, type: "debit" });
+  } else if (paymentMethod === "BANK_TRANSFER") {
+    clauses.push({ ...withoutMethod, type: { $ne: "debit" } });
+  }
+  return { $or: clauses };
+}
+
 /**
  * Prédicat Mongo d'un onglet. `now` est injectable pour les tests.
  */
@@ -77,7 +104,11 @@ export function buildBaseQuery(workspaceId, filters = {}) {
   }
 
   if (filters.paymentMethod) {
-    query["metadata.paymentMethod"] = filters.paymentMethod;
+    // $and pour ne pas écraser le $or de catégorie
+    query.$and = [
+      ...(query.$and || []),
+      buildPaymentMethodClause(filters.paymentMethod),
+    ];
   }
 
   if (filters.minAmount !== undefined && filters.minAmount !== null) {
