@@ -1,4 +1,5 @@
 import ProductCustomField from "../models/ProductCustomField.js";
+import { assertPlanCapacity } from "../services/planLimits.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceLevel,
@@ -76,6 +77,14 @@ export const productCustomFieldResolvers = {
           if (existingField) {
             throw new Error("Un champ avec ce nom existe déjà");
           }
+
+          // Plafond de l'offre (5 champs sur l'offre d'entrée)
+          await assertPlanCapacity(
+            workspaceId,
+            "customFields",
+            () => ProductCustomField.countDocuments({ workspaceId }),
+            "champs personnalisés de produits",
+          );
 
           // Récupérer l'ordre maximum actuel
           const maxOrderField = await ProductCustomField.findOne({

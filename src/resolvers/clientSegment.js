@@ -10,6 +10,7 @@ import {
 import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 import { buildSearchRegex } from "../utils/searchRegex.js";
+import { assertPlanFeature } from "../services/planLimits.js";
 
 /**
  * Escape special regex characters in a string
@@ -198,6 +199,13 @@ export const clientSegmentResolvers = {
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
+        );
+
+        // Absents de l'offre d'entrée (clientSegments dans plan-limits)
+        await assertPlanFeature(
+          workspaceId,
+          "clientSegments",
+          "les segments de contacts",
         );
 
         if (!input.rules || input.rules.length === 0) {

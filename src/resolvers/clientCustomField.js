@@ -1,5 +1,6 @@
 import ClientCustomField from "../models/ClientCustomField.js";
 import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
+import { assertPlanCapacity } from "../services/planLimits.js";
 import {
   requireAction,
   requireRead,
@@ -124,6 +125,14 @@ export const clientCustomFieldResolvers = {
           if (existingField) {
             throw new Error("Un champ avec ce nom existe déjà");
           }
+
+          // Plafond de l'offre (5 champs sur l'offre d'entrée)
+          await assertPlanCapacity(
+            workspaceId,
+            "customFields",
+            () => ClientCustomField.countDocuments({ workspaceId }),
+            "champs personnalisés de contacts",
+          );
 
           // Récupérer l'ordre maximum actuel
           const maxOrderField = await ClientCustomField.findOne({

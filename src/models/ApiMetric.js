@@ -228,14 +228,20 @@ apiMetricSchema.statics.findOrCreate = async function (
   return metric;
 };
 
-apiMetricSchema.statics.getProviderStats = function (
+// Statistiques d'un espace seulement : sans espace, rien (jamais la somme
+// de toutes les organisations). L'agrégation ne convertit pas les types,
+// d'où le String() (workspaceId est stocké en texte).
+apiMetricSchema.statics.getProviderStats = async function (
+  workspaceId,
   provider,
   startDate,
   endDate,
 ) {
+  if (!workspaceId) return [];
   return this.aggregate([
     {
       $match: {
+        workspaceId: String(workspaceId),
         provider,
         date: { $gte: startDate, $lte: endDate },
       },
@@ -265,10 +271,16 @@ apiMetricSchema.statics.getProviderStats = function (
   ]);
 };
 
-apiMetricSchema.statics.getCostComparison = function (startDate, endDate) {
+apiMetricSchema.statics.getCostComparison = async function (
+  workspaceId,
+  startDate,
+  endDate,
+) {
+  if (!workspaceId) return [];
   return this.aggregate([
     {
       $match: {
+        workspaceId: String(workspaceId),
         date: { $gte: startDate, $lte: endDate },
       },
     },

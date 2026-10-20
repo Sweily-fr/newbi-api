@@ -412,7 +412,7 @@ export class BankingService {
    * @returns {Promise<Array>} Métriques de coût
    */
   async getCostMetrics(workspaceId, startDate, endDate) {
-    return await ApiMetric.getCostComparison(startDate, endDate);
+    return await ApiMetric.getCostComparison(workspaceId, startDate, endDate);
   }
 
   // Méthodes privées

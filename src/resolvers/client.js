@@ -25,6 +25,7 @@ import { workspaceKey } from "../dataloaders/index.js";
 import { isInternationalEntity } from "../utils/validators.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { toObjectIdOrNull } from "../utils/objectIdString.js";
+import { sanitizeRichText } from "../utils/richText.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -817,10 +818,12 @@ const clientResolvers = {
           throw createNotFoundError("Client");
         }
 
+        // Note en texte riche : nettoyée avant d'être enregistrée
+        const content = sanitizeRichText(input.content);
         const noteId = new mongoose.Types.ObjectId().toString();
         const newNote = {
           id: noteId,
-          content: input.content,
+          content,
           userId: user.id,
           userName: user.name || user.email,
           userImage: user.image || null,
@@ -835,7 +838,7 @@ const clientResolvers = {
         client.activity.push({
           id: new mongoose.Types.ObjectId().toString(),
           type: "note_added",
-          description: input.content,
+          description: content,
           userId: user.id,
           userName: user.name || user.email,
           userImage: user.image || null,
@@ -851,10 +854,17 @@ const clientResolvers = {
     updateClientNote: requireNotes(
       async (
         _,
-        { clientId, noteId, content, workspaceId: inputWorkspaceId },
+        {
+          clientId,
+          noteId,
+          content: rawContent,
+          workspaceId: inputWorkspaceId,
+        },
         context,
       ) => {
         const { user } = context;
+        // Note en texte riche : nettoyée avant d'être enregistrée
+        const content = sanitizeRichText(rawContent);
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
