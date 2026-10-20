@@ -400,3 +400,25 @@ describe("Mutations : dossier privé inaccessible comme introuvable", () => {
     expect((await targetOf(allowed))?.name).toBe("Confidentiel");
   });
 });
+
+describe("Suppression définitive des dossiers : seulement ceux de la corbeille", () => {
+  it("un dossier actif (hors corbeille) n'est pas supprimé définitivement", async () => {
+    await call(
+      Mutation,
+      "permanentlyDeleteFolders",
+      { ids: [String(publicFolder)] },
+      owner,
+    );
+    expect(await folderState(publicFolder)).not.toBeNull();
+  });
+
+  it("un dossier de la corbeille l'est", async () => {
+    await call(
+      Mutation,
+      "permanentlyDeleteFolders",
+      { ids: [String(trashedPrivateFolder)] },
+      owner,
+    );
+    expect(await folderState(trashedPrivateFolder)).toBeNull();
+  });
+});
