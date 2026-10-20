@@ -13,7 +13,10 @@ import "../../src/models/CreditNote.js";
 import "../../src/models/Quote.js";
 import "../../src/models/Transaction.js";
 import "../../src/models/Client.js";
-import financialAnalyticsResolvers from "../../src/resolvers/financialAnalytics.js";
+import financialAnalyticsResolvers, {
+  computeCollectionRate,
+  inclusiveEndDate,
+} from "../../src/resolvers/financialAnalytics.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -470,5 +473,48 @@ describe("financialAnalytics — Dépenses (factures d'achat + transactions)", (
     // Trou constaté : la transaction est exclue (rapprochée) et la facture
     // d'achat aussi (non PAID) → 800 € de sortie n'apparaissent nulle part.
     expect(monthOf(result, "2026-06")?.expenseAmountHT ?? 0).toBe(0);
+  });
+});
+
+describe("financialAnalytics — bornes de la période et taux de recouvrement", () => {
+  it("une date de fin seule (AAAA-MM-JJ) couvre toute la journée", () => {
+    expect(inclusiveEndDate("2026-10-04")).toBe("2026-10-04T23:59:59.999Z");
+    // Date complète déjà fournie : inchangée
+    expect(inclusiveEndDate(END)).toBe(END);
+    expect(inclusiveEndDate(undefined)).toBeUndefined();
+  });
+
+  it("période d'un seul jour : la facture émise ce jour-là, à midi, est comptée", async () => {
+    await Invoice().collection.insertMany([
+      invoiceDoc({
+        number: "000075",
+        status: "COMPLETED",
+        issueDate: "2026-10-04T12:00:00Z",
+        paymentDate: "2026-10-04T15:00:00Z",
+        ht: 640,
+        ttc: 768,
+      }),
+    ]);
+
+    const result = await financialAnalyticsResolvers.Query.financialAnalytics(
+      null,
+      {
+        workspaceId: organizationId.toString(),
+        startDate: "2026-10-04",
+        endDate: "2026-10-04",
+      },
+      buildContext({ userId, organizationId }),
+    );
+
+    expect(result.kpi.invoiceCount).toBe(1);
+    expect(result.kpi.netRevenueHT).toBe(640);
+  });
+
+  it("taux de recouvrement : part encaissée de ce qui était dû, jamais plus de 100 %", () => {
+    // Encaissé 6 688 €, impayé échu 1 440 € : l'ancien ratio donnait 464 %
+    expect(computeCollectionRate(6688, 1440)).toBe(82.28);
+    expect(computeCollectionRate(500, 0)).toBe(100);
+    expect(computeCollectionRate(0, 300)).toBe(0);
+    expect(computeCollectionRate(0, 0)).toBe(0);
   });
 });
