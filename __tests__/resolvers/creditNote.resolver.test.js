@@ -19,8 +19,8 @@ vi.mock("../../src/services/documentAutomationService.js", () => ({
   default: { executeAutomations: vi.fn().mockResolvedValue(undefined) },
 }));
 
-// Mock Event model to avoid schema validation errors on audit events
-// (the resolver uses fields not matching the Event schema for update/delete)
+// Événement de calendrier créé avec l'avoir (CREDIT_NOTE_CREATED) : simulé,
+// le test vérifie seulement qu'aucun n'est créé à la modification
 vi.mock("../../src/models/Event.js", () => ({
   default: {
     create: vi.fn().mockResolvedValue({}),
@@ -34,6 +34,7 @@ vi.mock("../../src/services/creditNoteFacturXArchiveService.js", () => ({
 }));
 
 import CreditNote from "../../src/models/CreditNote.js";
+import Event from "../../src/models/Event.js";
 import Invoice from "../../src/models/Invoice.js";
 import creditNoteResolvers from "../../src/resolvers/creditNote.js";
 import { triggerCreditNoteFacturXArchive } from "../../src/services/creditNoteFacturXArchiveService.js";
@@ -466,6 +467,50 @@ describe("CreditNote Resolver — updateCreditNote", () => {
     expect(updated.finalTotalTTC).toBeCloseTo(-240, 0);
   });
 
+  it("modifie le motif sans créer d'événement de calendrier", async () => {
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+    Event.create.mockClear();
+
+    const updated = await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      { id: cn._id.toString(), input: { reason: "Motif corrigé" } },
+      ctx(),
+    );
+
+    expect(updated.reason).toBe("Motif corrigé");
+    expect(Event.create).not.toHaveBeenCalled();
+  });
+
+  it("le montant restant d'un avoir modifié ne compte pas l'avoir lui-même", async () => {
+    // Facture de 1 200 € TTC, un seul avoir de 600 € : il peut passer à 840 €
+    const inv = await insertInvoice();
+    const cn = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+
+    const updated = await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      {
+        id: cn._id.toString(),
+        input: {
+          items: [
+            { description: "Retour", quantity: 1, unitPrice: 700, vatRate: 20 },
+          ],
+        },
+      },
+      ctx(),
+    );
+
+    expect(updated.finalTotalTTC).toBeCloseTo(-840, 2);
+  });
+
   it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
     const inv = await insertInvoice();
     const cn = await creditNoteResolvers.Mutation.createCreditNote(
@@ -651,7 +696,7 @@ describe("CreditNote Resolver — updateCreditNote (e-facturation)", () => {
 });
 
 describe("CreditNote Resolver — deleteCreditNote", () => {
-  it("deletes a credit note", async () => {
+  it("refuse de supprimer un avoir : il garde sa place dans la numérotation", async () => {
     const inv = await insertInvoice();
     const input = buildCreditNoteInput(inv._id);
     const cn = await creditNoteResolvers.Mutation.createCreditNote(
@@ -661,11 +706,18 @@ describe("CreditNote Resolver — deleteCreditNote", () => {
     );
 
     const resolver = creditNoteResolvers.Mutation.deleteCreditNote;
-    const result = await resolver(null, { id: cn._id.toString() }, ctx());
+    await expect(
+      resolver(null, { id: cn._id.toString() }, ctx()),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
 
-    expect(result).toBe(true);
-    const deleted = await CreditNote.findById(cn._id);
-    expect(deleted).toBeNull();
+    expect(await CreditNote.findById(cn._id)).not.toBeNull();
+  });
+
+  it("répond « introuvable » pour un avoir d'une autre organisation", async () => {
+    const resolver = creditNoteResolvers.Mutation.deleteCreditNote;
+    await expect(
+      resolver(null, { id: new mongoose.Types.ObjectId().toString() }, ctx()),
+    ).rejects.toThrow(/non trouvé/);
   });
 });
 

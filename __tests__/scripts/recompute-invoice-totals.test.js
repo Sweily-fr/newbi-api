@@ -339,7 +339,8 @@ describe("recomputeInvoiceTotals", () => {
 
   it("écrit exactement les totaux qu'enregistre updateInvoice", async () => {
     const id = await insertInvoice();
-    const twin = await insertInvoice();
+    // Brouillon : une facture émise ne change plus de montant par updateInvoice
+    const twin = await insertInvoice({ status: "DRAFT" });
     // Même facture enregistrée par le vrai resolver (calcul actuel)
     await invoiceResolvers.Mutation.updateInvoice(
       null,
@@ -357,6 +358,11 @@ describe("recomputeInvoiceTotals", () => {
         organizationId,
         extra: { userRole: "owner" },
       }),
+    );
+    // Puis émise, comme la facture à corriger
+    await Invoice.collection.updateOne(
+      { _id: twin },
+      { $set: { status: "PENDING" } },
     );
 
     const stats = await run({ apply: true });
