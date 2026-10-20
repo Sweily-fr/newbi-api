@@ -16,6 +16,7 @@ import {
   createValidationError,
 } from "../utils/errors.js";
 import { MODULES } from "../config/rolePermissions.js";
+import { assertPlanCapacity } from "../services/planLimits.js";
 import documentAutomationService, {
   getAutomationProgress,
 } from "../services/documentAutomationService.js";
@@ -165,6 +166,14 @@ const documentAutomationResolvers = {
       async (_, { workspaceId, input }, context) => {
         const { user } = context;
         assertSourceReadable(context, input.triggerType);
+
+        // Plafond de l'offre (5 automatisations sur l'offre d'entrée)
+        await assertPlanCapacity(
+          workspaceId,
+          "documentAutomations",
+          () => DocumentAutomation.countDocuments({ workspaceId }),
+          "automatisations de documents",
+        );
 
         // Vérifier que le dossier cible existe (et qu'il est visible : un
         // dossier privé inaccessible est traité comme inexistant)

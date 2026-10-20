@@ -12,6 +12,8 @@ import { getWorkspacePlan } from "./esignatureQuota.js";
 export const PLAN_LIMITS = {
   freelance: {
     customFields: 5,
+    // Automatisations des documents partagés
+    documentAutomations: 5,
     clientSegments: false,
     crmEmailAutomations: false,
     // Modèles de factures et de devis, quota commun
@@ -21,6 +23,7 @@ export const PLAN_LIMITS = {
   },
   pme: {
     customFields: -1,
+    documentAutomations: -1,
     clientSegments: true,
     crmEmailAutomations: true,
     documentTemplates: -1,
@@ -28,6 +31,7 @@ export const PLAN_LIMITS = {
   },
   entreprise: {
     customFields: -1,
+    documentAutomations: -1,
     clientSegments: true,
     crmEmailAutomations: true,
     documentTemplates: -1,
