@@ -31,6 +31,9 @@ const FORECAST_CATEGORY = {
   OTHER_EXPENSE: "OTHER_EXPENSE",
 };
 
+// Mois réel au format YYYY-MM (« 2026-13 » refusé)
+export const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 const treasuryForecastSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -41,7 +44,7 @@ const treasuryForecastSchema = new mongoose.Schema(
     month: {
       type: String,
       required: [true, "Le mois est requis (format YYYY-MM)"],
-      match: [/^\d{4}-\d{2}$/, "Le format du mois doit être YYYY-MM"],
+      match: [MONTH_REGEX, "Le format du mois doit être YYYY-MM"],
     },
     category: {
       type: String,
@@ -72,17 +75,20 @@ const treasuryForecastSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Unique compound index: one forecast per workspace + month + category
 treasuryForecastSchema.index(
   { workspaceId: 1, month: 1, category: 1 },
-  { unique: true }
+  { unique: true },
 );
 
 treasuryForecastSchema.statics.FORECAST_TYPE = FORECAST_TYPE;
 treasuryForecastSchema.statics.FORECAST_CATEGORY = FORECAST_CATEGORY;
 
-const TreasuryForecast = mongoose.model("TreasuryForecast", treasuryForecastSchema);
+const TreasuryForecast = mongoose.model(
+  "TreasuryForecast",
+  treasuryForecastSchema,
+);
 export default TreasuryForecast;
