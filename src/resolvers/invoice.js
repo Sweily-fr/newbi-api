@@ -306,7 +306,10 @@ const invoiceResolvers = {
       if (invoice.status !== "PENDING") return null;
       try {
         // Compte Stripe Connect lu une fois par organisation et par requête,
-        // et non pour chaque facture en attente de la liste.
+        // et non pour chaque facture en attente de la liste. On garde la
+        // promesse (exec) : une requête Mongoose attendue une seconde fois
+        // lève « Query was already executed », et toutes les factures après
+        // la première perdaient leur lien de paiement.
         const organizationId = invoice.workspaceId.toString();
         const cache = context
           ? (context._stripeConnectAccountByOrg ??= new Map())
