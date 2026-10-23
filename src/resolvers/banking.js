@@ -18,6 +18,7 @@ import {
   syntheticReceiptFileId,
 } from "../utils/transactionReceiptFiles.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import { syncCategoryFromTransaction } from "../utils/purchaseInvoiceCategorySync.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
 import { buildPageQuery } from "../utils/transaction-page-query.js";
 import {
@@ -414,6 +415,16 @@ const bankingResolvers = {
 
         if (!transaction) {
           throw new AppError("Transaction non trouvée", ERROR_CODES.NOT_FOUND);
+        }
+
+        // Catégorie choisie à la main : elle s'applique aussi aux factures
+        // d'achat rapprochées (et à leurs autres transactions)
+        if (input.category) {
+          await syncCategoryFromTransaction({
+            transaction,
+            category: input.category,
+            workspaceId,
+          });
         }
 
         // Si la transaction est (devenue) une dépense et porte des

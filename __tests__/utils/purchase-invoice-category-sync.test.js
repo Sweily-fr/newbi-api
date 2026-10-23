@@ -6,6 +6,7 @@ import Transaction from "../../src/models/Transaction.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import {
   PI_TO_EXPENSE_CATEGORY,
+  syncCategoryFromTransaction,
   syncLinkedTransactionCategories,
 } from "../../src/utils/purchaseInvoiceCategorySync.js";
 
@@ -25,6 +26,25 @@ async function createTx(overrides = {}) {
     description: "Dépense test",
     workspaceId,
     date: new Date("2026-08-01T00:00:00.000Z"),
+    ...overrides,
+  });
+}
+
+async function createPi(overrides = {}) {
+  counter += 1;
+  return PurchaseInvoice.create({
+    supplierName: "Fournisseur test",
+    invoiceNumber: `PI-CAT-SYNC-${counter}`,
+    issueDate: new Date("2026-08-01T00:00:00.000Z"),
+    amountHT: 50,
+    amountTVA: 0,
+    amountTTC: 50,
+    currency: "EUR",
+    status: "PAID",
+    category: "SUBSCRIPTIONS",
+    source: "OCR",
+    workspaceId,
+    createdBy: buildOrganizationId(),
     ...overrides,
   });
 }
@@ -113,5 +133,90 @@ describe("syncLinkedTransactionCategories", () => {
 
     const updated = await Transaction.findById(tx._id);
     expect(updated.category).toBe("parking");
+  });
+});
+
+describe("syncCategoryFromTransaction", () => {
+  beforeAll(async () => {
+    await startMongo();
+  });
+
+  afterAll(async () => {
+    await stopMongo();
+  });
+
+  beforeEach(async () => {
+    await clearMongo();
+  });
+
+  it("applique la catégorie de la transaction à sa facture et aux autres paiements de la facture", async () => {
+    const tx = await createTx({ category: "carburant" });
+    const otherTx = await createTx({ category: "SUBSCRIPTIONS" });
+    const pi = await createPi({
+      linkedTransactionIds: [tx._id, otherTx._id],
+    });
+    tx.linkedPurchaseInvoiceIds = [pi._id];
+    await tx.save();
+
+    await syncCategoryFromTransaction({
+      transaction: tx,
+      category: "carburant",
+      workspaceId,
+    });
+
+    const updatedPi = await PurchaseInvoice.findById(pi._id);
+    expect(updatedPi.category).toBe("TRANSPORT");
+    expect(updatedPi.subcategory).toBe("carburant");
+
+    const updatedOther = await Transaction.findById(otherTx._id);
+    expect(updatedOther.category).toBe("carburant");
+    expect(updatedOther.expenseCategory).toBe("TRAVEL");
+    expect(updatedOther.categoryIsManual).toBe(true);
+  });
+
+  it("retrouve la facture par son seul lien côté facture", async () => {
+    const tx = await createTx();
+    const pi = await createPi({ linkedTransactionIds: [tx._id] });
+
+    await syncCategoryFromTransaction({
+      transaction: tx,
+      category: "MARKETING",
+      workspaceId,
+    });
+
+    const updatedPi = await PurchaseInvoice.findById(pi._id);
+    expect(updatedPi.category).toBe("MARKETING");
+    expect(updatedPi.subcategory).toBeNull();
+  });
+
+  it("laisse la facture intacte pour une catégorie hors référentiel", async () => {
+    const tx = await createTx();
+    const pi = await createPi({ linkedTransactionIds: [tx._id] });
+
+    await syncCategoryFromTransaction({
+      transaction: tx,
+      category: "code_bridge_inconnu",
+      workspaceId,
+    });
+
+    const updatedPi = await PurchaseInvoice.findById(pi._id);
+    expect(updatedPi.category).toBe("SUBSCRIPTIONS");
+  });
+
+  it("ne touche pas aux factures d'un autre workspace", async () => {
+    const tx = await createTx();
+    const pi = await createPi({
+      workspaceId: buildOrganizationId(),
+      linkedTransactionIds: [tx._id],
+    });
+
+    await syncCategoryFromTransaction({
+      transaction: tx,
+      category: "MARKETING",
+      workspaceId,
+    });
+
+    const updatedPi = await PurchaseInvoice.findById(pi._id);
+    expect(updatedPi.category).toBe("SUBSCRIPTIONS");
   });
 });
