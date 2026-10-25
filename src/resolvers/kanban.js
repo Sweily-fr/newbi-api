@@ -10,6 +10,7 @@ import {
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub, cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import logger from "../utils/logger.js";
+import { sanitizeRichText } from "../utils/richText.js";
 import mongoose from "mongoose";
 import { ObjectId } from "mongodb";
 import { sendTaskAssignmentEmail, sendMentionEmail } from "../utils/mailer.js";
@@ -2010,6 +2011,10 @@ const resolvers = {
 
         // Nettoyer les IDs temporaires de la checklist
         const cleanedInput = { ...input };
+        // Description en texte riche : nettoyée avant d'être enregistrée
+        if (cleanedInput.description !== undefined) {
+          cleanedInput.description = sanitizeRichText(cleanedInput.description);
+        }
         if (cleanedInput.checklist) {
           cleanedInput.checklist = cleanedInput.checklist.map((item) => {
             const cleanedItem = { ...item };
@@ -2334,6 +2339,10 @@ const resolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { id, ...updates } = input;
+        // Description en texte riche : nettoyée avant d'être enregistrée
+        if (updates.description !== undefined) {
+          updates.description = sanitizeRichText(updates.description);
+        }
 
         logger.debug("📝 [UpdateTask] dueDate reçue:", input.dueDate);
         logger.debug("📝 [UpdateTask] dueDate type:", typeof input.dueDate);

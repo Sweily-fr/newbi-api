@@ -250,6 +250,7 @@ const bankingResolvers = {
         { user, workspaceId },
       ) => {
         const stats = await ApiMetric.getProviderStats(
+          workspaceId,
           provider.toLowerCase(),
           startDate,
           endDate,
@@ -269,6 +270,7 @@ const bankingResolvers = {
     costComparison: readBanking(
       async (parent, { startDate, endDate }, { user, workspaceId }) => {
         const comparison = await ApiMetric.getCostComparison(
+          workspaceId,
           startDate,
           endDate,
         );

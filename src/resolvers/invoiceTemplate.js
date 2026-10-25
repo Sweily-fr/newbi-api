@@ -6,6 +6,7 @@ import {
   requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+import { assertDocumentTemplateCapacity } from "../services/planLimits.js";
 
 // Modèles : mêmes droits que le module « invoices »
 const readTemplates = requireWorkspaceLevel("invoices", "read");
@@ -34,6 +35,9 @@ const invoiceTemplateResolvers = {
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const { invoiceId, name, description } = input;
+
+        // Plafond de l'offre (10 modèles sur l'offre d'entrée)
+        await assertDocumentTemplateCapacity(finalWorkspaceId);
 
         const invoice = await Invoice.findOne({
           _id: invoiceId,

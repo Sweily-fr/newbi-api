@@ -43,6 +43,7 @@ import depthLimit from "graphql-depth-limit";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
 import { graphqlUploadMiddleware } from "./middlewares/graphql-upload.js";
+import { stripMongoOperators } from "./middlewares/strip-mongo-operators.js";
 import fs from "fs";
 import cors from "cors";
 import helmet from "helmet";
@@ -335,6 +336,9 @@ async function startServer() {
   });
   app.use("/api/auth", authLimiter);
 
+  // Clés « $… » retirées des paramètres de requête (opérateurs MongoDB)
+  app.use(stripMongoOperators);
+
   // Webhook pour les transferts de fichiers (DOIT être AVANT les autres routes /webhook)
   app.post(
     "/webhook/file-transfer",
@@ -365,6 +369,8 @@ async function startServer() {
   // Middleware pour les uploads
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
+  // Même nettoyage pour les corps JSON et formulaires, une fois analysés
+  app.use(stripMongoOperators);
 
   // Redirection publique de paiement d'une facture vers Stripe Checkout
   app.get("/pay/invoice/:invoiceId", redirectToInvoicePayment);

@@ -1367,8 +1367,14 @@ const treasuryForecastResolvers = {
           scenarioExists ? "edit" : "create",
         );
 
+        // Un identifiant désigne un scénario existant : inconnu, on ne crée
+        // rien (l'upsert le créerait sous cet identifiant, hors plafond)
+        if (input.id && !scenarioExists) {
+          throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+        }
+
         // Enforce 5-scenario limit for new scenarios
-        if (!input.id) {
+        if (!scenarioExists) {
           const count = await ForecastScenario.countDocuments({
             workspaceId: wId,
           });

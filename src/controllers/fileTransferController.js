@@ -17,6 +17,17 @@ import { createTransferAccessToken } from "../utils/transferAccessToken.js";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const logger = console; // Utilisation de console comme logger de base
 
+// Paramètre public de la requête : seule une chaîne est retenue. Un objet
+// (`?link[$ne]=x`, que l'analyseur d'Express reconstruit) deviendrait un
+// opérateur MongoDB dans la recherche du transfert.
+const queryString = (value) => (typeof value === "string" ? value : "");
+
+const transferNotFound = (res) =>
+  res.status(404).json({
+    success: false,
+    message: "Transfert non trouvé ou expiré",
+  });
+
 // Webhook Stripe pour les paiements
 const handleStripeWebhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
@@ -143,7 +154,10 @@ const handleStripeWebhook = async (req, res) => {
 const downloadFile = async (req, res) => {
   try {
     // Utiliser req.query pour les paramètres de requête
-    const { link: shareLink, key: accessKey, fileId } = req.query;
+    const { link, key, fileId: rawFileId } = req.query;
+    const shareLink = queryString(link);
+    const accessKey = queryString(key);
+    const fileId = queryString(rawFileId);
 
     logger.info(
       `[FileTransfer] Demande de téléchargement - shareLink: ${shareLink}, accessKey: ${
@@ -151,7 +165,7 @@ const downloadFile = async (req, res) => {
       }, fileId: ${fileId}`,
     );
 
-    if (!shareLink || !accessKey || !fileId) {
+    if (!link || !key || !rawFileId) {
       logger.error(
         "[FileTransfer] Paramètres manquants pour le téléchargement",
       );
@@ -159,6 +173,11 @@ const downloadFile = async (req, res) => {
         success: false,
         message: "Paramètres de téléchargement manquants",
       });
+    }
+
+    // Lien, clé ou fichier qui ne sont pas du texte : rien à chercher
+    if (!shareLink || !accessKey || !fileId) {
+      return transferNotFound(res);
     }
 
     // Vérifier le transfert de fichiers
@@ -326,7 +345,9 @@ const downloadFile = async (req, res) => {
 // Télécharger tous les fichiers en tant qu'archive ZIP
 const downloadAllFiles = async (req, res) => {
   try {
-    const { link: shareLink, key: accessKey } = req.query;
+    const { link, key } = req.query;
+    const shareLink = queryString(link);
+    const accessKey = queryString(key);
 
     logger.info(
       `[FileTransfer] Demande de téléchargement groupé - shareLink: ${shareLink}, accessKey: ${
@@ -334,7 +355,7 @@ const downloadAllFiles = async (req, res) => {
       }`,
     );
 
-    if (!shareLink || !accessKey) {
+    if (!link || !key) {
       logger.error(
         "[FileTransfer] Paramètres manquants pour le téléchargement groupé",
       );
@@ -342,6 +363,11 @@ const downloadAllFiles = async (req, res) => {
         success: false,
         message: "Paramètres de téléchargement manquants",
       });
+    }
+
+    // Lien ou clé qui ne sont pas du texte : rien à chercher
+    if (!shareLink || !accessKey) {
+      return transferNotFound(res);
     }
 
     // Vérifier le transfert de fichiers
@@ -606,10 +632,16 @@ const downloadAllFiles = async (req, res) => {
 // Valider un paiement
 const validatePayment = async (req, res) => {
   try {
-    const { shareLink, accessKey, sessionId } = req.query;
+    const shareLink = queryString(req.query.shareLink);
+    const accessKey = queryString(req.query.accessKey);
+    const sessionId = queryString(req.query.sessionId);
 
     if (!sessionId) {
       return res.status(400).send("ID de session manquant");
+    }
+
+    if (!shareLink || !accessKey) {
+      return res.status(404).send("Transfert de fichiers non trouvé");
     }
 
     // Vérifier la session de paiement

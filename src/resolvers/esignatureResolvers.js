@@ -16,6 +16,7 @@ import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
 import { mapExternalStatus } from "../services/esignatureStatus.js";
+import { assertQualifiedSignatureAllowed } from "../services/planLimits.js";
 import {
   getEsignatureQuota,
   assertEsignatureQuotaAvailable,
@@ -358,6 +359,21 @@ const esignatureResolvers = {
           );
         }
 
+        // Le cachet de l'entreprise ne passe jamais par une demande de
+        // signature : il s'appose sur un devis déjà signé par le client
+        // (sealQuoteDocument), et il ne contourne pas le quota.
+        if (signatureType === "QES_automatic") {
+          throw new AppError(
+            "Le cachet de l'entreprise s'appose sur un devis déjà signé par le client.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
+        // Signature qualifiée : offre Entreprise seulement
+        if (signatureType === "QES_otp") {
+          await assertQualifiedSignatureAllowed(context.workspaceId);
+        }
+
         // Vérifier que le document existe
         const Model = getDocumentModel(documentType);
         const document = await Model.findOne({
@@ -425,10 +441,8 @@ const esignatureResolvers = {
           }
         }
 
-        // Quota mensuel du plan (le cachet entreprise n'en consomme pas)
-        if (signatureType !== "QES_automatic") {
-          await assertEsignatureQuotaAvailable(context.workspaceId);
-        }
+        // Quota mensuel du plan
+        await assertEsignatureQuotaAvailable(context.workspaceId);
 
         // Créer l'entrée SignatureRequest en base
         const signatureRequest = new SignatureRequest({
@@ -710,6 +724,9 @@ const esignatureResolvers = {
       "sign",
     )(async (_, { quoteId }, context) => {
       try {
+        // Cachet qualifié : offre Entreprise seulement
+        await assertQualifiedSignatureAllowed(context.workspaceId);
+
         const quote = await Quote.findOne({
           _id: quoteId,
           workspaceId: context.workspaceId,
