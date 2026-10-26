@@ -64,12 +64,12 @@ const orgId = buildOrganizationId();
 const CLIENT_EMAIL = "client@test.fr";
 const SENDER_EMAIL = "emetteur@test.fr";
 
-async function insertInvoice(emailTracking) {
+async function insertInvoice(emailTracking, number = "000042") {
   const { insertedId } = await Invoice.collection.insertOne({
     _id: new ObjectId(),
     workspaceId: orgId,
     prefix: "F-2026",
-    number: "000042",
+    number,
     status: "PENDING",
     issueDate: new Date("2026-09-01"),
     dueDate: new Date("2026-09-15"),
@@ -121,6 +121,8 @@ const sendByEmail = (invoiceId) =>
 
 beforeAll(async () => {
   await startMongo();
+  // Index d'unicité des numéros présents comme en production
+  await Invoice.syncIndexes();
 });
 afterAll(async () => {
   await stopMongo();
@@ -398,6 +400,7 @@ describe("vérification planifiée de la remise", () => {
         resendMessageId: "resend-3",
         deliveryCheckedAt: new Date(Date.now() - 5 * 60 * 1000),
       }),
+      "000043",
     );
 
     const result = await checkPendingDeliveries({ pauseMs: 0 });
