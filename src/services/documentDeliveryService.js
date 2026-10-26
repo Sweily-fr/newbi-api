@@ -9,6 +9,13 @@ import {
   sendSenderConfirmationEmail,
   sendSenderFailureEmail,
 } from "./documentEmailService.js";
+import {
+  FROM_STATUSES,
+  concernsRecipient,
+  emailLogPreviewUrl,
+  findEmailLogId,
+  recordEmailLogDelivery,
+} from "./documentEmailLogService.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
 import logger from "../utils/logger.js";
 
@@ -68,15 +75,6 @@ const LAST_EVENT_OUTCOMES = {
   failed: { status: "FAILED", reason: SEND_FAILURE },
 };
 
-// États depuis lesquels chaque issue s'applique : un rejet l'emporte sur une
-// remise (rejet différé du serveur), jamais l'inverse ; null = envoi antérieur
-// au suivi de remise
-const FROM_STATUSES = {
-  DELIVERED: [null, "SENT", "DELAYED"],
-  DELAYED: [null, "SENT"],
-  FAILED: [null, "SENT", "DELAYED", "DELIVERED"],
-};
-
 // Vérification planifiée : premier passage après 3 min, puis toutes les
 // 20 min pendant 48 h
 const CHECK_MIN_AGE_MS = 3 * 60 * 1000;
@@ -115,23 +113,6 @@ export function describeFailure(type, data = {}) {
     return "L'adresse e-mail est invalide ou refuse les e-mails";
   }
   return DEFAULT_REJECTION;
-}
-
-function normalizeAddress(address) {
-  const value = String(address || "");
-  const bracketed = value.match(/<([^>]+)>/);
-  return (bracketed ? bracketed[1] : value).trim().toLowerCase();
-}
-
-/**
- * Un événement vise-t-il le destinataire principal ? Resend liste dans `to`
- * les adresses concernées : un rejet d'une copie (Cc, Cci) ne doit pas marquer
- * le document comme non remis au client.
- */
-function concernsRecipient(tracking, to) {
-  const recipient = normalizeAddress(tracking?.recipientEmail);
-  if (!recipient || !Array.isArray(to) || to.length === 0) return true;
-  return to.some((address) => normalizeAddress(address) === recipient);
 }
 
 const toIso = (date) => (date ? new Date(date).toISOString() : null);
@@ -182,6 +163,9 @@ async function notifySender(Model, documentType, doc) {
     recipientEmail: tracking.recipientEmail,
     clientName: summary.clientName,
     sentAt: tracking.emailSentAt,
+    previewUrl: emailLogPreviewUrl(
+      await findEmailLogId(tracking.resendMessageId),
+    ),
   };
   try {
     if (failed) {
@@ -259,27 +243,33 @@ export async function recordDeliveryEvent(event) {
   const { type, data, created_at: createdAt } = event || {};
   if (!isDeliveryEvent(type) || !data?.email_id) return false;
 
-  const found = await findDocumentByResendId(data.email_id);
-  if (!found) return false;
-  const { doc, Model, documentType } = found;
-
-  if (!concernsRecipient(doc.emailTracking, data.to)) return true;
-
   const status =
     type === "email.delivered"
       ? "DELIVERED"
       : type === "email.delivery_delayed"
         ? "DELAYED"
         : "FAILED";
+  const reason = status === "FAILED" ? describeFailure(type, data) : null;
+  const at = createdAt ? new Date(createdAt) : new Date();
 
-  await applyDeliveryOutcome({
-    Model,
-    documentType,
-    doc,
+  // Historique : aussi les envois plus anciens que le dernier du document
+  const logged = await recordEmailLogDelivery({
+    resendMessageId: data.email_id,
+    to: data.to,
     status,
-    reason: status === "FAILED" ? describeFailure(type, data) : null,
-    at: createdAt ? new Date(createdAt) : new Date(),
+    reason,
+    at,
   });
+
+  const found = await findDocumentByResendId(data.email_id);
+  if (!found) return logged;
+  const { doc, Model, documentType } = found;
+
+  if (!concernsRecipient(doc.emailTracking?.recipientEmail, data.to)) {
+    return true;
+  }
+
+  await applyDeliveryOutcome({ Model, documentType, doc, status, reason, at });
   return true;
 }
 
@@ -340,6 +330,12 @@ export async function checkPendingDeliveries({
 
       const outcome = LAST_EVENT_OUTCOMES[data.last_event];
       if (!outcome) continue;
+      await recordEmailLogDelivery({
+        resendMessageId: doc.emailTracking.resendMessageId,
+        status: outcome.status,
+        reason: outcome.reason,
+        at: now,
+      });
       const changed = await applyDeliveryOutcome({
         Model,
         documentType,

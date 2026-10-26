@@ -7,6 +7,7 @@ import CreditNote from "../models/CreditNote.js";
 import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
+import { markEmailLogOpened } from "../services/documentEmailLogService.js";
 import {
   cacheDocumentPdf,
   generateDocumentPdf,
@@ -39,6 +40,9 @@ router.get("/open/:token", async (req, res) => {
   const { token } = req.params;
 
   try {
+    // Historique des envois : y compris un envoi plus ancien que le dernier
+    await markEmailLogOpened({ trackingToken: token });
+
     // Chercher le document dans tous les modèles
     for (const { model: Model, type: documentType } of DOCUMENT_MODELS) {
       const doc = await Model.findOne({ "emailTracking.trackingToken": token });
@@ -155,6 +159,9 @@ router.get("/click/:token", async (req, res) => {
   let foundType = null;
 
   try {
+    // Un clic implique une ouverture (historique des envois)
+    await markEmailLogOpened({ trackingToken: token });
+
     for (const { model: Model, type: documentType } of DOCUMENT_MODELS) {
       const doc = await Model.findOne({ "emailTracking.trackingToken": token });
 

@@ -8,6 +8,7 @@ import {
   isDeliveryEvent,
   recordDeliveryEvent,
 } from "../services/documentDeliveryService.js";
+import { markEmailLogOpened } from "../services/documentEmailLogService.js";
 
 const router = express.Router();
 
@@ -143,6 +144,8 @@ router.post("/", express.raw({ type: "*/*" }), async (req, res) => {
       if (!resendMessageId) {
         return res.status(200).json({ received: true });
       }
+
+      await markEmailLogOpened({ resendMessageId });
 
       const result = await findDocumentByResendId(resendMessageId);
 

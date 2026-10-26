@@ -12,6 +12,10 @@ import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
 import cloudflareService from "./cloudflareService.js";
 import { APP_URL, escapeHtml, typo } from "../utils/trialEmails.js";
+import {
+  createEmailLog,
+  emailLogPreviewUrl,
+} from "./documentEmailLogService.js";
 
 /**
  * Service d'envoi de documents (factures, devis, avoirs) par email
@@ -596,6 +600,12 @@ function renderSenderNoticeHtml({
 </html>`;
 }
 
+// Bouton des e-mails à l'émetteur (même style que les e-mails d'essai)
+function senderNoticeButton(url, label) {
+  return `
+      <a href="${escapeHtml(url)}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;margin-top:24px;">${label}</a>`;
+}
+
 /**
  * Génère le HTML de l'email de confirmation d'envoi destiné à l'émetteur
  */
@@ -607,6 +617,7 @@ function generateSenderConfirmationHtml({
   totalAmount,
   sentAt,
   deliveredAt,
+  previewUrl,
 }) {
   const label = capitalizedDocumentLabel(documentType);
   const verbAccord =
@@ -629,6 +640,9 @@ function generateSenderConfirmationHtml({
       { label: "Envoyé le", value: sentAt },
       { label: "Remis le", value: deliveredAt },
     ],
+    afterRowsHtml: previewUrl
+      ? senderNoticeButton(previewUrl, "Voir l'e-mail envoyé")
+      : "",
     footerText:
       "Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.",
   });
@@ -645,10 +659,17 @@ function generateSenderFailureHtml({
   clientName,
   reason,
   sentAt,
+  previewUrl,
 }) {
   const { singular } = DOCUMENT_LABELS[documentType];
   const remis = documentType === DOCUMENT_TYPES.INVOICE ? "remise" : "remis";
-  const listUrl = `${APP_URL}/dashboard/outils/${DOCUMENT_LIST_PATHS[documentType]}`;
+  // L'aperçu montre l'adresse utilisée ; sans lui, la liste des documents
+  const button = previewUrl
+    ? senderNoticeButton(previewUrl, "Voir l'e-mail envoyé")
+    : senderNoticeButton(
+        `${APP_URL}/dashboard/outils/${DOCUMENT_LIST_PATHS[documentType]}`,
+        "Ouvrir Newbi",
+      );
 
   return renderSenderNoticeHtml({
     title: "Envoi non remis",
@@ -668,8 +689,7 @@ function generateSenderFailureHtml({
       <!-- Que faire -->
       <div style="font-size:15px;color:#4b5563;margin:24px 0 0 0;line-height:1.6;">
         ${typo("Vérifiez l'adresse e-mail de votre client, puis renvoyez le document depuis Newbi.")}
-      </div>
-      <a href="${listUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;margin-top:24px;">Ouvrir Newbi</a>`,
+      </div>${button}`,
     footerText:
       "Email automatique envoyé par Newbi pour vous signaler un envoi non remis.",
   });
@@ -688,6 +708,7 @@ async function sendSenderConfirmationEmail({
   totalAmount,
   sentAt = new Date(),
   deliveredAt = null,
+  previewUrl = null,
 }) {
   if (!senderEmail) return;
 
@@ -707,6 +728,7 @@ async function sendSenderConfirmationEmail({
     totalAmount,
     sentAt: formatParisDateTime(sentAt),
     deliveredAt: deliveredAt ? formatParisDateTime(deliveredAt) : null,
+    previewUrl,
   });
 
   await emailReminderService.sendEmail({
@@ -727,6 +749,7 @@ async function sendSenderFailureEmail({
   clientName,
   reason,
   sentAt = new Date(),
+  previewUrl = null,
 }) {
   if (!senderEmail) return;
 
@@ -742,6 +765,7 @@ async function sendSenderFailureEmail({
     clientName,
     reason,
     sentAt: formatParisDateTime(sentAt),
+    previewUrl,
   });
 
   await emailReminderService.sendEmail({
@@ -1081,6 +1105,8 @@ async function sendDocumentEmail({
   // Envoyer l'email via Resend API (prioritaire) ou SMTP (fallback)
   let mailResult;
   let resendMessageId = null;
+  // Expéditeur tel que le client le voit (journal de l'envoi)
+  let sentFrom = actualSenderEmail;
 
   if (emailReminderService.useResend && emailReminderService.resend) {
     // Envoi via Resend API
@@ -1090,6 +1116,7 @@ async function sendDocumentEmail({
     const resendFrom = fromName
       ? `${fromName} <${resendFromEmail}>`
       : `Newbi <${resendFromEmail}>`;
+    sentFrom = resendFrom;
 
     const resendPayload = {
       from: resendFrom,
@@ -1179,6 +1206,54 @@ async function sendDocumentEmail({
     );
   }
 
+  // Journal de l'envoi : aperçu de l'e-mail reçu par le client et historique
+  // du document. Sans pixel ni liens de suivi (boutons inertes) : consulter
+  // l'aperçu ne doit pas marquer le document « Ouvert ».
+  const cleanAddresses = (emails) =>
+    (emails || []).filter((email) => email && email.trim());
+  const emailLog = await createEmailLog({
+    workspaceId: document.workspaceId,
+    documentType,
+    documentId: document._id,
+    documentNumber,
+    originalInvoiceId:
+      documentType === DOCUMENT_TYPES.CREDIT_NOTE
+        ? document.originalInvoice || null
+        : null,
+    sentAt,
+    senderEmail: senderEmail || null,
+    from: sentFrom,
+    replyTo,
+    to: recipientEmail,
+    cc: cleanAddresses(ccEmails),
+    bcc: cleanAddresses(bccEmails),
+    subject: finalSubject,
+    html: generateEmailHtml(
+      finalBody,
+      variables,
+      documentType,
+      dueDate,
+      customFooter,
+      null,
+      "#",
+      paymentUrl ? "#" : null,
+    ),
+    attachments: [
+      {
+        filename: `${documentNumber}.pdf`,
+        size: pdfBuffer.length,
+        isDocument: true,
+      },
+      ...normalizedExtraAttachments.map((att) => ({
+        filename: att.filename,
+        size: att.content.length,
+      })),
+    ],
+    resendMessageId,
+    trackingToken,
+    deliveryStatus: "SENT",
+  });
+
   // Ajouter l'activité au client
   try {
     if (document.client?.id || document.client?._id) {
@@ -1238,6 +1313,7 @@ async function sendDocumentEmail({
           clientName: variables.clientName,
           totalAmount: variables.totalAmount,
           sentAt,
+          previewUrl: emailLogPreviewUrl(emailLog?._id),
         });
       } catch (confirmationError) {
         console.warn(
