@@ -123,6 +123,7 @@ import { startQontoImportCron } from "./cron/qontoImportCron.js";
 import { startAbbyImportCron } from "./cron/abbyImportCron.js";
 import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaymentRetryCron.js";
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
+import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -786,6 +787,10 @@ async function startServer() {
       // Démarrer le cron des factures récurrentes (génération + envoi)
       startInvoiceRecurrenceCron();
       logger.info("✅ Cron des factures récurrentes démarré");
+
+      // Démarrer le cron de vérification de la remise des e-mails de documents
+      // (filet du webhook Resend : reçu ou alerte de rejet à l'émetteur)
+      startDocumentDeliveryCheckCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

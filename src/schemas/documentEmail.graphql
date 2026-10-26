@@ -1,11 +1,25 @@
 # Schéma GraphQL pour l'envoi de documents par email
 
+# Remise de l'e-mail au serveur du destinataire (null : envoi antérieur au suivi)
+enum EmailDeliveryStatus {
+  SENT
+  DELIVERED
+  DELAYED
+  FAILED
+}
+
 type EmailTracking {
   emailSentAt: String
   emailOpenedAt: String
   emailOpenCount: Int
   emailClickedAt: String
   emailClickCount: Int
+  deliveryStatus: EmailDeliveryStatus
+  deliveredAt: String
+  deliveryFailedAt: String
+  # Raison du rejet, rédigée pour l'utilisateur
+  deliveryFailureReason: String
+  recipientEmail: String
 }
 
 input EmailAttachmentInput {

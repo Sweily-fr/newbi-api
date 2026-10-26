@@ -11,6 +11,7 @@ import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
 import cloudflareService from "./cloudflareService.js";
+import { APP_URL, escapeHtml, typo } from "../utils/trialEmails.js";
 
 /**
  * Service d'envoi de documents (factures, devis, avoirs) par email
@@ -441,48 +442,89 @@ function generateReminderEmailHtml(emailBody, variables, reminderType) {
 </html>`;
 }
 
+// Liste où retrouver chaque type de document dans l'application
+const DOCUMENT_LIST_PATHS = {
+  invoice: "factures",
+  quote: "devis",
+  creditNote: "factures",
+  purchaseOrder: "bons-commande",
+  deliveryNote: "bons-de-livraison",
+};
+
 /**
- * Génère le HTML de l'email de confirmation d'envoi destiné à l'émetteur
+ * Numéro, client et montant affichés dans les e-mails d'un document
  */
-function generateSenderConfirmationHtml({
-  documentType,
-  documentNumber,
-  recipientEmail,
-  clientName,
-  totalAmount,
-  sentAt,
-  companyName,
-}) {
-  const labels = DOCUMENT_LABELS[documentType];
-  const docLabel = labels.singular;
-  const article = labels.article;
+function buildDocumentSummary(document) {
+  const total = document.finalTotalTTC ?? document.totalTTC ?? 0;
+  return {
+    documentNumber: `${document.prefix || ""}-${document.number}`.replace(
+      /^-/,
+      "",
+    ),
+    clientName: document.client?.name || "Client",
+    totalAmount: new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency: "EUR",
+    }).format(total),
+  };
+}
+
+// Le VPS est en UTC : les heures affichées sont celles de Paris
+function formatParisDateTime(date) {
+  return new Date(date).toLocaleString("fr-FR", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: "Europe/Paris",
+  });
+}
+
+/**
+ * Article + nom du document en début de phrase (« La facture », « L'avoir »)
+ */
+function capitalizedDocumentLabel(documentType) {
+  const { singular, article } = DOCUMENT_LABELS[documentType];
   const capitalizedArticle =
     article.charAt(0).toUpperCase() +
     article.slice(1) +
     (article.endsWith("'") ? "" : " ");
-  const verbAccord =
-    documentType === DOCUMENT_TYPES.INVOICE ||
-    documentType === DOCUMENT_TYPES.CREDIT_NOTE
-      ? "envoyée"
-      : "envoyé";
+  return `${capitalizedArticle}${singular}`;
+}
 
+/**
+ * Gabarit commun des e-mails adressés à l'émetteur (reçu de remise, alerte
+ * de rejet) : même habillage que l'e-mail d'envoi de document.
+ */
+function renderSenderNoticeHtml({
+  title,
+  preheader,
+  notifType,
+  badge,
+  heading,
+  messageHtml,
+  rows,
+  afterRowsHtml = "",
+  footerText,
+}) {
   const todayFormatted = new Date().toLocaleDateString("fr-FR", {
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: "Europe/Paris",
   });
 
-  const confRow = (label, value, opts = {}) => {
-    if (value === null || value === undefined || value === "") return "";
-    const weight = opts.strong ? "600" : "400";
-    return `
+  const confRows = rows
+    .filter(
+      ({ value }) => value !== null && value !== undefined && value !== "",
+    )
+    .map(({ label, value, strong }) => {
+      const weight = strong ? "600" : "400";
+      return `
                 <tr>
                   <td style="padding:6px 0;font-size:14px;color:#6b7280;">${label}</td>
-                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${value}</td>
+                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${typo(escapeHtml(value))}</td>
                 </tr>`;
-  };
-
-  const confRows = `${confRow("Numéro", documentNumber)}${confRow("Destinataire", recipientEmail)}${confRow("Montant", totalAmount, { strong: true })}${confRow("Envoyé le", sentAt)}`;
+    })
+    .join("");
 
   // Même gabarit que l'email d'envoi de document (cf. notification de mention).
   return `<!DOCTYPE html>
@@ -490,10 +532,10 @@ function generateSenderConfirmationHtml({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Confirmation d'envoi</title>
+  <title>${title}</title>
 </head>
 <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${capitalizedArticle}${docLabel} ${documentNumber} a bien été ${verbAccord} à ${clientName}.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${escapeHtml(preheader)}</div>
   <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
 
     <!-- Logo -->
@@ -503,7 +545,7 @@ function generateSenderConfirmationHtml({
 
     <!-- Type de notification -->
     <div style="text-align:center;margin-bottom:8px;">
-      <span style="font-size:11px;font-weight:600;color:#1a1a1a;letter-spacing:0.5px;text-transform:uppercase;">CONFIRMATION D'ENVOI</span>
+      <span style="font-size:11px;font-weight:600;color:#1a1a1a;letter-spacing:0.5px;text-transform:uppercase;">${notifType}</span>
     </div>
 
     <!-- Date -->
@@ -516,24 +558,24 @@ function generateSenderConfirmationHtml({
 
       <!-- Badge -->
       <div style="margin-bottom:20px;">
-        <div style="display:inline-block;background-color:#ede9fe;border-radius:6px;padding:8px 12px;">
-          <span style="font-size:11px;font-weight:500;color:#5a50ff;letter-spacing:0.3px;text-transform:uppercase;">Envoi confirmé</span>
+        <div style="display:inline-block;background-color:${badge.background};border-radius:6px;padding:8px 12px;">
+          <span style="font-size:11px;font-weight:500;color:${badge.color};letter-spacing:0.3px;text-transform:uppercase;">${badge.label}</span>
         </div>
       </div>
 
       <!-- Titre -->
-      <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${capitalizedArticle}${docLabel} ${documentNumber}</h1>
+      <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${escapeHtml(heading)}</h1>
 
       <!-- Message -->
       <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">
-        ${capitalizedArticle}${docLabel} <strong style="color:#1a1a1a;">${documentNumber}</strong> a bien été ${verbAccord} à <strong style="color:#1a1a1a;">${clientName}</strong> (${recipientEmail}).
+        ${typo(messageHtml)}
       </div>
 
       <!-- Récapitulatif -->
       <div style="background-color:#fafafa;border-radius:8px;padding:16px;">
         <table style="width:100%;border-collapse:collapse;">${confRows}
         </table>
-      </div>
+      </div>${afterRowsHtml}
     </div>
 
     <!-- Footer -->
@@ -542,7 +584,7 @@ function generateSenderConfirmationHtml({
         <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png" alt="Newbi" style="height:28px;width:auto;">
       </div>
       <p style="font-size:13px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;">Votre gestion, simplifiée.</p>
-      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">${typo(footerText)}</p>
       <div style="font-size:11px;color:#9ca3af;line-height:1.6;">
         <p style="margin:0 0 4px 0;">SWEILY (SAS),</p>
         <p style="margin:0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
@@ -555,7 +597,87 @@ function generateSenderConfirmationHtml({
 }
 
 /**
- * Envoie un email de confirmation à l'émetteur après un envoi réussi
+ * Génère le HTML de l'email de confirmation d'envoi destiné à l'émetteur
+ */
+function generateSenderConfirmationHtml({
+  documentType,
+  documentNumber,
+  recipientEmail,
+  clientName,
+  totalAmount,
+  sentAt,
+  deliveredAt,
+}) {
+  const label = capitalizedDocumentLabel(documentType);
+  const verbAccord =
+    documentType === DOCUMENT_TYPES.INVOICE ||
+    documentType === DOCUMENT_TYPES.CREDIT_NOTE
+      ? "envoyée"
+      : "envoyé";
+
+  return renderSenderNoticeHtml({
+    title: "Confirmation d'envoi",
+    preheader: `${label} ${documentNumber} a bien été ${verbAccord} à ${clientName}.`,
+    notifType: "CONFIRMATION D'ENVOI",
+    badge: { label: "Envoi confirmé", background: "#ede9fe", color: "#5a50ff" },
+    heading: `${label} ${documentNumber}`,
+    messageHtml: `${escapeHtml(label)} <strong style="color:#1a1a1a;">${escapeHtml(documentNumber)}</strong> a bien été ${verbAccord} à <strong style="color:#1a1a1a;">${escapeHtml(clientName)}</strong> (${escapeHtml(recipientEmail)}).`,
+    rows: [
+      { label: "Numéro", value: documentNumber },
+      { label: "Destinataire", value: recipientEmail },
+      { label: "Montant", value: totalAmount, strong: true },
+      { label: "Envoyé le", value: sentAt },
+      { label: "Remis le", value: deliveredAt },
+    ],
+    footerText:
+      "Email automatique envoyé par Newbi pour confirmer l'envoi de votre document.",
+  });
+}
+
+/**
+ * Génère le HTML de l'alerte envoyée à l'émetteur quand l'e-mail du document
+ * n'a pas pu être remis au destinataire
+ */
+function generateSenderFailureHtml({
+  documentType,
+  documentNumber,
+  recipientEmail,
+  clientName,
+  reason,
+  sentAt,
+}) {
+  const { singular } = DOCUMENT_LABELS[documentType];
+  const remis = documentType === DOCUMENT_TYPES.INVOICE ? "remise" : "remis";
+  const listUrl = `${APP_URL}/dashboard/outils/${DOCUMENT_LIST_PATHS[documentType]}`;
+
+  return renderSenderNoticeHtml({
+    title: "Envoi non remis",
+    preheader: `Votre ${singular} ${documentNumber} n'a pas pu être ${remis} à ${clientName}.`,
+    notifType: "ENVOI NON REMIS",
+    badge: { label: "Non remis", background: "#fee2e2", color: "#dc2626" },
+    heading: `${capitalizedDocumentLabel(documentType)} ${documentNumber}`,
+    messageHtml: `Votre ${singular} <strong style="color:#1a1a1a;">${escapeHtml(documentNumber)}</strong> n'a pas pu être ${remis} à <strong style="color:#1a1a1a;">${escapeHtml(clientName)}</strong> (${escapeHtml(recipientEmail)}). Votre client ne l'a pas reçu.`,
+    rows: [
+      { label: "Numéro", value: documentNumber },
+      { label: "Destinataire", value: recipientEmail },
+      { label: "Raison", value: reason, strong: true },
+      { label: "Envoyé le", value: sentAt },
+    ],
+    afterRowsHtml: `
+
+      <!-- Que faire -->
+      <div style="font-size:15px;color:#4b5563;margin:24px 0 0 0;line-height:1.6;">
+        ${typo("Vérifiez l'adresse e-mail de votre client, puis renvoyez le document depuis Newbi.")}
+      </div>
+      <a href="${listUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;margin-top:24px;">Ouvrir Newbi</a>`,
+    footerText:
+      "Email automatique envoyé par Newbi pour vous signaler un envoi non remis.",
+  });
+}
+
+/**
+ * Envoie un email de confirmation à l'émetteur une fois l'e-mail du document
+ * remis au serveur du destinataire
  */
 async function sendSenderConfirmationEmail({
   senderEmail,
@@ -564,7 +686,8 @@ async function sendSenderConfirmationEmail({
   recipientEmail,
   clientName,
   totalAmount,
-  companyName,
+  sentAt = new Date(),
+  deliveredAt = null,
 }) {
   if (!senderEmail) return;
 
@@ -576,19 +699,49 @@ async function sendSenderConfirmationEmail({
       : ""
   } à ${clientName}`;
 
-  const sentAt = new Date().toLocaleString("fr-FR", {
-    dateStyle: "long",
-    timeStyle: "short",
-  });
-
   const html = generateSenderConfirmationHtml({
     documentType,
     documentNumber,
     recipientEmail,
     clientName,
     totalAmount,
-    sentAt,
-    companyName,
+    sentAt: formatParisDateTime(sentAt),
+    deliveredAt: deliveredAt ? formatParisDateTime(deliveredAt) : null,
+  });
+
+  await emailReminderService.sendEmail({
+    to: senderEmail,
+    subject,
+    html,
+  });
+}
+
+/**
+ * Prévient l'émetteur que l'e-mail du document a été rejeté
+ */
+async function sendSenderFailureEmail({
+  senderEmail,
+  documentType,
+  documentNumber,
+  recipientEmail,
+  clientName,
+  reason,
+  sentAt = new Date(),
+}) {
+  if (!senderEmail) return;
+
+  const labels = DOCUMENT_LABELS[documentType];
+  const subject = `${labels.singular.charAt(0).toUpperCase() + labels.singular.slice(1)} ${documentNumber} non remis${
+    documentType === DOCUMENT_TYPES.INVOICE ? "e" : ""
+  } à ${clientName}`;
+
+  const html = generateSenderFailureHtml({
+    documentType,
+    documentNumber,
+    recipientEmail,
+    clientName,
+    reason,
+    sentAt: formatParisDateTime(sentAt),
   });
 
   await emailReminderService.sendEmail({
@@ -625,11 +778,8 @@ async function sendDocumentEmail({
   }
 
   // Préparer les variables
-  const total = document.finalTotalTTC ?? document.totalTTC ?? 0;
-  const documentNumber = `${document.prefix || ""}-${document.number}`.replace(
-    /^-/,
-    "",
-  );
+  const summary = buildDocumentSummary(document);
+  const { documentNumber } = summary;
 
   // Récupérer le nom et l'email d'entreprise actuels depuis l'organisation (pas le snapshot du document)
   let currentCompanyName = document.companyInfo?.name || "Votre Entreprise";
@@ -652,11 +802,8 @@ async function sendDocumentEmail({
 
   const variables = {
     documentNumber,
-    clientName: document.client?.name || "Client",
-    totalAmount: new Intl.NumberFormat("fr-FR", {
-      style: "currency",
-      currency: "EUR",
-    }).format(total),
+    clientName: summary.clientName,
+    totalAmount: summary.totalAmount,
     issueDate: new Date(document.issueDate).toLocaleDateString("fr-FR"),
     companyName: currentCompanyName,
   };
@@ -719,7 +866,8 @@ async function sendDocumentEmail({
   const trackingPixelUrl = `${apiBaseUrl}/tracking/open/${trackingToken}`;
   const clickTrackingUrl = `${apiBaseUrl}/tracking/click/${trackingToken}`;
 
-  // Sauvegarder le token de tracking sur le document
+  // Le suivi n'est enregistré qu'une fois l'e-mail accepté (après l'envoi) :
+  // un envoi refusé ne doit pas marquer le document « Envoyé »
   const ModelMap = {
     invoice: Invoice,
     quote: Quote,
@@ -728,25 +876,6 @@ async function sendDocumentEmail({
     deliveryNote: DeliveryNote,
   };
   const TrackingModel = ModelMap[documentType];
-  if (TrackingModel) {
-    // $set de l'objet entier (pas de chemins pointés) : un document dont
-    // emailTracking vaut null ferait échouer la création de sous-champs.
-    await TrackingModel.updateOne(
-      { _id: documentId },
-      {
-        $set: {
-          emailTracking: {
-            trackingToken,
-            emailSentAt: new Date(),
-            emailOpenedAt: null,
-            emailOpenCount: 0,
-            emailClickedAt: null,
-            emailClickCount: 0,
-          },
-        },
-      },
-    );
-  }
 
   // Lien de paiement en ligne : uniquement pour une facture non encore payée,
   // et si l'organisation a un compte Stripe Connect opérationnel (chargesEnabled).
@@ -1020,11 +1149,33 @@ async function sendDocumentEmail({
     mailResult = await emailReminderService.transporter.sendMail(mailOptions);
   }
 
-  // Sauvegarder le resendMessageId sur le document pour le webhook tracking
-  if (resendMessageId && TrackingModel) {
+  // Via Resend, le reçu attend la remise de l'e-mail au serveur du
+  // destinataire (documentDeliveryService) ; via SMTP, aucun suivi possible,
+  // il part tout de suite comme avant
+  const sentAt = new Date();
+  const confirmNow = Boolean(senderEmail) && !resendMessageId;
+  if (TrackingModel) {
+    // $set de l'objet entier (pas de chemins pointés) : un document dont
+    // emailTracking vaut null ferait échouer la création de sous-champs.
     await TrackingModel.updateOne(
       { _id: documentId },
-      { $set: { "emailTracking.resendMessageId": resendMessageId } },
+      {
+        $set: {
+          emailTracking: {
+            trackingToken,
+            emailSentAt: sentAt,
+            emailOpenedAt: null,
+            emailOpenCount: 0,
+            emailClickedAt: null,
+            emailClickCount: 0,
+            resendMessageId,
+            deliveryStatus: "SENT",
+            recipientEmail,
+            senderEmail: senderEmail || null,
+            senderNotifiedAt: confirmNow ? sentAt : null,
+          },
+        },
+      },
     );
   }
 
@@ -1076,7 +1227,7 @@ async function sendDocumentEmail({
   }
 
   // Envoi de la confirmation à l'émetteur (fire-and-forget)
-  if (senderEmail) {
+  if (confirmNow) {
     (async () => {
       try {
         await sendSenderConfirmationEmail({
@@ -1086,7 +1237,7 @@ async function sendDocumentEmail({
           recipientEmail,
           clientName: variables.clientName,
           totalAmount: variables.totalAmount,
-          companyName: variables.companyName,
+          sentAt,
         });
       } catch (confirmationError) {
         console.warn(
@@ -1155,4 +1306,7 @@ export {
   getDocument,
   generateDocumentPdf,
   generateReminderEmailHtml,
+  buildDocumentSummary,
+  sendSenderConfirmationEmail,
+  sendSenderFailureEmail,
 };

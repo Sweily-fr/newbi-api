@@ -1,24 +1,15 @@
 import express from "express";
 import crypto from "crypto";
-import Invoice from "../models/Invoice.js";
-import Quote from "../models/Quote.js";
-import PurchaseOrder from "../models/PurchaseOrder.js";
-import DeliveryNote from "../models/DeliveryNote.js";
-import CreditNote from "../models/CreditNote.js";
 import logger from "../utils/logger.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
 import { recordTrialNudgeEmailEvent } from "../services/trialNudgeService.js";
+import {
+  findDocumentByResendId,
+  isDeliveryEvent,
+  recordDeliveryEvent,
+} from "../services/documentDeliveryService.js";
 
 const router = express.Router();
-
-// Modèles de documents avec leur type
-const DOCUMENT_MODELS = [
-  { model: Invoice, type: "invoice" },
-  { model: Quote, type: "quote" },
-  { model: PurchaseOrder, type: "purchaseOrder" },
-  { model: DeliveryNote, type: "deliveryNote" },
-  { model: CreditNote, type: "creditNote" },
-];
 
 /**
  * Vérifie la signature Svix du webhook Resend sur le CORPS BRUT.
@@ -65,22 +56,6 @@ function verifySvixSignature({
   } catch {
     return false;
   }
-}
-
-/**
- * Cherche un document par son resendMessageId
- */
-async function findDocumentByResendId(resendMessageId) {
-  for (const { model: Model, type: documentType } of DOCUMENT_MODELS) {
-    const doc = await Model.findOne({
-      "emailTracking.resendMessageId": resendMessageId,
-    });
-
-    if (doc) {
-      return { doc, Model, documentType };
-    }
-  }
-  return null;
 }
 
 /**
@@ -152,6 +127,13 @@ router.post("/", express.raw({ type: "*/*" }), async (req, res) => {
       logger.warn(
         `[ResendWebhook] suivi de relance d'essai en échec: ${nudgeError.message}`,
       );
+    }
+
+    // Remise de l'e-mail d'un document (remis, retardé, rejeté) : reçu ou
+    // alerte à l'émetteur
+    if (isDeliveryEvent(type)) {
+      await recordDeliveryEvent(parsedBody);
+      return res.status(200).json({ received: true });
     }
 
     // Traiter les événements pertinents
