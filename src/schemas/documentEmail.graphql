@@ -47,6 +47,51 @@ type SendDocumentEmailResult {
   recipientEmail: String!
 }
 
+type DocumentEmailAttachment {
+  filename: String!
+  size: Int
+  # PDF du document (les pièces ajoutées à la main ne sont pas conservées)
+  isDocument: Boolean
+}
+
+# Envoi d'un document par e-mail, tel que le client l'a reçu
+type DocumentEmailLog {
+  id: ID!
+  workspaceId: ID!
+  workspaceName: String
+  documentType: String!
+  documentId: ID!
+  documentNumber: String
+  originalInvoiceId: ID
+  sentAt: String!
+  senderEmail: String
+  from: String
+  replyTo: String
+  to: String!
+  cc: [String!]!
+  bcc: [String!]!
+  subject: String
+  # HTML sans pixel ni liens de suivi (absent de l'historique)
+  html: String
+  attachments: [DocumentEmailAttachment!]!
+  deliveryStatus: EmailDeliveryStatus
+  deliveredAt: String
+  deliveryFailedAt: String
+  deliveryFailureReason: String
+  openedAt: String
+}
+
+extend type Query {
+  # Envoi lu dans son propre espace (lien du reçu), même si un autre est actif
+  documentEmailLog(id: ID!): DocumentEmailLog
+  # Envois d'un document, du plus récent au plus ancien
+  documentEmailLogs(
+    workspaceId: ID!
+    documentType: String!
+    documentId: ID!
+  ): [DocumentEmailLog!]!
+}
+
 type EmailTrackingUpdate {
   documentId: ID!
   documentType: String!
