@@ -311,6 +311,20 @@ const invoiceSchema = new mongoose.Schema(
       emailClickCount: { type: Number, default: 0 },
       trackingToken: { type: String, index: true },
       resendMessageId: { type: String, index: true },
+      // Remise au serveur du destinataire (webhook Resend, sinon vérification
+      // planifiée) : le reçu ou l'alerte à l'émetteur en dépend
+      deliveryStatus: {
+        type: String,
+        enum: ["SENT", "DELIVERED", "DELAYED", "FAILED"],
+      },
+      deliveredAt: { type: Date },
+      deliveryFailedAt: { type: Date },
+      deliveryFailureReason: { type: String },
+      deliveryCheckedAt: { type: Date },
+      recipientEmail: { type: String },
+      senderEmail: { type: String },
+      senderNotifiedAt: { type: Date },
+      senderFailureNotifiedAt: { type: Date },
     },
     // Référence vers l'organisation/workspace (Better Auth)
     workspaceId: {
@@ -622,6 +636,15 @@ const invoiceSchema = new mongoose.Schema(
 // Index pour améliorer les performances des recherches
 // Index composés workspace + autres champs pour les requêtes fréquentes
 invoiceSchema.index({ workspaceId: 1, createdAt: -1 });
+// E-mails en attente de remise (vérification planifiée)
+invoiceSchema.index(
+  { "emailTracking.deliveryStatus": 1, "emailTracking.emailSentAt": 1 },
+  {
+    partialFilterExpression: {
+      "emailTracking.deliveryStatus": { $exists: true },
+    },
+  },
+);
 invoiceSchema.index({ workspaceId: 1, status: 1 });
 invoiceSchema.index({ workspaceId: 1, "client.name": 1 });
 invoiceSchema.index({ workspaceId: 1, dueDate: 1 });
