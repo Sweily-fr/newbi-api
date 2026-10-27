@@ -8,14 +8,18 @@ import mongoose from "mongoose";
  *
  * Le HTML est conservé sans pixel ni liens de suivi : le consulter ne doit
  * pas marquer le document « Ouvert ». Les pièces jointes ajoutées à la main
- * ne sont pas conservées, seuls leur nom et leur taille le sont.
+ * sont conservées dans un bucket privé (storageKey) ; les envois antérieurs
+ * n'en gardent que le nom et la taille.
  */
 const attachmentSchema = new mongoose.Schema(
   {
     filename: { type: String, required: true },
     size: { type: Number },
-    // PDF du document (téléchargeable depuis le document lui-même)
+    // PDF du document : lu depuis l'archive du document lui-même
     isDocument: { type: Boolean, default: false },
+    // Fichier ajouté à la main, conservé après l'envoi (bucket privé)
+    storageKey: { type: String },
+    contentType: { type: String },
   },
   { _id: false },
 );

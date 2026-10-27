@@ -50,8 +50,11 @@ type SendDocumentEmailResult {
 type DocumentEmailAttachment {
   filename: String!
   size: Int
-  # PDF du document (les pièces ajoutées à la main ne sont pas conservées)
+  # PDF du document (lu depuis l'archive du document)
   isDocument: Boolean
+  # Fichier consultable : PDF du document, ou fichier ajouté à la main et
+  # conservé à l'envoi (/documents/email-logs/:id/attachment?index=)
+  available: Boolean!
 }
 
 # Envoi d'un document par e-mail, tel que le client l'a reçu

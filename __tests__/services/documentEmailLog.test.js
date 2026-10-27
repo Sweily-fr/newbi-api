@@ -33,11 +33,14 @@ vi.mock("../../src/config/redis.js", () => ({
   cacheDel: async () => {},
   getCacheClient: () => null,
 }));
+const storage = vi.hoisted(() => ({
+  uploadImage: vi.fn(),
+  getDocumentObjectBuffer: vi.fn(),
+  uploadEmailAttachment: vi.fn(),
+  sanitizeFileName: (name) => name.replace(/[^\w\d.-]/g, "-"),
+}));
 vi.mock("../../src/services/cloudflareService.js", () => ({
-  default: {
-    uploadImage: vi.fn().mockResolvedValue({ key: "k", url: "https://r2/k" }),
-    getDocumentObjectBuffer: vi.fn().mockResolvedValue(null),
-  },
+  default: storage,
 }));
 vi.mock("axios", () => ({
   default: {
@@ -134,6 +137,9 @@ beforeEach(async () => {
     error: null,
   });
   mailer.sendEmail.mockResolvedValue({});
+  storage.uploadImage.mockResolvedValue({ key: "k", url: "https://r2/k" });
+  storage.getDocumentObjectBuffer.mockResolvedValue(null);
+  storage.uploadEmailAttachment.mockResolvedValue({});
 });
 
 describe("journal de l'envoi", () => {
@@ -154,7 +160,7 @@ describe("journal de l'envoi", () => {
     expect(log.senderEmail).toBe(SENDER_EMAIL);
     expect(log.resendMessageId).toBe("resend-1");
     expect(log.deliveryStatus).toBe("SENT");
-    expect(log.attachments).toEqual([
+    expect(log.attachments).toMatchObject([
       { filename: "F-2026-000042.pdf", size: 8, isDocument: true },
       { filename: "cgv.pdf", size: 10, isDocument: false },
     ]);
@@ -165,6 +171,43 @@ describe("journal de l'envoi", () => {
     // L'e-mail réellement envoyé, lui, garde son suivi
     const sent = mailer.resend.emails.send.mock.calls[0][0];
     expect(sent.html).toContain("/tracking/open/");
+  });
+
+  it("conserve les fichiers ajoutés à la main, pas le PDF du document", async () => {
+    const id = await insertInvoice();
+
+    await sendByEmail(id);
+
+    const log = await DocumentEmailLog.findOne({ documentId: id }).lean();
+    const key = `email-attachments/${orgId}/${log._id}/1-cgv.pdf`;
+    await vi.waitFor(async () => {
+      const stored = await DocumentEmailLog.findById(log._id).lean();
+      expect(stored.attachments[1]).toMatchObject({
+        storageKey: key,
+        contentType: "application/pdf",
+      });
+    });
+    expect(storage.uploadEmailAttachment).toHaveBeenCalledTimes(1);
+    const [uploadedKey, content] = storage.uploadEmailAttachment.mock.calls[0];
+    expect(uploadedKey).toBe(key);
+    expect(content.toString()).toBe("conditions");
+    const stored = await DocumentEmailLog.findById(log._id).lean();
+    expect(stored.attachments[0].storageKey).toBeUndefined();
+  });
+
+  it("un fichier non conservé ne bloque pas l'envoi", async () => {
+    storage.uploadEmailAttachment.mockRejectedValue(
+      new Error("R2 indisponible"),
+    );
+    const id = await insertInvoice();
+
+    await expect(sendByEmail(id)).resolves.toBeTruthy();
+
+    await vi.waitFor(() =>
+      expect(storage.uploadEmailAttachment).toHaveBeenCalled(),
+    );
+    const log = await DocumentEmailLog.findOne({ documentId: id }).lean();
+    expect(log.attachments[1].storageKey).toBeUndefined();
   });
 
   it("le reçu, envoyé à la remise, pointe vers l'aperçu de l'envoi", async () => {
@@ -272,6 +315,53 @@ describe("lecture des envois (GraphQL)", () => {
     expect(result.workspaceName).toBe("Test Org");
     expect(result.html).toContain("Voici votre facture.");
     expect(result.cc).toEqual(["compta@test.fr"]);
+  });
+
+  it("indique les pièces jointes consultables, sans exposer leur clé", async () => {
+    await seedOrgMembership({ userId, organizationId: orgId });
+    const { log } = await sentLog();
+    await DocumentEmailLog.collection.insertOne({
+      ...log,
+      _id: new ObjectId(),
+      attachments: [
+        ...log.attachments.slice(0, 1),
+        { filename: "ancien.docx", size: 5, isDocument: false },
+      ],
+    });
+    await vi.waitFor(async () => {
+      const stored = await DocumentEmailLog.findById(log._id).lean();
+      expect(stored.attachments[1].storageKey).toBeTruthy();
+    });
+
+    const [recent, older] = await Promise.all(
+      [
+        log._id,
+        (await DocumentEmailLog.findOne({ _id: { $ne: log._id } }))._id,
+      ].map((id) =>
+        resolve(
+          "documentEmailLog",
+          { id: id.toString() },
+          buildContext({ userId, organizationId: orgId }),
+        ),
+      ),
+    );
+
+    expect(recent.attachments).toEqual([
+      {
+        filename: "F-2026-000042.pdf",
+        size: 8,
+        isDocument: true,
+        available: true,
+      },
+      { filename: "cgv.pdf", size: 10, isDocument: false, available: true },
+    ]);
+    // Envoi antérieur à la conservation : nom seulement
+    expect(older.attachments[1]).toEqual({
+      filename: "ancien.docx",
+      size: 5,
+      isDocument: false,
+      available: false,
+    });
   });
 
   it("refuse l'aperçu à un utilisateur hors de l'espace du document", async () => {

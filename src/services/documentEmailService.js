@@ -15,6 +15,7 @@ import { APP_URL, escapeHtml, typo } from "../utils/trialEmails.js";
 import {
   createEmailLog,
   emailLogPreviewUrl,
+  storeEmailLogAttachments,
 } from "./documentEmailLogService.js";
 
 /**
@@ -1253,6 +1254,19 @@ async function sendDocumentEmail({
     trackingToken,
     deliveryStatus: "SENT",
   });
+
+  // Fichiers ajoutés à la main : conservés pour être rouverts depuis la page
+  // de l'e-mail envoyé, en arrière-plan (l'envoi est déjà parti)
+  if (emailLog && normalizedExtraAttachments.length > 0) {
+    storeEmailLogAttachments(emailLog, normalizedExtraAttachments).catch(
+      (error) => {
+        console.warn(
+          "⚠️ [DocumentEmail] Pièces jointes non conservées:",
+          error.message,
+        );
+      },
+    );
+  }
 
   // Ajouter l'activité au client
   try {
