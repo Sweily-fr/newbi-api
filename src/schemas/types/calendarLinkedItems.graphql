@@ -1,0 +1,69 @@
+# Échéances des autres pages affichées dans le calendrier, relues dans les
+# documents à chaque affichage (rien n'est copié dans les événements)
+
+enum CalendarLinkedKind {
+  "Facture de vente : échéance de paiement"
+  INVOICE
+  "Facture d'achat : échéance de paiement"
+  PURCHASE_INVOICE
+  "Devis en attente : fin de validité"
+  QUOTE
+  "Tâche d'un projet : échéance"
+  TASK
+  "Facture récurrente : prochaine émission"
+  RECURRING_INVOICE
+}
+
+enum CalendarLinkedState {
+  UPCOMING
+  OVERDUE
+  DONE
+}
+
+type CalendarLinkedItem {
+  id: ID!
+  kind: CalendarLinkedKind!
+  "Facture, devis, facture d'achat, tâche ou récurrence"
+  entityId: ID!
+  "Jour calendaire AAAA-MM-JJ (heure de Paris)"
+  day: String!
+  title: String!
+  "Numéro du document"
+  reference: String
+  "Client ou fournisseur"
+  counterparty: String
+  amount: Float
+  currency: String
+  state: CalendarLinkedState!
+  "Statut du document, ou colonne de la tâche"
+  documentStatus: String
+  boardId: ID
+  boardTitle: String
+  boardEmoji: String
+  boardColor: String
+  columnTitle: String
+  columnColor: String
+  priority: String
+  assignedMembersInfo: [AssignedMemberInfo!]
+  "Facture récurrente : facture modèle et rythme"
+  sourceInvoiceId: ID
+  frequency: String
+  interval: Int
+}
+
+type CalendarLinkedItemsResult {
+  items: [CalendarLinkedItem!]!
+  "Sources que le rôle permet de voir"
+  kinds: [CalendarLinkedKind!]!
+  "Vrai si une source a atteint la limite d'éléments"
+  truncated: Boolean!
+}
+
+extend type Query {
+  "Période en jours AAAA-MM-JJ inclus, 100 jours au plus"
+  calendarLinkedItems(
+    workspaceId: ID
+    from: String!
+    to: String!
+  ): CalendarLinkedItemsResult!
+}
