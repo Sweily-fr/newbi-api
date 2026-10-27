@@ -97,6 +97,7 @@ import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
 import documentPdfRoutes from "./routes/documentPdf.js";
 import documentAnnexRoutes from "./routes/documentAnnex.js";
 import importedDocumentFileRoutes from "./routes/importedDocumentFile.js";
+import emailAttachmentRoutes from "./routes/emailAttachment.js";
 import guideLeadsRoutes from "./routes/guideLeads.js";
 import esignatureWebhookRoutes from "./routes/esignature-webhook.js";
 import emailTrackingRoutes from "./routes/emailTracking.js";
@@ -395,6 +396,10 @@ async function startServer() {
   // Route de streaming des fichiers originaux importés (factures/devis/BC
   // importés, justificatifs de factures d'achat) depuis R2 (auth session)
   app.use("/documents", importedDocumentFileRoutes);
+
+  // Route de streaming des fichiers joints à la main aux e-mails de
+  // documents (R2 privé, auth session)
+  app.use("/documents", emailAttachmentRoutes);
 
   // Route de streaming des annexes PDF des devis / factures / BC (R2 privé,
   // auth session ou secret interne pour la génération du PDF)

@@ -59,7 +59,12 @@ function serializeEmailLog(log, workspaceName = null) {
     bcc: log.bcc || [],
     subject: log.subject || null,
     html: log.html ?? null,
-    attachments: log.attachments || [],
+    attachments: (log.attachments || []).map((attachment) => ({
+      filename: attachment.filename,
+      size: attachment.size ?? null,
+      isDocument: Boolean(attachment.isDocument),
+      available: Boolean(attachment.isDocument || attachment.storageKey),
+    })),
     deliveryStatus: log.deliveryStatus || null,
     deliveredAt: toIso(log.deliveredAt),
     deliveryFailedAt: toIso(log.deliveryFailedAt),

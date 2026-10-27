@@ -39,6 +39,10 @@ class BankingCacheService {
 
       this.client = createClient({
         url: redisUrl,
+        // Pas de file d'attente hors connexion : une commande envoyée pendant
+        // une coupure échoue tout de suite (repli sans cache) au lieu
+        // d'attendre le retour de Redis.
+        disableOfflineQueue: true,
         socket: {
           // Ne JAMAIS abandonner : un restart Redis (ex: auto-refresh snap)
           // peut durer plus longtemps que quelques tentatives, et un cache
@@ -78,11 +82,13 @@ class BankingCacheService {
   }
 
   /**
-   * Attend que Redis soit prêt
+   * Redis prêt à répondre ? Ne JAMAIS attendre la connexion initiale : avec
+   * le reconnectStrategy ci-dessus, `connect()` ne se résout pas tant que
+   * Redis est arrêté. L'attendre bloquait toutes les routes bancaires quand
+   * l'API démarrait sans Redis (27/10/2026). Sans Redis, on passe sans cache.
    */
-  async _ensureConnected() {
-    await this._initPromise;
-    return this.isConnected;
+  _isReady() {
+    return Boolean(this.isConnected && this.client?.isReady);
   }
 
   /**
@@ -97,8 +103,7 @@ class BankingCacheService {
    * Vérifie si Redis est disponible
    */
   async isAvailable() {
-    await this._ensureConnected();
-    if (!this.isConnected || !this.client) return false;
+    if (!this._isReady()) return false;
     try {
       await this.client.ping();
       return true;
@@ -111,8 +116,7 @@ class BankingCacheService {
    * Méthodes internes pour get/set/delete
    */
   async _get(key) {
-    await this._ensureConnected();
-    if (!this.isConnected || !this.client) return null;
+    if (!this._isReady()) return null;
     try {
       const value = await this.client.get(key);
       return value ? JSON.parse(value) : null;
@@ -123,8 +127,7 @@ class BankingCacheService {
   }
 
   async _set(key, value, ttlSeconds) {
-    await this._ensureConnected();
-    if (!this.isConnected || !this.client) return false;
+    if (!this._isReady()) return false;
     try {
       await this.client.setEx(key, ttlSeconds, JSON.stringify(value));
       return true;
@@ -135,8 +138,7 @@ class BankingCacheService {
   }
 
   async _delete(key) {
-    await this._ensureConnected();
-    if (!this.isConnected || !this.client) return false;
+    if (!this._isReady()) return false;
     try {
       await this.client.del(key);
       return true;

@@ -374,6 +374,61 @@ class CloudflareService {
     return Buffer.from(await response.Body.transformToByteArray());
   }
 
+  // ============================================================
+  // PIÈCES JOINTES DES E-MAILS DE DOCUMENTS
+  // ============================================================
+
+  /**
+   * Bucket privé des fichiers joints à la main aux e-mails de documents :
+   * dédié si configuré, sinon celui des annexes (clés préfixées
+   * email-attachments/).
+   */
+  get emailAttachmentsBucketName() {
+    return (
+      process.env.EMAIL_ATTACHMENTS_BUCKET || this.documentAnnexesBucketName
+    );
+  }
+
+  /**
+   * Conserve un fichier joint à un e-mail de document. La clé est construite
+   * par l'appelant : email-attachments/{workspaceId}/{logId}/{index}-{nom}.
+   * @param {string} key
+   * @param {Buffer} buffer
+   * @param {string} contentType
+   * @param {string} workspaceId
+   */
+  async uploadEmailAttachment(key, buffer, contentType, workspaceId) {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.emailAttachmentsBucketName,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType || "application/octet-stream",
+        Metadata: {
+          workspaceId: String(workspaceId),
+          uploadedAt: new Date().toISOString(),
+        },
+      }),
+    );
+    logger.debug(`📎 Pièce jointe d'e-mail conservée sur R2: ${key}`);
+    return { key, bucket: this.emailAttachmentsBucketName };
+  }
+
+  /**
+   * Lit un fichier joint à un e-mail de document depuis R2.
+   * @param {string} key
+   * @returns {Promise<Buffer>}
+   */
+  async getEmailAttachmentBuffer(key) {
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.emailAttachmentsBucketName,
+        Key: key,
+      }),
+    );
+    return Buffer.from(await response.Body.transformToByteArray());
+  }
+
   /**
    * Nettoie un nom de fichier pour les headers HTTP
    * @param {string} fileName - Nom original du fichier

@@ -1,4 +1,5 @@
 import DocumentEmailLog from "../models/DocumentEmailLog.js";
+import cloudflareService from "./cloudflareService.js";
 import { APP_URL } from "../utils/trialEmails.js";
 import logger from "../utils/logger.js";
 
@@ -54,6 +55,48 @@ export async function createEmailLog(entry) {
       `[DocumentEmailLog] envoi non journalisé (${entry.documentType} ${entry.documentId}): ${error.message}`,
     );
     return null;
+  }
+}
+
+/**
+ * Conserve les fichiers ajoutés à la main à un envoi (bucket privé), pour
+ * les rouvrir depuis la page de l'e-mail envoyé. Lancé après l'envoi, déjà
+ * parti : un fichier non conservé garde seulement son nom.
+ * @param {object} log - entrée créée par createEmailLog
+ * @param {Array<{filename: string, content: Buffer, contentType?: string}>} files
+ *   fichiers dans l'ordre de log.attachments (hors PDF du document)
+ */
+export async function storeEmailLogAttachments(log, files) {
+  if (!log?._id || !files?.length) return;
+  const extraIndexes = log.attachments
+    .map((attachment, index) => (attachment.isDocument ? null : index))
+    .filter((index) => index !== null);
+
+  const updates = {};
+  await Promise.all(
+    files.map(async (file, position) => {
+      const index = extraIndexes[position];
+      if (index === undefined) return;
+      const key = `email-attachments/${log.workspaceId}/${log._id}/${index}-${cloudflareService.sanitizeFileName(file.filename)}`;
+      try {
+        await cloudflareService.uploadEmailAttachment(
+          key,
+          file.content,
+          file.contentType,
+          log.workspaceId,
+        );
+        updates[`attachments.${index}.storageKey`] = key;
+        updates[`attachments.${index}.contentType`] = file.contentType || null;
+      } catch (error) {
+        logger.warn(
+          `[DocumentEmailLog] pièce jointe non conservée (${log._id}, ${file.filename}): ${error.message}`,
+        );
+      }
+    }),
+  );
+
+  if (Object.keys(updates).length > 0) {
+    await DocumentEmailLog.updateOne({ _id: log._id }, { $set: updates });
   }
 }
 
