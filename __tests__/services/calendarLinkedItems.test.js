@@ -421,6 +421,7 @@ describe("droits", () => {
       "FORECAST",
       "DELIVERY",
       "FILE_TRANSFER",
+      "FISCAL",
     ]);
     expect(result.items.map((i) => i.kind)).toEqual(["PURCHASE_INVOICE"]);
   });

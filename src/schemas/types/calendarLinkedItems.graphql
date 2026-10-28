@@ -20,6 +20,8 @@ enum CalendarLinkedKind {
   DELIVERY
   "Fin d'un lien de transfert de fichiers"
   FILE_TRANSFER
+  "Échéance fiscale ou sociale, calculée depuis les informations légales"
+  FISCAL
 }
 
 enum CalendarLinkedState {
@@ -74,6 +76,30 @@ type CalendarLinkedItem {
   documentKind: String
   "Transfert : nombre de téléchargements"
   downloadCount: Int
+  "Échéance fiscale : page officielle qui la décrit"
+  infoUrl: String
+  "Échéance fiscale : date indicative, le jour exact dépend de l'entreprise"
+  isIndicative: Boolean
+  "Échéance fiscale : due seulement dans certains cas (voir la note)"
+  isConditional: Boolean
+  "Échéance fiscale : règle appliquée et conditions"
+  note: String
+}
+
+"Information légale qui manque pour calculer des échéances fiscales"
+type CalendarFiscalMissingInfo {
+  code: String!
+  "Ce qu'il faut compléter, en une phrase"
+  label: String!
+  "Échéances qui n'apparaissent pas tant qu'elle manque"
+  concerns: [String!]!
+}
+
+"Source Fiscal : ce qui manque dans les informations légales de l'espace"
+type CalendarFiscalSetup {
+  "Vrai quand rien ne manque"
+  complete: Boolean!
+  missing: [CalendarFiscalMissingInfo!]!
 }
 
 type CalendarLinkedItemsResult {
@@ -82,6 +108,8 @@ type CalendarLinkedItemsResult {
   kinds: [CalendarLinkedKind!]!
   "Vrai si une source a atteint la limite d'éléments"
   truncated: Boolean!
+  "Source Fiscal : informations légales manquantes (null sans la source)"
+  fiscalSetup: CalendarFiscalSetup
 }
 
 "Solde prévu en fin de journée"

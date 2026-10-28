@@ -229,6 +229,11 @@ beforeEach(async () => {
     role: "owner",
     organizationName: "Studio Nord",
   });
+  // Sans forme juridique, la source Fiscal ne calcule rien : ces tests
+  // comptent les autres sources (la source Fiscal a ses propres tests)
+  await mongoose.connection.db
+    .collection("organization")
+    .updateOne({ _id: workspaceId }, { $unset: { legalForm: "" } });
 });
 
 describe("gestion du lien (GraphQL)", () => {

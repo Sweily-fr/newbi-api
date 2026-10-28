@@ -26,6 +26,7 @@ import { forecastItems } from "./forecastItems.js";
 import { reminderItems } from "./reminderItems.js";
 import { deliveryItems } from "./deliveryItems.js";
 import { fileTransferItems } from "./fileTransferItems.js";
+import { fiscalItems } from "./fiscalItems.js";
 
 /**
  * Éléments des autres pages affichés dans le calendrier : échéances des
@@ -54,6 +55,8 @@ export const LINKED_KIND_MODULES = {
   REMINDER: "invoices",
   DELIVERY: ["purchaseOrders", "deliveryNotes"],
   FILE_TRANSFER: "fileTransfers",
+  // Échéances fiscales : calculées, sans document d'une autre page
+  FISCAL: "calendar",
 };
 
 export { MAX_ITEMS_PER_KIND };
@@ -451,6 +454,7 @@ const LOADERS = {
   REMINDER: reminderItems,
   DELIVERY: deliveryItems,
   FILE_TRANSFER: fileTransferItems,
+  FISCAL: fiscalItems,
 };
 
 /**
@@ -509,5 +513,7 @@ export async function getCalendarLinkedItems({
     items,
     kinds,
     truncated: results.some((r) => r.truncated),
+    // Source Fiscal : informations légales manquantes (null sans la source)
+    fiscalSetup: results.find((r) => r.fiscalSetup)?.fiscalSetup ?? null,
   };
 }
