@@ -3,6 +3,7 @@ import AbbyAccount from "../models/AbbyAccount.js";
 import QontoAccount from "../models/QontoAccount.js";
 import PennylaneAccount from "../models/PennylaneAccount.js";
 import logger from "../utils/logger.js";
+import { disconnectAllAccounts as disconnectAllSocialAccounts } from "../services/social/socialPublishingService.js";
 import {
   checkSubscriptionActive,
   resolveWorkspaceId,
@@ -24,6 +25,10 @@ const APP_INTEGRATIONS = {
   qonto: { label: "Qonto", model: QontoAccount },
   pennylane: { label: "Pennylane", model: PennylaneAccount },
 };
+
+// Application « Réseaux sociaux » : les comptes connectés vivent chez le
+// fournisseur de publication (Zernio). Désinstaller, c'est les déconnecter.
+const SOCIAL_NETWORKS_APP_ID = "social-networks";
 
 // Installer ou désinstaller une application : module « Applications et
 // banques » (rôle prédéfini ou personnalisé)
@@ -125,6 +130,17 @@ const installedAppResolvers = {
           if (disconnected) {
             logger.info(
               `${integration.label} déconnecté par la désinstallation de l'application:`,
+              { organizationId, userId: context.user._id?.toString() },
+            );
+          }
+        }
+
+        if (appId === SOCIAL_NETWORKS_APP_ID) {
+          const count = await disconnectAllSocialAccounts(organizationId);
+          if (count > 0) {
+            disconnected = true;
+            logger.info(
+              `${count} compte(s) de réseau social déconnecté(s) par la désinstallation de l'application:`,
               { organizationId, userId: context.user._id?.toString() },
             );
           }

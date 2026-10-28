@@ -1,0 +1,152 @@
+# Publication programmée sur les réseaux sociaux depuis le kanban
+# (resolvers/socialPublishing.js). Plateformes : "instagram" | "facebook" |
+# "linkedin" | "twitter" | "tiktok". Dates : chaînes ISO UTC.
+
+type SocialAccount {
+  id: ID!
+  platform: String!
+  username: String
+  displayName: String
+  avatarUrl: String
+  "active | needs_reconnect"
+  status: String!
+  connectedAt: String
+}
+
+type SocialPublishingStatus {
+  "ZERNIO_API_KEY configurée sur le serveur"
+  enabled: Boolean!
+  "Droit « Applications et banques » > Connecter et configurer"
+  canManageAccounts: Boolean!
+  "Droit de création dans le kanban et abonnement actif"
+  canSchedule: Boolean!
+  accounts: [SocialAccount!]!
+}
+
+type SocialPostMedia {
+  id: ID!
+  url: String!
+  width: Int
+  height: Int
+  contentType: String
+}
+
+type SocialPostTarget {
+  "SocialAccount local (null si le compte a été supprimé)"
+  accountId: ID
+  platform: String!
+  username: String
+  displayName: String
+  "pending | publishing | published | failed | cancelled"
+  status: String!
+  platformPostUrl: String
+  "Message français prêt à afficher, traduit depuis la catégorie d'erreur"
+  errorMessage: String
+  publishedAt: String
+}
+
+type SocialPostTikTokSettings {
+  privacyLevel: String
+  allowComment: Boolean
+  brandOrganic: Boolean
+}
+
+type SocialPost {
+  id: ID!
+  boardId: ID!
+  taskId: ID!
+  content: String!
+  media: [SocialPostMedia!]!
+  targets: [SocialPostTarget!]!
+  scheduledFor: String!
+  timezone: String!
+  "scheduled | publishing | published | partial | failed | cancelled"
+  status: String!
+  tiktokSettings: SocialPostTikTokSettings
+  createdBy: ID
+  createdAt: String
+  updatedAt: String
+}
+
+type TikTokPrivacyLevel {
+  value: String!
+  "Libellé français (Tout le monde, Amis, Abonnés, Moi uniquement)"
+  label: String!
+}
+
+type TikTokCreatorInfo {
+  nickname: String
+  canPostMore: Boolean!
+  commentDisabled: Boolean!
+  privacyLevels: [TikTokPrivacyLevel!]!
+}
+
+type ScheduleSocialPostPayload {
+  post: SocialPost!
+  "La carte créée, mêmes champs que createTask"
+  task: Task!
+}
+
+input SocialPostTikTokSettingsInput {
+  privacyLevel: String!
+  allowComment: Boolean!
+  brandOrganic: Boolean
+  "Doit valoir true (case à cocher obligatoire)"
+  consentGiven: Boolean!
+}
+
+input ScheduleSocialPostInput {
+  boardId: ID!
+  "Défaut : première colonne du tableau"
+  columnId: ID
+  "SocialAccount locaux"
+  accountIds: [ID!]!
+  content: String!
+  "Renvoyés par uploadSocialPostMedia"
+  mediaIds: [ID!]
+  "Obligatoire sauf publishNow ; au moins 5 minutes dans le futur"
+  scheduledFor: String
+  publishNow: Boolean
+  "Défaut : Europe/Paris"
+  timezone: String
+  "Obligatoire si un compte TikTok est visé"
+  tiktokSettings: SocialPostTikTokSettingsInput
+}
+
+input UpdateSocialPostInput {
+  accountIds: [ID!]
+  content: String
+  mediaIds: [ID!]
+  scheduledFor: String
+  tiktokSettings: SocialPostTikTokSettingsInput
+}
+
+extend type Query {
+  socialPublishingStatus(workspaceId: ID): SocialPublishingStatus!
+  boardSocialPosts(boardId: ID!, workspaceId: ID): [SocialPost!]!
+  socialPost(id: ID!, workspaceId: ID): SocialPost
+  tiktokCreatorInfo(accountId: ID!, workspaceId: ID): TikTokCreatorInfo!
+}
+
+extend type Mutation {
+  "Renvoie l'adresse d'autorisation vers laquelle envoyer le navigateur"
+  connectSocialAccount(
+    platform: String!
+    returnTo: String
+    workspaceId: ID
+  ): String!
+  disconnectSocialAccount(accountId: ID!, workspaceId: ID): Boolean!
+  refreshSocialAccounts(workspaceId: ID): [SocialAccount!]!
+  uploadSocialPostMedia(file: Upload!, workspaceId: ID): SocialPostMedia!
+  scheduleSocialPost(
+    input: ScheduleSocialPostInput!
+    workspaceId: ID
+  ): ScheduleSocialPostPayload!
+  updateSocialPost(
+    id: ID!
+    input: UpdateSocialPostInput!
+    workspaceId: ID
+  ): SocialPost!
+  cancelSocialPost(id: ID!, workspaceId: ID): SocialPost!
+  retrySocialPost(id: ID!, workspaceId: ID): SocialPost!
+}

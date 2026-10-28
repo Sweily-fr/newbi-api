@@ -53,6 +53,10 @@ import {
   claudeDevApplies,
   isClaudeCodingStartComment,
 } from "../services/claudeDevTriggerService.js";
+import {
+  cancelSocialPostsBeforeTaskDeletion,
+  rescheduleSocialPostForTask,
+} from "../services/social/socialPublishingService.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1028,6 +1032,182 @@ const loadTaskUsersInfo = async (context, userIds) => {
   return usersMap;
 };
 
+/**
+ * Création d'une tâche : contrôles d'appartenance (tableau, colonne, membres),
+ * position en haut de la colonne, activité de création, tâches liées, puis
+ * diffusion temps réel (TASK_UPDATED « CREATED ») et invalidation du cache.
+ * Partagée par createTask et la programmation d'un post sur les réseaux
+ * sociaux (services/social/socialPublishingService.js), qui diffère la
+ * diffusion (`publish: false`) jusqu'à l'accord du fournisseur.
+ * @returns {Promise<{savedTask, enrichedTask, cleanedInput, creatorData}>}
+ */
+export const createTaskInWorkspace = async ({
+  input,
+  user,
+  workspaceId: finalWorkspaceId,
+  publish = true,
+}) => {
+  await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
+  await assertColumnInBoard(input.columnId, input.boardId, finalWorkspaceId);
+
+  // Nettoyer les IDs temporaires de la checklist
+  const cleanedInput = { ...input };
+  // Description en texte riche : nettoyée avant d'être enregistrée
+  if (cleanedInput.description !== undefined) {
+    cleanedInput.description = sanitizeRichText(cleanedInput.description);
+  }
+  if (cleanedInput.checklist) {
+    cleanedInput.checklist = cleanedInput.checklist.map((item) => {
+      const cleanedItem = { ...item };
+      // Supprimer les IDs temporaires (qui commencent par 'temp-')
+      if (cleanedItem.id && cleanedItem.id.startsWith("temp-")) {
+        delete cleanedItem.id;
+      }
+      return cleanedItem;
+    });
+  }
+
+  // Membres assignés : ceux de l'espace seulement (un id quelconque
+  // recevait e-mail et notification, et son identité s'affichait)
+  if (Array.isArray(cleanedInput.assignedMembers)) {
+    cleanedInput.assignedMembers = await keepWorkspaceMembers(
+      cleanedInput.assignedMembers,
+      finalWorkspaceId,
+    );
+  }
+
+  // Calculer la position correcte en fonction des tâches existantes dans la colonne
+  // Par défaut, ajouter en haut (position 0)
+  let position = input.position !== undefined ? input.position : 0;
+
+  // Récupérer les infos utilisateur pour l'activité de création
+  const db = mongoose.connection.db;
+  let creatorData = null;
+  try {
+    creatorData = await db.collection("user").findOne({ _id: user.id });
+    if (!creatorData && /^[0-9a-fA-F]{24}$/.test(user.id)) {
+      creatorData = await db
+        .collection("user")
+        .findOne({ _id: new ObjectId(user.id) });
+    }
+  } catch (e) {
+    logger.warn("Could not fetch creator data:", e.message);
+  }
+  const creatorImage = creatorData?.image || creatorData?.avatar || null;
+  const creatorName =
+    creatorData?.name || user?.name || user?.email || "Utilisateur";
+
+  // Décaler les tâches existantes pour faire de la place à la nouvelle position
+  await Task.updateMany(
+    {
+      boardId: input.boardId,
+      columnId: input.columnId,
+      workspaceId: finalWorkspaceId,
+      position: { $gte: position },
+    },
+    { $inc: { position: 1 } },
+  );
+
+  // Construire l'activité initiale : création + checklist initiale éventuelle
+  const initialActivity = [
+    {
+      userId: user.id,
+      userName: creatorName,
+      userImage: creatorImage,
+      type: "created",
+      description: "a créé la tâche",
+      createdAt: new Date(),
+    },
+  ];
+
+  // Si la tâche est créée avec une checklist non vide, logger l'ajout
+  if (
+    Array.isArray(cleanedInput.checklist) &&
+    cleanedInput.checklist.length > 0
+  ) {
+    const initialItems = cleanedInput.checklist
+      .map((i) => i?.text)
+      .filter(Boolean);
+    if (initialItems.length > 0) {
+      initialActivity.push({
+        userId: user.id,
+        userName: creatorName,
+        userImage: creatorImage,
+        type: "updated",
+        field: "checklist",
+        description: `a ajouté ${initialItems.length > 1 ? "les éléments" : "l'élément"} : ${initialItems.join(" ;; ")}`,
+        createdAt: new Date(Date.now() + 1),
+      });
+    }
+  }
+
+  // Tâches à lier dès la création : posées après le save (lien symétrique)
+  const linkedTaskIds = normalizeLinkedTaskIds(cleanedInput.linkedTaskIds);
+  delete cleanedInput.linkedTaskIds;
+
+  const task = new Task({
+    ...cleanedInput,
+    status: cleanedInput.status || cleanedInput.columnId,
+    userId: user.id,
+    workspaceId: finalWorkspaceId,
+    position: position,
+    activity: initialActivity,
+  });
+  let savedTask = await task.save();
+
+  if (linkedTaskIds.length > 0) {
+    const linkedTasksToPublish = [];
+    for (const linkedTaskId of linkedTaskIds) {
+      try {
+        const { linkedTask } = await linkTasks({
+          taskId: savedTask._id,
+          linkedTaskId,
+          workspaceId: finalWorkspaceId,
+          user,
+          userName: creatorName,
+          userImage: creatorImage,
+        });
+        if (linkedTask) linkedTasksToPublish.push(linkedTask);
+      } catch (error) {
+        // Une tâche liée introuvable ne doit pas faire échouer la création
+        logger.warn(
+          `⚠️ [CreateTask] Lien impossible vers ${linkedTaskId}: ${error.message}`,
+        );
+      }
+    }
+    savedTask = (await Task.findById(savedTask._id)) || savedTask;
+    for (const linkedTask of linkedTasksToPublish) {
+      await publishTaskUpdated(linkedTask, finalWorkspaceId);
+    }
+  }
+
+  // Enrichir la tâche avec les infos utilisateur AVANT de publier
+  const enrichedTask = await enrichTaskWithUserInfo(savedTask);
+
+  if (publish) publishTaskCreated(enrichedTask, finalWorkspaceId);
+  return { savedTask, enrichedTask, cleanedInput, creatorData };
+};
+
+// Diffuse la création d'une tâche (et invalide le cache des tâches du board)
+export const publishTaskCreated = (enrichedTask, workspaceId) =>
+  safePublish(
+    `${TASK_UPDATED}_${workspaceId}_${enrichedTask.boardId}`,
+    {
+      type: "CREATED",
+      task: enrichedTask,
+      boardId: enrichedTask.boardId,
+      workspaceId,
+    },
+    "Tâche créée",
+  );
+
+// Tâche créée sans être diffusée (createTaskInWorkspace, publish: false)
+// puis abandonnée : supprimée, cache des tâches du board invalidé
+export const discardCreatedTask = async (task, workspaceId) => {
+  await Task.deleteOne({ _id: task._id, workspaceId });
+  await invalidateBoardTasksCache(task.boardId, workspaceId);
+};
+
 const resolvers = {
   Query: {
     boards: requireWorkspaceLevel(
@@ -1760,6 +1940,11 @@ const resolvers = {
       "delete",
     )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      // Posts réseaux sociaux programmés des cartes : annulés d'abord
+      await cancelSocialPostsBeforeTaskDeletion({
+        workspaceId: finalWorkspaceId,
+        boardId: id,
+      });
 
       try {
         // Supprimer les tâches associées au tableau
@@ -1901,6 +2086,11 @@ const resolvers = {
       "delete",
     )(async (_, { id, workspaceId }, { workspaceId: contextWorkspaceId }) => {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
+      // Posts réseaux sociaux programmés des cartes : annulés d'abord
+      await cancelSocialPostsBeforeTaskDeletion({
+        workspaceId: finalWorkspaceId,
+        columnId: id,
+      });
 
       try {
         // Récupérer la colonne avant suppression pour avoir le boardId
@@ -2002,160 +2192,12 @@ const resolvers = {
         { user, workspaceId: contextWorkspaceId },
       ) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        await assertBoardInWorkspace(input.boardId, finalWorkspaceId);
-        await assertColumnInBoard(
-          input.columnId,
-          input.boardId,
-          finalWorkspaceId,
-        );
-
-        // Nettoyer les IDs temporaires de la checklist
-        const cleanedInput = { ...input };
-        // Description en texte riche : nettoyée avant d'être enregistrée
-        if (cleanedInput.description !== undefined) {
-          cleanedInput.description = sanitizeRichText(cleanedInput.description);
-        }
-        if (cleanedInput.checklist) {
-          cleanedInput.checklist = cleanedInput.checklist.map((item) => {
-            const cleanedItem = { ...item };
-            // Supprimer les IDs temporaires (qui commencent par 'temp-')
-            if (cleanedItem.id && cleanedItem.id.startsWith("temp-")) {
-              delete cleanedItem.id;
-            }
-            return cleanedItem;
+        const { savedTask, enrichedTask, cleanedInput, creatorData } =
+          await createTaskInWorkspace({
+            input,
+            user,
+            workspaceId: finalWorkspaceId,
           });
-        }
-
-        // Membres assignés : ceux de l'espace seulement (un id quelconque
-        // recevait e-mail et notification, et son identité s'affichait)
-        if (Array.isArray(cleanedInput.assignedMembers)) {
-          cleanedInput.assignedMembers = await keepWorkspaceMembers(
-            cleanedInput.assignedMembers,
-            finalWorkspaceId,
-          );
-        }
-
-        // Calculer la position correcte en fonction des tâches existantes dans la colonne
-        // Par défaut, ajouter en haut (position 0)
-        let position = input.position !== undefined ? input.position : 0;
-
-        // Récupérer les infos utilisateur pour l'activité de création
-        const db = mongoose.connection.db;
-        let creatorData = null;
-        try {
-          creatorData = await db.collection("user").findOne({ _id: user.id });
-          if (!creatorData && /^[0-9a-fA-F]{24}$/.test(user.id)) {
-            creatorData = await db
-              .collection("user")
-              .findOne({ _id: new ObjectId(user.id) });
-          }
-        } catch (e) {
-          logger.warn("Could not fetch creator data:", e.message);
-        }
-        const creatorImage = creatorData?.image || creatorData?.avatar || null;
-        const creatorName =
-          creatorData?.name || user?.name || user?.email || "Utilisateur";
-
-        // Décaler les tâches existantes pour faire de la place à la nouvelle position
-        await Task.updateMany(
-          {
-            boardId: input.boardId,
-            columnId: input.columnId,
-            workspaceId: finalWorkspaceId,
-            position: { $gte: position },
-          },
-          { $inc: { position: 1 } },
-        );
-
-        // Construire l'activité initiale : création + checklist initiale éventuelle
-        const initialActivity = [
-          {
-            userId: user.id,
-            userName: creatorName,
-            userImage: creatorImage,
-            type: "created",
-            description: "a créé la tâche",
-            createdAt: new Date(),
-          },
-        ];
-
-        // Si la tâche est créée avec une checklist non vide, logger l'ajout
-        if (
-          Array.isArray(cleanedInput.checklist) &&
-          cleanedInput.checklist.length > 0
-        ) {
-          const initialItems = cleanedInput.checklist
-            .map((i) => i?.text)
-            .filter(Boolean);
-          if (initialItems.length > 0) {
-            initialActivity.push({
-              userId: user.id,
-              userName: creatorName,
-              userImage: creatorImage,
-              type: "updated",
-              field: "checklist",
-              description: `a ajouté ${initialItems.length > 1 ? "les éléments" : "l'élément"} : ${initialItems.join(" ;; ")}`,
-              createdAt: new Date(Date.now() + 1),
-            });
-          }
-        }
-
-        // Tâches à lier dès la création : posées après le save (lien symétrique)
-        const linkedTaskIds = normalizeLinkedTaskIds(
-          cleanedInput.linkedTaskIds,
-        );
-        delete cleanedInput.linkedTaskIds;
-
-        const task = new Task({
-          ...cleanedInput,
-          status: cleanedInput.status || cleanedInput.columnId,
-          userId: user.id,
-          workspaceId: finalWorkspaceId,
-          position: position,
-          activity: initialActivity,
-        });
-        let savedTask = await task.save();
-
-        if (linkedTaskIds.length > 0) {
-          const linkedTasksToPublish = [];
-          for (const linkedTaskId of linkedTaskIds) {
-            try {
-              const { linkedTask } = await linkTasks({
-                taskId: savedTask._id,
-                linkedTaskId,
-                workspaceId: finalWorkspaceId,
-                user,
-                userName: creatorName,
-                userImage: creatorImage,
-              });
-              if (linkedTask) linkedTasksToPublish.push(linkedTask);
-            } catch (error) {
-              // Une tâche liée introuvable ne doit pas faire échouer la création
-              logger.warn(
-                `⚠️ [CreateTask] Lien impossible vers ${linkedTaskId}: ${error.message}`,
-              );
-            }
-          }
-          savedTask = (await Task.findById(savedTask._id)) || savedTask;
-          for (const linkedTask of linkedTasksToPublish) {
-            await publishTaskUpdated(linkedTask, finalWorkspaceId);
-          }
-        }
-
-        // Enrichir la tâche avec les infos utilisateur AVANT de publier
-        const enrichedTask = await enrichTaskWithUserInfo(savedTask);
-
-        // Publier l'événement de création de tâche avec la tâche enrichie
-        safePublish(
-          `${TASK_UPDATED}_${finalWorkspaceId}_${enrichedTask.boardId}`,
-          {
-            type: "CREATED",
-            task: enrichedTask,
-            boardId: enrichedTask.boardId,
-            workspaceId: finalWorkspaceId,
-          },
-          "Tâche créée",
-        );
 
         // Envoyer des notifications aux membres assignés lors de la création
         if (
@@ -2353,6 +2395,18 @@ const resolvers = {
           workspaceId: finalWorkspaceId,
         });
         if (!oldTask) throw new Error("Task not found");
+
+        // Post réseaux sociaux programmé : la date d'échéance est sa date de
+        // publication, reprogrammée chez le fournisseur avant l'enregistrement
+        // (refus = tâche non modifiée). Sans post : rien ne change.
+        if (updates.dueDate !== undefined) {
+          await rescheduleSocialPostForTask({
+            task: oldTask,
+            dueDate: updates.dueDate,
+            workspaceId: finalWorkspaceId,
+            userId: user?.id,
+          });
+        }
 
         // Changement de colonne : une colonne du même tableau
         if (
@@ -3316,6 +3370,12 @@ const resolvers = {
         workspaceId: finalWorkspaceId,
       });
       if (!task) throw new Error("Task not found");
+
+      // Post réseaux sociaux programmé : annulé avant la suppression
+      await cancelSocialPostsBeforeTaskDeletion({
+        workspaceId: finalWorkspaceId,
+        taskId: task._id,
+      });
 
       const result = await Task.deleteOne({
         _id: id,
