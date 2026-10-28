@@ -98,7 +98,9 @@ describe("TVA au réel normal", () => {
       isIndicative: true,
       isConditional: false,
     });
-    expect(item.note).toContain("entre le 19 et le 21 du mois");
+    expect(item.note).toContain(
+      "pour une société, la date limite tombe entre le 19 et le 21 du mois selon le département de votre service des impôts et votre numéro SIREN.",
+    );
   });
 
   it("entreprise individuelle : le 15, reporté au lundi 16 février 2026", () => {
@@ -228,9 +230,10 @@ describe("TVA au réel simplifié (supprimé au 1er janvier 2027)", () => {
       "2026-12-15",
       "2027-07-15",
     ]);
-    expect(find(result, "VAT_INSTALLMENT", "2027-07-15").note).toContain(
-      "dépasse 1 000 €",
-    );
+    // Montants insécables (« 1 000 € » ne se coupe pas en fin de ligne)
+    const note = find(result, "VAT_INSTALLMENT", "2027-07-15").note;
+    expect(note).toMatch(/dépasse 1\s000\s€\./);
+    expect(note).not.toContain("1 000 €");
     expect(days(result, "VAT_ANNUAL_RETURN")).toEqual([
       "2026-12-30",
       "2027-12-30",

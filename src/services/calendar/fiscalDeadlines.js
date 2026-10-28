@@ -101,6 +101,15 @@ const MONTH_NAMES = [
   "décembre",
 ];
 
+// Espace insécable : « 55 % » et « n° 2571 » ne se coupent pas en fin de ligne
+const NBSP = "\u00a0";
+// Montant à la française, insécable (« 3 000 € »)
+const euros = (amount) =>
+  new Intl.NumberFormat("fr-FR", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0,
+  }).format(amount);
 const pad = (n) => String(n).padStart(2, "0");
 const yearOf = (day) => Number(day.slice(0, 4));
 const monthOf = (day) => Number(day.slice(5, 7));
@@ -326,7 +335,7 @@ function vatDayRange(legalForm) {
       last: 19,
       who: "une entreprise individuelle",
       criteria:
-        "du département de votre service des impôts et de l'initiale de votre nom",
+        "le département de votre service des impôts et l'initiale de votre nom",
     };
   }
   if (legalForm === "SA" || legalForm === "SELAFA") {
@@ -335,7 +344,7 @@ function vatDayRange(legalForm) {
       last: 24,
       who: "une société anonyme",
       criteria:
-        "du département de votre service des impôts et de votre numéro SIREN",
+        "le département de votre service des impôts et votre numéro SIREN",
     };
   }
   if (legalForm === "Association" || legalForm === "Indivision") {
@@ -346,7 +355,7 @@ function vatDayRange(legalForm) {
     last: 21,
     who: "une société",
     criteria:
-      "du département de votre service des impôts et de votre numéro SIREN",
+      "le département de votre service des impôts et votre numéro SIREN",
   };
 }
 
@@ -654,12 +663,12 @@ function simplifiedVatDeadlines(years, range, closingInfo) {
       installment(
         year,
         7,
-        "Régime simplifié : acompte de 55 % de la TVA de l'exercice précédent, sauf si celle-ci était inférieure à 1 000 €.",
+        `Régime simplifié : acompte de 55${NBSP}% de la TVA de l'exercice précédent, sauf si celle-ci était inférieure à ${euros(1000)}.`,
       ),
       installment(
         year,
         12,
-        "Régime simplifié : acompte de 40 % de la TVA de l'exercice précédent, sauf si celle-ci était inférieure à 1 000 €.",
+        `Régime simplifié : acompte de 40${NBSP}% de la TVA de l'exercice précédent, sauf si celle-ci était inférieure à ${euros(1000)}.`,
       ),
     );
   }
@@ -691,7 +700,7 @@ function simplifiedVatDeadlines(years, range, closingInfo) {
       installment(
         2027,
         7,
-        "Dernier acompte du régime simplifié, dû seulement si la TVA de l'exercice précédent dépasse 1 000 €.",
+        `Dernier acompte du régime simplifié, dû seulement si la TVA de l'exercice précédent dépasse ${euros(1000)}.`,
       ),
     );
   }
@@ -779,7 +788,7 @@ function corporateTaxDeadlines(years, closingInfo) {
       isConditional: assumed,
       note: [
         assumed && assumedExerciseNote(closing, anchor),
-        "Relevé de solde n° 2572 : impôt de l'exercice, après déduction des acomptes versés.",
+        `Relevé de solde n°${NBSP}2572 : impôt de l'exercice, après déduction des acomptes versés.`,
       ]
         .filter(Boolean)
         .join(" "),
@@ -801,7 +810,7 @@ function corporateTaxDeadlines(years, closingInfo) {
         infoUrl: FISCAL_INFO_URLS.CORPORATE_TAX,
         isIndicative: false,
         isConditional: true,
-        note: "Dû si l'impôt sur les sociétés de l'exercice précédent dépasse 3 000 €, jamais au cours du premier exercice. Relevé d'acompte n° 2571.",
+        note: `Dû si l'impôt sur les sociétés de l'exercice précédent dépasse ${euros(3000)}, jamais au cours du premier exercice. Relevé d'acompte n°${NBSP}2571.`,
       });
     }
   }
@@ -819,7 +828,7 @@ function cfeDeadlines(years) {
     infoUrl: FISCAL_INFO_URLS.CFE,
     isIndicative: false,
     isConditional: true,
-    note: "L'avis de CFE est à consulter dans votre espace professionnel. Pas de CFE l'année de création de l'entreprise ; pas de cotisation minimum si le chiffre d'affaires ne dépasse pas 5 000 €. Un acompte est dû au 15 juin quand la CFE de l'année précédente atteint 3 000 €.",
+    note: `L'avis de CFE est à consulter dans votre espace professionnel. Pas de CFE l'année de création de l'entreprise ; pas de cotisation minimum si le chiffre d'affaires ne dépasse pas ${euros(5000)}. Un acompte est dû au 15 juin quand la CFE de l'année précédente atteint ${euros(3000)}.`,
   }));
 }
 
