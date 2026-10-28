@@ -50,6 +50,9 @@ const eventSchema = new mongoose.Schema(
         "REMINDER",
         "CREDIT_NOTE_CREATED",
         "EXTERNAL",
+        // Rendez-vous pris sur une page de réservation (géré depuis
+        // Communication > Prise de rendez-vous, jamais modifié ici)
+        "APPOINTMENT",
       ],
       default: "MANUAL",
     },
@@ -118,6 +121,13 @@ const eventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Client",
       sparse: true,
+    },
+
+    // Réservation à l'origine d'un événement APPOINTMENT
+    bookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Booking",
+      default: null,
     },
 
     // Référence vers l'organisation/workspace (Better Auth)

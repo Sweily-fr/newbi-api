@@ -1,16 +1,23 @@
-import { createDAVClient } from 'tsdav';
-import ICAL from 'node-ical';
-import { mapAppleEventToNewbi, mapNewbiToICalEvent } from '../utils/eventMapper.js';
-import logger from '../../../utils/logger.js';
+import { createDAVClient } from "tsdav";
+import ICAL from "node-ical";
+import {
+  mapAppleEventToNewbi,
+  mapNewbiToICalEvent,
+} from "../utils/eventMapper.js";
+import logger from "../../../utils/logger.js";
 
-const DEFAULT_CALDAV_URL = 'https://caldav.icloud.com';
+const DEFAULT_CALDAV_URL = "https://caldav.icloud.com";
 
 export default class AppleCalendarProvider {
   /**
    * Filter calendars to only include VEVENT calendars (exclude VTODO/reminders)
    */
   _isEventCalendar(cal) {
-    return !cal.components || cal.components.length === 0 || cal.components.includes('VEVENT');
+    return (
+      !cal.components ||
+      cal.components.length === 0 ||
+      cal.components.includes("VEVENT")
+    );
   }
 
   /**
@@ -23,10 +30,10 @@ export default class AppleCalendarProvider {
       serverUrl,
       credentials: {
         username,
-        password
+        password,
       },
-      authMethod: 'Basic',
-      defaultAccountType: 'caldav'
+      authMethod: "Basic",
+      defaultAccountType: "caldav",
     });
 
     return client;
@@ -36,24 +43,33 @@ export default class AppleCalendarProvider {
    * Translate common CalDAV errors to French
    */
   _translateError(error) {
-    const msg = error.message || '';
-    if (msg.includes('401') || msg.includes('Unauthorized') || msg.includes('authentication')) {
-      return 'Identifiant ou mot de passe d\'application incorrect. Vérifiez vos identifiants et utilisez un mot de passe d\'application (pas votre mot de passe Apple).';
+    const msg = error.message || "";
+    if (
+      msg.includes("401") ||
+      msg.includes("Unauthorized") ||
+      msg.includes("authentication")
+    ) {
+      return "Identifiant ou mot de passe d'application incorrect. Vérifiez vos identifiants et utilisez un mot de passe d'application (pas votre mot de passe Apple).";
     }
-    if (msg.includes('403') || msg.includes('Forbidden')) {
-      return 'Accès refusé par Apple. Vérifiez que CalDAV est activé sur votre compte iCloud.';
+    if (msg.includes("403") || msg.includes("Forbidden")) {
+      return "Accès refusé par Apple. Vérifiez que CalDAV est activé sur votre compte iCloud.";
     }
-    if (msg.includes('404') || msg.includes('Not Found')) {
-      return 'Serveur CalDAV introuvable. Vérifiez l\'URL du serveur.';
+    if (msg.includes("404") || msg.includes("Not Found")) {
+      return "Serveur CalDAV introuvable. Vérifiez l'URL du serveur.";
     }
-    if (msg.includes('ENOTFOUND') || msg.includes('ECONNREFUSED') || msg.includes('network') || msg.includes('fetch failed')) {
-      return 'Impossible de joindre le serveur Apple. Vérifiez votre connexion internet.';
+    if (
+      msg.includes("ENOTFOUND") ||
+      msg.includes("ECONNREFUSED") ||
+      msg.includes("network") ||
+      msg.includes("fetch failed")
+    ) {
+      return "Impossible de joindre le serveur Apple. Vérifiez votre connexion internet.";
     }
-    if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
-      return 'Le serveur Apple ne répond pas. Réessayez dans quelques instants.';
+    if (msg.includes("ETIMEDOUT") || msg.includes("timeout")) {
+      return "Le serveur Apple ne répond pas. Réessayez dans quelques instants.";
     }
-    if (msg.includes('SSL') || msg.includes('certificate')) {
-      return 'Erreur de certificat SSL avec le serveur Apple.';
+    if (msg.includes("SSL") || msg.includes("certificate")) {
+      return "Erreur de certificat SSL avec le serveur Apple.";
     }
     return `Erreur de connexion au calendrier Apple : ${msg}`;
   }
@@ -68,11 +84,11 @@ export default class AppleCalendarProvider {
       return {
         valid: true,
         email: username,
-        name: username.split('@')[0],
-        calendarsCount: calendars.length
+        name: username.split("@")[0],
+        calendarsCount: calendars.length,
       };
     } catch (error) {
-      logger.error('Apple CalDAV validation failed:', error.message);
+      logger.error("Apple CalDAV validation failed:", error.message);
       return { valid: false, error: this._translateError(error) };
     }
   }
@@ -84,21 +100,25 @@ export default class AppleCalendarProvider {
     const client = await this.connect(
       connection.calDavUsername,
       connection.getDecryptedCalDavPassword(),
-      connection.calDavUrl
+      connection.calDavUrl,
     );
 
     const calendars = await client.fetchCalendars();
 
     // Filtrer : ne garder que les calendriers d'événements (VEVENT), pas les rappels (VTODO)
-    const eventCalendars = calendars.filter(cal => this._isEventCalendar(cal));
+    const eventCalendars = calendars.filter((cal) =>
+      this._isEventCalendar(cal),
+    );
 
-    logger.info(`[Apple CalDAV] listCalendars: ${calendars.length} total, ${eventCalendars.length} calendrier(s) d'événements (VEVENT)`);
+    logger.info(
+      `[Apple CalDAV] listCalendars: ${calendars.length} total, ${eventCalendars.length} calendrier(s) d'événements (VEVENT)`,
+    );
 
-    return eventCalendars.map(cal => ({
+    return eventCalendars.map((cal) => ({
       calendarId: cal.url,
-      name: cal.displayName || 'Calendrier',
+      name: cal.displayName || "Calendrier",
       color: cal.calendarColor || null,
-      isPrimary: false
+      isPrimary: false,
     }));
   }
 
@@ -109,65 +129,91 @@ export default class AppleCalendarProvider {
     const client = await this.connect(
       connection.calDavUsername,
       connection.getDecryptedCalDavPassword(),
-      connection.calDavUrl
+      connection.calDavUrl,
     );
 
-    const lookbackDays = parseInt(process.env.CALENDAR_SYNC_LOOKBACK_DAYS) || 30;
-    const lookaheadDays = parseInt(process.env.CALENDAR_SYNC_LOOKAHEAD_DAYS) || 90;
+    const lookbackDays =
+      parseInt(process.env.CALENDAR_SYNC_LOOKBACK_DAYS) || 30;
+    const lookaheadDays =
+      parseInt(process.env.CALENDAR_SYNC_LOOKAHEAD_DAYS) || 90;
 
     const timeRange = {
-      start: options.timeMin || new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString(),
-      end: options.timeMax || new Date(Date.now() + lookaheadDays * 24 * 60 * 60 * 1000).toISOString()
+      start:
+        options.timeMin ||
+        new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString(),
+      end:
+        options.timeMax ||
+        new Date(
+          Date.now() + lookaheadDays * 24 * 60 * 60 * 1000,
+        ).toISOString(),
     };
 
-    logger.info(`[Apple CalDAV] Récupération des événements du ${timeRange.start} au ${timeRange.end}`);
+    logger.info(
+      `[Apple CalDAV] Récupération des événements du ${timeRange.start} au ${timeRange.end}`,
+    );
 
     const allCalendars = await client.fetchCalendars();
 
     // Filtrer : ne garder que les calendriers d'événements (VEVENT), pas les rappels (VTODO)
-    const calendars = allCalendars.filter(cal => this._isEventCalendar(cal));
-    logger.info(`[Apple CalDAV] ${allCalendars.length} calendrier(s) sur le serveur, ${calendars.length} calendrier(s) d'événements (VEVENT)`);
+    const calendars = allCalendars.filter((cal) => this._isEventCalendar(cal));
+    logger.info(
+      `[Apple CalDAV] ${allCalendars.length} calendrier(s) sur le serveur, ${calendars.length} calendrier(s) d'événements (VEVENT)`,
+    );
 
-    const enabledCalendars = connection.selectedCalendars.filter(c => c.enabled);
+    const enabledCalendars = connection.selectedCalendars.filter(
+      (c) => c.enabled,
+    );
 
     // Matcher les calendriers sélectionnés avec ceux du serveur
     let calendarsToFetch = [];
     if (enabledCalendars.length > 0) {
       for (const enabled of enabledCalendars) {
-        const match = calendars.find(c => c.url === enabled.calendarId);
+        const match = calendars.find((c) => c.url === enabled.calendarId);
         if (match) {
           calendarsToFetch.push(match);
         } else {
-          logger.warn(`[Apple CalDAV] Calendrier sélectionné introuvable: ${enabled.calendarId} (peut-être un calendrier VTODO filtré)`);
+          logger.warn(
+            `[Apple CalDAV] Calendrier sélectionné introuvable: ${enabled.calendarId} (peut-être un calendrier VTODO filtré)`,
+          );
         }
       }
     }
 
     // Si aucun calendrier sélectionné n'a été trouvé parmi les VEVENT, utiliser tous les calendriers VEVENT
     if (calendarsToFetch.length === 0) {
-      logger.info(`[Apple CalDAV] Aucun calendrier sélectionné valide, utilisation de tous les ${calendars.length} calendrier(s) VEVENT`);
+      logger.info(
+        `[Apple CalDAV] Aucun calendrier sélectionné valide, utilisation de tous les ${calendars.length} calendrier(s) VEVENT`,
+      );
       calendarsToFetch = calendars;
     }
 
-    logger.info(`[Apple CalDAV] Synchronisation de ${calendarsToFetch.length} calendrier(s)`);
+    logger.info(
+      `[Apple CalDAV] Synchronisation de ${calendarsToFetch.length} calendrier(s)`,
+    );
 
     const allEvents = [];
 
     for (const calObj of calendarsToFetch) {
       try {
         // Récupérer la couleur du calendrier (depuis CalDAV ou selectedCalendars)
-        const calColor = calObj.calendarColor ||
-          enabledCalendars.find(c => c.calendarId === calObj.url)?.color || null;
+        const calColor =
+          calObj.calendarColor ||
+          enabledCalendars.find((c) => c.calendarId === calObj.url)?.color ||
+          null;
 
-        logger.info(`[Apple CalDAV] Récupération depuis: ${calObj.displayName || calObj.url}`);
+        logger.info(
+          `[Apple CalDAV] Récupération depuis: ${calObj.displayName || calObj.url}`,
+        );
 
         const objects = await client.fetchCalendarObjects({
           calendar: calObj,
           timeRange,
-          expand: true
+          expand: true,
         });
 
-        logger.info(`[Apple CalDAV] ${objects.length} objet(s) trouvé(s) dans "${calObj.displayName || 'Calendrier'}"`);
+        logger.info(
+          `[Apple CalDAV] ${objects.length} objet(s) trouvé(s) dans "${calObj.displayName || "Calendrier"}"`,
+        );
 
         for (const obj of objects) {
           try {
@@ -178,7 +224,7 @@ export default class AppleCalendarProvider {
 
             const parsed = ICAL.parseICS(obj.data);
             for (const key in parsed) {
-              if (parsed[key].type === 'VEVENT') {
+              if (parsed[key].type === "VEVENT") {
                 const vevent = parsed[key];
                 const newbiEvent = mapAppleEventToNewbi(
                   {
@@ -188,26 +234,41 @@ export default class AppleCalendarProvider {
                     start: vevent.start,
                     end: vevent.end,
                     location: vevent.location,
-                    allDay: vevent.datetype === 'date',
-                    url: obj.url
+                    allDay: vevent.datetype === "date",
+                    url: obj.url,
                   },
                   connection._id,
                   connection.userId,
-                  calColor
+                  calColor,
                 );
+                // Prise de rendez-vous : disponibilité de l'événement
+                // (« disponible » = TRANSP:TRANSPARENT, ou annulé)
+                if (options.withAvailability) {
+                  newbiEvent.transparent =
+                    vevent.transparency === "TRANSPARENT";
+                  newbiEvent.cancelled = vevent.status === "CANCELLED";
+                }
                 allEvents.push(newbiEvent);
               }
             }
           } catch (parseError) {
-            logger.warn(`[Apple CalDAV] Erreur parsing événement:`, parseError.message);
+            logger.warn(
+              `[Apple CalDAV] Erreur parsing événement:`,
+              parseError.message,
+            );
           }
         }
       } catch (error) {
-        logger.warn(`[Apple CalDAV] Erreur récupération calendrier ${calObj.displayName || calObj.url}:`, error.message);
+        logger.warn(
+          `[Apple CalDAV] Erreur récupération calendrier ${calObj.displayName || calObj.url}:`,
+          error.message,
+        );
       }
     }
 
-    logger.info(`[Apple CalDAV] Total: ${allEvents.length} événement(s) récupéré(s)`);
+    logger.info(
+      `[Apple CalDAV] Total: ${allEvents.length} événement(s) récupéré(s)`,
+    );
     return allEvents;
   }
 
@@ -218,21 +279,24 @@ export default class AppleCalendarProvider {
     const client = await this.connect(
       connection.calDavUsername,
       connection.getDecryptedCalDavPassword(),
-      connection.calDavUrl
+      connection.calDavUrl,
     );
 
     const allCalendars = await client.fetchCalendars();
 
     // Filter to VEVENT calendars only (exclude VTODO/reminders)
-    const eventCalendars = allCalendars.filter(cal => this._isEventCalendar(cal));
+    const eventCalendars = allCalendars.filter((cal) =>
+      this._isEventCalendar(cal),
+    );
 
     // Try to match a selected/enabled calendar
-    const enabledCalendars = connection.selectedCalendars?.filter(c => c.enabled) || [];
+    const enabledCalendars =
+      connection.selectedCalendars?.filter((c) => c.enabled) || [];
     let targetCalendar = null;
 
     if (enabledCalendars.length > 0) {
       for (const enabled of enabledCalendars) {
-        const match = eventCalendars.find(c => c.url === enabled.calendarId);
+        const match = eventCalendars.find((c) => c.url === enabled.calendarId);
         if (match) {
           targetCalendar = match;
           break;
@@ -246,10 +310,12 @@ export default class AppleCalendarProvider {
     }
 
     if (!targetCalendar) {
-      throw new Error('Aucun calendrier Apple disponible');
+      throw new Error("Aucun calendrier Apple disponible");
     }
 
-    logger.info(`[Apple CalDAV] Push vers: ${targetCalendar.displayName || targetCalendar.url}`);
+    logger.info(
+      `[Apple CalDAV] Push vers: ${targetCalendar.displayName || targetCalendar.url}`,
+    );
 
     const icsData = mapNewbiToICalEvent(newbiEvent);
     const filename = `newbi-${newbiEvent._id || newbiEvent.id}.ics`;
@@ -257,12 +323,44 @@ export default class AppleCalendarProvider {
     const result = await client.createCalendarObject({
       calendar: targetCalendar,
       filename,
-      iCalString: icsData
+      iCalString: icsData,
     });
 
     const eventUrl = result?.url || `${targetCalendar.url}${filename}`;
     logger.info(`Event pushed to Apple Calendar: ${eventUrl}`);
     return eventUrl;
+  }
+
+  /**
+   * Intervalles occupés pour la prise de rendez-vous : événements de la
+   * période, sans les « disponible » (transparents), les annulés ni les
+   * journées entières.
+   */
+  async getBusyIntervals(connection, { timeMin, timeMax }) {
+    const events = await this.fetchEvents(connection, {
+      timeMin: new Date(timeMin).toISOString(),
+      timeMax: new Date(timeMax).toISOString(),
+      withAvailability: true,
+    });
+    return events
+      .filter((e) => !e.transparent && !e.cancelled && !e.allDay)
+      .map((e) => ({
+        start: e.start,
+        end: e.end,
+        externalEventId: e.externalEventId,
+      }))
+      .filter((b) => !isNaN(b.start) && !isNaN(b.end));
+  }
+
+  /** Rendez-vous dans l'agenda Apple : pas de visioconférence possible. */
+  async pushEventDetailed(connection, newbiEvent) {
+    const externalEventId = await this.pushEvent(connection, newbiEvent);
+    return { externalEventId, meetingUrl: null, meetingError: null };
+  }
+
+  /** Déplace un rendez-vous (fichier .ics réécrit). */
+  async rescheduleEvent(connection, externalEventId, newbiEvent) {
+    await this.updateEvent(connection, externalEventId, newbiEvent);
   }
 
   /**
@@ -272,7 +370,7 @@ export default class AppleCalendarProvider {
     const client = await this.connect(
       connection.calDavUsername,
       connection.getDecryptedCalDavPassword(),
-      connection.calDavUrl
+      connection.calDavUrl,
     );
 
     const icsData = mapNewbiToICalEvent(newbiEvent);
@@ -280,8 +378,8 @@ export default class AppleCalendarProvider {
     await client.updateCalendarObject({
       calendarObject: {
         url: externalEventId,
-        data: icsData
-      }
+        data: icsData,
+      },
     });
 
     logger.info(`Event updated in Apple Calendar: ${externalEventId}`);
@@ -294,10 +392,12 @@ export default class AppleCalendarProvider {
     const client = await this.connect(
       connection.calDavUsername,
       connection.getDecryptedCalDavPassword(),
-      connection.calDavUrl
+      connection.calDavUrl,
     );
 
-    await client.deleteCalendarObject({ calendarObject: { url: externalEventId } });
+    await client.deleteCalendarObject({
+      calendarObject: { url: externalEventId },
+    });
     logger.info(`Event deleted from Apple Calendar: ${externalEventId}`);
   }
 }

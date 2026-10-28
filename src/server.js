@@ -88,6 +88,7 @@ import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.js";
+import publicBookingRoutes from "./routes/publicBooking.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
@@ -127,6 +128,7 @@ import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaym
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
+import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -457,6 +459,10 @@ async function startServer() {
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
   app.use("/api/public/einvoicing", publicEInvoicingDirectoryRoutes);
+
+  // Prise de rendez-vous : pages publiques de réservation, gestion d'un
+  // rendez-vous par l'invité (sans compte, jeton secret, rate-limitée)
+  app.use("/api/public/booking", publicBookingRoutes);
 
   // Routes tracking d'ouverture d'email (publique, sans auth)
   app.use("/tracking", emailTrackingRoutes);
@@ -806,6 +812,10 @@ async function startServer() {
       // Récap du calendrier le lundi à 8 h (no-op tant que
       // CALENDAR_WEEKLY_DIGEST_MODE n'est pas « simulation » ou « live »)
       startCalendarWeeklyDigestCron();
+
+      // Rappels des rendez-vous (24 h et 1 h avant), toutes les 5 minutes
+      // (coupés si APPOINTMENT_REMINDERS_MODE=off)
+      startAppointmentReminderCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

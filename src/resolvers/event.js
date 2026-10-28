@@ -40,6 +40,11 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const CALENDAR_EVENTS_CHANGED = "CALENDAR_EVENTS_CHANGED";
 
+// Rendez-vous pris sur une page de réservation : gérés (déplacés, annulés)
+// depuis la prise de rendez-vous, qui prévient l'invité
+const APPOINTMENT_MANAGED_ELSEWHERE =
+  "Gérez ce rendez-vous depuis Communication > Prise de rendez-vous.";
+
 /**
  * Détermine le statut d'un rappel lors d'un (re)calcul.
  * Règle clé : si l'heure d'envoi recalculée est déjà passée ET que le rappel
@@ -432,6 +437,14 @@ const eventResolvers = {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
+          if (input.type === "APPOINTMENT") {
+            return {
+              success: false,
+              event: null,
+              message: APPOINTMENT_MANAGED_ELSEWHERE,
+            };
+          }
+
           const event = new Event({
             ...input,
             userId: user.id,
@@ -561,6 +574,16 @@ const eventResolvers = {
               message: "Les événements externes ne peuvent pas être modifiés",
             };
           }
+          if (
+            existingEvent?.type === "APPOINTMENT" ||
+            updateData.type === "APPOINTMENT"
+          ) {
+            return {
+              success: false,
+              event: null,
+              message: APPOINTMENT_MANAGED_ELSEWHERE,
+            };
+          }
 
           // Si la date ou le rappel email change, recalculer la date d'envoi
           if (updateData.emailReminder || updateData.start) {
@@ -683,6 +706,13 @@ const eventResolvers = {
               success: false,
               event: null,
               message: "Les événements externes ne peuvent pas être supprimés",
+            };
+          }
+          if (existingEvent?.type === "APPOINTMENT") {
+            return {
+              success: false,
+              event: null,
+              message: APPOINTMENT_MANAGED_ELSEWHERE,
             };
           }
 
