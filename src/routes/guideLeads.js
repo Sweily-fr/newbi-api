@@ -5,6 +5,7 @@ import ClientList from "../models/ClientList.js";
 import ClientCustomField from "../models/ClientCustomField.js";
 import redisService from "../services/redisService.js";
 import logger from "../utils/logger.js";
+import { verifyTurnstileToken } from "../utils/turnstile.js";
 
 const router = express.Router();
 
@@ -48,35 +49,6 @@ async function checkRateLimit(ip) {
 
   entry.count++;
   return true;
-}
-
-// Vérification Turnstile côté serveur
-async function verifyTurnstileToken(token, ip) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) {
-    // Pas de clé configurée → skip la vérification (dev local)
-    return true;
-  }
-
-  if (!token) {
-    return false;
-  }
-
-  try {
-    const res = await fetch(
-      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ secret, response: token, remoteip: ip }),
-      },
-    );
-    const outcome = await res.json();
-    return outcome.success === true;
-  } catch (err) {
-    logger.error(`[GuideLeads] Erreur vérification Turnstile: ${err.message}`);
-    return false;
-  }
 }
 
 // Sanitize basic string input
