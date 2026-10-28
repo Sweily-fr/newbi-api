@@ -446,13 +446,28 @@ describe("trésorerie au jour le jour", () => {
 
   it("solde actuel puis échéances et prévisions jour par jour", async () => {
     await AccountBanking.collection.insertMany([
-      { workspaceId: orgA.toString(), status: "active", balance: 5000 },
+      // provider + externalId : index unique du modèle
       {
         workspaceId: orgA.toString(),
+        provider: "bridge",
+        externalId: "compte-1",
+        status: "active",
+        balance: 5000,
+      },
+      {
+        workspaceId: orgA.toString(),
+        provider: "bridge",
+        externalId: "compte-2",
         status: "active",
         balance: { current: 1000 },
       },
-      { workspaceId: orgA.toString(), status: "inactive", balance: 99999 },
+      {
+        workspaceId: orgA.toString(),
+        provider: "bridge",
+        externalId: "compte-3",
+        status: "inactive",
+        balance: 99999,
+      },
     ]);
     // À encaisser le 30, en retard depuis le 10 (hors projection)
     await insertInvoice({ dueDate: new Date("2026-10-30T00:00:00Z") });
