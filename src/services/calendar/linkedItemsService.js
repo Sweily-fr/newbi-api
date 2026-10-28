@@ -5,7 +5,6 @@ import PurchaseInvoice from "../../models/PurchaseInvoice.js";
 import InvoiceRecurrence from "../../models/InvoiceRecurrence.js";
 import { Board, Column, Task } from "../../models/kanban.js";
 import {
-  addDays,
   isDayString,
   nextOccurrenceFrom,
   parisDay,
@@ -14,11 +13,25 @@ import {
   buildAssignedMemberInfo,
   loadAssignedUsers,
 } from "../../utils/assignedMemberInfo.js";
+import SignatureRequest from "../../models/SignatureRequest.js";
+import {
+  MAX_ITEMS_PER_KIND,
+  clientName,
+  dateBounds,
+  documentNumber,
+  inRange,
+  stateFor,
+} from "./linkedItemsCommon.js";
+import { forecastItems } from "./forecastItems.js";
+import { reminderItems } from "./reminderItems.js";
+import { deliveryItems } from "./deliveryItems.js";
+import { fileTransferItems } from "./fileTransferItems.js";
 
 /**
  * Éléments des autres pages affichés dans le calendrier : échéances des
  * factures de vente et d'achat, fin de validité des devis en attente,
- * échéances des tâches et prochaines factures récurrentes.
+ * échéances des tâches, prochaines factures récurrentes, prévisions de
+ * trésorerie, relances automatiques, livraisons et fin des transferts.
  *
  * Rien n'est copié dans la collection des événements : tout est relu dans
  * les documents à chaque affichage, le statut montré est donc toujours le
@@ -29,23 +42,34 @@ import {
  * fuseau, une échéance ne glisse jamais d'un jour.
  */
 
-// Source → page dont le droit « Voir » est exigé
+// Source → page dont le droit « Voir » est exigé (une liste : l'une suffit,
+// le chargeur filtre ensuite chaque type de document)
 export const LINKED_KIND_MODULES = {
   INVOICE: "invoices",
   PURCHASE_INVOICE: "purchaseInvoices",
   QUOTE: "quotes",
   TASK: "kanban",
   RECURRING_INVOICE: "invoices",
+  FORECAST: "forecast",
+  REMINDER: "invoices",
+  DELIVERY: ["purchaseOrders", "deliveryNotes"],
+  FILE_TRANSFER: "fileTransfers",
 };
 
-// Au-delà, la source est tronquée et le front le signale
-export const MAX_ITEMS_PER_KIND = 300;
+export { MAX_ITEMS_PER_KIND };
 // La vue mois couvre au plus 42 jours, l'agenda 30
 export const MAX_RANGE_DAYS = 100;
 // Garde-fou des récurrences quotidiennes sur une longue période
 const MAX_OCCURRENCES_PER_RECURRENCE = 100;
 
 const OPEN_INVOICE_STATUSES = ["PENDING", "OVERDUE"];
+// Demande de signature envoyée, pas encore signée ni abandonnée
+const PENDING_SIGNATURE_STATUSES = [
+  "PENDING",
+  "WAIT_VALIDATION",
+  "WAIT_SIGN",
+  "WAIT_SIGNER",
+];
 const PURCHASE_HIDDEN_STATUSES = ["ARCHIVED"];
 
 // Colonne qui vaut « terminé » (tableaux par défaut : « Terminées ») : une
@@ -79,35 +103,6 @@ export function validateRange(from, to) {
     return `La période ne peut pas dépasser ${MAX_RANGE_DAYS} jours.`;
   }
   return null;
-}
-
-// Bornes UTC élargies d'un jour : un jour de Paris commence la veille à
-// 22 h ou 23 h UTC. Le filtre exact se fait ensuite sur parisDay().
-function dateBounds(from, to) {
-  return {
-    $gte: new Date(`${addDays(from, -1)}T00:00:00.000Z`),
-    $lte: new Date(`${addDays(to, 1)}T00:00:00.000Z`),
-  };
-}
-
-const stateFor = (day, today, done) =>
-  done ? "DONE" : day < today ? "OVERDUE" : "UPCOMING";
-
-const documentNumber = (doc) =>
-  doc?.prefix && doc?.number ? `${doc.prefix}-${doc.number}` : null;
-
-function clientName(client) {
-  if (!client) return null;
-  const name =
-    client.name ||
-    [client.firstName, client.lastName].filter(Boolean).join(" ");
-  return name || null;
-}
-
-function inRange(date, from, to) {
-  if (!date) return null;
-  const day = parisDay(new Date(date));
-  return day >= from && day <= to ? day : null;
 }
 
 async function invoiceItems({ workspaceId, from, to, today }) {
@@ -221,8 +216,29 @@ async function quoteItems({ workspaceId, from, to, today }) {
     .limit(MAX_ITEMS_PER_KIND + 1)
     .lean();
 
+  // Signature électronique en cours : le devis est peut-être déjà chez le
+  // client pour signature, la relance n'a alors pas le même sens
+  const kept = quotes.slice(0, MAX_ITEMS_PER_KIND);
+  const signatures = kept.length
+    ? await SignatureRequest.find(
+        {
+          documentType: "quote",
+          documentId: { $in: kept.map((q) => q._id) },
+          status: { $in: PENDING_SIGNATURE_STATUSES },
+        },
+        { documentId: 1, createdAt: 1 },
+      )
+        .sort({ createdAt: -1 })
+        .lean()
+    : [];
+  const signatureByQuote = new Map();
+  for (const signature of signatures) {
+    const key = signature.documentId.toString();
+    if (!signatureByQuote.has(key)) signatureByQuote.set(key, signature);
+  }
+
   const items = [];
-  for (const quote of quotes.slice(0, MAX_ITEMS_PER_KIND)) {
+  for (const quote of kept) {
     const day = inRange(quote.validUntil, from, to);
     if (!day) continue;
     const reference = documentNumber(quote);
@@ -239,6 +255,11 @@ async function quoteItems({ workspaceId, from, to, today }) {
       currency: "EUR",
       state: stateFor(day, today, false),
       documentStatus: quote.status,
+      signatureStatus: signatureByQuote.has(quote._id.toString())
+        ? "PENDING"
+        : null,
+      signatureSentAt:
+        signatureByQuote.get(quote._id.toString())?.createdAt || null,
     });
   }
   return { items, truncated: quotes.length > MAX_ITEMS_PER_KIND };
@@ -281,6 +302,7 @@ async function taskItems({
     },
     {
       title: 1,
+      startDate: 1,
       dueDate: 1,
       boardId: 1,
       columnId: 1,
@@ -334,6 +356,8 @@ async function taskItems({
       columnTitle: column?.title || null,
       columnColor: column?.color || null,
       priority: task.priority || null,
+      startDate: task.startDate ? new Date(task.startDate).toISOString() : null,
+      dueDate: new Date(task.dueDate).toISOString(),
       assignedMembersInfo: (task.assignedMembers || [])
         .filter(Boolean)
         .map(String)
@@ -423,6 +447,10 @@ const LOADERS = {
   QUOTE: quoteItems,
   TASK: taskItems,
   RECURRING_INVOICE: recurringInvoiceItems,
+  FORECAST: forecastItems,
+  REMINDER: reminderItems,
+  DELIVERY: deliveryItems,
+  FILE_TRANSFER: fileTransferItems,
 };
 
 /**
@@ -430,7 +458,11 @@ const LOADERS = {
  */
 export function allowedLinkedKinds(permissions) {
   return Object.entries(LINKED_KIND_MODULES)
-    .filter(([, moduleKey]) => permissions?.hasPermission?.(moduleKey, "view"))
+    .filter(([, modules]) =>
+      [modules]
+        .flat()
+        .some((moduleKey) => permissions?.hasPermission?.(moduleKey, "view")),
+    )
     .map(([kind]) => kind);
 }
 
@@ -445,8 +477,12 @@ export async function getCalendarLinkedItems({
   from,
   to,
   now = new Date(),
+  // Limite facultative à certaines sources (trésorerie, abonnement…)
+  onlyKinds = null,
 }) {
-  const kinds = allowedLinkedKinds(permissions);
+  const kinds = allowedLinkedKinds(permissions).filter(
+    (kind) => !onlyKinds || onlyKinds.includes(kind),
+  );
   const today = parisDay(now);
   const workspaceObjectId = new mongoose.Types.ObjectId(String(workspaceId));
 
@@ -460,6 +496,7 @@ export async function getCalendarLinkedItems({
         userId,
         permissions,
         db,
+        now,
       }),
     ),
   );

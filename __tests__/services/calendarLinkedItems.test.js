@@ -407,7 +407,14 @@ describe("droits", () => {
 
     const result = await run({ permissions: noInvoices });
 
-    expect(result.kinds).toEqual(["PURCHASE_INVOICE", "QUOTE", "TASK"]);
+    expect(result.kinds).toEqual([
+      "PURCHASE_INVOICE",
+      "QUOTE",
+      "TASK",
+      "FORECAST",
+      "DELIVERY",
+      "FILE_TRANSFER",
+    ]);
     expect(result.items.map((i) => i.kind)).toEqual(["PURCHASE_INVOICE"]);
   });
 });
