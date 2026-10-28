@@ -14,6 +14,10 @@ import {
   buildAssignedMemberInfo,
   loadAssignedUsers,
 } from "../../utils/assignedMemberInfo.js";
+import {
+  FISCAL_ORGANIZATION_FIELDS,
+  computeFiscalDeadlines,
+} from "./fiscalDeadlines.js";
 
 /**
  * Éléments des autres pages affichés dans le calendrier : échéances des
@@ -36,6 +40,8 @@ export const LINKED_KIND_MODULES = {
   QUOTE: "quotes",
   TASK: "kanban",
   RECURRING_INVOICE: "invoices",
+  // Échéances fiscales : calculées, sans document d'une autre page
+  FISCAL: "calendar",
 };
 
 // Au-delà, la source est tronquée et le front le signale
@@ -417,12 +423,27 @@ async function recurringInvoiceItems({ workspaceId, from, to, today }) {
   return { items, truncated };
 }
 
+// Échéances fiscales et sociales calculées depuis les informations légales
+// de l'espace (fiscalDeadlines.js), avec ce qui manque pour les calculer
+async function fiscalItems({ workspaceId, from, to, today, db }) {
+  const organization = await (db || mongoose.connection.db)
+    .collection("organization")
+    .findOne({ _id: workspaceId }, { projection: FISCAL_ORGANIZATION_FIELDS });
+  const { items, setup } = computeFiscalDeadlines(organization, {
+    from,
+    to,
+    today,
+  });
+  return { items, truncated: false, fiscalSetup: setup };
+}
+
 const LOADERS = {
   INVOICE: invoiceItems,
   PURCHASE_INVOICE: purchaseInvoiceItems,
   QUOTE: quoteItems,
   TASK: taskItems,
   RECURRING_INVOICE: recurringInvoiceItems,
+  FISCAL: fiscalItems,
 };
 
 /**
@@ -472,5 +493,7 @@ export async function getCalendarLinkedItems({
     items,
     kinds,
     truncated: results.some((r) => r.truncated),
+    // Source Fiscal : informations légales manquantes (null sans la source)
+    fiscalSetup: results.find((r) => r.fiscalSetup)?.fiscalSetup ?? null,
   };
 }
