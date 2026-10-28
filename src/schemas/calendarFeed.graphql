@@ -1,0 +1,25 @@
+# Lien d'abonnement au calendrier : une adresse secrète que Google Agenda,
+# Apple Calendrier ou Outlook relisent régulièrement, sans connexion de
+# compte. Un lien par utilisateur et par espace.
+
+type CalendarFeedLink {
+  "Vrai si un lien d'abonnement existe pour cet espace"
+  enabled: Boolean!
+  "Adresse à suivre depuis l'agenda (null si désactivé, ou à régénérer)"
+  url: String
+  "Création du lien actuel"
+  createdAt: DateTime
+  "Dernière lecture du calendrier par une application"
+  lastAccessedAt: DateTime
+}
+
+extend type Query {
+  calendarFeedLink(workspaceId: ID): CalendarFeedLink!
+}
+
+extend type Mutation {
+  "Crée le lien, ou le remplace : l'ancienne adresse cesse de fonctionner"
+  regenerateCalendarFeedLink(workspaceId: ID): CalendarFeedLink!
+  "Désactive le lien : l'adresse cesse de fonctionner"
+  disableCalendarFeedLink(workspaceId: ID): CalendarFeedLink!
+}
