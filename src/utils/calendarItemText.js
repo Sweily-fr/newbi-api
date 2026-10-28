@@ -64,6 +64,64 @@ export const LINKED_KIND_TEXT = {
       DONE: "Tâche terminée",
     },
   },
+  FORECAST: {
+    source: "Prévisions",
+    noun: "Prévision",
+    party: "Tiers",
+    states: {
+      UPCOMING: "Mouvement prévu",
+      OVERDUE: "Mouvement prévu",
+      DONE: "Prévision passée",
+    },
+  },
+  REMINDER: {
+    source: "Relances",
+    noun: "Relance de la facture",
+    party: "Client",
+    states: {
+      UPCOMING: "Relance prévue",
+      OVERDUE: "Relance en échec",
+      DONE: "Relance envoyée",
+    },
+  },
+  DELIVERY: {
+    source: "Livraisons",
+    noun: "Livraison",
+    party: "Client",
+    states: {
+      UPCOMING: "Livraison prévue",
+      OVERDUE: "Livraison en retard",
+      DONE: "Livraison effectuée",
+    },
+  },
+  FILE_TRANSFER: {
+    source: "Transferts",
+    noun: "Transfert de fichiers",
+    party: "Destinataire",
+    states: {
+      UPCOMING: "Fin du lien de transfert",
+      OVERDUE: "Fin du lien de transfert",
+      DONE: "Lien de transfert expiré",
+    },
+  },
+};
+
+// Montants TTC de documents ; une prévision ou le prix d'un transfert n'en
+// sont pas
+const TTC_KINDS = new Set([
+  "INVOICE",
+  "PURCHASE_INVOICE",
+  "QUOTE",
+  "RECURRING_INVOICE",
+  "REMINDER",
+  "DELIVERY",
+]);
+
+// Sorties d'argent prévues : montant précédé d'un signe moins
+const signedAmount = (item, options) => {
+  const amount = formatAmount(item?.amount, item?.currency, options);
+  if (!amount || item?.kind !== "FORECAST") return amount;
+  return `${item.flowType === "EXPENSE" ? "- " : "+ "}${amount}`;
 };
 
 const GENERIC_TEXT = { source: "Échéances", noun: "Échéance", states: {} };
@@ -74,6 +132,12 @@ export const kindText = (kind) => LINKED_KIND_TEXT[kind] || GENERIC_TEXT;
 
 /** « Facture à encaisser », « Tâche en retard »… */
 export function linkedItemLabel(item) {
+  if (item?.kind === "FORECAST" && item.state !== "DONE") {
+    return item.flowType === "INCOME" ? "Rentrée prévue" : "Sortie prévue";
+  }
+  if (item?.kind === "REMINDER" && item.reminderStatus === "NO_EMAIL") {
+    return "Relance sans adresse e-mail";
+  }
   const text = kindText(item?.kind);
   return text.states[item?.state] || text.noun;
 }
@@ -123,9 +187,7 @@ export function linkedItemSummary(item) {
   const known = Boolean(LINKED_KIND_TEXT[item?.kind]);
   const who =
     item?.counterparty || item?.reference || (known ? null : item?.title);
-  return [label, who, formatAmount(item?.amount, item?.currency)]
-    .filter(Boolean)
-    .join(" · ");
+  return [label, who, signedAmount(item)].filter(Boolean).join(" · ");
 }
 
 /**
@@ -148,6 +210,17 @@ export function linkedItemPath(item) {
       return item.boardId
         ? `/dashboard/outils/kanban/${item.boardId}?task=${item.entityId}`
         : "/dashboard/outils/kanban";
+    // La relance ouvre sa facture
+    case "REMINDER":
+      return `/dashboard/outils/factures?id=${item.entityId}`;
+    case "FORECAST":
+      return "/dashboard/outils/prevision";
+    case "DELIVERY":
+      return item.documentKind === "DELIVERY_NOTE"
+        ? `/dashboard/outils/bons-de-livraison?id=${item.entityId}`
+        : `/dashboard/outils/bons-commande?id=${item.entityId}`;
+    case "FILE_TRANSFER":
+      return "/dashboard/outils/transferts-fichiers";
     default:
       return "/dashboard/calendar";
   }
@@ -165,18 +238,22 @@ export function linkedItemDetails(item) {
     }
     return lines;
   }
-  lines.push(item?.reference ? `${text.noun} ${item.reference}` : text.noun);
+  const noun =
+    item?.kind === "DELIVERY"
+      ? item.documentKind === "DELIVERY_NOTE"
+        ? "Bon de livraison"
+        : "Bon de commande"
+      : text.noun;
+  lines.push(item?.reference ? `${noun} ${item.reference}` : noun);
   if (item?.counterparty) {
     lines.push(`${text.party || "Contact"} : ${item.counterparty}`);
   } else if (!LINKED_KIND_TEXT[item?.kind] && item?.title) {
     lines.push(item.title);
   }
-  const amount = formatAmount(item?.amount, item?.currency, { exact: true });
-  // Montants TTC des documents connus ; rien de supposé pour les autres
+  const amount = signedAmount(item, { exact: true });
+  // Montants TTC des documents ; rien de supposé pour les autres
   if (amount) {
-    lines.push(
-      `Montant : ${amount}${LINKED_KIND_TEXT[item?.kind] ? " TTC" : ""}`,
-    );
+    lines.push(`Montant : ${amount}${TTC_KINDS.has(item?.kind) ? " TTC" : ""}`);
   }
   return lines;
 }

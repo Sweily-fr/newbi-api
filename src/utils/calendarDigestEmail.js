@@ -46,6 +46,36 @@ const TOTAL_ROWS = [
     label: "Tâches",
     unit: ["échéance", "échéances"],
     phrase: ["tâche", "tâches"],
+    withAmounts: false,
+  },
+  // Rentrées et sorties mêlées : un total n'aurait pas de sens
+  {
+    kind: "FORECAST",
+    label: "Mouvements prévus",
+    unit: ["mouvement", "mouvements"],
+    phrase: ["mouvement prévu", "mouvements prévus"],
+    withAmounts: false,
+  },
+  {
+    kind: "REMINDER",
+    label: "Relances",
+    unit: ["relance", "relances"],
+    phrase: ["relance", "relances"],
+    withAmounts: false,
+  },
+  {
+    kind: "DELIVERY",
+    label: "Livraisons",
+    unit: ["livraison", "livraisons"],
+    phrase: ["livraison", "livraisons"],
+    withAmounts: false,
+  },
+  {
+    kind: "FILE_TRANSFER",
+    label: "Liens de transfert",
+    unit: ["lien qui expire", "liens qui expirent"],
+    phrase: ["lien de transfert qui expire", "liens de transfert qui expirent"],
+    withAmounts: false,
   },
 ];
 const OTHER_ROW = {
@@ -137,7 +167,7 @@ export function summarizeWeek({ events = [], items = [], weekStart, weekEnd }) {
     const row = rowFor(item.kind);
     const stats = rows.get(row.kind) || { row, count: 0, amounts: new Map() };
     stats.count += 1;
-    if (Number.isFinite(item.amount) && row.kind !== "TASK") {
+    if (Number.isFinite(item.amount) && row.withAmounts !== false) {
       const currency = item.currency || "EUR";
       stats.amounts.set(
         currency,
