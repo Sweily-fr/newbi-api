@@ -1209,10 +1209,12 @@ export async function rescheduleSocialPostForTask({
     status: "scheduled",
   });
   if (!post) return null;
-  if (dueDate === null || dueDate === "") {
+  // Date retirée : null, ou chaîne vide (le scalaire DateTime en fait une
+  // date invalide)
+  const next = dueDate === null || dueDate === "" ? null : new Date(dueDate);
+  if (!next || Number.isNaN(next.getTime())) {
     throw userError("Un post programmé doit garder une date de publication");
   }
-  const next = new Date(dueDate);
   if (sameInstant(post.scheduledFor, next)) return post;
   assertValid(validateScheduleDate(next, { now }));
   assertSocialPublishingEnabled();

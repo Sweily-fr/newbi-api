@@ -507,6 +507,14 @@ describe("carte modifiée dans le kanban", () => {
         ctx,
       ),
     ).rejects.toThrow("Un post programmé doit garder une date de publication");
+    // Chaîne vide : le scalaire DateTime en fait une date invalide
+    await expect(
+      KanbanMutation.updateTask(
+        null,
+        { input: { id: task.id, dueDate: new Date("") } },
+        ctx,
+      ),
+    ).rejects.toThrow("Un post programmé doit garder une date de publication");
 
     provider.updatePost.mockRejectedValue(
       new SocialProviderError("timeout", { kind: "timeout" }),
