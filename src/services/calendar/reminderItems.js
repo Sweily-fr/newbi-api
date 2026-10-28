@@ -18,7 +18,8 @@ import {
  * 2e relance m jours après, une seule par facture et par passage, clients
  * exclus ignorés, à l'heure réglée.
  */
-const STEP = { FIRST: 1, SECOND: 2 };
+// 0 : relance envoyée à la demande depuis le calendrier
+const STEP = { FIRST: 1, SECOND: 2, MANUAL: 0 };
 
 const maxDay = (a, b) => (a > b ? a : b);
 
@@ -100,7 +101,7 @@ export async function reminderItems({
       reminderItem({
         id: `REMINDER:log:${log._id}`,
         invoice,
-        step: STEP[log.reminderType] || 1,
+        step: STEP[log.reminderType] ?? 1,
         day,
         state: failed ? "OVERDUE" : "DONE",
         reminderStatus: failed ? "FAILED" : "SENT",

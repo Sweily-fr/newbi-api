@@ -1,19 +1,21 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const invoiceReminderLogSchema = new mongoose.Schema({
   invoiceId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Invoice',
+    ref: "Invoice",
     required: true,
   },
   workspaceId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
+    ref: "Organization",
     required: true,
   },
   reminderType: {
     type: String,
-    enum: ['FIRST', 'SECOND'],
+    // MANUAL : rappel envoyé à la demande (calendrier), hors du rythme
+    // automatique (le cron ne regarde que FIRST et SECOND)
+    enum: ["FIRST", "SECOND", "MANUAL"],
     required: true,
   },
   sentAt: {
@@ -34,8 +36,8 @@ const invoiceReminderLogSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['SENT', 'FAILED'],
-    default: 'SENT',
+    enum: ["SENT", "FAILED"],
+    default: "SENT",
   },
   error: {
     type: String,
@@ -47,6 +49,9 @@ const invoiceReminderLogSchema = new mongoose.Schema({
 invoiceReminderLogSchema.index({ invoiceId: 1, reminderType: 1 });
 invoiceReminderLogSchema.index({ workspaceId: 1, sentAt: -1 });
 
-const InvoiceReminderLog = mongoose.model('InvoiceReminderLog', invoiceReminderLogSchema);
+const InvoiceReminderLog = mongoose.model(
+  "InvoiceReminderLog",
+  invoiceReminderLogSchema,
+);
 
 export default InvoiceReminderLog;
