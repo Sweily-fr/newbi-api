@@ -86,6 +86,7 @@ const MINUTE = 60 * 1000;
 const LOCK_TTL_MS = 15000;
 const LOCK_WAIT_MS = 5000;
 const LOCK_RETRY_MS = 200;
+const LOCK_COMMAND_TIMEOUT_MS = 2000;
 const MAX_BUFFER_MS = MAX_BUFFER_MINUTES * MINUTE;
 const PROVIDER_ORDER = ["google", "microsoft", "apple"];
 
@@ -288,7 +289,13 @@ async function acquireHostLock(hostUserId) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   try {
     while (Date.now() <= deadline) {
-      const ok = await client.set(key, value, "PX", LOCK_TTL_MS, "NX");
+      // Redis injoignable : la commande attendrait sa reconnexion
+      const ok = await Promise.race([
+        client.set(key, value, "PX", LOCK_TTL_MS, "NX"),
+        sleep(LOCK_COMMAND_TIMEOUT_MS).then(() => {
+          throw new Error("Redis ne répond pas");
+        }),
+      ]);
       if (ok) return { client, key, value };
       await sleep(LOCK_RETRY_MS);
     }

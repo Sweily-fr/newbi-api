@@ -452,6 +452,9 @@ export default class GoogleCalendarProvider {
     await calendar.events.delete({
       calendarId,
       eventId: externalEventId,
+      // Participants (invité d'un rendez-vous) : aucun e-mail de Google,
+      // Newbi envoie le sien
+      sendUpdates: "none",
     });
 
     logger.info(
