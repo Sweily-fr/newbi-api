@@ -104,6 +104,17 @@ export const LINKED_KIND_TEXT = {
       DONE: "Lien de transfert expiré",
     },
   },
+  // Échéance calculée : jamais en retard, une date passée reste neutre
+  FISCAL: {
+    source: "Fiscal",
+    noun: "Échéance fiscale",
+    party: "Organisme",
+    states: {
+      UPCOMING: "Échéance fiscale",
+      OVERDUE: "Échéance fiscale",
+      DONE: "Échéance fiscale passée",
+    },
+  },
 };
 
 // Montants TTC de documents ; une prévision ou le prix d'un transfert n'en
@@ -184,6 +195,11 @@ export function linkedItemSummary(item) {
   if (item?.kind === "TASK") {
     return [label, item.title].filter(Boolean).join(" · ");
   }
+  // « Déclaration de TVA (CA3) · Octobre 2026 » : l'organisme est le même
+  // pour presque toutes, le titre et la période disent de quoi il s'agit
+  if (item?.kind === "FISCAL") {
+    return [item.title || label, item.reference].filter(Boolean).join(" · ");
+  }
   const known = Boolean(LINKED_KIND_TEXT[item?.kind]);
   const who =
     item?.counterparty || item?.reference || (known ? null : item?.title);
@@ -230,6 +246,15 @@ export function linkedItemPath(item) {
 export function linkedItemDetails(item) {
   const text = kindText(item?.kind);
   const lines = [];
+  // Échéance fiscale : période, organisme, règle et page officielle
+  if (item?.kind === "FISCAL") {
+    if (item.reference) lines.push(`Période : ${item.reference}`);
+    if (item.counterparty) lines.push(`Organisme : ${item.counterparty}`);
+    if (item.isIndicative) lines.push("Date indicative");
+    if (item.note) lines.push(item.note);
+    if (item.infoUrl) lines.push(`Page officielle : ${item.infoUrl}`);
+    return lines;
+  }
   if (item?.kind === "TASK") {
     if (item.boardTitle) lines.push(`Projet : ${item.boardTitle}`);
     if (item.columnTitle) lines.push(`Colonne : ${item.columnTitle}`);

@@ -77,6 +77,14 @@ const TOTAL_ROWS = [
     phrase: ["lien de transfert qui expire", "liens de transfert qui expirent"],
     withAmounts: false,
   },
+  // Échéances calculées depuis les informations légales, sans montant
+  {
+    kind: "FISCAL",
+    label: "Échéances fiscales",
+    unit: ["échéance", "échéances"],
+    phrase: ["échéance fiscale", "échéances fiscales"],
+    withAmounts: false,
+  },
 ];
 const OTHER_ROW = {
   kind: "OTHER",
