@@ -52,6 +52,7 @@ import calendarFeedRoutes, {
   FEED_RATE_WINDOW_SECONDS,
 } from "../../src/routes/calendarFeed.js";
 import calendarFeedResolvers from "../../src/resolvers/calendarFeed.js";
+import notificationPreferencesResolvers from "../../src/resolvers/notificationPreferences.js";
 import {
   buildCalendarFeed,
   findCalendarFeed,
@@ -530,6 +531,50 @@ describe("contenu du calendrier", () => {
     expect(
       events.map((e) => e.description.match(/F-202610-(\d+)/)[1]).sort(),
     ).toEqual(["0001", "0003", "0004"]);
+  });
+});
+
+describe("préférence du récap du lundi", () => {
+  const readDigest = () =>
+    calendarFeedResolvers.Query.calendarWeeklyDigest(null, {}, context());
+  const setDigest = (enabled) =>
+    calendarFeedResolvers.Mutation.setCalendarWeeklyDigest(
+      null,
+      { enabled },
+      context(),
+    );
+  const preferences = () =>
+    notificationPreferencesResolvers.Query.getNotificationPreferences(
+      null,
+      {},
+      context(),
+    );
+
+  it("désactivée par défaut, partout", async () => {
+    expect(await readDigest()).toBe(false);
+    expect((await preferences()).calendar_weekly_digest).toEqual({
+      email: false,
+      push: false,
+    });
+  });
+
+  it("même clé que l'écran des notifications, dans les deux sens", async () => {
+    expect(await setDigest(true)).toBe(true);
+    expect(await readDigest()).toBe(true);
+    expect((await preferences()).calendar_weekly_digest.email).toBe(true);
+
+    await notificationPreferencesResolvers.Mutation.updateNotificationPreferences(
+      null,
+      { input: { calendar_weekly_digest: { email: false } } },
+      context(),
+    );
+    expect(await readDigest()).toBe(false);
+  });
+
+  it("refuse un appel sans session", async () => {
+    expect(() =>
+      calendarFeedResolvers.Query.calendarWeeklyDigest(null, {}, {}),
+    ).toThrow("Vous devez être connecté");
   });
 });
 
