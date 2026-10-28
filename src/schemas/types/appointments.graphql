@@ -1,0 +1,211 @@
+# Prise de rendez-vous (Communication) : page de réservation de
+# l'utilisateur dans l'espace, types de rendez-vous et réservations. Chaque
+# utilisateur ne voit et ne modifie que les siens.
+
+enum AppointmentLocationKind {
+  GOOGLE_MEET
+  TEAMS
+  CUSTOM_LINK
+  PHONE
+  IN_PERSON
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+type AvailabilityInterval {
+  "Heure locale HH:mm (fuseau de la page)"
+  start: String!
+  "Heure locale HH:mm, 24:00 pour minuit"
+  end: String!
+}
+
+type AvailabilityDay {
+  "Jour ISO : 1 = lundi … 7 = dimanche"
+  dayOfWeek: Int!
+  intervals: [AvailabilityInterval!]!
+}
+
+type AvailabilityOverride {
+  "Jour AAAA-MM-JJ ; aucune plage = jour fermé"
+  date: String!
+  intervals: [AvailabilityInterval!]!
+}
+
+type AppointmentLocation {
+  kind: AppointmentLocationKind!
+  "Lien https (CUSTOM_LINK), adresse (IN_PERSON) ou précision (PHONE)"
+  value: String
+}
+
+type BookingPage {
+  id: ID!
+  slug: String!
+  title: String!
+  description: String
+  accentColor: String
+  avatarUrl: String
+  timezone: String!
+  isActive: Boolean!
+  availability: [AvailabilityDay!]!
+  dateOverrides: [AvailabilityOverride!]!
+  writeConnectionId: ID
+  busyConnectionIds: [ID!]!
+  "https://www.newbi.fr/rdv/<slug>"
+  publicUrl: String!
+  createdAt: DateTime
+  updatedAt: DateTime
+}
+
+type AppointmentType {
+  id: ID!
+  slug: String!
+  name: String!
+  description: String
+  durationMinutes: Int!
+  slotIntervalMinutes: Int!
+  location: AppointmentLocation!
+  bufferBeforeMinutes: Int!
+  bufferAfterMinutes: Int!
+  minNoticeMinutes: Int!
+  maxDaysAhead: Int!
+  maxPerDay: Int
+  color: String
+  position: Int!
+  isActive: Boolean!
+  requirePhone: Boolean!
+  "https://www.newbi.fr/rdv/<slug de la page>/<slug du type>"
+  publicUrl: String!
+  "Réservations confirmées à venir"
+  upcomingCount: Int!
+}
+
+type BookingGuest {
+  firstName: String!
+  lastName: String!
+  email: String!
+  phone: String
+  message: String
+  timezone: String
+}
+
+type Booking {
+  id: ID!
+  appointmentTypeId: ID
+  typeName: String!
+  durationMinutes: Int!
+  location: AppointmentLocation!
+  startAt: DateTime!
+  endAt: DateTime!
+  status: BookingStatus!
+  guest: BookingGuest!
+  meetingUrl: String
+  meetingWarning: String
+  "GUEST ou HOST"
+  cancelledBy: String
+  cancelReason: String
+  cancelledAt: DateTime
+  clientId: ID
+  eventId: ID
+  createdAt: DateTime
+}
+
+type BookingList {
+  items: [Booking!]!
+  totalCount: Int!
+}
+
+input AvailabilityIntervalInput {
+  start: String!
+  end: String!
+}
+
+input AvailabilityDayInput {
+  dayOfWeek: Int!
+  intervals: [AvailabilityIntervalInput!]!
+}
+
+input AvailabilityOverrideInput {
+  date: String!
+  intervals: [AvailabilityIntervalInput!]!
+}
+
+input AppointmentLocationInput {
+  kind: AppointmentLocationKind!
+  value: String
+}
+
+input BookingPageInput {
+  slug: String
+  title: String
+  description: String
+  accentColor: String
+  avatarUrl: String
+  timezone: String
+  isActive: Boolean
+  availability: [AvailabilityDayInput!]
+  dateOverrides: [AvailabilityOverrideInput!]
+  writeConnectionId: ID
+  busyConnectionIds: [ID!]
+}
+
+input AppointmentTypeInput {
+  slug: String
+  name: String
+  description: String
+  durationMinutes: Int
+  slotIntervalMinutes: Int
+  location: AppointmentLocationInput
+  bufferBeforeMinutes: Int
+  bufferAfterMinutes: Int
+  minNoticeMinutes: Int
+  maxDaysAhead: Int
+  maxPerDay: Int
+  color: String
+  position: Int
+  isActive: Boolean
+  requirePhone: Boolean
+}
+
+extend type Query {
+  "Page de réservation de l'utilisateur dans l'espace (null avant sa création)"
+  myBookingPage(workspaceId: ID): BookingPage
+  appointmentTypes(workspaceId: ID): [AppointmentType!]!
+  """
+  Réservations de l'utilisateur. scope : « upcoming » (défaut, à venir, tri
+  croissant), « past » (passées, tri décroissant) ou « all »
+  """
+  bookings(
+    workspaceId: ID
+    scope: String
+    status: BookingStatus
+    limit: Int
+    offset: Int
+  ): BookingList!
+  booking(id: ID!, workspaceId: ID): Booking
+  "Adresse de page libre (format valide, non réservée, non prise)"
+  bookingSlugAvailable(slug: String!, workspaceId: ID): Boolean!
+}
+
+extend type Mutation {
+  """
+  Crée (premier appel : slug obligatoire, type par défaut « Rendez-vous de
+  30 min » ajouté) ou modifie la page de réservation de l'utilisateur
+  """
+  upsertBookingPage(workspaceId: ID, input: BookingPageInput!): BookingPage!
+  createAppointmentType(
+    workspaceId: ID
+    input: AppointmentTypeInput!
+  ): AppointmentType!
+  updateAppointmentType(
+    id: ID!
+    workspaceId: ID
+    input: AppointmentTypeInput!
+  ): AppointmentType!
+  "Les réservations à venir de ce type gardent leur instantané"
+  deleteAppointmentType(id: ID!, workspaceId: ID): Boolean!
+  "Annulation par l'organisateur (e-mail à l'invité)"
+  cancelBooking(id: ID!, workspaceId: ID, reason: String): Booking!
+}
