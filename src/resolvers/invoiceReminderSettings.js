@@ -1,7 +1,13 @@
 import logger from "../utils/logger.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import { AuthenticationError, UserInputError } from "apollo-server-express";
-import { requireRead, requireAction } from "../middlewares/rbac.js";
+import {
+  requireRead,
+  requireAction,
+  requireWorkspaceAction,
+  checkSubscriptionActive,
+} from "../middlewares/rbac.js";
+import { sendManualReminder } from "../services/invoiceReminderService.js";
 
 const invoiceReminderSettingsResolvers = {
   Query: {
@@ -134,6 +140,16 @@ Cordialement,
       );
 
       return settings;
+    }),
+
+    // Rappel immédiat depuis la fiche d'une échéance du calendrier : droit
+    // « Envoyer par e-mail » des factures, abonnement actif
+    sendInvoiceReminderNow: requireWorkspaceAction(
+      "invoices",
+      "send",
+    )(async (_, { invoiceId }, context) => {
+      await checkSubscriptionActive(context);
+      return sendManualReminder(invoiceId, context.workspaceId);
     }),
   },
 };

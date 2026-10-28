@@ -124,19 +124,26 @@ describe("factures de vente", () => {
   });
 
   it("ignore les brouillons, les annulées, les autres espaces et la période", async () => {
+    // Numéros distincts : index unique préfixe + numéro + espace
     await insertInvoice({
+      number: "0011",
       status: "DRAFT",
       dueDate: new Date("2026-11-02T10:00:00Z"),
     });
     await insertInvoice({
+      number: "0012",
       status: "CANCELED",
       dueDate: new Date("2026-11-02T10:00:00Z"),
     });
     await insertInvoice({
+      number: "0013",
       workspaceId: orgB,
       dueDate: new Date("2026-11-02T10:00:00Z"),
     });
-    await insertInvoice({ dueDate: new Date("2026-12-01T10:00:00Z") });
+    await insertInvoice({
+      number: "0014",
+      dueDate: new Date("2026-12-01T10:00:00Z"),
+    });
 
     expect(byKind(await run(), "INVOICE")).toEqual([]);
   });
@@ -407,7 +414,14 @@ describe("droits", () => {
 
     const result = await run({ permissions: noInvoices });
 
-    expect(result.kinds).toEqual(["PURCHASE_INVOICE", "QUOTE", "TASK"]);
+    expect(result.kinds).toEqual([
+      "PURCHASE_INVOICE",
+      "QUOTE",
+      "TASK",
+      "FORECAST",
+      "DELIVERY",
+      "FILE_TRANSFER",
+    ]);
     expect(result.items.map((i) => i.kind)).toEqual(["PURCHASE_INVOICE"]);
   });
 });
