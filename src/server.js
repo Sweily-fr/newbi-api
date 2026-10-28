@@ -91,6 +91,7 @@ import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
+import calendarFeedRoutes from "./routes/calendarFeed.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
 import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
@@ -125,6 +126,7 @@ import { startAbbyImportCron } from "./cron/abbyImportCron.js";
 import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaymentRetryCron.js";
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
+import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -438,6 +440,10 @@ async function startServer() {
 
   // Routes webhooks calendriers (Google/Microsoft push notifications)
   app.use("/calendar-webhooks", calendarWebhookRoutes);
+
+  // Abonnement au calendrier (fichier .ics lu par Google Agenda, Apple
+  // Calendrier ou Outlook ; publique, jeton secret dans l'adresse)
+  app.use("/calendar/feed", calendarFeedRoutes);
 
   // Routes connexion Gmail pour import factures fournisseurs
   app.use("/gmail-connect", gmailConnectRoutes);
@@ -796,6 +802,10 @@ async function startServer() {
       // Démarrer le cron de vérification de la remise des e-mails de documents
       // (filet du webhook Resend : reçu ou alerte de rejet à l'émetteur)
       startDocumentDeliveryCheckCron();
+
+      // Récap du calendrier le lundi à 8 h (no-op tant que
+      // CALENDAR_WEEKLY_DIGEST_MODE n'est pas « simulation » ou « live »)
+      startCalendarWeeklyDigestCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
