@@ -12,6 +12,14 @@ enum CalendarLinkedKind {
   TASK
   "Facture récurrente : prochaine émission"
   RECURRING_INVOICE
+  "Prévision de trésorerie : récurrence détectée ou saisie manuelle"
+  FORECAST
+  "Relance automatique d'une facture impayée (envoyée ou à venir)"
+  REMINDER
+  "Livraison prévue d'un bon de commande ou d'un bon de livraison"
+  DELIVERY
+  "Fin d'un lien de transfert de fichiers"
+  FILE_TRANSFER
   "Échéance fiscale ou sociale, calculée depuis les informations légales"
   FISCAL
 }
@@ -51,6 +59,23 @@ type CalendarLinkedItem {
   sourceInvoiceId: ID
   frequency: String
   interval: Int
+  "Tâche : dates exactes (glisser-déposer)"
+  startDate: DateTime
+  dueDate: DateTime
+  "Devis : signature électronique en attente"
+  signatureStatus: String
+  signatureSentAt: DateTime
+  "Prévision : INCOME ou EXPENSE, DETECTED ou MANUAL, catégorie"
+  flowType: String
+  forecastOrigin: String
+  category: String
+  "Relance : 1 ou 2, PLANNED, SENT, FAILED ou NO_EMAIL"
+  reminderStep: Int
+  reminderStatus: String
+  "Livraison : PURCHASE_ORDER ou DELIVERY_NOTE"
+  documentKind: String
+  "Transfert : nombre de téléchargements"
+  downloadCount: Int
   "Échéance fiscale : page officielle qui la décrit"
   infoUrl: String
   "Échéance fiscale : date indicative, le jour exact dépend de l'entreprise"
@@ -87,6 +112,29 @@ type CalendarLinkedItemsResult {
   fiscalSetup: CalendarFiscalSetup
 }
 
+"Solde prévu en fin de journée"
+type CalendarTreasuryDay {
+  day: String!
+  income: Float!
+  expense: Float!
+  balance: Float!
+}
+
+type CalendarTreasury {
+  "Jour de Paris AAAA-MM-JJ"
+  today: String!
+  currentBalance: Float!
+  hasBankAccounts: Boolean!
+  "Du plus tard entre le début de la période et aujourd'hui jusqu'à la fin"
+  days: [CalendarTreasuryDay!]!
+  lowest: CalendarTreasuryDay
+  "Sources comptées dans la projection"
+  sources: [CalendarLinkedKind!]!
+  "Échéances déjà en retard, hors projection"
+  overdueIncome: Float!
+  overdueExpense: Float!
+}
+
 extend type Query {
   "Période en jours AAAA-MM-JJ inclus, 100 jours au plus"
   calendarLinkedItems(
@@ -94,4 +142,11 @@ extend type Query {
     from: String!
     to: String!
   ): CalendarLinkedItemsResult!
+
+  "Trésorerie au jour le jour (null sans accès à Prévision ou Analytiques)"
+  calendarTreasury(
+    workspaceId: ID
+    from: String!
+    to: String!
+  ): CalendarTreasury
 }

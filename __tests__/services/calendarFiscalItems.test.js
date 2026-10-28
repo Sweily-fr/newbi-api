@@ -29,6 +29,7 @@ import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import { getCalendarLinkedItems } from "../../src/services/calendar/linkedItemsService.js";
+import { loadLinkedItems } from "../../src/services/calendar/calendarAgenda.js";
 import calendarLinkedItemsResolvers from "../../src/resolvers/calendarLinkedItems.js";
 import typeDefs from "../../src/schemas/index.js";
 
@@ -161,6 +162,41 @@ describe("source Fiscal", () => {
     expect(result.fiscalSetup.missing.map((m) => m.code)).toEqual([
       "LEGAL_FORM",
     ]);
+  });
+});
+
+describe("hors de la page du calendrier", () => {
+  it("abonnement iCal et récap du lundi : échéances fiscales comprises", async () => {
+    await insertOrganization(SAS);
+
+    // Plus de 100 jours : lu par tranches, sans doublon
+    const { items, kinds } = await loadLinkedItems({
+      workspaceId: orgA.toString(),
+      userId: userId.toString(),
+      permissions: allowAll,
+      db: mongoose.connection.db,
+      from: "2026-11-01",
+      to: "2027-03-31",
+      now: NOW,
+    });
+
+    expect(kinds).toContain("FISCAL");
+    const fiscalIds = items.filter((i) => i.kind === "FISCAL").map((i) => i.id);
+    expect(fiscalIds).toContain("FISCAL:CFE:2026-12-15");
+    expect(fiscalIds).toContain("FISCAL:CORPORATE_TAX_INSTALLMENT:2027-03-15");
+    expect(new Set(fiscalIds).size).toBe(fiscalIds.length);
+  });
+
+  it("trésorerie (sources choisies) : pas d'échéance fiscale", async () => {
+    await insertOrganization(SAS);
+
+    const result = await run({
+      onlyKinds: ["INVOICE", "PURCHASE_INVOICE", "FORECAST"],
+    });
+
+    expect(result.kinds).not.toContain("FISCAL");
+    expect(fiscal(result)).toEqual([]);
+    expect(result.fiscalSetup).toBeNull();
   });
 });
 

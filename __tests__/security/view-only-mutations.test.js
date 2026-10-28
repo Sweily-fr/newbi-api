@@ -92,6 +92,7 @@ const OPEN_TO_ANY_MEMBER = {
     "exportMyData",
     "updateEmailPreferences",
     "updateNotificationPreferences",
+    "setCalendarWeeklyDigest", // récap du lundi, préférence personnelle
     "sendTestEmail",
     "registerPushToken",
     "removePushToken",
@@ -142,6 +143,10 @@ const OPEN_TO_ANY_MEMBER = {
     "setTaskPresence", // présence sur une tâche consultée
     "disconnectCalendar", // retirer l'accès à son propre agenda externe
     "disconnectGmail", // retirer l'accès à sa propre boîte
+    // Lien d'abonnement à son propre calendrier : il ne montre que ce que
+    // le rôle voit déjà (« Voir » du calendrier exigé)
+    "regenerateCalendarFeedLink",
+    "disableCalendarFeedLink",
   ],
   // Fichier déposé dans l'espace de stockage de l'utilisateur : son
   // enregistrement passe ensuite par une mutation contrôlée

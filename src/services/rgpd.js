@@ -417,6 +417,14 @@ export async function deleteUserAccount(userId, organizationId) {
       userId: userObjectId,
     }).session(session);
 
+    // --- Liens d'abonnement au calendrier et journal du récap du lundi ---
+    await db
+      .collection("calendar_feed_tokens")
+      .deleteMany({ userId: userObjectId }, { session });
+    await db
+      .collection("calendar_digest_log")
+      .deleteMany({ userId: userObjectId }, { session });
+
     // --- Transferts de fichiers ---
     const ftResult = await FileTransfer.deleteMany({
       workspaceId: orgObjectId,

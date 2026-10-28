@@ -436,6 +436,12 @@ const userSchema = new mongoose.Schema(
         email: { type: Boolean, default: true },
         push: { type: Boolean, default: true },
       },
+      // Calendrier : récap de la semaine le lundi (e-mail seulement, à
+      // activer par l'utilisateur)
+      calendar_weekly_digest: {
+        email: { type: Boolean, default: false },
+        push: { type: Boolean, default: false },
+      },
     },
 
     // Tokens de notifications push (Expo) — un par appareil

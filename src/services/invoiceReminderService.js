@@ -189,8 +189,14 @@ async function sendReminder(
       return;
     }
 
-    // Calculer le total si nécessaire
-    const total = invoice.total || invoice.totalAmount || 0;
+    // Montant TTC de la facture (les champs total / totalAmount n'existent
+    // pas sur le modèle : le rappel annonçait 0,00 €)
+    const total =
+      invoice.finalTotalTTC ??
+      invoice.totalTTC ??
+      invoice.total ??
+      invoice.totalAmount ??
+      0;
 
     // Préparer les variables pour le template
     const variables = {
@@ -356,12 +362,17 @@ async function sendReminder(
         });
 
         if (client) {
-          const reminderLabel = reminderType === "first" ? "1ère" : "2ème";
+          // reminderType vaut FIRST, SECOND ou MANUAL (la comparaison avec
+          // « first » affichait toujours « 2ème »)
+          const description =
+            reminderType === "MANUAL"
+              ? `a envoyé une relance pour la facture ${variables.invoiceNumber}`
+              : `a envoyé la ${reminderType === "FIRST" ? "1ère" : "2ème"} relance pour la facture ${variables.invoiceNumber}`;
 
           client.activity.push({
             id: new mongoose.Types.ObjectId().toString(),
             type: "invoice_reminder_sent",
-            description: `a envoyé la ${reminderLabel} relance pour la facture ${variables.invoiceNumber}`,
+            description,
             userId: invoice.createdBy || invoice.userId,
             userName: variables.companyName,
             metadata: {
@@ -420,4 +431,74 @@ function replaceVariables(text, variables) {
   return result;
 }
 
-export { processAutomaticReminders, processWorkspaceReminders, sendReminder };
+// Une relance manuelle au plus toutes les 12 heures par facture
+const MANUAL_REMINDER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Rappel de paiement envoyé tout de suite au client (fiche d'une échéance
+ * dans le calendrier), avec le modèle des relances automatiques. Ne touche
+ * pas au rythme automatique : le journal le note MANUAL.
+ * @returns {Promise<{ success: boolean, message: string }>}
+ */
+async function sendManualReminder(invoiceId, workspaceId) {
+  const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });
+  if (!invoice) {
+    return { success: false, message: "Facture introuvable." };
+  }
+  if (!["PENDING", "OVERDUE"].includes(invoice.status)) {
+    return {
+      success: false,
+      message:
+        "Seules les factures en attente de paiement peuvent être relancées.",
+    };
+  }
+  if (!invoice.client?.email) {
+    return {
+      success: false,
+      message: "Le client n'a pas d'adresse e-mail.",
+    };
+  }
+  const recent = await InvoiceReminderLog.findOne({
+    invoiceId: invoice._id,
+    reminderType: "MANUAL",
+    status: "SENT",
+    sentAt: { $gte: new Date(Date.now() - MANUAL_REMINDER_COOLDOWN_MS) },
+  }).lean();
+  if (recent) {
+    return {
+      success: false,
+      message:
+        "Une relance a déjà été envoyée pour cette facture dans les 12 dernières heures.",
+    };
+  }
+
+  const settings =
+    (await InvoiceReminderSettings.findOne({ workspaceId })) ||
+    new InvoiceReminderSettings({ workspaceId });
+  const emailSettings = await EmailSettings.findOne({ workspaceId });
+
+  const startedAt = new Date(Date.now() - 1000);
+  await sendReminder(invoice, settings, "MANUAL", emailSettings);
+
+  const log = await InvoiceReminderLog.findOne({
+    invoiceId: invoice._id,
+    reminderType: "MANUAL",
+    sentAt: { $gte: startedAt },
+  })
+    .sort({ sentAt: -1 })
+    .lean();
+  if (log?.status === "SENT") {
+    return {
+      success: true,
+      message: `Rappel envoyé à ${invoice.client.email}.`,
+    };
+  }
+  return { success: false, message: "L'envoi du rappel a échoué." };
+}
+
+export {
+  processAutomaticReminders,
+  processWorkspaceReminders,
+  sendReminder,
+  sendManualReminder,
+};
