@@ -137,6 +137,12 @@ async function claimTarget(postId, target, mode, now) {
     set["targets.$.status"] = "publishing";
     set.status = "publishing";
     update.$inc = { "targets.$.attempts": 1 };
+    // Nouvel essai automatique vers X : un envoi facturé de plus, compté
+    // dans la limite mensuelle (xPostQuota.js). Le premier envoi est déjà
+    // compté par la cible elle-même.
+    if (target.platform === "twitter" && (target.attempts || 0) >= 1) {
+      update.$push = { xRetriedAt: now };
+    }
   }
   const post = await SocialPost.findOneAndUpdate(
     {

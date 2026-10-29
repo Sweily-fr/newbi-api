@@ -353,6 +353,10 @@ describe("publication des cibles directes", () => {
       attempts: MAX_ATTEMPTS,
       errorCategory: "platform_rate_limit",
     });
+    // Chaque nouvel essai automatique vers X compte dans la limite
+    // mensuelle ; le premier envoi est compté par la cible elle-même
+    const { xRetriedAt } = await SocialPost.findById(post._id).lean();
+    expect(xRetriedAt).toHaveLength(MAX_ATTEMPTS - 1);
     expect((await SocialPost.findById(post._id)).status).toBe("failed");
 
     await publishDueDirectTargets({
@@ -371,6 +375,7 @@ describe("publication des cibles directes", () => {
       }),
     );
     await publishDueDirectTargets({ now: NOW });
+    expect((await SocialPost.findById(post._id).lean()).xRetriedAt).toEqual([]);
     expect(await targetOf(post)).toMatchObject({
       status: "failed",
       errorCategory: "user_content",

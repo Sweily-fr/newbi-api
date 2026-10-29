@@ -61,6 +61,13 @@ import {
   sanitizeReturnTo,
 } from "./socialConnectUrls.js";
 
+import {
+  assertXPostQuota,
+  countXTargets,
+  sameParisMonth,
+  X_PLATFORM,
+} from "./xPostQuota.js";
+
 export { sanitizeReturnTo };
 
 /**
@@ -1056,6 +1063,11 @@ export async function schedulePost({
   const tiktokSettings = platforms.includes("tiktok")
     ? normalizeTikTokSettings(input.tiktokSettings)
     : null;
+  await assertXPostQuota(workspaceId, {
+    xCount: countXTargets(accounts),
+    at: scheduledFor,
+    now,
+  });
 
   // 1. La carte (non diffusée tant que le fournisseur n'a pas accepté)
   const { createTaskInWorkspace, discardCreatedTask, publishTaskCreated } =
@@ -1196,6 +1208,21 @@ export async function updatePost({
   if (input.scheduledFor !== undefined && input.scheduledFor !== null) {
     scheduledFor = parseDate(input.scheduledFor);
     assertValid(validateScheduleDate(scheduledFor, { now }));
+  }
+  // Limite X vérifiée seulement si le post en demande plus, ou change de
+  // mois : modifier le texte reste possible après un passage à une offre
+  // inférieure
+  const xCount = countXTargets(accounts);
+  if (
+    xCount > countXTargets(post.targets) ||
+    !sameParisMonth(scheduledFor, post.scheduledFor)
+  ) {
+    await assertXPostQuota(workspaceId, {
+      xCount,
+      at: scheduledFor,
+      excludePostId: post._id,
+      now,
+    });
   }
   let tiktokSettings = null;
   if (platforms.includes("tiktok")) {
@@ -1431,8 +1458,15 @@ export async function retryPost({
   if (post.status !== "failed" && post.status !== "partial") {
     throw userError("Seul un post en échec peut être publié de nouveau.");
   }
-  if (hasDirectTargets(post))
+  // Chaque cible X en échec repart chez X (Zernio ou direct) : un envoi de
+  // plus ce mois-ci
+  const failedXCount = post.targets.filter(
+    (target) => target.platform === X_PLATFORM && target.status === "failed",
+  ).length;
+  await assertXPostQuota(workspaceId, { xCount: failedXCount, at: now, now });
+  if (hasDirectTargets(post)) {
     return retryPostWithDirectTargets(post, user, now);
+  }
   let result;
   try {
     result = await provider.retryPost(post.externalPostId);
@@ -1444,6 +1478,7 @@ export async function retryPost({
   } else {
     post.status = "publishing";
   }
+  for (let i = 0; i < failedXCount; i += 1) post.xRetriedAt.push(now);
   // Même échec qu'avant : déjà notifié (notifiedStatus), rien n'est renvoyé
   post.updatedBy = toObjectIdOrNull(String(user?.id || ""));
   post.syncLockedUntil = null;
@@ -1457,10 +1492,16 @@ export async function retryPost({
  * relancées chez Zernio, cibles directes en échec republiées tout de suite.
  */
 async function retryPostWithDirectTargets(post, user, now) {
-  const zernioFailed = zernioTargetsOf(post).some(
+  const failedX = (targets) =>
+    targets.filter(
+      (target) => target.platform === X_PLATFORM && target.status === "failed",
+    ).length;
+  const zernioTargets = zernioTargetsOf(post);
+  const zernioFailed = zernioTargets.some(
     (target) => target.status === "failed",
   );
   if (post.externalPostId && zernioFailed) {
+    const zernioFailedX = failedX(zernioTargets);
     let result;
     try {
       result = await provider.retryPost(post.externalPostId);
@@ -1468,14 +1509,26 @@ async function retryPostWithDirectTargets(post, user, now) {
       throw toUserError(error, "retry");
     }
     if (result?.post) applyRemotePost(post, result.post, now);
+    // Chaque cible X relancée chez Zernio : un envoi facturé de plus
+    for (let i = 0; i < zernioFailedX; i += 1) post.xRetriedAt.push(now);
     post.updatedBy = toObjectIdOrNull(String(user?.id || ""));
     post.syncLockedUntil = null;
     await post.save();
   }
-  const directFailed = post.targets.some(
-    (target) => isDirectTarget(target) && target.status === "failed",
+  const directTargets = post.targets.filter(isDirectTarget);
+  const directFailedX = failedX(directTargets);
+  const directFailed = directTargets.some(
+    (target) => target.status === "failed",
   );
   if (directFailed && (await resetFailedDirectTargets(post._id)) > 0) {
+    // Le premier envoi de chaque cible X relancée compte ici ; les nouveaux
+    // essais automatiques du cron s'ajoutent ensuite (socialDirectPublisher)
+    if (directFailedX > 0) {
+      await SocialPost.updateOne(
+        { _id: post._id },
+        { $push: { xRetriedAt: { $each: Array(directFailedX).fill(now) } } },
+      );
+    }
     await publishDirectTargetsNow(post._id, { now });
   }
   const fresh = await refreshPostStatus(post._id, now);
@@ -1521,6 +1574,14 @@ export async function rescheduleSocialPostForTask({
   if (sameInstant(post.scheduledFor, next)) return post;
   assertValid(validateScheduleDate(next, { now }));
   assertSocialPublishingEnabled();
+  if (!sameParisMonth(next, post.scheduledFor)) {
+    await assertXPostQuota(workspaceId, {
+      xCount: countXTargets(post.targets),
+      at: next,
+      excludePostId: post._id,
+      now,
+    });
+  }
   if (post.externalPostId) {
     try {
       await provider.updatePost(post.externalPostId, {

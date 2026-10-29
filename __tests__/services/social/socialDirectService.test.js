@@ -580,6 +580,12 @@ describe("posts avec des cibles directes", () => {
     const retried = await Mutation.retrySocialPost(null, { id: post.id }, ctx);
     expect(retried.status).toBe("published");
     expect(xApi.publish).toHaveBeenCalledTimes(2);
+    // Nouvel envoi demandé vers X : compté dans la limite mensuelle
+    expect((await SocialPost.findById(post.id).lean()).xRetriedAt).toHaveLength(
+      1,
+    );
+    const { xPostQuota } = await Query.socialPublishingStatus(null, {}, ctx);
+    expect(xPostQuota.used).toBe(2);
   });
 
   it("TikTok direct : creator_info lu par notre appli, pseudo et confidentialités en français", async () => {

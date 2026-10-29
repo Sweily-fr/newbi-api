@@ -61,6 +61,8 @@ import {
   createConnectUrl,
   sanitizeReturnTo,
 } from "../../../src/services/social/socialPublishingService.js";
+import { getXPostQuota } from "../../../src/services/social/xPostQuota.js";
+import { parisMonthBounds } from "../../../src/services/esignatureQuota.js";
 
 const { Mutation: KanbanMutation } = kanbanResolvers;
 const { Mutation, Query } = socialResolvers;
@@ -753,6 +755,223 @@ describe("connexion des comptes", () => {
     });
     expect(redirect).toBe(
       "https://www.newbi.test/dashboard/outils/kanban?social_error=oauth_denied&social_platform=instagram",
+    );
+  });
+});
+
+describe("limite mensuelle de posts X", () => {
+  const setPlan = (plan) =>
+    mongoose.connection.db
+      .collection("subscription")
+      .updateOne({ referenceId: String(organizationId) }, { $set: { plan } });
+
+  // Posts X déjà envoyés (ou prévus) dans le mois de `scheduledFor`
+  const seedXPosts = async (
+    count,
+    {
+      scheduledFor = new Date(),
+      status = "published",
+      targetStatus = "published",
+      xRetriedAt = [],
+    } = {},
+  ) => {
+    for (let i = 0; i < count; i += 1) {
+      await SocialPost.create({
+        workspaceId: organizationId,
+        boardId: board._id,
+        taskId: new mongoose.Types.ObjectId(),
+        externalPostId: `zp_seed_${status}_${i}`,
+        idempotencyKey: `seed_${status}_${i}_${Math.random()}`,
+        scheduledFor,
+        status,
+        xRetriedAt,
+        targets: [
+          {
+            platform: "twitter",
+            externalAccountId: "za_x",
+            status: targetStatus,
+          },
+        ],
+      });
+    }
+  };
+
+  // Lendemain du 1er du mois prochain, heure de Paris
+  const nextMonth = () =>
+    new Date(parisMonthBounds().end.getTime() + 24 * 60 * 60 * 1000);
+
+  it("offre Freelance : 10 posts X par mois, le 11e est refusé avant toute création", async () => {
+    await setPlan("freelance");
+    await seedXPosts(10);
+    const tasksBefore = await Task.countDocuments();
+
+    await expect(
+      schedule({
+        boardId: String(board._id),
+        accountIds: [String(twitter._id)],
+        content: "Un post de trop",
+        scheduledFor: inOneDay().toISOString(),
+      }),
+    ).rejects.toThrow(
+      "Limite de posts X atteinte ce mois-ci : 10 avec votre offre.",
+    );
+    expect(await Task.countDocuments()).toBe(tasksBefore);
+    expect(provider.createPost).not.toHaveBeenCalled();
+
+    // Les autres réseaux ne sont pas concernés
+    const result = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(instagram._id)],
+      content: "Instagram reste possible",
+      mediaIds: [String(squareImage._id)],
+      scheduledFor: inOneDay().toISOString(),
+    });
+    expect(result.post.status).toBe("scheduled");
+  });
+
+  it("le mois suivant a son propre compteur", async () => {
+    await setPlan("freelance");
+    await seedXPosts(10);
+    const result = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(twitter._id)],
+      content: "Pour le mois prochain",
+      scheduledFor: nextMonth().toISOString(),
+    });
+    expect(result.post.status).toBe("scheduled");
+  });
+
+  it("compte les cibles X en échec et les nouveaux essais, pas les annulations", async () => {
+    await setPlan("freelance");
+    await seedXPosts(2, { status: "failed", targetStatus: "failed" });
+    await seedXPosts(3, { status: "cancelled", targetStatus: "cancelled" });
+    await seedXPosts(1, { xRetriedAt: [new Date(), new Date()] });
+
+    const quota = await getXPostQuota(organizationId);
+    expect(quota).toMatchObject({
+      plan: "freelance",
+      monthlyQuota: 10,
+      used: 5,
+      remaining: 5,
+    });
+  });
+
+  it("offres TPE et Entreprise : 30 et 60 posts X par mois", async () => {
+    await setPlan("pme");
+    expect((await getXPostQuota(organizationId)).monthlyQuota).toBe(30);
+    await setPlan("entreprise");
+    expect((await getXPostQuota(organizationId)).monthlyQuota).toBe(60);
+  });
+
+  it("modifier le texte reste possible au-delà de la limite ; ajouter X est refusé", async () => {
+    await setPlan("freelance");
+    const withX = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(twitter._id)],
+      content: "Déjà programmé",
+      scheduledFor: inOneDay().toISOString(),
+    });
+    const withoutX = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(instagram._id)],
+      content: "Instagram seul",
+      mediaIds: [String(squareImage._id)],
+      scheduledFor: inOneDay().toISOString(),
+    });
+    // Passage à une limite déjà dépassée (ex. offre inférieure)
+    await seedXPosts(10);
+
+    const edited = await Mutation.updateSocialPost(
+      null,
+      { id: withX.post.id, input: { content: "Texte corrigé" } },
+      ctx,
+    );
+    expect(edited.content).toBe("Texte corrigé");
+
+    await expect(
+      Mutation.updateSocialPost(
+        null,
+        {
+          id: withoutX.post.id,
+          input: {
+            accountIds: [String(instagram._id), String(twitter._id)],
+          },
+        },
+        ctx,
+      ),
+    ).rejects.toThrow("Limite de posts X atteinte ce mois-ci");
+  });
+
+  it("carte déplacée au mois suivant : vérifiée sur la limite de ce mois-là", async () => {
+    await setPlan("freelance");
+    const { task } = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(twitter._id)],
+      content: "À décaler",
+      scheduledFor: inOneDay().toISOString(),
+    });
+    await seedXPosts(10, { scheduledFor: nextMonth() });
+
+    await expect(
+      KanbanMutation.updateTask(
+        null,
+        { input: { id: task.id, dueDate: nextMonth().toISOString() } },
+        ctx,
+      ),
+    ).rejects.toThrow(/Limite de posts X atteinte en .* 2\d{3}/);
+    expect(provider.updatePost).not.toHaveBeenCalled();
+  });
+
+  it("nouvel essai d'un post X en échec : compté, refusé si la limite est atteinte", async () => {
+    await setPlan("freelance");
+    const { post } = await schedule({
+      boardId: String(board._id),
+      accountIds: [String(twitter._id)],
+      content: "Échec puis nouvel essai",
+      scheduledFor: inOneDay().toISOString(),
+    });
+    await SocialPost.updateOne(
+      { _id: post.id },
+      {
+        $set: {
+          status: "failed",
+          notifiedStatus: "failed",
+          "targets.0.status": "failed",
+        },
+      },
+    );
+    provider.retryPost.mockResolvedValue({ httpStatus: 200, post: null });
+
+    await Mutation.retrySocialPost(null, { id: post.id }, ctx);
+    const saved = await SocialPost.findById(post.id).lean();
+    expect(saved.xRetriedAt).toHaveLength(1);
+    // La cible en échec et son nouvel essai
+    expect((await getXPostQuota(organizationId)).used).toBe(2);
+
+    await seedXPosts(8);
+    await SocialPost.updateOne(
+      { _id: post.id },
+      { $set: { status: "failed" } },
+    );
+    provider.retryPost.mockClear();
+    await expect(
+      Mutation.retrySocialPost(null, { id: post.id }, ctx),
+    ).rejects.toThrow("Limite de posts X atteinte ce mois-ci");
+    expect(provider.retryPost).not.toHaveBeenCalled();
+  });
+
+  it("le statut expose le compteur du mois", async () => {
+    await setPlan("freelance");
+    await seedXPosts(3);
+    const status = await Query.socialPublishingStatus(null, {}, ctx);
+    expect(status.xPostQuota).toMatchObject({
+      plan: "freelance",
+      monthlyQuota: 10,
+      used: 3,
+      remaining: 7,
+    });
+    expect(status.xPostQuota.resetsAt).toBe(
+      parisMonthBounds().end.toISOString(),
     );
   });
 });

@@ -133,6 +133,9 @@ const socialPostSchema = new mongoose.Schema(
     notifiedStatus: { type: String, default: null },
     // Carte supprimée : le post n'est plus affiché sur le tableau
     taskDeletedAt: { type: Date, default: null },
+    // Nouveaux essais vers X (un par cible X en échec) : chaque envoi à X
+    // est facturé et compte dans la limite mensuelle (xPostQuota.js)
+    xRetriedAt: { type: [Date], default: [] },
   },
   { timestamps: true },
 );
@@ -140,6 +143,7 @@ const socialPostSchema = new mongoose.Schema(
 socialPostSchema.index({ workspaceId: 1, boardId: 1, taskDeletedAt: 1 });
 socialPostSchema.index({ status: 1, scheduledFor: 1 });
 socialPostSchema.index({ workspaceId: 1, "targets.socialAccountId": 1 });
+socialPostSchema.index({ workspaceId: 1, scheduledFor: 1 });
 
 const SocialPost =
   mongoose.models.SocialPost || mongoose.model("SocialPost", socialPostSchema);
