@@ -63,6 +63,8 @@ export async function createDirectConnectUrl({
   return network.buildAuthorizeUrl({
     state: token,
     redirectUri: directRedirectUri(platform),
+    // LinkedIn : appli des pages ouverte à certains espaces seulement
+    workspaceId: String(workspaceId),
     codeChallenge: codeVerifier
       ? crypto.createHash("sha256").update(codeVerifier).digest("base64url")
       : undefined,
@@ -233,6 +235,7 @@ export async function completeDirectConnect(
     result = await directNetworkFor(platform).exchangeCode({
       code: query.code,
       redirectUri: directRedirectUri(platform),
+      workspaceId: String(state.workspaceId),
       codeVerifier: state.codeVerifier
         ? decrypt(state.codeVerifier)
         : undefined,

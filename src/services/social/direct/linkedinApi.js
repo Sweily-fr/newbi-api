@@ -17,7 +17,9 @@ import {
  *   profil seulement, sans validation, identité par /v2/userinfo ;
  * - « pages » : Community Management API (LINKEDIN_PAGES_CLIENT_ID), profil
  *   ET pages après validation par LinkedIn, identité par /v2/me.
- * Les connexions neuves passent par « pages » dès qu'elle est configurée.
+ * Les connexions neuves passent par « pages » dès qu'elle est configurée,
+ * ou seulement pour les espaces de LINKEDIN_PAGES_WORKSPACE_IDS (virgules,
+ * vide = tous) tant que LinkedIn ne l'a pas validée au Standard tier.
  * Chaque compte garde l'appli de sa connexion (platformData.app) pour
  * rafraîchir son jeton avec les bons identifiants : les profils connectés
  * avant la validation continuent de publier sans reconnexion.
@@ -77,15 +79,30 @@ const isAppConfigured = (app) => {
   return Boolean(clientId && clientSecret);
 };
 
-/** Appli des connexions neuves : « pages » si configurée, sinon « profile ». */
-export const connectApp = () =>
-  isAppConfigured("pages")
-    ? "pages"
-    : isAppConfigured("profile")
-      ? "profile"
-      : null;
+const pagesWorkspaceIds = () =>
+  String(process.env.LINKEDIN_PAGES_WORKSPACE_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
 
-export const isConfigured = () => connectApp() !== null;
+const pagesAppAllowed = (workspaceId) => {
+  if (!isAppConfigured("pages")) return false;
+  const ids = pagesWorkspaceIds();
+  return ids.length === 0 || ids.includes(String(workspaceId || ""));
+};
+
+/**
+ * Appli des connexions neuves pour cet espace : « pages » si configurée et
+ * ouverte à l'espace, sinon « profile » (null : aucune appli).
+ */
+export const connectApp = (workspaceId) => {
+  if (pagesAppAllowed(workspaceId)) return "pages";
+  if (isAppConfigured("profile")) return "profile";
+  return null;
+};
+
+export const isConfigured = () =>
+  isAppConfigured("profile") || isAppConfigured("pages");
 
 /** Appli d'un compte déjà connecté (les plus anciens : « profile »). */
 export const accountApp = (account) =>
@@ -94,7 +111,7 @@ export const accountApp = (account) =>
 export const apiVersion = () =>
   (process.env.LINKEDIN_API_VERSION || DEFAULT_API_VERSION).trim();
 
-export const scopes = (app = connectApp()) => APPS[app]?.scopes || [];
+export const scopes = (app) => APPS[app]?.scopes || [];
 
 // ── Erreurs ────────────────────────────────────────────────────────────────
 
@@ -165,8 +182,8 @@ const rest = (method, path, { token, query, json, timeoutMs } = {}) =>
 
 // ── Connexion ──────────────────────────────────────────────────────────────
 
-export function buildAuthorizeUrl({ state, redirectUri }) {
-  const app = connectApp();
+export function buildAuthorizeUrl({ state, redirectUri, workspaceId }) {
+  const app = connectApp(workspaceId);
   if (!app) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
@@ -304,8 +321,13 @@ async function listOrganizations(token) {
  * Code de retour → le profil du membre, et ses pages entreprise si l'appli
  * a la Community Management API. Tous partagent le même jeton.
  */
-export async function exchangeCode({ code, redirectUri, now = new Date() }) {
-  const app = connectApp();
+export async function exchangeCode({
+  code,
+  redirectUri,
+  workspaceId,
+  now = new Date(),
+}) {
+  const app = connectApp(workspaceId);
   if (!app) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
   const credentials = await tokenRequest(
     { grant_type: "authorization_code", code, redirect_uri: redirectUri },

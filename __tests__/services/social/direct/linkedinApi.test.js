@@ -44,6 +44,7 @@ beforeEach(() => {
   process.env.LINKEDIN_CLIENT_SECRET = "li_secret";
   delete process.env.LINKEDIN_PAGES_CLIENT_ID;
   delete process.env.LINKEDIN_PAGES_CLIENT_SECRET;
+  delete process.env.LINKEDIN_PAGES_WORKSPACE_IDS;
   delete process.env.LINKEDIN_API_VERSION;
   vi.spyOn(storage, "fetchImage").mockResolvedValue({
     buffer: Buffer.from("jpeg"),
@@ -62,11 +63,11 @@ const usePagesApp = () => {
 
 describe("connexion", () => {
   it("permissions selon l'appli : profil seul, ou Community Management API dès qu'elle est posée", () => {
-    expect(connectApp()).toBe("profile");
-    expect(scopes()).toEqual(["openid", "profile", "w_member_social"]);
+    expect(connectApp("ws1")).toBe("profile");
+    expect(scopes("profile")).toEqual(["openid", "profile", "w_member_social"]);
     usePagesApp();
-    expect(connectApp()).toBe("pages");
-    expect(scopes()).toEqual([
+    expect(connectApp("ws1")).toBe("pages");
+    expect(scopes("pages")).toEqual([
       "r_basicprofile",
       "w_member_social",
       "w_organization_social",
@@ -247,6 +248,29 @@ describe("connexion", () => {
 });
 
 describe("deux applis en même temps", () => {
+  it("appli des pages limitée aux espaces de relecture avant sa validation", async () => {
+    usePagesApp();
+    process.env.LINKEDIN_PAGES_WORKSPACE_IDS = "relecture1, relecture2";
+    expect(connectApp("relecture2")).toBe("pages");
+    expect(connectApp("client")).toBe("profile");
+    const url = new URL(
+      linkedinApi.buildAuthorizeUrl({
+        state: "etat",
+        redirectUri: "https://r",
+        workspaceId: "client",
+      }),
+    );
+    expect(url.searchParams.get("client_id")).toBe("li_client");
+    expect(url.searchParams.get("scope")).toBe(
+      "openid profile w_member_social",
+    );
+
+    // Sans appli des profils : rien pour les autres espaces
+    delete process.env.LINKEDIN_CLIENT_ID;
+    expect(connectApp("client")).toBeNull();
+    expect(linkedinApi.isConfigured()).toBe(true);
+  });
+
   it("chaque compte rafraîchit son jeton avec l'appli qui l'a connecté", async () => {
     usePagesApp();
     const fetchMock = stubFetch([
