@@ -23,6 +23,7 @@ import {
   assertSocialPublishingEnabled,
 } from "../services/social/socialPublishingService.js";
 import { toUserError } from "../services/social/socialPostMessages.js";
+import { getXPostQuota } from "../services/social/xPostQuota.js";
 
 /**
  * Publication programmée sur les réseaux sociaux depuis le kanban
@@ -63,11 +64,14 @@ const socialPublishingResolvers = {
       const { workspaceId, permissions } = context;
       const enabled = isSocialPublishingEnabled();
       let accounts = [];
+      let xPostQuota = null;
       if (enabled) {
         // Comptes à jour (jeton expiré…) au plus toutes les 10 minutes, en
         // arrière-plan : la requête ne dépend jamais du fournisseur
         await refreshAccountsIfStale(workspaceId);
         accounts = await listWorkspaceAccounts(workspaceId);
+        const quota = await getXPostQuota(workspaceId);
+        xPostQuota = { ...quota, resetsAt: quota.resetsAt.toISOString() };
       }
       const canSchedule =
         Boolean(permissions?.hasPermission?.("kanban", "create")) &&
@@ -79,6 +83,7 @@ const socialPublishingResolvers = {
         ),
         canSchedule,
         accounts: accounts.map(serializeAccount),
+        xPostQuota,
       };
     }),
 
