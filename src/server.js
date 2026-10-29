@@ -92,6 +92,7 @@ import publicBookingRoutes from "./routes/publicBooking.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import socialConnectRoutes from "./routes/social-connect.js";
+import socialMediaRoutes from "./routes/social-media.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import calendarFeedRoutes from "./routes/calendarFeed.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
@@ -130,6 +131,7 @@ import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
 import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
+import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
 import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
@@ -442,9 +444,13 @@ async function startServer() {
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
 
-  // Retour de la connexion d'un compte de réseau social (OAuth Zernio ;
-  // publique, jeton à usage unique dans l'adresse)
+  // Retour de la connexion d'un compte de réseau social (OAuth Zernio ou
+  // de nos propres applis ; publique, jeton à usage unique dans l'adresse)
   app.use("/social-connect", socialConnectRoutes);
+
+  // Images des posts réseaux sociaux, lues par Instagram, Facebook et TikTok
+  // (publique, identifiant aléatoire ; jamais de redirection)
+  app.use("/social-media", socialMediaRoutes);
 
   // Routes webhooks calendriers (Google/Microsoft push notifications)
   app.use("/calendar-webhooks", calendarWebhookRoutes);
@@ -822,6 +828,10 @@ async function startServer() {
       // Suivi des posts programmés sur les réseaux sociaux (no-op tant que
       // ZERNIO_API_KEY n'est pas configurée)
       startSocialPostSyncCron();
+
+      // Publication des posts par nos propres applis de réseaux, chaque
+      // minute (no-op tant qu'aucune appli n'est configurée)
+      startSocialDirectPublishCron();
 
       // Rappels des rendez-vous (24 h et 1 h avant), toutes les 5 minutes
       // (coupés si APPOINTMENT_REMINDERS_MODE=off)

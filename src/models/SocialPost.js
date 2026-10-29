@@ -36,6 +36,23 @@ const targetSchema = new mongoose.Schema(
     errorMessage: { type: String, default: null },
     errorCategory: { type: String, default: null },
     publishedAt: { type: Date, default: null },
+
+    // « zernio » : la cible fait partie du post Zernio (externalPostId du
+    // post) ; « direct » : publiée par notre cron (socialDirectPublisher.js)
+    provider: { type: String, default: "zernio" },
+    // ── Cibles « direct » seulement ──
+    // Identifiant du post chez le réseau (publish_id TikTok tant que la
+    // publication est en cours)
+    externalPostId: { type: String, default: null },
+    attempts: { type: Number, default: 0 },
+    // Nouvel essai après une erreur passagère
+    nextAttemptAt: { type: Date, default: null },
+    // Bail de publication (une seule instance publie la cible)
+    lockedUntil: { type: Date, default: null },
+    // Envoi accepté par le réseau, publication pas encore confirmée (TikTok)
+    submittedAt: { type: Date, default: null },
+    // Adresse du post encore attendue jusqu'à cette date (TikTok)
+    urlCheckUntil: { type: Date, default: null },
   },
   { _id: false },
 );
@@ -55,7 +72,8 @@ const mediaSchema = new mongoose.Schema(
  * Post programmé sur les réseaux sociaux depuis le kanban : une carte
  * (taskId) par post. La date de publication suit la date d'échéance de la
  * carte (voir updateTask) ; le statut est suivi par le cron
- * socialPostSyncCron.
+ * socialPostSyncCron (cibles Zernio) et publié par socialDirectPublishCron
+ * (cibles « direct ») ; le statut global agrège les deux.
  */
 const socialPostSchema = new mongoose.Schema(
   {
@@ -77,8 +95,11 @@ const socialPostSchema = new mongoose.Schema(
     },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // « zernio », « direct » ou « mixed » (cibles des deux fournisseurs)
     provider: { type: String, required: true, default: "zernio" },
-    externalPostId: { type: String, required: true },
+    // Post Zernio des cibles Zernio ; null quand toutes les cibles sont
+    // publiées en direct
+    externalPostId: { type: String, default: null },
     idempotencyKey: { type: String, required: true },
     content: { type: String, default: "" },
     media: { type: [mediaSchema], default: [] },
@@ -95,7 +116,10 @@ const socialPostSchema = new mongoose.Schema(
         {
           privacyLevel: String,
           allowComment: Boolean,
+          // Divulgation du contenu commercial : votre marque (contenu
+          // promotionnel) et contenu de marque (partenariat rémunéré)
           brandOrganic: Boolean,
+          brandContent: Boolean,
         },
         { _id: false },
       ),

@@ -429,9 +429,18 @@ export function buildPostPayload({
       description: Array.from(content || "")
         .slice(0, 4000)
         .join(""),
-      ...(tiktokSettings.brandOrganic
-        ? { commercialContentType: "brand_organic" }
-        : {}),
+      // Contenu de marque (partenariat rémunéré) prioritaire ; les deux
+      // types déclarés ensemble par isBrandOrganicPost (doc Zernio)
+      ...(tiktokSettings.brandContent
+        ? {
+            commercialContentType: "brand_content",
+            ...(tiktokSettings.brandOrganic
+              ? { isBrandOrganicPost: true }
+              : {}),
+          }
+        : tiktokSettings.brandOrganic
+          ? { commercialContentType: "brand_organic" }
+          : {}),
     };
   }
   return payload;

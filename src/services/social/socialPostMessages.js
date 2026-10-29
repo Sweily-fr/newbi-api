@@ -1,5 +1,6 @@
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import logger from "../../utils/logger.js";
+import { DirectApiError } from "./direct/directHttp.js";
 import { SocialProviderError } from "./providers/zernioProvider.js";
 import { platformLabel } from "./socialPostRules.js";
 
@@ -52,6 +53,53 @@ export function targetErrorMessage(target) {
   }
 }
 
+// Réseau d'une erreur de nos propres applis → nom affiché
+const NETWORK_LABELS = {
+  meta: "Facebook",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  x: "X",
+  twitter: "X",
+};
+
+/** Erreur d'une API de réseau (publication directe) → erreur affichable. */
+function directToUserError(error, action) {
+  const label = NETWORK_LABELS[error.network] || "Le réseau social";
+  const log = `[SocialPost] ${label} en direct (${action}) : ${error.message} [kind=${error.kind} status=${error.status} code=${error.code}]`;
+  if (error.kind === "config") {
+    logger.error(log);
+    return userError(FEATURE_UNAVAILABLE_MESSAGE);
+  }
+  logger.warn(log);
+  if (error.authInvalid) {
+    return userError(
+      `La connexion à ${label} a expiré. Reconnectez le compte dans Paramètres > Intégrations.`,
+    );
+  }
+  if (error.transient) {
+    return providerDownError(
+      action === "cancel"
+        ? CANCEL_FAILED_MESSAGE
+        : `${label} ne répond pas. Réessayez dans quelques minutes.`,
+    );
+  }
+  if (
+    ["quota_exhausted", "platform_rate_limit", "user_abuse"].includes(
+      error.category,
+    )
+  ) {
+    return userError(
+      `${label} limite le nombre de publications. Réessayez plus tard.`,
+    );
+  }
+  if (action === "connect") {
+    return userError(`Connexion à ${label} impossible. Réessayez.`);
+  }
+  return userError(`${label} a refusé la demande.`);
+}
+
 /**
  * Erreur du fournisseur → erreur affichable. Les autres erreurs (déjà des
  * AppError, ou bugs) sont renvoyées telles quelles.
@@ -59,6 +107,7 @@ export function targetErrorMessage(target) {
  * @param {"connect"|"account"|"media"|"create"|"update"|"cancel"|"retry"|"read"} action
  */
 export function toUserError(error, action) {
+  if (error instanceof DirectApiError) return directToUserError(error, action);
   if (!(error instanceof SocialProviderError)) return error;
 
   const log = `[SocialPost] Zernio (${action}) : ${error.message} [kind=${error.kind} status=${error.status} code=${error.code}]`;
