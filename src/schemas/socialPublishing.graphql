@@ -21,6 +21,19 @@ type SocialPublishingStatus {
   "Droit de création dans le kanban et abonnement actif"
   canSchedule: Boolean!
   accounts: [SocialAccount!]!
+  "Limite mensuelle de posts X de l'offre (null si la fonctionnalité est coupée)"
+  xPostQuota: SocialXPostQuota
+}
+
+type SocialXPostQuota {
+  "freelance | pme | entreprise"
+  plan: String!
+  monthlyQuota: Int!
+  "Envois à X du mois en cours (heure de Paris), nouveaux essais compris"
+  used: Int!
+  remaining: Int!
+  "Début du mois suivant, chaîne ISO UTC"
+  resetsAt: String!
 }
 
 type SocialPostMedia {

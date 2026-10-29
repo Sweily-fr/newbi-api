@@ -28,6 +28,12 @@ import {
 } from "./socialPostMessages.js";
 import { normalizeSocialImage } from "./socialPostImage.js";
 import { notifySocialPostOutcome } from "./socialPostNotifications.js";
+import {
+  assertXPostQuota,
+  countXTargets,
+  sameParisMonth,
+  X_PLATFORM,
+} from "./xPostQuota.js";
 
 /**
  * Publication programmée sur les réseaux sociaux depuis le kanban : règles
@@ -896,6 +902,11 @@ export async function schedulePost({
   const tiktokSettings = platforms.includes("tiktok")
     ? normalizeTikTokSettings(input.tiktokSettings)
     : null;
+  await assertXPostQuota(workspaceId, {
+    xCount: countXTargets(accounts),
+    at: scheduledFor,
+    now,
+  });
 
   // 1. La carte (non diffusée tant que le fournisseur n'a pas accepté)
   const { createTaskInWorkspace, discardCreatedTask, publishTaskCreated } =
@@ -1029,6 +1040,21 @@ export async function updatePost({
     scheduledFor = parseDate(input.scheduledFor);
     assertValid(validateScheduleDate(scheduledFor, { now }));
   }
+  // Limite X vérifiée seulement si le post en demande plus, ou change de
+  // mois : modifier le texte reste possible après un passage à une offre
+  // inférieure
+  const xCount = countXTargets(accounts);
+  if (
+    xCount > countXTargets(post.targets) ||
+    !sameParisMonth(scheduledFor, post.scheduledFor)
+  ) {
+    await assertXPostQuota(workspaceId, {
+      xCount,
+      at: scheduledFor,
+      excludePostId: post._id,
+      now,
+    });
+  }
   let tiktokSettings = null;
   if (platforms.includes("tiktok")) {
     tiktokSettings = input.tiktokSettings
@@ -1160,6 +1186,11 @@ export async function retryPost({
   if (post.status !== "failed" && post.status !== "partial") {
     throw userError("Seul un post en échec peut être publié de nouveau.");
   }
+  // Chaque cible X en échec repart chez X : un envoi de plus ce mois-ci
+  const failedXCount = post.targets.filter(
+    (target) => target.platform === X_PLATFORM && target.status === "failed",
+  ).length;
+  await assertXPostQuota(workspaceId, { xCount: failedXCount, at: now, now });
   let result;
   try {
     result = await provider.retryPost(post.externalPostId);
@@ -1171,6 +1202,7 @@ export async function retryPost({
   } else {
     post.status = "publishing";
   }
+  for (let i = 0; i < failedXCount; i += 1) post.xRetriedAt.push(now);
   // Même échec qu'avant : déjà notifié (notifiedStatus), rien n'est renvoyé
   post.updatedBy = toObjectIdOrNull(String(user?.id || ""));
   post.syncLockedUntil = null;
@@ -1218,6 +1250,14 @@ export async function rescheduleSocialPostForTask({
   if (sameInstant(post.scheduledFor, next)) return post;
   assertValid(validateScheduleDate(next, { now }));
   assertSocialPublishingEnabled();
+  if (!sameParisMonth(next, post.scheduledFor)) {
+    await assertXPostQuota(workspaceId, {
+      xCount: countXTargets(post.targets),
+      at: next,
+      excludePostId: post._id,
+      now,
+    });
+  }
   try {
     await provider.updatePost(post.externalPostId, {
       scheduledFor: next,
