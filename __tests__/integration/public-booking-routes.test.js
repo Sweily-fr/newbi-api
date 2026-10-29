@@ -399,6 +399,21 @@ describe("réservation", () => {
     expect(after.some((s) => s.start === slot.start)).toBe(false);
   });
 
+  it("crée le client de l'invité avec une adresse aux champs vides", async () => {
+    const [slot] = await firstSlots();
+    const res = await api("/jean-dupont/decouverte/book", {
+      method: "POST",
+      body: bookingBody(slot.start),
+    });
+    expect(res.status).toBe(201);
+    const client = await Client.findOne({ email: "elise@exemple.fr" }).lean();
+    expect(client).toMatchObject({
+      type: "INDIVIDUAL",
+      name: "Élise Martin",
+      address: { street: "", city: "", postalCode: "", country: "" },
+    });
+  });
+
   it("409 SLOT_TAKEN quand le créneau vient d'être pris", async () => {
     const [slot] = await firstSlots();
     const first = await api("/jean-dupont/decouverte/book", {

@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import mongoose from "mongoose";
+import { buildASTSchema, defaultFieldResolver, graphql } from "graphql";
 
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
@@ -33,6 +34,7 @@ import Invoice from "../../src/models/Invoice.js";
 import Quote from "../../src/models/Quote.js";
 import PurchaseOrder from "../../src/models/PurchaseOrder.js";
 import clientResolvers from "../../src/resolvers/client.js";
+import typeDefs from "../../src/schemas/index.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -172,6 +174,74 @@ describe("Client Resolver - Query.clients", () => {
     const result = await resolver(null, { page: 1, limit: 10 }, ctx());
 
     expect(result.totalItems).toBe(1);
+  });
+});
+
+describe("Client Resolver - adresse incomplète (GraphQL)", () => {
+  const schema = buildASTSchema(typeDefs, { assumeValidSDL: true });
+  const LIST_QUERY = `query ($workspaceId: String) {
+    clients(workspaceId: $workspaceId, page: 1, limit: 10) {
+      items {
+        name
+        address { street city postalCode country }
+        shippingAddress { street city postalCode country }
+      }
+      totalItems
+    }
+  }`;
+
+  /** Exécute la requête par le vrai schéma, avec les resolvers clients. */
+  const execute = () =>
+    graphql({
+      schema,
+      source: LIST_QUERY,
+      variableValues: { workspaceId: String(organizationId) },
+      contextValue: ctx(),
+      fieldResolver: (parent, args, context, info) => {
+        const resolver =
+          clientResolvers[info.parentType.name]?.[info.fieldName];
+        return resolver
+          ? resolver(parent, args, context, info)
+          : defaultFieldResolver(parent, args, context, info);
+      },
+    });
+
+  it("une fiche sans adresse ne fait plus échouer toute la liste", async () => {
+    const acme = await Client.create(
+      buildClientDoc({
+        workspaceId: organizationId,
+        createdBy: userId,
+        name: "Acme Corp",
+      }),
+    );
+    // Comme les clients créés par la prise de rendez-vous avant le correctif
+    await Client.collection.insertOne({
+      workspaceId: organizationId,
+      createdBy: userId,
+      type: "INDIVIDUAL",
+      name: "Jean Dupont",
+      email: "jean@exemple.fr",
+      address: { _id: new mongoose.Types.ObjectId() },
+      shippingAddress: { _id: new mongoose.Types.ObjectId() },
+      activity: [],
+    });
+
+    const res = await execute();
+
+    expect(res.errors).toBeUndefined();
+    expect(res.data.clients.totalItems).toBe(2);
+    const byName = (name) =>
+      res.data.clients.items.find((c) => c.name === name);
+    const empty = { street: "", city: "", postalCode: "", country: "" };
+    expect(byName("Jean Dupont").address).toEqual(empty);
+    expect(byName("Jean Dupont").shippingAddress).toEqual(empty);
+    expect(byName("Acme Corp").address).toEqual({
+      street: acme.address.street,
+      city: acme.address.city,
+      postalCode: acme.address.postalCode,
+      country: acme.address.country,
+    });
+    expect(byName("Acme Corp").shippingAddress).toBeNull();
   });
 });
 
