@@ -143,6 +143,9 @@ extend type Query {
     to: String!
   ): CalendarLinkedItemsResult!
 
+  "Tout ce qui est en retard, quelle que soit la date, du plus ancien au plus récent"
+  calendarOverdueItems(workspaceId: ID): CalendarLinkedItemsResult!
+
   "Trésorerie au jour le jour (null sans accès à Prévision ou Analytiques)"
   calendarTreasury(
     workspaceId: ID

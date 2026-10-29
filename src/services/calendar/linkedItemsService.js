@@ -5,6 +5,7 @@ import PurchaseInvoice from "../../models/PurchaseInvoice.js";
 import InvoiceRecurrence from "../../models/InvoiceRecurrence.js";
 import { Board, Column, Task } from "../../models/kanban.js";
 import {
+  addDays,
   isDayString,
   nextOccurrenceFrom,
   parisDay,
@@ -108,11 +109,17 @@ export function validateRange(from, to) {
   return null;
 }
 
-async function invoiceItems({ workspaceId, from, to, today }) {
+// overdueOnly (liste « En retard ») : seulement ce qui reste à régler, pour
+// que la limite d'éléments ne soit pas prise par des documents réglés
+async function invoiceItems({ workspaceId, from, to, today, overdueOnly }) {
   const invoices = await Invoice.find(
     {
       workspaceId,
-      status: { $in: [...OPEN_INVOICE_STATUSES, "COMPLETED"] },
+      status: {
+        $in: overdueOnly
+          ? OPEN_INVOICE_STATUSES
+          : [...OPEN_INVOICE_STATUSES, "COMPLETED"],
+      },
       dueDate: dateBounds(from, to),
     },
     {
@@ -153,11 +160,21 @@ async function invoiceItems({ workspaceId, from, to, today }) {
   return { items, truncated: invoices.length > MAX_ITEMS_PER_KIND };
 }
 
-async function purchaseInvoiceItems({ workspaceId, from, to, today }) {
+async function purchaseInvoiceItems({
+  workspaceId,
+  from,
+  to,
+  today,
+  overdueOnly,
+}) {
   const invoices = await PurchaseInvoice.find(
     {
       workspaceId,
-      status: { $nin: PURCHASE_HIDDEN_STATUSES },
+      status: {
+        $nin: overdueOnly
+          ? [...PURCHASE_HIDDEN_STATUSES, "PAID"]
+          : PURCHASE_HIDDEN_STATUSES,
+      },
       dueDate: dateBounds(from, to),
     },
     {
@@ -292,16 +309,31 @@ async function taskItems({
   userId,
   permissions,
   db,
+  overdueOnly,
 }) {
   const boards = await visibleBoards({ workspaceId, userId, permissions });
   if (boards.length === 0) return { items: [], truncated: false };
   const boardsById = new Map(boards.map((b) => [b._id.toString(), b]));
+
+  // Liste « En retard » : les colonnes « terminé » sont écartées dès la
+  // requête (sinon de vieilles tâches finies prendraient toute la limite)
+  let doneColumnIds = [];
+  if (overdueOnly) {
+    const boardColumns = await Column.find(
+      { workspaceId, boardId: { $in: boards.map((b) => b._id) } },
+      { title: 1 },
+    ).lean();
+    doneColumnIds = boardColumns
+      .filter((column) => isDoneColumnTitle(column.title))
+      .map((column) => column._id.toString());
+  }
 
   const tasks = await Task.find(
     {
       workspaceId,
       boardId: { $in: boards.map((b) => b._id) },
       dueDate: dateBounds(from, to),
+      ...(doneColumnIds.length ? { columnId: { $nin: doneColumnIds } } : {}),
     },
     {
       title: 1,
@@ -515,5 +547,65 @@ export async function getCalendarLinkedItems({
     truncated: results.some((r) => r.truncated),
     // Source Fiscal : informations légales manquantes (null sans la source)
     fiscalSetup: results.find((r) => r.fiscalSetup)?.fiscalSetup ?? null,
+  };
+}
+
+// Sources où un retard appelle une action de l'utilisateur (une prévision,
+// une relance ou une échéance fiscale passée ne se « rattrapent » pas ici)
+export const OVERDUE_KINDS = [
+  "INVOICE",
+  "PURCHASE_INVOICE",
+  "QUOTE",
+  "TASK",
+  "DELIVERY",
+];
+// Plus ancien jour cherché : au-delà, un retard n'est plus un retard
+const OVERDUE_SINCE = "2000-01-01";
+
+/**
+ * Liste « En retard » du calendrier : tout ce qui est en retard, quelle
+ * que soit la date (factures à encaisser ou à payer, devis sans réponse
+ * après leur validité, tâches non terminées, livraisons). Mêmes droits et
+ * même forme que calendarLinkedItems, du plus ancien au plus récent.
+ */
+export async function getCalendarOverdueItems({
+  workspaceId,
+  userId,
+  permissions,
+  db,
+  now = new Date(),
+}) {
+  const kinds = allowedLinkedKinds(permissions).filter((kind) =>
+    OVERDUE_KINDS.includes(kind),
+  );
+  const today = parisDay(now);
+  const workspaceObjectId = new mongoose.Types.ObjectId(String(workspaceId));
+
+  const results = await Promise.all(
+    kinds.map((kind) =>
+      LOADERS[kind]({
+        workspaceId: workspaceObjectId,
+        from: OVERDUE_SINCE,
+        to: addDays(today, -1),
+        today,
+        userId,
+        permissions,
+        db,
+        now,
+        overdueOnly: true,
+      }),
+    ),
+  );
+
+  return {
+    items: results
+      .flatMap((r) => r.items)
+      .filter((item) => item.state === "OVERDUE")
+      .sort(
+        (a, b) => a.day.localeCompare(b.day) || a.kind.localeCompare(b.kind),
+      ),
+    kinds,
+    truncated: results.some((r) => r.truncated),
+    fiscalSetup: null,
   };
 }
