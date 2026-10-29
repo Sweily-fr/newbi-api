@@ -5,6 +5,7 @@ vi.mock("../../../../src/utils/logger.js", () => ({
 }));
 
 import linkedinApi, {
+  connectApp,
   escapeLittleText,
   scopes,
 } from "../../../../src/services/social/direct/linkedinApi.js";
@@ -41,7 +42,9 @@ beforeEach(() => {
   timing.sleep = async () => {};
   process.env.LINKEDIN_CLIENT_ID = "li_client";
   process.env.LINKEDIN_CLIENT_SECRET = "li_secret";
-  delete process.env.LINKEDIN_ORGANIZATION_ACCESS;
+  delete process.env.LINKEDIN_PAGES_CLIENT_ID;
+  delete process.env.LINKEDIN_PAGES_CLIENT_SECRET;
+  delete process.env.LINKEDIN_PAGES_WORKSPACE_IDS;
   delete process.env.LINKEDIN_API_VERSION;
   vi.spyOn(storage, "fetchImage").mockResolvedValue({
     buffer: Buffer.from("jpeg"),
@@ -53,11 +56,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const usePagesApp = () => {
+  process.env.LINKEDIN_PAGES_CLIENT_ID = "li_pages_client";
+  process.env.LINKEDIN_PAGES_CLIENT_SECRET = "li_pages_secret";
+};
+
 describe("connexion", () => {
-  it("permissions selon l'appli : profil seul, ou Community Management API", () => {
-    expect(scopes()).toEqual(["openid", "profile", "w_member_social"]);
-    process.env.LINKEDIN_ORGANIZATION_ACCESS = "true";
-    expect(scopes()).toEqual([
+  it("permissions selon l'appli : profil seul, ou Community Management API dès qu'elle est posée", () => {
+    expect(connectApp("ws1")).toBe("profile");
+    expect(scopes("profile")).toEqual(["openid", "profile", "w_member_social"]);
+    usePagesApp();
+    expect(connectApp("ws1")).toBe("pages");
+    expect(scopes("pages")).toEqual([
       "r_basicprofile",
       "w_member_social",
       "w_organization_social",
@@ -75,6 +85,7 @@ describe("connexion", () => {
     expect(url.searchParams.get("scope")).toBe(
       "r_basicprofile w_member_social w_organization_social rw_organization_admin",
     );
+    expect(url.searchParams.get("client_id")).toBe("li_pages_client");
   });
 
   it("profil perso (OpenID Connect) : un compte, jeton de 60 jours", async () => {
@@ -108,6 +119,7 @@ describe("connexion", () => {
         externalAccountId: "urn:li:person:abc",
         displayName: "Alice Martin",
         credentialGroup: "linkedin:urn:li:person:abc",
+        platformData: { kind: "person", app: "profile" },
         credentials: expect.objectContaining({
           accessToken: "li_token",
           refreshToken: null,
@@ -124,7 +136,7 @@ describe("connexion", () => {
   });
 
   it("Community Management API : profil + pages où le membre peut publier", async () => {
-    process.env.LINKEDIN_ORGANIZATION_ACCESS = "true";
+    usePagesApp();
     const fetchMock = stubFetch([
       on(
         "POST",
@@ -182,6 +194,17 @@ describe("connexion", () => {
       ["urn:li:organization:43", "Page LinkedIn 43"],
     ]);
     expect(new Set(accounts.map((a) => a.credentialGroup)).size).toBe(1);
+    expect(accounts.map((a) => a.platformData)).toEqual([
+      { kind: "person", app: "pages" },
+      { kind: "organization", app: "pages" },
+      { kind: "organization", app: "pages" },
+    ]);
+    expect(
+      formOf(callsTo(fetchMock, "POST", "/oauth/v2/accessToken")[0]),
+    ).toMatchObject({
+      client_id: "li_pages_client",
+      client_secret: "li_pages_secret",
+    });
     const acl = callsTo(fetchMock, "GET", "/rest/organizationAcls")[0];
     expect(acl[1].headers["Linkedin-Version"]).toBe("202610");
     expect(acl[1].headers["X-Restli-Protocol-Version"]).toBe("2.0.0");
@@ -221,6 +244,79 @@ describe("connexion", () => {
     await expect(
       linkedinApi.refreshCredentials({ refreshToken: "revoked" }),
     ).rejects.toMatchObject({ authInvalid: true });
+  });
+});
+
+describe("deux applis en même temps", () => {
+  it("appli des pages limitée aux espaces de relecture avant sa validation", async () => {
+    usePagesApp();
+    process.env.LINKEDIN_PAGES_WORKSPACE_IDS = "relecture1, relecture2";
+    expect(connectApp("relecture2")).toBe("pages");
+    expect(connectApp("client")).toBe("profile");
+    const url = new URL(
+      linkedinApi.buildAuthorizeUrl({
+        state: "etat",
+        redirectUri: "https://r",
+        workspaceId: "client",
+      }),
+    );
+    expect(url.searchParams.get("client_id")).toBe("li_client");
+    expect(url.searchParams.get("scope")).toBe(
+      "openid profile w_member_social",
+    );
+
+    // Sans appli des profils : rien pour les autres espaces
+    delete process.env.LINKEDIN_CLIENT_ID;
+    expect(connectApp("client")).toBeNull();
+    expect(linkedinApi.isConfigured()).toBe(true);
+  });
+
+  it("chaque compte rafraîchit son jeton avec l'appli qui l'a connecté", async () => {
+    usePagesApp();
+    const fetchMock = stubFetch([
+      on(
+        "POST",
+        "/oauth/v2/accessToken",
+        jsonResponse({ access_token: "li_new", expires_in: 5184000 }),
+      ),
+    ]);
+    // Profil connecté avant la validation des pages (appli « profile »)
+    await linkedinApi.refreshCredentials({
+      account: { platformData: { kind: "person", app: "profile" } },
+      refreshToken: "r1",
+      now: NOW,
+    });
+    // Compte sans appli notée : le plus ancien cas, appli « profile »
+    await linkedinApi.refreshCredentials({
+      account: { platformData: null },
+      refreshToken: "r2",
+      now: NOW,
+    });
+    await linkedinApi.refreshCredentials({
+      account: { platformData: { kind: "organization", app: "pages" } },
+      refreshToken: "r3",
+      now: NOW,
+    });
+    expect(
+      callsTo(fetchMock, "POST", "/oauth/v2/accessToken").map(
+        (call) => formOf(call).client_id,
+      ),
+    ).toEqual(["li_client", "li_client", "li_pages_client"]);
+  });
+
+  it("appli « profile » retirée : rafraîchissement refusé (configuration), sans appel", async () => {
+    usePagesApp();
+    delete process.env.LINKEDIN_CLIENT_ID;
+    const fetchMock = stubFetch([]);
+    await expect(
+      linkedinApi.refreshCredentials({
+        account: { platformData: { kind: "person", app: "profile" } },
+        refreshToken: "r1",
+        now: NOW,
+      }),
+    ).rejects.toThrow(/appli LinkedIn profile/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(linkedinApi.isConfigured()).toBe(true);
   });
 });
 

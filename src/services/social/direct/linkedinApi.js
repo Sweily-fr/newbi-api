@@ -12,15 +12,17 @@ import {
  * entreprise (Community Management API, w_organization_social).
  *
  * La Community Management API doit être SEULE sur son appli (doc LinkedIn,
- * « must be the only product ») : on ne peut pas l'ajouter à l'appli qui
- * porte Share on LinkedIn + OpenID Connect. LINKEDIN_ORGANIZATION_ACCESS
- * dit donc quelle appli porte LINKEDIN_CLIENT_ID :
- * - false (défaut) : appli « Share on LinkedIn + OpenID Connect », profil
- *   seulement, identité par /v2/userinfo ;
- * - true : appli « Community Management API », qui accorde aussi
- *   w_member_social : profil ET pages, identité par /v2/me.
- * Les identifiants de membre sont propres à chaque appli : changer d'appli
- * oblige les clients à reconnecter LinkedIn.
+ * « must be the only product ») : deux applis, chacune ses identifiants.
+ * - « profile » : Share on LinkedIn + OpenID Connect (LINKEDIN_CLIENT_ID),
+ *   profil seulement, sans validation, identité par /v2/userinfo ;
+ * - « pages » : Community Management API (LINKEDIN_PAGES_CLIENT_ID), profil
+ *   ET pages après validation par LinkedIn, identité par /v2/me.
+ * Les connexions neuves passent par « pages » dès qu'elle est configurée,
+ * ou seulement pour les espaces de LINKEDIN_PAGES_WORKSPACE_IDS (virgules,
+ * vide = tous) tant que LinkedIn ne l'a pas validée au Standard tier.
+ * Chaque compte garde l'appli de sa connexion (platformData.app) pour
+ * rafraîchir son jeton avec les bons identifiants : les profils connectés
+ * avant la validation continuent de publier sans reconnexion.
  *
  * Jetons de 60 jours ; jeton de rafraîchissement seulement si LinkedIn
  * l'accorde à l'appli (sinon : reconnexion à l'expiration).
@@ -49,26 +51,67 @@ const PUBLISHING_ROLES = new Set([
   "CONTENT_ADMIN",
 ]);
 
-export const isConfigured = () =>
-  Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
+const APPS = {
+  profile: {
+    clientIdVar: "LINKEDIN_CLIENT_ID",
+    clientSecretVar: "LINKEDIN_CLIENT_SECRET",
+    scopes: ["openid", "profile", "w_member_social"],
+  },
+  pages: {
+    clientIdVar: "LINKEDIN_PAGES_CLIENT_ID",
+    clientSecretVar: "LINKEDIN_PAGES_CLIENT_SECRET",
+    scopes: [
+      "r_basicprofile",
+      "w_member_social",
+      "w_organization_social",
+      "rw_organization_admin",
+    ],
+  },
+};
 
-export const organizationAccess = () =>
-  String(process.env.LINKEDIN_ORGANIZATION_ACCESS || "")
-    .trim()
-    .toLowerCase() === "true";
+const appCredentials = (app) => ({
+  clientId: process.env[APPS[app].clientIdVar],
+  clientSecret: process.env[APPS[app].clientSecretVar],
+});
+
+const isAppConfigured = (app) => {
+  const { clientId, clientSecret } = appCredentials(app);
+  return Boolean(clientId && clientSecret);
+};
+
+const pagesWorkspaceIds = () =>
+  String(process.env.LINKEDIN_PAGES_WORKSPACE_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+const pagesAppAllowed = (workspaceId) => {
+  if (!isAppConfigured("pages")) return false;
+  const ids = pagesWorkspaceIds();
+  return ids.length === 0 || ids.includes(String(workspaceId || ""));
+};
+
+/**
+ * Appli des connexions neuves pour cet espace : « pages » si configurée et
+ * ouverte à l'espace, sinon « profile » (null : aucune appli).
+ */
+export const connectApp = (workspaceId) => {
+  if (pagesAppAllowed(workspaceId)) return "pages";
+  if (isAppConfigured("profile")) return "profile";
+  return null;
+};
+
+export const isConfigured = () =>
+  isAppConfigured("profile") || isAppConfigured("pages");
+
+/** Appli d'un compte déjà connecté (les plus anciens : « profile »). */
+export const accountApp = (account) =>
+  account?.platformData?.app === "pages" ? "pages" : "profile";
 
 export const apiVersion = () =>
   (process.env.LINKEDIN_API_VERSION || DEFAULT_API_VERSION).trim();
 
-export const scopes = () =>
-  organizationAccess()
-    ? [
-        "r_basicprofile",
-        "w_member_social",
-        "w_organization_social",
-        "rw_organization_admin",
-      ]
-    : ["openid", "profile", "w_member_social"];
+export const scopes = (app) => APPS[app]?.scopes || [];
 
 // ── Erreurs ────────────────────────────────────────────────────────────────
 
@@ -139,14 +182,15 @@ const rest = (method, path, { token, query, json, timeoutMs } = {}) =>
 
 // ── Connexion ──────────────────────────────────────────────────────────────
 
-export function buildAuthorizeUrl({ state, redirectUri }) {
-  if (!isConfigured()) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
+export function buildAuthorizeUrl({ state, redirectUri, workspaceId }) {
+  const app = connectApp(workspaceId);
+  if (!app) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", process.env.LINKEDIN_CLIENT_ID);
+  url.searchParams.set("client_id", appCredentials(app).clientId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
-  url.searchParams.set("scope", scopes().join(" "));
+  url.searchParams.set("scope", scopes(app).join(" "));
   return url.toString();
 }
 
@@ -163,15 +207,22 @@ const tokenCredentials = (data, now) => ({
     .filter(Boolean),
 });
 
-async function tokenRequest(form, now) {
+async function tokenRequest(form, now, app) {
+  if (!isAppConfigured(app)) {
+    throw configError(
+      NETWORK,
+      `identifiants de l'appli LinkedIn ${app} absents`,
+    );
+  }
+  const { clientId, clientSecret } = appCredentials(app);
   const { data } = await directRequest({
     network: NETWORK,
     method: "POST",
     url: TOKEN_URL,
     form: {
       ...form,
-      client_id: process.env.LINKEDIN_CLIENT_ID,
-      client_secret: process.env.LINKEDIN_CLIENT_SECRET,
+      client_id: clientId,
+      client_secret: clientSecret,
     },
     check: classifyLinkedInError,
   });
@@ -186,8 +237,8 @@ async function tokenRequest(form, now) {
 }
 
 /** Membre connecté : identifiant (URN), nom et photo. */
-async function readMember(token) {
-  if (organizationAccess()) {
+async function readMember(token, app) {
+  if (app === "pages") {
     const { data } = await directRequest({
       network: NETWORK,
       url: `${API_URL}/v2/me`,
@@ -270,13 +321,20 @@ async function listOrganizations(token) {
  * Code de retour → le profil du membre, et ses pages entreprise si l'appli
  * a la Community Management API. Tous partagent le même jeton.
  */
-export async function exchangeCode({ code, redirectUri, now = new Date() }) {
-  if (!isConfigured()) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
+export async function exchangeCode({
+  code,
+  redirectUri,
+  workspaceId,
+  now = new Date(),
+}) {
+  const app = connectApp(workspaceId);
+  if (!app) throw configError(NETWORK, "LINKEDIN_CLIENT_ID absente");
   const credentials = await tokenRequest(
     { grant_type: "authorization_code", code, redirect_uri: redirectUri },
     now,
+    app,
   );
-  const member = await readMember(credentials.accessToken);
+  const member = await readMember(credentials.accessToken, app);
   if (!member?.id) {
     throw new DirectApiError("linkedin : membre sans identifiant", {
       network: NETWORK,
@@ -295,10 +353,10 @@ export async function exchangeCode({ code, redirectUri, now = new Date() }) {
       avatarUrl: member.picture || null,
       credentials,
       credentialGroup,
-      platformData: { kind: "person" },
+      platformData: { kind: "person", app },
     },
   ];
-  if (organizationAccess()) {
+  if (app === "pages") {
     for (const organization of await listOrganizations(
       credentials.accessToken,
     )) {
@@ -310,14 +368,18 @@ export async function exchangeCode({ code, redirectUri, now = new Date() }) {
         avatarUrl: null,
         credentials,
         credentialGroup,
-        platformData: { kind: "organization" },
+        platformData: { kind: "organization", app },
       });
     }
   }
   return { accounts };
 }
 
-export async function refreshCredentials({ refreshToken, now = new Date() }) {
+export async function refreshCredentials({
+  account,
+  refreshToken,
+  now = new Date(),
+}) {
   if (!refreshToken) {
     throw new DirectApiError("linkedin : pas de jeton de rafraîchissement", {
       network: NETWORK,
@@ -329,6 +391,7 @@ export async function refreshCredentials({ refreshToken, now = new Date() }) {
   return tokenRequest(
     { grant_type: "refresh_token", refresh_token: refreshToken },
     now,
+    accountApp(account),
   );
 }
 

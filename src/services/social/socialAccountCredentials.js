@@ -164,6 +164,8 @@ export async function getFreshAccessToken(
 
   try {
     const fresh = await network.refreshCredentials({
+      // LinkedIn : identifiants de l'appli qui a connecté le compte
+      account,
       accessToken,
       refreshToken,
       now,
