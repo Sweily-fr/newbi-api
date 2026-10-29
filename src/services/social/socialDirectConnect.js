@@ -149,6 +149,32 @@ export async function saveDirectAccounts(
 }
 
 /**
+ * LinkedIn : les identifiants de membre sont propres à chaque appli. Un
+ * profil déjà connecté (et actif) par l'appli « profile » par le même
+ * utilisateur reste sur celle-ci : une connexion par l'appli « pages »
+ * n'ajoute alors que les pages, sans doublon du profil.
+ */
+async function withoutKnownLinkedInProfile(state, accounts) {
+  const isPagesProfile = (account) =>
+    account.platformData?.kind === "person" &&
+    account.platformData?.app === "pages";
+  if (!accounts.some(isPagesProfile)) return accounts;
+  const known = await SocialAccount.exists({
+    workspaceId: state.workspaceId,
+    provider: "direct",
+    platform: "linkedin",
+    status: "active",
+    deletedAt: null,
+    connectedBy: state.userId,
+    "platformData.kind": "person",
+    "platformData.app": { $ne: "pages" },
+  });
+  return known
+    ? accounts.filter((account) => !isPagesProfile(account))
+    : accounts;
+}
+
+/**
  * Retour du navigateur après l'autorisation chez le réseau : jeton d'état à
  * usage unique et du même réseau, droit « Applications » toujours présent,
  * échange du code, enregistrement des comptes, puis adresse du site.
@@ -224,14 +250,14 @@ export async function completeDirectConnect(
   if (accounts.length === 0) {
     return fail(platform === "facebook" ? "no_facebook_pages" : "no_account");
   }
-  const { saved, taken } = await saveDirectAccounts(
-    state.workspaceId,
-    accounts,
-    {
-      connectedBy: state.userId,
-      now,
-    },
-  );
+  const toSave = await withoutKnownLinkedInProfile(state, accounts);
+  if (toSave.length === 0) {
+    return frontendRedirect(state.returnTo, { social_connected: platform });
+  }
+  const { saved, taken } = await saveDirectAccounts(state.workspaceId, toSave, {
+    connectedBy: state.userId,
+    now,
+  });
   if (saved === 0 && taken > 0) return fail("account_in_use");
   logger.info(
     `[SocialConnect] ${saved} compte(s) ${platform} connecté(s) en direct pour l'espace ${state.workspaceId}`,

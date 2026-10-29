@@ -50,6 +50,7 @@ import { decrypt, isEncrypted } from "../../../src/utils/encryption.js";
 import provider from "../../../src/services/social/providers/zernioProvider.js";
 import xApi from "../../../src/services/social/direct/xApi.js";
 import tiktokApi from "../../../src/services/social/direct/tiktokApi.js";
+import linkedinApi from "../../../src/services/social/direct/linkedinApi.js";
 import storage from "../../../src/services/social/socialMediaStorage.js";
 import {
   DirectApiError,
@@ -186,7 +187,12 @@ afterEach(() => {
   for (const key of [
     "SOCIAL_PROVIDER_TWITTER",
     "SOCIAL_PROVIDER_TIKTOK",
+    "SOCIAL_PROVIDER_LINKEDIN",
     "SOCIAL_DIRECT_WORKSPACE_IDS",
+    "LINKEDIN_CLIENT_ID",
+    "LINKEDIN_CLIENT_SECRET",
+    "LINKEDIN_PAGES_CLIENT_ID",
+    "LINKEDIN_PAGES_CLIENT_SECRET",
   ]) {
     delete process.env[key];
   }
@@ -368,6 +374,77 @@ describe("connexion par notre appli (OAuth direct)", () => {
         code: "c",
       }),
     ).toContain("social_error=connection_failed");
+  });
+
+  it("LinkedIn, appli des pages ajoutée : le profil déjà connecté n'est pas dupliqué", async () => {
+    Object.assign(process.env, {
+      SOCIAL_PROVIDER_LINKEDIN: "direct",
+      LINKEDIN_CLIENT_ID: "li_client",
+      LINKEDIN_CLIENT_SECRET: "li_secret",
+      LINKEDIN_PAGES_CLIENT_ID: "li_pages_client",
+      LINKEDIN_PAGES_CLIENT_SECRET: "li_pages_secret",
+    });
+    // Profil connecté par l'appli « profile » avant la validation des pages
+    await SocialAccount.create({
+      workspaceId: organizationId,
+      provider: "direct",
+      platform: "linkedin",
+      externalAccountId: "urn:li:person:share-abc",
+      displayName: "Alice Martin",
+      connectedBy: alice,
+      platformData: { kind: "person", app: "profile" },
+    });
+    const credentials = {
+      accessToken: "li_pages_access",
+      refreshToken: null,
+      tokenExpiresAt: new Date(Date.now() + 60 * 24 * 3600 * 1000),
+      scopes: ["w_organization_social"],
+    };
+    const pagesConnection = {
+      accounts: [
+        {
+          platform: "linkedin",
+          externalAccountId: "urn:li:person:pages-abc",
+          displayName: "Alice Martin",
+          credentials,
+          credentialGroup: "linkedin:urn:li:person:pages-abc",
+          platformData: { kind: "person", app: "pages" },
+        },
+        {
+          platform: "linkedin",
+          externalAccountId: "urn:li:organization:42",
+          displayName: "Newbi",
+          credentials,
+          credentialGroup: "linkedin:urn:li:person:pages-abc",
+          platformData: { kind: "organization", app: "pages" },
+        },
+      ],
+    };
+    vi.spyOn(linkedinApi, "exchangeCode").mockResolvedValue(pagesConnection);
+
+    const token = new URL(await connect("linkedin")).searchParams.get("state");
+    const redirect = await completeDirectConnect("linkedin", {
+      state: token,
+      code: "code",
+    });
+    expect(redirect).toContain("social_connected=linkedin");
+    const linkedin = await SocialAccount.find({ platform: "linkedin" })
+      .sort({ createdAt: 1 })
+      .lean();
+    expect(linkedin.map((a) => a.externalAccountId)).toEqual([
+      "urn:li:person:share-abc",
+      "urn:li:organization:42",
+    ]);
+
+    // Sans profil déjà connecté : le profil de l'appli des pages est ajouté
+    await SocialAccount.deleteMany({ platform: "linkedin" });
+    const second = new URL(await connect("linkedin")).searchParams.get("state");
+    await completeDirectConnect("linkedin", { state: second, code: "code" });
+    expect(
+      (await SocialAccount.find({ platform: "linkedin" }).lean())
+        .map((a) => a.externalAccountId)
+        .sort(),
+    ).toEqual(["urn:li:organization:42", "urn:li:person:pages-abc"]);
   });
 
   it("déconnexion : accès révoqué chez X, jetons effacés, posts programmés annulés", async () => {
