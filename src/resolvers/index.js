@@ -75,6 +75,7 @@ import dashboardAggregationResolvers from "./dashboardAggregation.js";
 import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
 import organizationRoleResolvers from "./organizationRole.js";
 import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
+import socialPublishingResolvers from "./socialPublishing.js";
 import appointmentsResolvers from "./appointments.js";
 
 const resolvers = mergeResolvers([
@@ -154,6 +155,7 @@ const resolvers = mergeResolvers([
   dashboardAggregationResolvers,
   receiptMatchingResolvers,
   organizationRoleResolvers,
+  socialPublishingResolvers,
   appointmentsResolvers,
 ]);
 

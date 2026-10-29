@@ -1904,7 +1904,100 @@ const sendBoardVisitorCodeEmail = async (
   }
 };
 
+/**
+ * Échec (total ou partiel) d'un post programmé sur les réseaux sociaux,
+ * envoyé à son auteur. Sobre, sans emoji.
+ * @param {string} recipientEmail
+ * @param {object} data
+ * @param {string} data.heading - ex. « Échec de la publication »
+ * @param {string} data.message - ex. « Publié sur X, échec sur Instagram. »
+ * @param {{network: string, error: string}[]} data.failures - détail par réseau
+ * @param {string} data.taskTitle
+ * @param {string} data.boardName
+ * @param {string} data.taskUrl
+ */
+const sendSocialPostFailedEmail = async (
+  recipientEmail,
+  { heading, message, failures = [], taskTitle, boardName, taskUrl },
+) => {
+  // Espace insécable avant « : ; ! ? » : la ponctuation ne passe jamais
+  // seule à la ligne
+  const safe = (value) => escapeHtml(value).replace(/ ([:;!?»])/g, "&nbsp;$1");
+  const failureRows = failures
+    .map(
+      (failure) => `<tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #6b7280; vertical-align: top; white-space: nowrap;">${safe(failure.network)}</td>
+                  <td style="padding: 6px 0 6px 16px; font-size: 14px; color: #1a1a1a; text-align: left; word-break: break-word;">${safe(failure.error)}</td>
+                </tr>`,
+    )
+    .join("");
+  const textFailures = failures
+    .map((failure) => `- ${failure.network} : ${failure.error}`)
+    .join("\n");
+
+  const mailOptions = {
+    from: "Newbi <contact@newbi.fr>",
+    replyTo: process.env.FROM_EMAIL,
+    to: recipientEmail,
+    subject: `${heading} : ${taskTitle || "post programmé"}`,
+    text: `${message}\n\n${textFailures}\n\nTableau : ${boardName || ""}\nVoir le post : ${taskUrl}`,
+    html: `
+      <!DOCTYPE html>
+      <html lang="fr">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${safe(heading)}</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafafa; color: #1a1a1a;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 0 20px; background-color: #fafafa;">
+          <div style="text-align: center; padding: 40px 0 24px 0;">
+            <img src="https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png" alt="Newbi" style="height: 32px; width: auto;">
+          </div>
+          <div style="background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 32px 24px; margin-bottom: 32px;">
+            <h1 style="font-size: 22px; font-weight: 500; color: #1a1a1a; margin: 0 0 16px 0; line-height: 1.3;">${safe(heading)}</h1>
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 16px 0; line-height: 1.6;">Bonjour,</p>
+            <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">${safe(message)}</p>
+            ${
+              failureRows
+                ? `<div style="background-color: #fafafa; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+              <table style="width: 100%; border-collapse: collapse;">${failureRows}</table>
+            </div>`
+                : ""
+            }
+            <p style="font-size: 14px; color: #6b7280; margin: 0 0 24px 0; line-height: 1.6;">
+              Post&nbsp;: <strong style="color: #1a1a1a;">${safe(taskTitle || "")}</strong>${boardName ? `<br>Tableau&nbsp;: <strong style="color: #1a1a1a;">${safe(boardName)}</strong>` : ""}
+            </p>
+            <a href="${escapeHtml(taskUrl)}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center;">Voir le post</a>
+          </div>
+          <div style="border-top: 1px solid #e5e7eb; padding-top: 32px; text-align: center; padding-bottom: 40px;">
+            <p style="font-size: 12px; color: #9ca3af; margin: 0 0 24px 0; line-height: 1.8;">
+              Vous recevez cet e-mail car vous avez programmé ce post dans Newbi.
+            </p>
+            <div style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+              <p style="margin: 0 0 4px 0;">SWEILY (SAS),</p>
+              <p style="margin: 0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    logger.error(
+      `Erreur d'envoi de l'e-mail d'échec de publication : ${error.message}`,
+    );
+    return false;
+  }
+};
+
 export {
+  sendSocialPostFailedEmail,
   sendBoardVisitorCodeEmail,
   sendSignatureTestEmail,
   sendPasswordResetEmail,

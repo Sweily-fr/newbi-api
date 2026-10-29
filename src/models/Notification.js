@@ -32,6 +32,8 @@ const notificationSchema = new mongoose.Schema(
         "PURCHASE_INVOICE_RECEIVED", // Facture d'achat reçue via e-invoicing (SuperPDP)
         "DOCUMENT_IMPORTED", // Document arrivé d'une plateforme externe (Qonto…)
         "ACCESS_REQUESTED", // Un membre demande l'accès à une page (rôles)
+        "SOCIAL_POST_PUBLISHED", // Post programmé publié sur les réseaux sociaux
+        "SOCIAL_POST_FAILED", // Post programmé en échec, publié en partie ou annulé
       ],
       index: true,
     },

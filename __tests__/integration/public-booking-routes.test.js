@@ -223,14 +223,12 @@ describe("404 uniforme", () => {
   });
 
   it("organisation sans abonnement actif (lecture seule) : 404", async () => {
-    await mongoose.connection.db
-      .collection("subscription")
-      .updateOne(
-        { referenceId: String(workspaceId) },
-        {
-          $set: { status: "canceled", periodEnd: new Date(Date.now() - 1000) },
-        },
-      );
+    await mongoose.connection.db.collection("subscription").updateOne(
+      { referenceId: String(workspaceId) },
+      {
+        $set: { status: "canceled", periodEnd: new Date(Date.now() - 1000) },
+      },
+    );
     invalidateSubCache();
     for (const path of [
       "/jean-dupont",
