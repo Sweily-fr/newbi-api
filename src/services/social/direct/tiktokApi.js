@@ -357,7 +357,7 @@ export async function checkPublication({
   accessToken,
   externalPostId,
 }) {
-  const { data } = await api("POST", "post/publish/status/fetch/", {
+  const { data, text } = await api("POST", "post/publish/status/fetch/", {
     token: accessToken,
     json: { publish_id: externalPostId },
   });
@@ -366,13 +366,15 @@ export async function checkPublication({
     throw tiktokError(info.fail_reason || "publish_failed", info.fail_reason);
   }
   if (info.status === "PUBLISH_COMPLETE") {
-    // Orthographe de TikTok : « publicaly »
-    const ids =
-      info.publicaly_available_post_id || info.publicly_available_post_id || [];
-    const postId = Array.isArray(ids) ? ids[0] : ids;
+    // Identifiant int64 (orthographe de TikTok : « publicaly ») : lu dans le
+    // texte brut, JSON.parse l'arrondirait
+    const raw = /"publicl?a?l?y_available_post_id"\s*:\s*\[\s*"?(\d+)/.exec(
+      text,
+    );
+    const postId = raw?.[1] || null;
     return {
       status: "published",
-      externalPostId: postId ? String(postId) : externalPostId,
+      externalPostId: postId || externalPostId,
       platformPostUrl: postUrl(account.username, postId),
     };
   }

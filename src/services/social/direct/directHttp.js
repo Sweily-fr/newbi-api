@@ -83,7 +83,7 @@ const describe = (method, url) => {
  * @param {string} options.network - « meta », « linkedin », « tiktok », « x »
  * @param {(response: object, data: any) => (DirectApiError|null)} options.check
  *   classe la réponse : une erreur à lever, ou null si tout va bien
- * @returns {Promise<{status: number, data: any, response: object}>}
+ * @returns {Promise<{status: number, data: any, response: object, text: string}>}
  */
 export async function directRequest({
   network,
@@ -165,7 +165,8 @@ export async function directRequest({
       category: response.status === 429 ? "platform_rate_limit" : null,
     });
   }
-  return { status: response.status, data, response };
+  // text : réponse brute (entiers de 64 bits que JSON.parse arrondit)
+  return { status: response.status, data, response, text: text || "" };
 }
 
 /** Erreur passagère générique d'un réseau (5xx, réponse illisible). */
