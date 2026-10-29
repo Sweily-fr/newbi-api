@@ -51,11 +51,17 @@ export async function deliveryItems({
   to,
   today,
   permissions,
+  overdueOnly,
 }) {
+  // Liste « En retard » : rien de déjà livré
+  const open = (statuses) =>
+    overdueOnly
+      ? statuses.filter((status) => status !== "DELIVERED")
+      : statuses;
   const loads = [];
   if (permissions?.hasPermission?.("purchaseOrders", "view")) {
     loads.push(
-      load(PurchaseOrder, "PURCHASE_ORDER", PURCHASE_ORDER_STATUSES, {
+      load(PurchaseOrder, "PURCHASE_ORDER", open(PURCHASE_ORDER_STATUSES), {
         workspaceId,
         from,
         to,
@@ -64,7 +70,7 @@ export async function deliveryItems({
   }
   if (permissions?.hasPermission?.("deliveryNotes", "view")) {
     loads.push(
-      load(DeliveryNote, "DELIVERY_NOTE", DELIVERY_NOTE_STATUSES, {
+      load(DeliveryNote, "DELIVERY_NOTE", open(DELIVERY_NOTE_STATUSES), {
         workspaceId,
         from,
         to,

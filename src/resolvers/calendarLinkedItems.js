@@ -2,6 +2,7 @@ import { requireWorkspaceLevel } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
   getCalendarLinkedItems,
+  getCalendarOverdueItems,
   validateRange,
 } from "../services/calendar/linkedItemsService.js";
 import { getCalendarTreasury } from "../services/calendar/treasuryService.js";
@@ -31,6 +32,20 @@ const calendarLinkedItemsResolvers = {
         to,
       });
     }),
+
+    // Tout ce qui est en retard, quelle que soit la date (bouton
+    // « En retard » du calendrier)
+    calendarOverdueItems: requireWorkspaceLevel(
+      "calendar",
+      "read",
+    )(async (_, __, { user, workspaceId, permissions, db }) =>
+      getCalendarOverdueItems({
+        workspaceId,
+        userId: user.id || user._id?.toString(),
+        permissions,
+        db,
+      }),
+    ),
 
     calendarTreasury: requireWorkspaceLevel(
       "calendar",
