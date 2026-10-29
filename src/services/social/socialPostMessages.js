@@ -45,6 +45,10 @@ export function targetErrorMessage(target) {
     case "quota_exhausted":
       return `${network} limite le nombre de publications. Réessayez plus tard.`;
     case "account_issue":
+      // Appli TikTok pas encore auditée : posts privés seulement
+      if (target.platform === "tiktok") {
+        return "TikTok n'accepte pour l'instant que des posts « Moi uniquement » sur un compte privé.";
+      }
       return `Le compte ${network} n'est pas configuré pour publier (ex. Instagram doit être un compte professionnel).`;
     case "platform_rejected":
       return `${network} a refusé ce post.`;

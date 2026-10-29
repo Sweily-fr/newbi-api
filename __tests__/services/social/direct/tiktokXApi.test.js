@@ -8,6 +8,7 @@ import tiktokApi from "../../../../src/services/social/direct/tiktokApi.js";
 import xApi from "../../../../src/services/social/direct/xApi.js";
 import storage from "../../../../src/services/social/socialMediaStorage.js";
 import { timing } from "../../../../src/services/social/direct/directHttp.js";
+import { targetErrorMessage } from "../../../../src/services/social/socialPostMessages.js";
 import {
   callsTo,
   formOf,
@@ -379,6 +380,20 @@ describe("TikTok : publication photo", () => {
         externalPostId: "p_1",
       }),
     ).rejects.toMatchObject({ category: "user_content", transient: false });
+  });
+});
+
+describe("TikTok : message affiché", () => {
+  it("appli pas encore auditée : posts privés seulement", () => {
+    expect(
+      targetErrorMessage({
+        platform: "tiktok",
+        status: "failed",
+        errorCategory: "account_issue",
+      }),
+    ).toBe(
+      "TikTok n'accepte pour l'instant que des posts « Moi uniquement » sur un compte privé.",
+    );
   });
 });
 
