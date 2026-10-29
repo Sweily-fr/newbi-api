@@ -28,6 +28,39 @@ import {
 } from "./socialPostMessages.js";
 import { normalizeSocialImage } from "./socialPostImage.js";
 import { notifySocialPostOutcome } from "./socialPostNotifications.js";
+import storage from "./socialMediaStorage.js";
+import {
+  connectionProvider,
+  directNetworkFor,
+  isAccountProviderUsable,
+  isPlatformAvailable,
+  isSocialPublishingEnabled as anyProviderEnabled,
+} from "./socialProviders.js";
+import {
+  createDirectConnectUrl,
+  disconnectDirectAccount,
+} from "./socialDirectConnect.js";
+import {
+  aggregatePostStatus,
+  isDirectTarget,
+  postProviderOf,
+  publishDirectTargetsNow,
+  refreshPostStatus,
+  resetFailedDirectTargets,
+} from "./socialDirectPublisher.js";
+import {
+  getFreshAccessToken,
+  loadAccountWithTokens,
+} from "./socialAccountCredentials.js";
+import {
+  CONNECT_STATE_TTL_MS,
+  DEFAULT_RETURN_TO,
+  apiPublicUrl,
+  frontendRedirect,
+  safeCode,
+  sanitizeReturnTo,
+} from "./socialConnectUrls.js";
+
 import {
   assertXPostQuota,
   countXTargets,
@@ -35,19 +68,26 @@ import {
   X_PLATFORM,
 } from "./xPostQuota.js";
 
+export { sanitizeReturnTo };
+
 /**
  * Publication programmée sur les réseaux sociaux depuis le kanban : règles
- * métier, indépendantes du fournisseur (providers/zernioProvider.js).
+ * métier, indépendantes du fournisseur (providers/zernioProvider.js, et nos
+ * propres applis : direct/*, socialDirectPublisher.js).
  *
  * Un post = une carte du tableau (sa date d'échéance est la date de
  * publication). Création : carte, puis post chez le fournisseur, puis post
  * local ; si le fournisseur refuse, la carte est supprimée (rien ne reste à
  * moitié).
+ *
+ * Chaque cible porte son fournisseur (celui de son compte) : les cibles
+ * Zernio forment un seul post Zernio (externalPostId du post), les cibles
+ * « direct » sont publiées par notre cron, et le statut du post agrège les
+ * deux. Modifier, reprogrammer ou annuler une cible directe pas encore
+ * partie reste local.
  */
 
 const DEFAULT_TIMEZONE = "Europe/Paris";
-const DEFAULT_RETURN_TO = "/dashboard/outils/kanban";
-const CONNECT_STATE_TTL_MS = 15 * 60 * 1000;
 const ACCOUNTS_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_CONTENT_LENGTH = 70000;
 const MAX_MEDIA_PER_POST = 35;
@@ -57,11 +97,15 @@ const DEFAULT_LOGO_URL =
 // Statuts encore susceptibles de partir sur un réseau
 const CANCELLABLE_ON_DELETE = new Set(["scheduled", "publishing", "failed"]);
 
-export const isSocialPublishingEnabled = () => provider.isConfigured();
+export const isSocialPublishingEnabled = () => anyProviderEnabled();
 
 export function assertSocialPublishingEnabled() {
-  if (!provider.isConfigured()) throw userError(FEATURE_UNAVAILABLE_MESSAGE);
+  if (!anyProviderEnabled()) throw userError(FEATURE_UNAVAILABLE_MESSAGE);
 }
+
+const zernioTargetsOf = (post) =>
+  (post.targets || []).filter((target) => !isDirectTarget(target));
+const hasDirectTargets = (post) => (post.targets || []).some(isDirectTarget);
 
 // Résolveurs kanban chargés à l'usage : kanban.js importe ce service
 let kanbanModule = null;
@@ -140,6 +184,7 @@ function serializePost(post, existingAccountIds) {
           privacyLevel: post.tiktokSettings.privacyLevel,
           allowComment: Boolean(post.tiktokSettings.allowComment),
           brandOrganic: Boolean(post.tiktokSettings.brandOrganic),
+          brandContent: Boolean(post.tiktokSettings.brandContent),
         }
       : null,
     createdBy: idString(post.createdBy),
@@ -255,7 +300,8 @@ export async function syncAccounts(
   { connectedBy = null, now = new Date() } = {},
 ) {
   const profile = await SocialProfile.findOne({ workspaceId });
-  if (!profile) return [];
+  // Pas de profil Zernio : seulement des comptes « direct », s'il y en a
+  if (!profile) return listWorkspaceAccounts(workspaceId);
   const remoteAccounts = await provider.listAccounts(profile.externalProfileId);
   const connector = toObjectIdOrNull(String(connectedBy || ""));
   const seen = [];
@@ -361,47 +407,9 @@ export async function refreshAccountsIfStale(workspaceId, now = new Date()) {
 }
 
 /**
- * Page de retour après la connexion : un chemin du tableau de bord
- * seulement (ni schéma, ni hôte, ni « // »).
- */
-export function sanitizeReturnTo(value) {
-  if (typeof value !== "string") return DEFAULT_RETURN_TO;
-  const raw = value.trim();
-  if (
-    !raw.startsWith("/dashboard") ||
-    raw.includes("//") ||
-    raw.includes("\\") ||
-    raw.length > 500 ||
-    // eslint-disable-next-line no-control-regex
-    /[\u0000-\u001f]/.test(raw)
-  ) {
-    return DEFAULT_RETURN_TO;
-  }
-  try {
-    const base = "https://newbi.invalid";
-    const url = new URL(raw, base);
-    if (url.origin !== base) return DEFAULT_RETURN_TO;
-    if (
-      url.pathname !== "/dashboard" &&
-      !url.pathname.startsWith("/dashboard/")
-    ) {
-      return DEFAULT_RETURN_TO;
-    }
-    return `${url.pathname}${url.search}`;
-  } catch {
-    return DEFAULT_RETURN_TO;
-  }
-}
-
-const apiPublicUrl = () =>
-  (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000").replace(
-    /\/+$/,
-    "",
-  );
-
-/**
  * Adresse d'autorisation vers laquelle envoyer le navigateur pour connecter
- * un compte (profil du fournisseur créé au besoin).
+ * un compte : notre appli chez le réseau si celui-ci est en direct pour cet
+ * espace, sinon Zernio (profil du fournisseur créé au besoin).
  */
 export async function createConnectUrl({
   workspaceId,
@@ -413,6 +421,24 @@ export async function createConnectUrl({
   assertSocialPublishingEnabled();
   if (!isSupportedPlatform(platform)) {
     throw userError("Ce réseau social n'est pas pris en charge.");
+  }
+  if (!isPlatformAvailable(platform, workspaceId)) {
+    throw userError(
+      `La connexion à ${platformLabel(platform)} n'est pas encore disponible.`,
+    );
+  }
+  if (connectionProvider(platform, workspaceId) === "direct") {
+    try {
+      return await createDirectConnectUrl({
+        workspaceId,
+        userId,
+        platform,
+        returnTo,
+        now,
+      });
+    } catch (error) {
+      throw toUserError(error, "connect");
+    }
   }
   try {
     const profile = await ensureProfile(workspaceId, userId);
@@ -437,11 +463,6 @@ export async function createConnectUrl({
   }
 }
 
-const safeCode = (value) =>
-  typeof value === "string" && /^[a-z0-9_]{1,64}$/i.test(value)
-    ? value
-    : "connection_failed";
-
 /**
  * Retour du navigateur après la connexion chez le fournisseur : jeton à
  * usage unique, droit « Applications » toujours présent, synchronisation
@@ -450,9 +471,6 @@ const safeCode = (value) =>
  * @returns {Promise<string>} adresse de redirection
  */
 export async function completeConnect(query = {}, { now = new Date() } = {}) {
-  const frontend = (
-    process.env.FRONTEND_URL || "http://localhost:3000"
-  ).replace(/\/+$/, "");
   const token =
     typeof query.state === "string" && query.state.length <= 64
       ? query.state
@@ -460,20 +478,14 @@ export async function completeConnect(query = {}, { now = new Date() } = {}) {
   const state = token
     ? await SocialConnectState.findOneAndDelete({
         token,
+        // Parcours Zernio seulement (les nôtres reviennent sur
+        // /social-connect/<réseau>/callback)
+        provider: { $ne: "direct" },
         expiresAt: { $gt: now },
       })
     : null;
 
-  const redirect = (returnTo, params) => {
-    const url = new URL(returnTo, `${frontend}/`);
-    ["social_connected", "social_error", "social_platform"].forEach((key) =>
-      url.searchParams.delete(key),
-    );
-    Object.entries(params).forEach(([key, value]) =>
-      url.searchParams.set(key, value),
-    );
-    return url.toString();
-  };
+  const redirect = frontendRedirect;
 
   if (!state) {
     logger.warn("[SocialConnect] Retour OAuth avec un state inconnu ou expiré");
@@ -525,6 +537,50 @@ export async function completeConnect(query = {}, { now = new Date() } = {}) {
 }
 
 /**
+ * Cible directe annulée sans se croiser avec le cron (écriture atomique),
+ * puis statut du post recalculé ; son post Zernio est supprimé s'il n'a
+ * plus de cible.
+ */
+async function cancelDirectPostTargetsOfAccount(post, accountId) {
+  await SocialPost.updateOne(
+    { _id: post._id },
+    {
+      $set: {
+        "targets.$[t].status": "cancelled",
+        "targets.$[t].lockedUntil": null,
+      },
+    },
+    {
+      arrayFilters: [{ "t.socialAccountId": accountId, "t.status": "pending" }],
+    },
+  );
+  const fresh = await SocialPost.findById(post._id);
+  if (!fresh) return;
+  const zernioLeft = zernioTargetsOf(fresh).some(
+    (target) => target.status !== "cancelled",
+  );
+  if (fresh.externalPostId && !zernioLeft && provider.isConfigured()) {
+    await provider
+      .deletePost(fresh.externalPostId)
+      .catch((error) =>
+        logger.warn(
+          `[SocialPost] Post ${fresh._id} non supprimé chez le fournisseur: ${error.message}`,
+        ),
+      );
+  }
+  const next = aggregatePostStatus(fresh);
+  if (next === "cancelled") {
+    // Annulation voulue : pas de notification
+    await SocialPost.updateOne(
+      { _id: fresh._id, status: fresh.status },
+      { $set: { status: "cancelled", notifiedStatus: "cancelled" } },
+    );
+  } else if (next !== fresh.status) {
+    await refreshPostStatus(fresh._id);
+  }
+}
+
+/**
  * Cibles des posts programmés sur un compte déconnecté : annulées
  * localement (le fournisseur annule de son côté les posts dont le compte
  * disparaît) ; un post sans plus aucune cible est supprimé chez le
@@ -533,10 +589,15 @@ export async function completeConnect(query = {}, { now = new Date() } = {}) {
 async function cancelPendingTargetsOfAccount(workspaceId, accountId) {
   const posts = await SocialPost.find({
     workspaceId,
-    status: "scheduled",
-    "targets.socialAccountId": accountId,
+    status: { $in: ["scheduled", "publishing"] },
+    targets: { $elemMatch: { socialAccountId: accountId, status: "pending" } },
   });
   for (const post of posts) {
+    if (hasDirectTargets(post)) {
+      await cancelDirectPostTargetsOfAccount(post, accountId);
+      continue;
+    }
+    if (post.status !== "scheduled") continue;
     post.targets.forEach((target) => {
       if (
         String(target.socialAccountId) === String(accountId) &&
@@ -573,15 +634,20 @@ export async function disconnectAccount({
     ? await SocialAccount.findOne({ _id: id, workspaceId, deletedAt: null })
     : null;
   if (!account) throw notFoundError("Compte introuvable.");
-  try {
-    await provider.deleteAccount(account.externalAccountId);
-  } catch (error) {
-    throw toUserError(error, "account");
+  if (account.provider === "direct") {
+    // Jetons effacés, accès révoqué chez le réseau quand c'est possible
+    await disconnectDirectAccount(account, { now });
+  } else {
+    try {
+      await provider.deleteAccount(account.externalAccountId);
+    } catch (error) {
+      throw toUserError(error, "account");
+    }
+    await SocialAccount.updateOne(
+      { _id: account._id },
+      { $set: { deletedAt: now } },
+    );
   }
-  await SocialAccount.updateOne(
-    { _id: account._id },
-    { $set: { deletedAt: now } },
-  );
   await cancelPendingTargetsOfAccount(workspaceId, account._id);
   return true;
 }
@@ -596,13 +662,17 @@ export async function disconnectAllAccounts(workspaceId, now = new Date()) {
   let count = 0;
   for (const account of accounts) {
     try {
-      if (provider.isConfigured()) {
-        await provider.deleteAccount(account.externalAccountId);
+      if (account.provider === "direct") {
+        await disconnectDirectAccount(account, { now });
+      } else {
+        if (provider.isConfigured()) {
+          await provider.deleteAccount(account.externalAccountId);
+        }
+        await SocialAccount.updateOne(
+          { _id: account._id },
+          { $set: { deletedAt: now } },
+        );
       }
-      await SocialAccount.updateOne(
-        { _id: account._id },
-        { $set: { deletedAt: now } },
-      );
       await cancelPendingTargetsOfAccount(workspaceId, account._id);
       count += 1;
     } catch (error) {
@@ -624,8 +694,12 @@ export async function getTikTokCreatorInfo({ workspaceId, accountId }) {
     throw notFoundError("Compte TikTok introuvable.");
   }
   try {
-    const info = await provider.getTikTokCreatorInfo(account.externalAccountId);
+    const info =
+      account.provider === "direct"
+        ? await readDirectCreatorInfo(account)
+        : await provider.getTikTokCreatorInfo(account.externalAccountId);
     return {
+      username: account.username || null,
       ...info,
       privacyLevels: info.privacyLevels.map((level) => ({
         value: level.value,
@@ -634,6 +708,35 @@ export async function getTikTokCreatorInfo({ workspaceId, accountId }) {
     };
   } catch (error) {
     throw toUserError(error, "read");
+  }
+}
+
+// Compte bloqué ou plafond de posts atteint : affiché, pas une erreur
+const CREATOR_BLOCKED_CATEGORIES = new Set(["quota_exhausted", "user_abuse"]);
+
+async function readDirectCreatorInfo(account) {
+  const withTokens = await loadAccountWithTokens({ _id: account._id });
+  const accessToken = await getFreshAccessToken(withTokens);
+  try {
+    const info = await directNetworkFor("tiktok").getCreatorInfo({
+      accessToken,
+    });
+    if (info.username && info.username !== account.username) {
+      await SocialAccount.updateOne(
+        { _id: account._id },
+        { $set: { username: info.username } },
+      );
+      account.username = info.username;
+    }
+    return info;
+  } catch (error) {
+    if (!CREATOR_BLOCKED_CATEGORIES.has(error?.category)) throw error;
+    return {
+      nickname: account.displayName || null,
+      canPostMore: false,
+      commentDisabled: false,
+      privacyLevels: [],
+    };
   }
 }
 
@@ -672,20 +775,35 @@ export async function uploadPostMedia({ workspaceId, userId, file }) {
   } catch (error) {
     throw userError(error.message);
   }
+  // Notre bucket dès qu'il est configuré (indispensable aux publications
+  // directes, accepté aussi par Zernio), sinon le stockage de Zernio
+  const ownStorage = storage.isConfigured();
   let uploaded;
   try {
-    uploaded = await provider.uploadMedia({
-      buffer: image.buffer,
-      filename: `${crypto.randomUUID()}.jpg`,
-      contentType: image.contentType,
-    });
+    uploaded = ownStorage
+      ? await storage.storeImage({
+          buffer: image.buffer,
+          contentType: image.contentType,
+          workspaceId,
+        })
+      : await provider.uploadMedia({
+          buffer: image.buffer,
+          filename: `${crypto.randomUUID()}.jpg`,
+          contentType: image.contentType,
+        });
   } catch (error) {
+    if (ownStorage) {
+      logger.error("[SocialPost] Image non déposée dans le bucket:", error);
+      throw userError(
+        "L'image n'a pas pu être enregistrée. Réessayez dans quelques instants.",
+      );
+    }
     throw toUserError(error, "media");
   }
   const media = await SocialPostMedia.create({
     workspaceId,
     createdBy: toObjectIdOrNull(String(userId || "")),
-    provider: provider.PROVIDER,
+    provider: ownStorage ? "newbi" : provider.PROVIDER,
     url: uploaded.url,
     key: uploaded.key,
     width: image.width,
@@ -726,6 +844,12 @@ async function loadTargetAccounts(workspaceId, accountIds) {
     const name = inactive.username ? ` @${inactive.username}` : "";
     throw userError(
       `Le compte ${platformLabel(inactive.platform)}${name} doit être reconnecté avant de publier.`,
+    );
+  }
+  const unusable = ordered.find((account) => !isAccountProviderUsable(account));
+  if (unusable) {
+    throw userError(
+      `La publication sur ${platformLabel(unusable.platform)} est momentanément indisponible.`,
     );
   }
   return ordered;
@@ -777,12 +901,30 @@ function normalizeTimezone(value) {
 function normalizeTikTokSettings(input) {
   const error = validateTikTokSettings(input);
   if (error) throw userError(error);
+  const privacyLevel = input.privacyLevel.trim();
+  // Règle TikTok : un contenu de marque ne peut pas être privé
+  if (input.brandContent === true && privacyLevel === "SELF_ONLY") {
+    throw userError(
+      "Le contenu de marque ne peut pas être visible par vous seul sur TikTok.",
+    );
+  }
   return {
-    privacyLevel: input.privacyLevel.trim(),
+    privacyLevel,
     allowComment: input.allowComment,
     brandOrganic: Boolean(input.brandOrganic),
+    brandContent: Boolean(input.brandContent),
   };
 }
+
+const storedTikTokSettings = (settings) =>
+  settings?.privacyLevel
+    ? {
+        privacyLevel: settings.privacyLevel,
+        allowComment: Boolean(settings.allowComment),
+        brandOrganic: Boolean(settings.brandOrganic),
+        brandContent: Boolean(settings.brandContent),
+      }
+    : null;
 
 const assertValid = (message) => {
   if (message) throw userError(message);
@@ -792,6 +934,20 @@ const providerTargets = (accounts) =>
   accounts.map((account) => ({
     platform: account.platform,
     externalAccountId: account.externalAccountId,
+  }));
+
+const isDirectAccount = (account) => account.provider === "direct";
+
+/** Cibles locales d'un post, chacune avec le fournisseur de son compte. */
+const localTargets = (accounts) =>
+  accounts.map((account) => ({
+    socialAccountId: account._id,
+    platform: account.platform,
+    externalAccountId: account.externalAccountId,
+    username: account.username,
+    displayName: account.displayName,
+    status: "pending",
+    provider: isDirectAccount(account) ? "direct" : "zernio",
   }));
 
 const postMedia = (media) =>
@@ -826,8 +982,12 @@ function findRemoteTarget(remoteTargets, target) {
  */
 export function applyRemotePost(post, remote, now = new Date()) {
   if (!remote) return post;
-  if (remote.status) post.status = remote.status;
+  const mixed = hasDirectTargets(post);
+  // Post mixte : le statut Zernio ne couvre que ses cibles, le statut
+  // global est recalculé depuis toutes les cibles
+  if (remote.status && !mixed) post.status = remote.status;
   post.targets.forEach((target) => {
+    if (isDirectTarget(target)) return;
     const match = findRemoteTarget(remote.targets || [], target);
     if (!match) return;
     target.status = match.status;
@@ -841,6 +1001,7 @@ export function applyRemotePost(post, remote, now = new Date()) {
         : now;
     }
   });
+  if (mixed) post.status = aggregatePostStatus(post);
   return post;
 }
 
@@ -924,32 +1085,39 @@ export async function schedulePost({
     publish: false,
   });
 
-  // 2. Le post chez le fournisseur
+  // 2. Les cibles Zernio : un seul post chez Zernio (les cibles directes
+  // partent par notre cron, ou tout de suite ci-dessous)
+  const zernioAccounts = accounts.filter(
+    (account) => !isDirectAccount(account),
+  );
   const idempotencyKey = crypto.randomUUID();
-  let result;
-  try {
-    result = await provider.createPost({
-      idempotencyKey,
-      content,
-      mediaUrls: media.map((item) => item.url),
-      targets: providerTargets(accounts),
-      scheduledFor,
-      publishNow,
-      timezone,
-      tiktokSettings,
-    });
-    if (!result?.post?.externalPostId) {
-      throw new SocialProviderError("Réponse sans identifiant de post", {
-        kind: "http",
-        status: 502,
+  let result = null;
+  if (zernioAccounts.length > 0) {
+    try {
+      result = await provider.createPost({
+        idempotencyKey,
+        content,
+        mediaUrls: media.map((item) => item.url),
+        targets: providerTargets(zernioAccounts),
+        scheduledFor,
+        publishNow,
+        timezone,
+        tiktokSettings,
       });
+      if (!result?.post?.externalPostId) {
+        throw new SocialProviderError("Réponse sans identifiant de post", {
+          kind: "http",
+          status: 502,
+        });
+      }
+    } catch (error) {
+      await discardCreatedTask(savedTask, workspaceId);
+      throw toUserError(error, "create");
     }
-  } catch (error) {
-    await discardCreatedTask(savedTask, workspaceId);
-    throw toUserError(error, "create");
   }
 
   // 3. Le post local
+  const targets = localTargets(accounts);
   let post;
   try {
     post = new SocialPost({
@@ -958,47 +1126,50 @@ export async function schedulePost({
       taskId: savedTask._id,
       createdBy: toObjectIdOrNull(String(user?.id || "")),
       updatedBy: toObjectIdOrNull(String(user?.id || "")),
-      provider: provider.PROVIDER,
-      externalPostId: result.post.externalPostId,
+      provider: postProviderOf(targets),
+      externalPostId: result?.post?.externalPostId || null,
       idempotencyKey,
       content,
       media: postMedia(media),
-      targets: accounts.map((account) => ({
-        socialAccountId: account._id,
-        platform: account.platform,
-        externalAccountId: account.externalAccountId,
-        username: account.username,
-        displayName: account.displayName,
-        status: "pending",
-      })),
+      targets,
       scheduledFor,
       timezone,
       status: publishNow ? "publishing" : "scheduled",
       tiktokSettings,
     });
-    applyRemotePost(post, result.post, now);
+    if (result) applyRemotePost(post, result.post, now);
     await post.save();
   } catch (error) {
     logger.error("[SocialPost] Post local non enregistré, annulation:", error);
-    await provider
-      .deletePost(result.post.externalPostId)
-      .catch((deleteError) =>
-        logger.error(
-          `[SocialPost] Post ${result.post.externalPostId} orphelin chez le fournisseur:`,
-          deleteError,
-        ),
-      );
+    if (result) {
+      await provider
+        .deletePost(result.post.externalPostId)
+        .catch((deleteError) =>
+          logger.error(
+            `[SocialPost] Post ${result.post.externalPostId} orphelin chez le fournisseur:`,
+            deleteError,
+          ),
+        );
+    }
     await discardCreatedTask(savedTask, workspaceId);
     throw error;
   }
 
   publishTaskCreated(enrichedTask, workspaceId);
-  // Publication immédiate : le résultat est déjà connu
-  await notifySocialPostOutcome(post);
+  if (publishNow && hasDirectTargets(post)) {
+    // Cibles directes publiées dans la mutation (statut final ou en cours)
+    post = (await publishDirectTargetsNow(post._id, { now })) || post;
+  } else {
+    // Publication immédiate Zernio : le résultat est déjà connu
+    await notifySocialPostOutcome(post);
+  }
   return { post: await serializeSocialPost(post), task: enrichedTask };
 }
 
 // ── Modifier, annuler, réessayer ───────────────────────────────────────────
+
+const UPDATE_TOO_LATE_MESSAGE =
+  "Ce post ne peut plus être modifié : sa publication est en cours ou terminée.";
 
 /** Modifie un post encore programmé, puis sa carte (titre, texte, date). */
 export async function updatePost({
@@ -1010,11 +1181,9 @@ export async function updatePost({
   now = new Date(),
 }) {
   assertSocialPublishingEnabled();
-  const post = await loadPostForUser(postId, workspaceId, user, permissions);
+  let post = await loadPostForUser(postId, workspaceId, user, permissions);
   if (post.status !== "scheduled") {
-    throw userError(
-      "Ce post ne peut plus être modifié : sa publication est en cours ou terminée.",
-    );
+    throw userError(UPDATE_TOO_LATE_MESSAGE);
   }
 
   const accounts = await loadTargetAccounts(
@@ -1059,42 +1228,74 @@ export async function updatePost({
   if (platforms.includes("tiktok")) {
     tiktokSettings = input.tiktokSettings
       ? normalizeTikTokSettings(input.tiktokSettings)
-      : post.tiktokSettings?.privacyLevel
-        ? {
-            privacyLevel: post.tiktokSettings.privacyLevel,
-            allowComment: Boolean(post.tiktokSettings.allowComment),
-            brandOrganic: Boolean(post.tiktokSettings.brandOrganic),
-          }
-        : normalizeTikTokSettings(null);
+      : storedTikTokSettings(post.tiktokSettings) ||
+        normalizeTikTokSettings(null);
   }
 
+  // Part Zernio : mise à jour, suppression ou création de son post selon
+  // les comptes Zernio qui restent visés ; la part directe est locale
+  const zernioAccounts = accounts.filter(
+    (account) => !isDirectAccount(account),
+  );
+  const remoteFields = {
+    content,
+    mediaUrls: media.map((item) => item.url),
+    targets: providerTargets(zernioAccounts),
+    scheduledFor,
+    timezone: post.timezone || DEFAULT_TIMEZONE,
+    tiktokSettings,
+  };
+  let externalPostId = post.externalPostId || null;
+  let idempotencyKey = post.idempotencyKey;
   try {
-    await provider.updatePost(post.externalPostId, {
-      content,
-      mediaUrls: media.map((item) => item.url),
-      targets: providerTargets(accounts),
-      scheduledFor,
-      timezone: post.timezone || DEFAULT_TIMEZONE,
-      tiktokSettings,
-    });
+    if (externalPostId && zernioAccounts.length > 0) {
+      await provider.updatePost(externalPostId, remoteFields);
+    } else if (externalPostId) {
+      await provider.deletePost(externalPostId);
+      externalPostId = null;
+    } else if (zernioAccounts.length > 0) {
+      idempotencyKey = crypto.randomUUID();
+      const created = await provider.createPost({
+        idempotencyKey,
+        ...remoteFields,
+      });
+      externalPostId = created?.post?.externalPostId || null;
+      if (!externalPostId) {
+        throw new SocialProviderError("Réponse sans identifiant de post", {
+          kind: "http",
+          status: 502,
+        });
+      }
+    }
   } catch (error) {
     throw toUserError(error, "update");
   }
 
-  post.content = content;
-  post.media = postMedia(media);
-  post.targets = accounts.map((account) => ({
-    socialAccountId: account._id,
-    platform: account.platform,
-    externalAccountId: account.externalAccountId,
-    username: account.username,
-    displayName: account.displayName,
-    status: "pending",
-  }));
-  post.scheduledFor = scheduledFor;
-  post.tiktokSettings = tiktokSettings;
-  post.updatedBy = toObjectIdOrNull(String(user?.id || ""));
-  await post.save();
+  const targets = localTargets(accounts);
+  const fields = {
+    content,
+    media: postMedia(media),
+    targets,
+    scheduledFor,
+    tiktokSettings,
+    provider: postProviderOf(targets),
+    externalPostId,
+    idempotencyKey,
+    updatedBy: toObjectIdOrNull(String(user?.id || "")),
+  };
+  if (hasDirectTargets(post) || fields.provider !== "zernio") {
+    // Écriture conditionnelle : le cron a pu commencer à publier
+    const updated = await SocialPost.findOneAndUpdate(
+      { _id: post._id, status: "scheduled" },
+      { $set: fields },
+      { new: true },
+    );
+    if (!updated) throw userError(UPDATE_TOO_LATE_MESSAGE);
+    post = updated;
+  } else {
+    Object.assign(post, fields);
+    await post.save();
+  }
 
   // La carte suit le post (diffusée en temps réel)
   const description = contentToTaskDescription(content);
@@ -1124,6 +1325,7 @@ export async function updatePost({
  * @returns {Promise<boolean>} true si le post est annulé
  */
 async function cancelRemotePost(post) {
+  if (hasDirectTargets(post)) return cancelPostWithDirectTargets(post);
   if (provider.isConfigured()) {
     try {
       await provider.deletePost(post.externalPostId);
@@ -1151,6 +1353,73 @@ async function cancelRemotePost(post) {
   return true;
 }
 
+/**
+ * Annulation d'un post qui a des cibles directes : son post Zernio
+ * éventuel est supprimé comme d'habitude, puis toutes les cibles pas encore
+ * parties sont annulées d'un coup, sauf si une cible directe est en cours
+ * d'envoi (trop tard).
+ * @returns {Promise<boolean>} true si le post est annulé
+ */
+async function cancelPostWithDirectTargets(post) {
+  const sending = (post.targets || []).some(
+    (target) => isDirectTarget(target) && target.status === "publishing",
+  );
+  if (sending) return false;
+  const zernioPending = zernioTargetsOf(post).some(
+    (target) => target.status !== "published" && target.status !== "cancelled",
+  );
+  if (post.externalPostId && zernioPending) {
+    if (provider.isConfigured()) {
+      try {
+        await provider.deletePost(post.externalPostId);
+      } catch (error) {
+        if (error instanceof SocialProviderError && error.status === 400) {
+          return false;
+        }
+        throw toUserError(error, "cancel");
+      }
+    } else {
+      logger.warn(
+        `[SocialPost] ZERNIO_API_KEY absente : post ${post._id} annulé localement seulement`,
+      );
+    }
+  }
+  const updated = await SocialPost.findOneAndUpdate(
+    {
+      _id: post._id,
+      targets: {
+        $not: { $elemMatch: { provider: "direct", status: "publishing" } },
+      },
+    },
+    {
+      $set: {
+        "targets.$[t].status": "cancelled",
+        "targets.$[t].lockedUntil": null,
+        "targets.$[t].nextAttemptAt": null,
+      },
+    },
+    {
+      new: true,
+      arrayFilters: [
+        { "t.status": { $in: ["pending", "publishing", "failed"] } },
+      ],
+    },
+  );
+  if (!updated) return false;
+  const next = aggregatePostStatus(updated);
+  await SocialPost.updateOne(
+    { _id: post._id },
+    {
+      $set: {
+        status: next,
+        // Annulation voulue : pas de notification
+        ...(next === "cancelled" ? { notifiedStatus: "cancelled" } : {}),
+      },
+    },
+  );
+  return next === "cancelled";
+}
+
 export async function cancelPost({ workspaceId, user, permissions, postId }) {
   assertSocialPublishingEnabled();
   const post = await loadPostForUser(postId, workspaceId, user, permissions);
@@ -1171,6 +1440,9 @@ export async function cancelPost({ workspaceId, user, permissions, postId }) {
       "Ce post vient d'être publié, il ne peut plus être annulé.",
     );
   }
+  if (hasDirectTargets(post)) {
+    return serializeSocialPost((await SocialPost.findById(post._id)) || post);
+  }
   return serializeSocialPost(post);
 }
 
@@ -1186,11 +1458,15 @@ export async function retryPost({
   if (post.status !== "failed" && post.status !== "partial") {
     throw userError("Seul un post en échec peut être publié de nouveau.");
   }
-  // Chaque cible X en échec repart chez X : un envoi de plus ce mois-ci
+  // Chaque cible X en échec repart chez X (Zernio ou direct) : un envoi de
+  // plus ce mois-ci
   const failedXCount = post.targets.filter(
     (target) => target.platform === X_PLATFORM && target.status === "failed",
   ).length;
   await assertXPostQuota(workspaceId, { xCount: failedXCount, at: now, now });
+  if (hasDirectTargets(post)) {
+    return retryPostWithDirectTargets(post, user, now);
+  }
   let result;
   try {
     result = await provider.retryPost(post.externalPostId);
@@ -1209,6 +1485,54 @@ export async function retryPost({
   await post.save();
   await notifySocialPostOutcome(post);
   return serializeSocialPost(post);
+}
+
+/**
+ * Nouvel essai d'un post qui a des cibles directes : cibles Zernio en échec
+ * relancées chez Zernio, cibles directes en échec republiées tout de suite.
+ */
+async function retryPostWithDirectTargets(post, user, now) {
+  const failedX = (targets) =>
+    targets.filter(
+      (target) => target.platform === X_PLATFORM && target.status === "failed",
+    ).length;
+  const zernioTargets = zernioTargetsOf(post);
+  const zernioFailed = zernioTargets.some(
+    (target) => target.status === "failed",
+  );
+  if (post.externalPostId && zernioFailed) {
+    const zernioFailedX = failedX(zernioTargets);
+    let result;
+    try {
+      result = await provider.retryPost(post.externalPostId);
+    } catch (error) {
+      throw toUserError(error, "retry");
+    }
+    if (result?.post) applyRemotePost(post, result.post, now);
+    // Chaque cible X relancée chez Zernio : un envoi facturé de plus
+    for (let i = 0; i < zernioFailedX; i += 1) post.xRetriedAt.push(now);
+    post.updatedBy = toObjectIdOrNull(String(user?.id || ""));
+    post.syncLockedUntil = null;
+    await post.save();
+  }
+  const directTargets = post.targets.filter(isDirectTarget);
+  const directFailedX = failedX(directTargets);
+  const directFailed = directTargets.some(
+    (target) => target.status === "failed",
+  );
+  if (directFailed && (await resetFailedDirectTargets(post._id)) > 0) {
+    // Le premier envoi de chaque cible X relancée compte ici ; les nouveaux
+    // essais automatiques du cron s'ajoutent ensuite (socialDirectPublisher)
+    if (directFailedX > 0) {
+      await SocialPost.updateOne(
+        { _id: post._id },
+        { $push: { xRetriedAt: { $each: Array(directFailedX).fill(now) } } },
+      );
+    }
+    await publishDirectTargetsNow(post._id, { now });
+  }
+  const fresh = await refreshPostStatus(post._id, now);
+  return serializeSocialPost(fresh || post);
 }
 
 // ── Carte modifiée ou supprimée dans le kanban ─────────────────────────────
@@ -1258,16 +1582,23 @@ export async function rescheduleSocialPostForTask({
       now,
     });
   }
-  try {
-    await provider.updatePost(post.externalPostId, {
-      scheduledFor: next,
-      timezone: post.timezone || DEFAULT_TIMEZONE,
-    });
-  } catch (error) {
-    throw toUserError(error, "update");
+  if (post.externalPostId) {
+    try {
+      await provider.updatePost(post.externalPostId, {
+        scheduledFor: next,
+        timezone: post.timezone || DEFAULT_TIMEZONE,
+      });
+    } catch (error) {
+      throw toUserError(error, "update");
+    }
   }
-  await SocialPost.updateOne(
-    { _id: post._id },
+  // Cibles directes : la nouvelle date suffit (le cron publie à l'heure) ;
+  // écriture conditionnelle, le cron a pu commencer à publier
+  const result = await SocialPost.updateOne(
+    {
+      _id: post._id,
+      ...(hasDirectTargets(post) ? { status: "scheduled" } : {}),
+    },
     {
       $set: {
         scheduledFor: next,
@@ -1275,6 +1606,7 @@ export async function rescheduleSocialPostForTask({
       },
     },
   );
+  if (result.matchedCount === 0) throw userError(UPDATE_TOO_LATE_MESSAGE);
   return post;
 }
 

@@ -10,7 +10,9 @@ import mongoose from "mongoose";
  * (environ 170 caractères utiles). Un state signé (espace, utilisateur,
  * réseau, page de retour) dépasse cette limite ; un jeton court adossé à
  * cette collection garde les mêmes garanties (infalsifiable, usage unique,
- * durée de vie courte), sans dépendre de Redis.
+ * durée de vie courte), sans dépendre de Redis. Même jeton pour l'OAuth de
+ * nos propres applis (provider « direct »), qui y garde aussi le
+ * vérificateur PKCE.
  */
 const socialConnectStateSchema = new mongoose.Schema(
   {
@@ -26,6 +28,10 @@ const socialConnectStateSchema = new mongoose.Schema(
       required: true,
     },
     platform: { type: String, required: true },
+    // « zernio » ou « direct » (OAuth de notre propre appli chez le réseau)
+    provider: { type: String, default: "zernio" },
+    // Vérificateur PKCE (X), jamais transmis au navigateur
+    codeVerifier: { type: String, default: null },
     returnTo: { type: String, required: true },
     expiresAt: { type: Date, required: true },
   },

@@ -23,6 +23,8 @@ import {
   assertSocialPublishingEnabled,
 } from "../services/social/socialPublishingService.js";
 import { toUserError } from "../services/social/socialPostMessages.js";
+import { availablePlatforms } from "../services/social/socialProviders.js";
+import { isZernioConfigured } from "../services/social/providers/zernioProvider.js";
 import { getXPostQuota } from "../services/social/xPostQuota.js";
 
 /**
@@ -78,6 +80,8 @@ const socialPublishingResolvers = {
         (await subscriptionIsActive(context));
       return {
         enabled,
+        // Réseaux connectables par cet espace (fournisseur configuré)
+        platforms: enabled ? availablePlatforms(workspaceId) : [],
         canManageAccounts: Boolean(
           permissions?.hasPermission?.("integrations", "manage"),
         ),
@@ -141,7 +145,10 @@ const socialPublishingResolvers = {
       withActiveSubscription(async (_, __, { workspaceId }) => {
         assertSocialPublishingEnabled();
         try {
-          const accounts = await syncAccounts(workspaceId);
+          // Comptes « direct » : rien à relire chez Zernio
+          const accounts = isZernioConfigured()
+            ? await syncAccounts(workspaceId)
+            : await listWorkspaceAccounts(workspaceId);
           return accounts.map(serializeAccount);
         } catch (error) {
           throw toUserError(error, "account");

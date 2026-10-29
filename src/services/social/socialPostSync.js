@@ -3,12 +3,18 @@ import logger from "../../utils/logger.js";
 import provider, { SocialProviderError } from "./providers/zernioProvider.js";
 import { applyRemotePost } from "./socialPublishingService.js";
 import {
+  aggregatePostStatus,
+  isDirectTarget,
+} from "./socialDirectPublisher.js";
+import {
   TERMINAL_STATUSES,
   notifySocialPostOutcome,
 } from "./socialPostNotifications.js";
 
 /**
- * Suivi des posts programmés (cron socialPostSyncCron, instance PM2 0) :
+ * Suivi des posts programmés chez Zernio (cron socialPostSyncCron,
+ * instance PM2 0 ; les cibles « direct » sont suivies par
+ * socialDirectPublisher.js) :
  * posts dont l'heure est passée et pas encore à un statut final, et posts
  * TikTok publiés dont l'adresse n'est pas encore connue (TikTok la donne
  * quelques minutes après, on la guette une heure).
@@ -34,15 +40,31 @@ const unlockedFilter = (now) => ({
 });
 
 export const dueFilter = (now) => ({
+  // Post Zernio seulement (un post tout en direct n'en a pas)
+  externalPostId: { $nin: [null, ""] },
   $or: [
     {
+      provider: { $ne: "mixed" },
       status: { $in: ["scheduled", "publishing"] },
       scheduledFor: { $lte: now },
+    },
+    {
+      // Post mixte : tant que sa part Zernio n'est pas terminée
+      provider: "mixed",
+      status: { $in: ["scheduled", "publishing"] },
+      scheduledFor: { $lte: now },
+      targets: {
+        $elemMatch: {
+          provider: { $ne: "direct" },
+          status: { $in: ["pending", "publishing"] },
+        },
+      },
     },
     {
       status: "published",
       targets: {
         $elemMatch: {
+          provider: { $ne: "direct" },
           platform: "tiktok",
           status: "published",
           platformPostUrl: null,
@@ -64,10 +86,15 @@ export async function syncOnePost(post, { now = new Date() } = {}) {
       logger.warn(
         `[SocialPostSync] Post ${post._id} introuvable chez le fournisseur, annulé`,
       );
-      post.status = "cancelled";
+      const mixed = post.targets.some(isDirectTarget);
       post.targets.forEach((target) => {
-        if (target.status !== "published") target.status = "cancelled";
+        if (!isDirectTarget(target) && target.status !== "published") {
+          target.status = "cancelled";
+        }
       });
+      // Post mixte : ses cibles directes partent quand même
+      post.status = mixed ? aggregatePostStatus(post) : "cancelled";
+      if (mixed) post.externalPostId = null;
       post.lastSyncedAt = now;
       post.syncLockedUntil = null;
       await post.save();

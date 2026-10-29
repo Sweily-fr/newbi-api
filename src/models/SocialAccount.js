@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { applyFieldEncryption } from "../utils/encryption.js";
 
 /**
  * Compte de réseau social connecté à un espace (page Facebook, compte
@@ -6,6 +7,10 @@ import mongoose from "mongoose";
  * Copie locale de la liste du fournisseur, resynchronisée au retour OAuth et
  * à la demande ; un compte absent chez le fournisseur garde sa ligne avec
  * deletedAt (les posts passés gardent leurs cibles).
+ *
+ * provider : « zernio » (jetons gardés par Zernio) ou « direct » (notre
+ * propre appli chez le réseau : jetons chiffrés ici, avec
+ * utils/encryption.js, jamais lus sans .select("+accessToken")).
  */
 const socialAccountSchema = new mongoose.Schema(
   {
@@ -37,9 +42,27 @@ const socialAccountSchema = new mongoose.Schema(
     },
     lastSyncedAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
+
+    // ── Comptes « direct » seulement ──
+    // Jetons chiffrés au repos (AES-256-GCM, DATA_ENCRYPTION_KEY)
+    accessToken: { type: String, default: null, select: false },
+    refreshToken: { type: String, default: null, select: false },
+    tokenExpiresAt: { type: Date, default: null },
+    refreshTokenExpiresAt: { type: Date, default: null },
+    tokenScopes: { type: [String], default: undefined },
+    // Bail du rafraîchissement (X fait tourner le jeton de rafraîchissement :
+    // deux rafraîchissements simultanés invalideraient le compte)
+    tokenRefreshLockedUntil: { type: Date, default: null },
+    // Comptes qui partagent le même jeton (profil et pages LinkedIn d'un
+    // même membre) : un rafraîchissement les met tous à jour
+    credentialGroup: { type: String, default: null },
+    // Données propres au réseau (ex. page Facebook liée au compte Instagram)
+    platformData: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true },
 );
+
+applyFieldEncryption(socialAccountSchema, ["accessToken", "refreshToken"]);
 
 socialAccountSchema.index(
   { provider: 1, externalAccountId: 1 },

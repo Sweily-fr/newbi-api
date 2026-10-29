@@ -1,5 +1,6 @@
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import logger from "../../utils/logger.js";
+import { DirectApiError } from "./direct/directHttp.js";
 import { SocialProviderError } from "./providers/zernioProvider.js";
 import { platformLabel } from "./socialPostRules.js";
 
@@ -44,12 +45,63 @@ export function targetErrorMessage(target) {
     case "quota_exhausted":
       return `${network} limite le nombre de publications. Réessayez plus tard.`;
     case "account_issue":
+      // Appli TikTok pas encore auditée : posts privés seulement
+      if (target.platform === "tiktok") {
+        return "TikTok n'accepte pour l'instant que des posts « Moi uniquement » sur un compte privé.";
+      }
       return `Le compte ${network} n'est pas configuré pour publier (ex. Instagram doit être un compte professionnel).`;
     case "platform_rejected":
       return `${network} a refusé ce post.`;
     default:
       return `La publication sur ${network} a échoué. Réessayez dans quelques minutes.`;
   }
+}
+
+// Réseau d'une erreur de nos propres applis → nom affiché
+const NETWORK_LABELS = {
+  meta: "Facebook",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  linkedin: "LinkedIn",
+  tiktok: "TikTok",
+  x: "X",
+  twitter: "X",
+};
+
+/** Erreur d'une API de réseau (publication directe) → erreur affichable. */
+function directToUserError(error, action) {
+  const label = NETWORK_LABELS[error.network] || "Le réseau social";
+  const log = `[SocialPost] ${label} en direct (${action}) : ${error.message} [kind=${error.kind} status=${error.status} code=${error.code}]`;
+  if (error.kind === "config") {
+    logger.error(log);
+    return userError(FEATURE_UNAVAILABLE_MESSAGE);
+  }
+  logger.warn(log);
+  if (error.authInvalid) {
+    return userError(
+      `La connexion à ${label} a expiré. Reconnectez le compte dans Paramètres > Intégrations.`,
+    );
+  }
+  if (error.transient) {
+    return providerDownError(
+      action === "cancel"
+        ? CANCEL_FAILED_MESSAGE
+        : `${label} ne répond pas. Réessayez dans quelques minutes.`,
+    );
+  }
+  if (
+    ["quota_exhausted", "platform_rate_limit", "user_abuse"].includes(
+      error.category,
+    )
+  ) {
+    return userError(
+      `${label} limite le nombre de publications. Réessayez plus tard.`,
+    );
+  }
+  if (action === "connect") {
+    return userError(`Connexion à ${label} impossible. Réessayez.`);
+  }
+  return userError(`${label} a refusé la demande.`);
 }
 
 /**
@@ -59,6 +111,7 @@ export function targetErrorMessage(target) {
  * @param {"connect"|"account"|"media"|"create"|"update"|"cancel"|"retry"|"read"} action
  */
 export function toUserError(error, action) {
+  if (error instanceof DirectApiError) return directToUserError(error, action);
   if (!(error instanceof SocialProviderError)) return error;
 
   const log = `[SocialPost] Zernio (${action}) : ${error.message} [kind=${error.kind} status=${error.status} code=${error.code}]`;

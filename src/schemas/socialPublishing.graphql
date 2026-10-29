@@ -14,8 +14,14 @@ type SocialAccount {
 }
 
 type SocialPublishingStatus {
-  "ZERNIO_API_KEY configurée sur le serveur"
+  "Un fournisseur est configuré sur le serveur (Zernio ou une appli directe)"
   enabled: Boolean!
+  """
+  Réseaux connectables par cet espace (fournisseur configuré) : "instagram",
+  "facebook", "linkedin", "twitter", "tiktok". Les comptes déjà connectés
+  restent listés dans accounts.
+  """
+  platforms: [String!]!
   "Droit « Applications et banques » > Connecter et configurer"
   canManageAccounts: Boolean!
   "Droit de création dans le kanban et abonnement actif"
@@ -61,7 +67,10 @@ type SocialPostTarget {
 type SocialPostTikTokSettings {
   privacyLevel: String
   allowComment: Boolean
+  "Votre marque (contenu promotionnel)"
   brandOrganic: Boolean
+  "Contenu de marque (partenariat rémunéré)"
+  brandContent: Boolean
 }
 
 type SocialPost {
@@ -88,6 +97,8 @@ type TikTokPrivacyLevel {
 }
 
 type TikTokCreatorInfo {
+  "Nom d'utilisateur TikTok (@…), quand il est connu"
+  username: String
   nickname: String
   canPostMore: Boolean!
   commentDisabled: Boolean!
@@ -103,7 +114,10 @@ type ScheduleSocialPostPayload {
 input SocialPostTikTokSettingsInput {
   privacyLevel: String!
   allowComment: Boolean!
+  "Votre marque (contenu promotionnel)"
   brandOrganic: Boolean
+  "Contenu de marque (partenariat rémunéré) : interdit avec SELF_ONLY"
+  brandContent: Boolean
   "Doit valoir true (case à cocher obligatoire)"
   consentGiven: Boolean!
 }
