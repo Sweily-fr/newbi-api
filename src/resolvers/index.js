@@ -76,6 +76,7 @@ import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
 import organizationRoleResolvers from "./organizationRole.js";
 import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
 import socialPublishingResolvers from "./socialPublishing.js";
+import appointmentsResolvers from "./appointments.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -155,6 +156,7 @@ const resolvers = mergeResolvers([
   receiptMatchingResolvers,
   organizationRoleResolvers,
   socialPublishingResolvers,
+  appointmentsResolvers,
 ]);
 
 export default resolvers;

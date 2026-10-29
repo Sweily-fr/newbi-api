@@ -88,6 +88,7 @@ import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.js";
+import publicBookingRoutes from "./routes/publicBooking.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import socialConnectRoutes from "./routes/social-connect.js";
@@ -129,6 +130,7 @@ import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
 import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
+import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -463,6 +465,10 @@ async function startServer() {
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
   app.use("/api/public/einvoicing", publicEInvoicingDirectoryRoutes);
+
+  // Prise de rendez-vous : pages publiques de réservation, gestion d'un
+  // rendez-vous par l'invité (sans compte, jeton secret, rate-limitée)
+  app.use("/api/public/booking", publicBookingRoutes);
 
   // Routes tracking d'ouverture d'email (publique, sans auth)
   app.use("/tracking", emailTrackingRoutes);
@@ -816,6 +822,10 @@ async function startServer() {
       // Suivi des posts programmés sur les réseaux sociaux (no-op tant que
       // ZERNIO_API_KEY n'est pas configurée)
       startSocialPostSyncCron();
+
+      // Rappels des rendez-vous (24 h et 1 h avant), toutes les 5 minutes
+      // (coupés si APPOINTMENT_REMINDERS_MODE=off)
+      startAppointmentReminderCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

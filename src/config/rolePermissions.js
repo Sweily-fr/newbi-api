@@ -372,6 +372,13 @@ export const MODULES = [
     label: "Signature de mail",
     actions: CRUD,
   },
+  {
+    // Chaque membre gère sa propre page, ses types et ses réservations
+    key: "appointments",
+    group: "communication",
+    label: "Prise de rendez-vous",
+    actions: CRUD,
+  },
   // Compte
   {
     key: "team",
@@ -592,11 +599,15 @@ function buildActions(pick) {
 // Pages du compte : réservées au super admin, sauf mention contraire
 const isAccount = (m) => m.group === "account";
 
+// Pages propres à chaque membre (sa signature, sa page de rendez-vous)
+const PERSONAL_MODULES = new Set(["signatures", "appointments"]);
+
 /**
  * Droits par défaut des rôles prédéfinis, action par action :
  *   - Administrateur : tout, sauf gérer les membres et l'abonnement ;
  *   - Éditeur : crée, modifie, envoie et fait avancer les documents, sans
- *     supprimer (sauf ses signatures de mail), ni annuler une facture
+ *     supprimer (sauf ses signatures de mail et sa prise de rendez-vous),
+ *     ni annuler une facture
  *     (équivaut à la supprimer), ni régler ce qui vaut pour tout l'espace
  *     (relances automatiques, champs personnalisés), ni toucher au compte ;
  *   - Membre : voit tout, sans rien modifier ni exporter ;
@@ -607,7 +618,7 @@ const isAccount = (m) => m.group === "account";
  *     contrôle de rôle : banque, rapprochement, calendrier, documents
  *     partagés et listes de clients ouverts à tout membre ; kanban et
  *     signatures fermés à l'écran ; transferts créés depuis les documents
- *     partagés).
+ *     partagés). Prise de rendez-vous fermée (outil personnel).
  */
 const EDITOR_EXCLUDED = {
   invoices: ["status", "reminders"],
@@ -628,6 +639,7 @@ const ACCOUNTANT_LEVELS = fill("read", {
   fileTransfers: "write",
   sharedDocuments: "delete",
   signatures: "none",
+  appointments: "none",
   team: "read",
   billing: "read",
   orgSettings: "read",
@@ -644,8 +656,9 @@ const PREDEFINED_ACTIONS = {
       return ["team", "orgSettings"].includes(m.key) && a === "view";
     }
     if (EDITOR_EXCLUDED[m.key]?.includes(a)) return false;
-    // Signatures de mail : documents personnels, chacun supprime les siennes
-    return a !== "delete" || m.key === "signatures";
+    // Signatures de mail et prise de rendez-vous : outils personnels, chacun
+    // supprime les siens
+    return a !== "delete" || PERSONAL_MODULES.has(m.key);
   }),
   // Membre : « Voir » partout, et tout ce qu'affiche l'accueil
   viewer: buildActions(

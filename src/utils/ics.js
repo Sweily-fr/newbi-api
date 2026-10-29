@@ -154,3 +154,84 @@ export function buildIcsCalendar({
   lines.push("END:VCALENDAR");
   return lines.map(foldIcsLine).join(CRLF) + CRLF;
 }
+
+// Nom affiché d'un participant (CN) : texte entre guillemets, sans guillemet
+const participantName = (value) =>
+  String(value ?? "")
+    .replace(/["\r\n]+/g, " ")
+    .trim();
+
+function participantLine(property, person, extra = "") {
+  const name = participantName(person.name);
+  const params = `${name ? `;CN="${name}"` : ""}${extra}`;
+  return `${property}${params}:mailto:${cleanUri(person.email)}`;
+}
+
+/**
+ * Fichier .ics d'un rendez-vous unique (pièce jointe d'e-mail ou
+ * téléchargement) :
+ *   - REQUEST : invitation, ajoutée ou mise à jour (même UID, SEQUENCE
+ *     croissante) par l'agenda du destinataire ;
+ *   - CANCEL : annulation de cette invitation ;
+ *   - PUBLISH : simple événement à ajouter.
+ *
+ * @param {object} params
+ * @param {"REQUEST"|"CANCEL"|"PUBLISH"} [params.method]
+ * @param {string} params.uid
+ * @param {number} [params.sequence]
+ * @param {Date} params.start
+ * @param {Date} params.end
+ * @param {string} params.summary
+ * @param {string} [params.description]
+ * @param {string} [params.location]
+ * @param {string} [params.url]
+ * @param {{ name, email }} [params.organizer]
+ * @param {{ name, email }} [params.attendee]
+ * @param {Date} [params.now]
+ */
+export function buildIcsEvent({
+  method = "PUBLISH",
+  uid,
+  sequence = 0,
+  start,
+  end,
+  summary,
+  description,
+  location,
+  url,
+  organizer,
+  attendee,
+  now = new Date(),
+}) {
+  const cancelled = method === "CANCEL";
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Newbi//Prise de rendez-vous//FR",
+    "CALSCALE:GREGORIAN",
+    `METHOD:${method}`,
+    "BEGIN:VEVENT",
+    `UID:${uid}`,
+    `SEQUENCE:${Math.max(0, Math.round(sequence))}`,
+    `DTSTAMP:${icsDateTime(now)}`,
+    `DTSTART:${icsDateTime(start)}`,
+    `DTEND:${icsDateTime(end)}`,
+    `SUMMARY:${escapeIcsText(summary)}`,
+  ];
+  if (description) lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
+  if (location) lines.push(`LOCATION:${escapeIcsText(location)}`);
+  if (url) lines.push(`URL:${cleanUri(url)}`);
+  if (organizer?.email) lines.push(participantLine("ORGANIZER", organizer));
+  if (attendee?.email) {
+    lines.push(
+      participantLine(
+        "ATTENDEE",
+        attendee,
+        ";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE",
+      ),
+    );
+  }
+  lines.push(`STATUS:${cancelled ? "CANCELLED" : "CONFIRMED"}`);
+  lines.push("TRANSP:OPAQUE", "END:VEVENT", "END:VCALENDAR");
+  return lines.map(foldIcsLine).join(CRLF) + CRLF;
+}
