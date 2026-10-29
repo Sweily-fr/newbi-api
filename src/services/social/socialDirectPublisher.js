@@ -1,6 +1,5 @@
 import SocialAccount from "../../models/SocialAccount.js";
 import SocialPost from "../../models/SocialPost.js";
-import SocialUsage from "../../models/SocialUsage.js";
 import logger from "../../utils/logger.js";
 import { DirectApiError } from "./direct/directHttp.js";
 import {
@@ -212,31 +211,17 @@ const failedFields = (error) => ({
 
 // ── Traitement d'une cible ─────────────────────────────────────────────────
 
-async function countXUsage(post, content, now) {
+/**
+ * Coût d'un envoi à X noté dans les journaux. La limite mensuelle par offre
+ * compte les cibles X des posts, quel que soit le fournisseur
+ * (xPostQuota.js) : rien n'est compté ici.
+ */
+function logXCost(post, content) {
   const withUrl = URL_PATTERN.test(content || "");
   const cost = withUrl ? X_POST_WITH_URL_COST_USD : X_POST_COST_USD;
-  try {
-    const usage = await SocialUsage.findOneAndUpdate(
-      {
-        workspaceId: post.workspaceId,
-        platform: "twitter",
-        month: now.toISOString().slice(0, 7),
-      },
-      {
-        $inc: {
-          posts: 1,
-          postsWithUrl: withUrl ? 1 : 0,
-          estimatedCostUsd: cost,
-        },
-      },
-      { upsert: true, new: true },
-    ).lean();
-    logger.info(
-      `[SocialDirect] Post X publié pour l'espace ${post.workspaceId} : ${cost} $ facturés à Sweily${withUrl ? " (lien dans le texte)" : ""} ; ${usage.posts} post(s) X ce mois-ci, environ ${usage.estimatedCostUsd.toFixed(3)} $`,
-    );
-  } catch (error) {
-    logger.error("[SocialDirect] Compteur des posts X non mis à jour:", error);
-  }
+  logger.info(
+    `[SocialDirect] Post X publié pour l'espace ${post.workspaceId} : ${cost} $ facturés à Sweily${withUrl ? " (lien dans le texte)" : ""}`,
+  );
 }
 
 /** Appel au réseau, avec un rafraîchissement du jeton s'il est refusé. */
@@ -322,8 +307,7 @@ async function publishTarget(post, target, lockUntil, now) {
       errorMessage: null,
       errorCategory: null,
     });
-    if (account.platform === "twitter")
-      await countXUsage(post, post.content, now);
+    if (account.platform === "twitter") logXCost(post, post.content);
     logger.info(
       `[SocialDirect] Post ${post._id} publié sur ${account.platform} (compte ${account._id})`,
     );

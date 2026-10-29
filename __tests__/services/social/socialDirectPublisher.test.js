@@ -38,7 +38,6 @@ import { Board, Task } from "../../../src/models/kanban.js";
 import Notification from "../../../src/models/Notification.js";
 import SocialAccount from "../../../src/models/SocialAccount.js";
 import SocialPost from "../../../src/models/SocialPost.js";
-import SocialUsage from "../../../src/models/SocialUsage.js";
 import { decrypt, isEncrypted } from "../../../src/utils/encryption.js";
 import {
   DirectApiError,
@@ -190,7 +189,7 @@ describe("publication des cibles directes", () => {
     expect(lean.refreshToken).toBeUndefined();
   });
 
-  it("cible X à l'heure : publiée, adresse, compteur mensuel du coût X, auteur notifié une fois", async () => {
+  it("cible X à l'heure : publiée, adresse, auteur notifié une fois", async () => {
     const post = await createPost();
     xApi.publish.mockResolvedValue(published());
 
@@ -209,16 +208,6 @@ describe("publication des cibles directes", () => {
       platformPostUrl: "https://x.com/acme/status/1850000000000000000",
       attempts: 1,
       lockedUntil: null,
-    });
-    const usage = await SocialUsage.findOne({
-      workspaceId: organizationId,
-    }).lean();
-    expect(usage).toMatchObject({
-      platform: "twitter",
-      month: "2026-11",
-      posts: 1,
-      postsWithUrl: 1,
-      estimatedCostUsd: 0.2,
     });
 
     await publishDueDirectTargets({ now: later(60 * 1000) });

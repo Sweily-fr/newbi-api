@@ -11,8 +11,8 @@ import {
  * d'image par l'API média v2, post par POST /2/tweets.
  *
  * Chaque création de post est facturée à Sweily (0,015 $, 0,20 $ si le
- * texte contient un lien) : compté par espace et par mois
- * (SocialUsage, voir socialDirectPublisher.js).
+ * texte contient un lien) : limite mensuelle par offre dans xPostQuota.js,
+ * comptée sur les cibles X des posts (pas ici).
  *
  * Jeton d'accès de 2 h ; le jeton de rafraîchissement tourne (on garde
  * toujours le dernier reçu, rafraîchissements sérialisés par compte).
