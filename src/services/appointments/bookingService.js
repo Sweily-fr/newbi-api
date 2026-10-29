@@ -414,7 +414,9 @@ async function attachClient({ booking, page, host }) {
       lastName: validNamePart(lastName) ? lastName : undefined,
       email: booking.guest.email,
       phone: clientPhone(booking.guest.phone) || undefined,
-      address: {},
+      // Adresse inconnue à la réservation : champs vides, pas un objet vide
+      // (le schéma GraphQL exige chaque champ de l'adresse)
+      address: { street: "", city: "", postalCode: "", country: "" },
       createdBy: page.userId,
       workspaceId,
       activity: [
