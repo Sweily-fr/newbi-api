@@ -451,6 +451,51 @@ describe("DeliveryNote Resolver — génération croisée", () => {
     ).rejects.toThrow();
   });
 
+  it("garde les prix du devis quand l'éditeur renvoie les lignes sans prix", async () => {
+    const quoteId = await insertQuote();
+    const draft = await Mutation.createDeliveryNoteFromQuote(
+      null,
+      { quoteId: quoteId.toString() },
+      ctx(),
+    );
+    const id = draft._id.toString();
+    // Ce qu'envoie l'éditeur du bon : lignes sans prix, transporteur modifié
+    await Mutation.updateDeliveryNote(
+      null,
+      {
+        id,
+        input: {
+          carrier: "Transport modifié après le devis",
+          items: [
+            {
+              description: "Widget",
+              quantity: 2,
+              orderedQuantity: 2,
+              deliveredQuantity: 2,
+              unit: "pièce",
+              productId: "",
+            },
+          ],
+        },
+      },
+      ctx(),
+    );
+
+    const stored = await DeliveryNote.collection.findOne({ _id: draft._id });
+    expect(stored.carrier).toBe("Transport modifié après le devis");
+    expect(stored.items[0].unitPrice).toBe(500);
+    expect(stored.items[0].vatRate).toBe(20);
+
+    await Mutation.updateDeliveryNote(null, { id, input: { status: "PENDING" } }, ctx());
+    const invoice = await Mutation.createInvoiceFromDeliveryNote(
+      null,
+      { deliveryNoteId: id },
+      ctx(),
+    );
+    expect(invoice.items[0].unitPrice).toBe(500);
+    expect(invoice.finalTotalTTC).toBeCloseTo(1200, 0);
+  });
+
   it("récupère le tarif catalogue pour un BL saisi à la main avec productId", async () => {
     const product = await Product.create({
       name: "Vis 4x40",

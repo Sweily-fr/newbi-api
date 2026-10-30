@@ -12,6 +12,41 @@ import mongoose from "mongoose";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { assertPlanFeature } from "../services/planLimits.js";
 
+// Opérateurs qui se suffisent à eux-mêmes ; tous les autres comparent le
+// champ à une valeur, sans laquelle la règle ne veut rien dire (et le calcul
+// du segment échouerait sur une valeur absente)
+const OPERATORS_WITHOUT_VALUE = [
+  "is_true",
+  "is_false",
+  "is_empty",
+  "is_not_empty",
+];
+
+const ruleKey = (rule) => `${rule.field}|${rule.operator}|${rule.value ?? ""}`;
+
+/**
+ * Refuse les règles qui attendent une valeur et n'en ont pas. `existingRules` :
+ * règles déjà enregistrées du segment, laissées telles quelles (seules les
+ * règles ajoutées ou modifiées sont contrôlées).
+ */
+export function assertRulesHaveValues(rules, existingRules = []) {
+  const unchanged = new Set(existingRules.map(ruleKey));
+  const ruleWithoutValue = (rules || []).some(
+    (rule) =>
+      !OPERATORS_WITHOUT_VALUE.includes(rule.operator) &&
+      (rule.value === undefined ||
+        rule.value === null ||
+        String(rule.value).trim() === "") &&
+      !unchanged.has(ruleKey(rule)),
+  );
+  if (ruleWithoutValue) {
+    throw new AppError(
+      "Renseignez une valeur pour chaque règle du segment",
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+}
+
 /**
  * Escape special regex characters in a string
  */
@@ -214,6 +249,7 @@ export const clientSegmentResolvers = {
             ERROR_CODES.BAD_REQUEST,
           );
         }
+        assertRulesHaveValues(input.rules);
 
         const segment = new ClientSegment({
           ...input,
@@ -245,6 +281,9 @@ export const clientSegmentResolvers = {
             ERROR_CODES.BAD_REQUEST,
           );
         }
+        // Règles ajoutées ou modifiées seulement : une ancienne règle sans
+        // valeur ne bloque pas le renommage du segment
+        if (input.rules) assertRulesHaveValues(input.rules, segment.rules);
 
         Object.keys(input).forEach((key) => {
           segment[key] = input[key];

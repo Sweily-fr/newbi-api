@@ -262,6 +262,31 @@ function generateAlerts(kpi) {
 }
 
 /**
+ * Fin de période incluse : une date seule (« AAAA-MM-JJ », envoyée par les
+ * filtres de période du site) couvre toute la journée. `new Date("2026-10-04")`
+ * vaut minuit au début du jour : le dernier jour de la période n'était pas
+ * compté, et une période d'un seul jour restait vide.
+ */
+export function inclusiveEndDate(endDate) {
+  if (typeof endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return `${endDate}T23:59:59.999Z`;
+  }
+  return endDate;
+}
+
+/**
+ * Taux de recouvrement : part encaissée de ce qui était à encaisser,
+ * encaissé / (encaissé + impayé échu) × 100, donc entre 0 et 100 %.
+ * L'ancien ratio encaissé / impayé dépassait 100 % dès que l'encaissé
+ * dépassait l'impayé. Rien d'encaissé ni d'impayé : 0 (champ non nullable).
+ */
+export function computeCollectionRate(collectedTTC, unpaidTTC) {
+  const collected = collectedTTC || 0;
+  const due = collected + (unpaidTTC || 0);
+  return due > 0 ? Math.round((collected / due) * 10000) / 100 : 0;
+}
+
+/**
  * Compute N-1 previous period dates by mirroring the current period
  */
 function computePreviousPeriod(startDate, endDate) {
@@ -283,7 +308,7 @@ const financialAnalyticsResolvers = {
         {
           workspaceId: inputWorkspaceId,
           startDate,
-          endDate,
+          endDate: endDateInput,
           clientId,
           clientIds,
           status,
@@ -296,6 +321,7 @@ const financialAnalyticsResolvers = {
         );
         const wId = new mongoose.Types.ObjectId(workspaceId);
         const now = new Date();
+        const endDate = inclusiveEndDate(endDateInput);
 
         const dateQuery = {};
         if (startDate) dateQuery.$gte = new Date(startDate);
@@ -2185,10 +2211,9 @@ const financialAnalyticsResolvers = {
           };
         });
 
-        // Taux de recouvrement = (montant encaissé / montant impayé) × 100.
+        // Taux de recouvrement = encaissé / (encaissé + impayé) × 100.
         // Impayé = factures échues (échéance dépassée), sans avoir,
-        // Newbi + importées — cf. unpaidTTC. Si aucun impayé, on retourne 0
-        // (le champ est non-nullable côté schéma GraphQL).
+        // Newbi + importées — cf. unpaidTTC.
         const totalCollectedTTCForRate = monthlyCollection.reduce(
           (s, m) => s + (m.collectedTTC || 0),
           0,
@@ -2197,12 +2222,10 @@ const financialAnalyticsResolvers = {
           (s, m) => s + (m.unpaidTTC || 0),
           0,
         );
-        collectionRate =
-          totalUnpaidTTCForRate > 0
-            ? Math.round(
-                (totalCollectedTTCForRate / totalUnpaidTTCForRate) * 10000,
-              ) / 100
-            : 0;
+        collectionRate = computeCollectionRate(
+          totalCollectedTTCForRate,
+          totalUnpaidTTCForRate,
+        );
 
         // Top client concentration
         const revenueByClientSorted = [...invResult.revenueByClient].sort(
@@ -2482,19 +2505,18 @@ const financialAnalyticsResolvers = {
                 100
               : 0;
 
-          // Taux de recouvrement N-1 = montant encaissé / montant impayé × 100
-          // (même formule que la période courante : encaissé et impayés échus
-          // sans avoir, factures Newbi + importées).
+          // Taux de recouvrement N-1 : même formule que la période courante
+          // (encaissé et impayés échus sans avoir, factures Newbi + importées).
           const prevCollectedTTC =
             (prevInvCollected[0]?.collectedTTC || 0) +
             (prevImpCollected[0]?.collectedTTC || 0);
           const prevUnpaidTTC =
             (prevInvUnpaid[0]?.unpaidTTC || 0) +
             (prevImpUnpaid[0]?.unpaidTTC || 0);
-          const prevCollectionRate =
-            prevUnpaidTTC > 0
-              ? Math.round((prevCollectedTTC / prevUnpaidTTC) * 10000) / 100
-              : 0;
+          const prevCollectionRate = computeCollectionRate(
+            prevCollectedTTC,
+            prevUnpaidTTC,
+          );
           // DSO N-1 : même définition que la période courante — moyenne
           // pondérée des jours entre émission et paiement des factures payées
           // sur N-1 (Newbi + importées).

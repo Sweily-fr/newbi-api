@@ -7,11 +7,13 @@ const supplierSchema = new mongoose.Schema(
       type: String,
       required: [true, "Le nom du fournisseur est requis"],
       trim: true,
+      // Raison sociale complète d'un fournisseur (souvent au-delà de 100
+      // caractères), même limite que le nom d'un client entreprise
       validate: {
         validator: function (v) {
-          return v && v.length >= 2 && v.length <= 100;
+          return v && v.length >= 2 && v.length <= 200;
         },
-        message: "Le nom doit contenir entre 2 et 100 caractères",
+        message: "Le nom doit contenir entre 2 et 200 caractères",
       },
     },
     email: {
@@ -45,10 +47,23 @@ const supplierSchema = new mongoose.Schema(
     defaultCategory: {
       type: String,
       enum: [
-        "RENT", "SUBSCRIPTIONS", "OFFICE_SUPPLIES", "SERVICES", "TRANSPORT",
-        "MEALS", "TELECOMMUNICATIONS", "INSURANCE", "ENERGY", "SOFTWARE",
-        "HARDWARE", "MARKETING", "TRAINING", "MAINTENANCE", "TAXES",
-        "UTILITIES", "OTHER",
+        "RENT",
+        "SUBSCRIPTIONS",
+        "OFFICE_SUPPLIES",
+        "SERVICES",
+        "TRANSPORT",
+        "MEALS",
+        "TELECOMMUNICATIONS",
+        "INSURANCE",
+        "ENERGY",
+        "SOFTWARE",
+        "HARDWARE",
+        "MARKETING",
+        "TRAINING",
+        "MAINTENANCE",
+        "TAXES",
+        "UTILITIES",
+        "OTHER",
       ],
       default: "OTHER",
     },
@@ -70,7 +85,7 @@ const supplierSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 supplierSchema.index({ workspaceId: 1, name: 1 });

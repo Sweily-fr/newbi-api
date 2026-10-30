@@ -72,6 +72,10 @@ import {
   assertNotEInvoiceTransmitted,
   isEInvoiceTransmitted,
 } from "../utils/eInvoiceLock.js";
+import {
+  assertInvoiceDeletable,
+  assertIssuedInvoiceContentUnchanged,
+} from "../utils/issuedInvoiceLock.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -306,7 +310,10 @@ const invoiceResolvers = {
       if (invoice.status !== "PENDING") return null;
       try {
         // Compte Stripe Connect lu une fois par organisation et par requête,
-        // et non pour chaque facture en attente de la liste.
+        // et non pour chaque facture en attente de la liste. On garde la
+        // promesse (exec) : une requête Mongoose attendue une seconde fois
+        // lève « Query was already executed », et toutes les factures après
+        // la première perdaient leur lien de paiement.
         const organizationId = invoice.workspaceId.toString();
         const cache = context
           ? (context._stripeConnectAccountByOrg ??= new Map())
@@ -316,7 +323,8 @@ const invoiceResolvers = {
             organizationId,
             StripeConnectAccount.findOne({ organizationId })
               .select("chargesEnabled")
-              .lean(),
+              .lean()
+              .exec(),
           );
         }
         const account = await cache.get(organizationId);
@@ -1966,6 +1974,11 @@ const invoiceResolvers = {
           // et webhooks SuperPDP.)
           assertNotEInvoiceTransmitted(invoiceData, "invoice");
 
+          // Facture émise : ses articles, ses montants et son client sont
+          // figés (elle se corrige par un avoir). Le brouillon, finalisation
+          // comprise, reste entièrement modifiable.
+          assertIssuedInvoiceContentUnchanged(invoiceData, input);
+
           // Garde-fou de transition : updateInvoice gère l'édition de contenu
           // et la SEULE transition DRAFT → PENDING (finalisation, numérotée plus
           // bas). Tout autre changement de statut (rétrogradation en DRAFT,
@@ -2783,15 +2796,13 @@ const invoiceResolvers = {
           throw createNotFoundError("Facture");
         }
 
-        if (invoice.status === "COMPLETED") {
-          throw createResourceLockedError(
-            "Impossible de supprimer une facture finalisée",
-          );
-        }
-
         // Facture transmise en facturation électronique : on l'annule par un
         // avoir, jamais en la supprimant
         assertNotEInvoiceTransmitted(invoice.toObject(), "invoice", "delete");
+
+        // Seul un brouillon se supprime : une facture émise (en attente,
+        // payée ou annulée) garde sa place dans la numérotation
+        assertInvoiceDeletable(invoice);
 
         // Si la facture est liée à un devis, retirer le lien du devis
 
@@ -3610,15 +3621,9 @@ const invoiceResolvers = {
           }
         }
 
-        // Vérifier que la facture peut être supprimée
-        if (invoice.status === "COMPLETED" || invoice.status === "CANCELED") {
-          throw createResourceLockedError(
-            "Facture liée",
-            `une facture ${
-              invoice.status === "COMPLETED" ? "terminée" : "annulée"
-            } ne peut pas être supprimée`,
-          );
-        }
+        // Seul un brouillon se supprime (même règle que deleteInvoice) : une
+        // facture émise garde sa place dans la numérotation
+        assertInvoiceDeletable(invoice);
 
         // Retirer la facture de la liste des factures liées du devis
 

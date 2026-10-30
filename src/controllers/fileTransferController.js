@@ -644,14 +644,7 @@ const validatePayment = async (req, res) => {
       return res.status(404).send("Transfert de fichiers non trouvé");
     }
 
-    // Vérifier la session de paiement
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-    if (session.payment_status !== "paid") {
-      return res.status(400).send("Le paiement n'a pas été effectué");
-    }
-
-    // Vérifier le transfert de fichiers
+    // Le transfert d'abord : un lien inconnu ne déclenche aucun appel à Stripe
     const fileTransfer = await FileTransfer.findOne({
       shareLink,
       accessKey,
@@ -661,6 +654,26 @@ const validatePayment = async (req, res) => {
 
     if (!fileTransfer) {
       return res.status(404).send("Transfert de fichiers non trouvé");
+    }
+
+    // Vérifier la session de paiement
+    let session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(sessionId);
+    } catch {
+      return res.status(400).send("Session de paiement introuvable");
+    }
+
+    if (session.payment_status !== "paid") {
+      return res.status(400).send("Le paiement n'a pas été effectué");
+    }
+
+    // Payée, mais pour CE transfert : sinon le paiement d'un autre transfert
+    // (le sien, à petit prix) débloquerait celui-ci
+    if (session.metadata?.fileTransferId !== String(fileTransfer._id)) {
+      return res
+        .status(400)
+        .send("Ce paiement ne correspond pas à ce transfert");
     }
 
     // Marquer comme payé si ce n'est pas déjà fait
