@@ -1394,7 +1394,9 @@ const sharedDocumentResolvers = {
           return {
             success: true,
             message: "Tag mis à jour",
-            tag: { ...tag.toObject(), id: tag._id },
+            // usageCount n'est pas stocké (calculé par documentTags, que le
+            // front recharge après la mutation) mais il est non nullable
+            tag: { ...tag.toObject(), id: tag._id, usageCount: 0 },
           };
         } catch (error) {
           console.error("❌ Erreur mise à jour tag:", error);
