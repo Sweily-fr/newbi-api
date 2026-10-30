@@ -229,7 +229,9 @@ describe("disponibilité par réseau et par espace", () => {
     const x = accounts.find((account) => account.platform === "twitter");
     expect(Object.keys(x).sort()).toEqual([
       "avatarUrl",
+      "capabilities",
       "connectedAt",
+      "connector",
       "displayName",
       "id",
       "platform",
@@ -689,9 +691,9 @@ describe("posts avec des cibles directes", () => {
         { value: "SELF_ONLY", label: "Moi uniquement" },
       ],
     });
-    expect(tiktokApi.getCreatorInfo).toHaveBeenCalledWith({
-      accessToken: "act.1",
-    });
+    expect(tiktokApi.getCreatorInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: "act.1" }),
+    );
   });
 
   it("TikTok : contenu de marque interdit en « Moi uniquement », enregistré sinon", async () => {

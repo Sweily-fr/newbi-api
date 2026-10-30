@@ -95,7 +95,9 @@ describe("TikTok : connexion et jetons", () => {
       "https://www.tiktok.com/v2/auth/authorize/",
     );
     expect(url.searchParams.get("client_key")).toBe("tt_key");
-    expect(url.searchParams.get("scope")).toBe("user.info.basic,video.publish");
+    expect(url.searchParams.get("scope")).toBe(
+      "user.info.basic,video.publish,video.upload",
+    );
     expect(url.searchParams.get("code_challenge")).toBeNull();
   });
 

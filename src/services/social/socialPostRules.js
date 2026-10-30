@@ -57,6 +57,9 @@ export const DRAFT_DIRECT_ONLY_MESSAGE =
   "Les brouillons TikTok ne sont disponibles que pour les comptes connectés directement.";
 export const DRAFT_NEEDS_RECONNECT_MESSAGE =
   "Reconnectez votre compte TikTok pour envoyer en brouillon.";
+// Brouillons TikTok : détail d'un refus de quota (5 en attente par 24 h)
+export const DRAFT_PENDING_LIMIT_MESSAGE =
+  "TikTok limite à 5 brouillons en attente par 24 heures.";
 export const TIKTOK_BUSINESS_PUBLIC_VIDEO_MESSAGE =
   "Avec un compte TikTok Business, une vidéo est toujours publique : choisissez « Tout le monde ».";
 export const MIXED_MEDIA_MESSAGE =

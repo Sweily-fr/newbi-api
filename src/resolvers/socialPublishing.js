@@ -12,6 +12,7 @@ import {
   getTikTokCreatorInfo,
   isSocialPublishingEnabled,
   listBoardPosts,
+  listTrendingSounds,
   listWorkspaceAccounts,
   refreshAccountsIfStale,
   retryPost,
@@ -29,7 +30,10 @@ import {
   startVideoUpload,
   uploadVideoChunk,
 } from "../services/social/socialVideoUpload.js";
-import { availablePlatforms } from "../services/social/socialProviders.js";
+import {
+  availableConnectors,
+  availablePlatforms,
+} from "../services/social/socialProviders.js";
 import { isZernioConfigured } from "../services/social/providers/zernioProvider.js";
 import { getXPostQuota } from "../services/social/xPostQuota.js";
 
@@ -41,7 +45,7 @@ import { getXPostQuota } from "../services/social/xPostQuota.js";
  * - comptes (connecter, déconnecter, actualiser) : « Applications et
  *   banques » > Connecter et configurer, et abonnement actif ;
  * - lecture : lecture du kanban, et accès au tableau comme la requête
- *   `board` ;
+ *   `board` ; sons tendance d'un compte : lecture du kanban ;
  * - programmer, téléverser une image ou une vidéo : création dans le
  *   kanban ; modifier, annuler, réessayer : modification dans le kanban ;
  *   abonnement actif ; suivi d'une vidéo : lecture du kanban.
@@ -89,6 +93,8 @@ const socialPublishingResolvers = {
         enabled,
         // Réseaux connectables par cet espace (fournisseur configuré)
         platforms: enabled ? availablePlatforms(workspaceId) : [],
+        // Façons de les connecter (Instagram via Facebook, TikTok Business…)
+        connectors: enabled ? availableConnectors(workspaceId) : [],
         canManageAccounts: Boolean(
           permissions?.hasPermission?.("integrations", "manage"),
         ),
@@ -119,6 +125,13 @@ const socialPublishingResolvers = {
       getTikTokCreatorInfo({ workspaceId, accountId }),
     ),
 
+    socialTrendingSounds: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { accountId, search, kind }, { workspaceId }) =>
+      listTrendingSounds({ workspaceId, accountId, search, kind }),
+    ),
+
     socialPostMedia: requireWorkspaceLevel(
       "kanban",
       "read",
@@ -133,11 +146,12 @@ const socialPublishingResolvers = {
       "manage",
     )(
       withActiveSubscription(
-        async (_, { platform, returnTo }, { workspaceId, user }) =>
+        async (_, { platform, connector, returnTo }, { workspaceId, user }) =>
           createConnectUrl({
             workspaceId,
             userId: user._id || user.id,
             platform,
+            connector,
             returnTo,
           }),
       ),

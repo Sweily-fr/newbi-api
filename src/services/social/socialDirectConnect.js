@@ -19,15 +19,25 @@ import {
   safeCode,
   sanitizeReturnTo,
 } from "./socialConnectUrls.js";
-import { directNetworkFor, isDirectNetworkReady } from "./socialProviders.js";
+import {
+  connectorByKey,
+  directNetworkFor,
+  isDirectNetworkReady,
+} from "./socialProviders.js";
 
 /**
  * Connexion d'un compte par notre propre appli chez le réseau (OAuth
  * « direct ») : jeton d'état aléatoire à usage unique (SocialConnectState,
- * 15 minutes, avec le vérificateur PKCE de X chiffré), retour sur
- * /social-connect/<réseau>/callback, échange du code, jetons chiffrés.
- * Mêmes conventions de retour vers le site que Zernio.
+ * 15 minutes, avec le vérificateur PKCE de X chiffré et la clé du
+ * connecteur), retour sur /social-connect/<connecteur>/callback (clé =
+ * réseau pour la connexion habituelle, ex. instagram_facebook ou
+ * tiktok_business sinon), échange du code, jetons chiffrés. Mêmes
+ * conventions de retour vers le site que Zernio.
  */
+
+/** Adresse de retour OAuth d'un connecteur (celle déclarée chez le réseau). */
+const redirectUriOf = (entry) =>
+  entry.module.redirectUri?.() || directRedirectUri(entry.key);
 
 // Refus de l'utilisateur dans la fenêtre du réseau → « cancelled »
 const CANCEL_CODES = new Set([
@@ -37,15 +47,22 @@ const CANCEL_CODES = new Set([
   "user_denied",
 ]);
 
-/** Adresse de la fenêtre d'autorisation du réseau. */
+/**
+ * Adresse de la fenêtre d'autorisation du réseau.
+ * @param {object} params
+ * @param {string} [params.connector] - clé du connecteur (défaut : celui
+ *   du réseau)
+ */
 export async function createDirectConnectUrl({
   workspaceId,
   userId,
   platform,
+  connector = null,
   returnTo,
   now = new Date(),
 }) {
-  const network = directNetworkFor(platform);
+  const entry = connectorByKey(connector || platform);
+  const network = entry.module;
   const token = crypto.randomBytes(24).toString("base64url");
   const codeVerifier = network.usesPkce
     ? crypto.randomBytes(48).toString("base64url")
@@ -56,13 +73,14 @@ export async function createDirectConnectUrl({
     userId,
     platform,
     provider: "direct",
+    connector: entry.key,
     codeVerifier: codeVerifier ? encrypt(codeVerifier) : null,
     returnTo: sanitizeReturnTo(returnTo),
     expiresAt: new Date(now.getTime() + CONNECT_STATE_TTL_MS),
   });
   return network.buildAuthorizeUrl({
     state: token,
-    redirectUri: directRedirectUri(platform),
+    redirectUri: redirectUriOf(entry),
     // LinkedIn : appli des pages ouverte à certains espaces seulement
     workspaceId: String(workspaceId),
     codeChallenge: codeVerifier
@@ -74,7 +92,10 @@ export async function createDirectConnectUrl({
 /**
  * Enregistre les comptes renvoyés par le réseau (jetons chiffrés). Un
  * compte déjà actif dans un autre espace est ignoré ; un compte déconnecté
- * d'un autre espace libère son identifiant (renommé) pour celui-ci.
+ * d'un autre espace libère son identifiant (renommé) pour celui-ci. Un
+ * compte déjà présent dans cet espace est mis à jour, connecteur compris
+ * (un Instagram connecté par Instagram Login puis via Facebook bascule sur
+ * Facebook, jetons remplacés).
  * @returns {Promise<{saved: number, taken: number}>}
  */
 export async function saveDirectAccounts(
@@ -110,6 +131,7 @@ export async function saveDirectAccounts(
     }
     const fields = {
       platform: remote.platform,
+      connector: remote.connector || null,
       username: remote.username || null,
       displayName: remote.displayName || null,
       avatarUrl: remote.avatarUrl || null,
@@ -176,17 +198,27 @@ async function withoutKnownLinkedInProfile(state, accounts) {
     : accounts;
 }
 
+// Aucun compte publiable renvoyé : code d'erreur transmis au site
+const NO_ACCOUNT_CODES = {
+  facebook: "no_facebook_pages",
+  instagram_facebook: "no_instagram_account",
+};
+
 /**
  * Retour du navigateur après l'autorisation chez le réseau : jeton d'état à
- * usage unique et du même réseau, droit « Applications » toujours présent,
- * échange du code, enregistrement des comptes, puis adresse du site.
+ * usage unique et du même connecteur, droit « Applications » toujours
+ * présent, échange du code, enregistrement des comptes (avec leur
+ * connecteur), puis adresse du site.
+ * @param {string} key - clé du connecteur (route /social-connect/<clé>/callback)
  * @returns {Promise<string>} adresse de redirection
  */
 export async function completeDirectConnect(
-  platform,
+  key,
   query = {},
   { now = new Date() } = {},
 ) {
+  const entry = connectorByKey(key);
+  const platform = entry?.platform || key;
   const token =
     typeof query.state === "string" && query.state.length <= 64
       ? query.state
@@ -198,9 +230,9 @@ export async function completeDirectConnect(
         expiresAt: { $gt: now },
       })
     : null;
-  if (!state || state.platform !== platform) {
+  if (!entry || !state || (state.connector || state.platform) !== key) {
     logger.warn(
-      `[SocialConnect] Retour OAuth ${platform} avec un state inconnu, expiré ou d'un autre réseau`,
+      `[SocialConnect] Retour OAuth ${key} avec un state inconnu, expiré ou d'un autre connecteur`,
     );
     return frontendRedirect(DEFAULT_RETURN_TO, {
       social_error: "invalid_state",
@@ -226,15 +258,18 @@ export async function completeDirectConnect(
     "manage",
   );
   if (!allowed) return fail("forbidden");
-  if (typeof query.code !== "string" || !query.code)
-    return fail("connection_failed");
-  if (!isDirectNetworkReady(platform)) return fail("unavailable");
+  // TikTok Business renvoie le code dans auth_code
+  const code = query.code || query.auth_code;
+  if (typeof code !== "string" || !code) return fail("connection_failed");
+  if (!isDirectNetworkReady(platform, entry.connector)) {
+    return fail("unavailable");
+  }
 
   let result;
   try {
-    result = await directNetworkFor(platform).exchangeCode({
-      code: query.code,
-      redirectUri: directRedirectUri(platform),
+    result = await entry.module.exchangeCode({
+      code,
+      redirectUri: redirectUriOf(entry),
       workspaceId: String(state.workspaceId),
       codeVerifier: state.codeVerifier
         ? decrypt(state.codeVerifier)
@@ -243,16 +278,16 @@ export async function completeDirectConnect(
     });
   } catch (error) {
     logger.error(
-      `[SocialConnect] Échange du code ${platform} impossible (espace ${state.workspaceId}) : ${error.message}`,
+      `[SocialConnect] Échange du code ${key} impossible (espace ${state.workspaceId}) : ${error.message}`,
     );
     return fail("connection_failed");
   }
-  const accounts = (result?.accounts || []).filter(
-    (account) => account.platform === platform && account.externalAccountId,
-  );
-  if (accounts.length === 0) {
-    return fail(platform === "facebook" ? "no_facebook_pages" : "no_account");
-  }
+  const accounts = (result?.accounts || [])
+    .filter(
+      (account) => account.platform === platform && account.externalAccountId,
+    )
+    .map((account) => ({ ...account, connector: entry.connector }));
+  if (accounts.length === 0) return fail(NO_ACCOUNT_CODES[key] || "no_account");
   const toSave = await withoutKnownLinkedInProfile(state, accounts);
   if (toSave.length === 0) {
     return frontendRedirect(state.returnTo, { social_connected: platform });
@@ -263,7 +298,7 @@ export async function completeDirectConnect(
   });
   if (saved === 0 && taken > 0) return fail("account_in_use");
   logger.info(
-    `[SocialConnect] ${saved} compte(s) ${platform} connecté(s) en direct pour l'espace ${state.workspaceId}`,
+    `[SocialConnect] ${saved} compte(s) ${key} connecté(s) en direct pour l'espace ${state.workspaceId}`,
   );
   return frontendRedirect(state.returnTo, { social_connected: platform });
 }
@@ -277,7 +312,7 @@ export async function disconnectDirectAccount(
   account,
   { now = new Date() } = {},
 ) {
-  const network = directNetworkFor(account.platform);
+  const network = directNetworkFor(account.platform, account.connector);
   if (network?.revoke && network.isConfigured()) {
     const shared =
       account.credentialGroup &&

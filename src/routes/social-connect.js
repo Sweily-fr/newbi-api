@@ -1,7 +1,13 @@
 import express from "express";
 import { completeConnect } from "../services/social/socialPublishingService.js";
 import { completeDirectConnect } from "../services/social/socialDirectConnect.js";
-import { isSupportedPlatform } from "../services/social/socialPostRules.js";
+import {
+  META_CALLBACK_SOURCES,
+  dataDeletionStatusPage,
+  handleDataDeletion,
+  handleDeauthorize,
+} from "../services/social/socialMetaCallbacks.js";
+import { connectorByKey } from "../services/social/socialProviders.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -11,12 +17,19 @@ import logger from "../utils/logger.js";
  * revérifié), jamais lus ailleurs.
  *
  * - GET /social-connect/callback?state=… : connexion chez Zernio ;
- * - GET /social-connect/<réseau>/callback?code=…&state=… : connexion par
- *   notre propre appli (facebook, instagram, linkedin, tiktok, twitter),
- *   adresse à déclarer chez le réseau.
+ * - GET /social-connect/<connecteur>/callback?code=…&state=… : connexion
+ *   par notre propre appli (facebook, instagram, instagram_facebook,
+ *   linkedin, tiktok, tiktok_business, twitter ; liste fermée), adresse à
+ *   déclarer chez le réseau (TikTok Business : avec le « / » final, accepté
+ *   aussi).
  *
  * Succès : `${FRONTEND_URL}${returnTo}?social_connected=<réseau>`.
  * Échec : `${FRONTEND_URL}${returnTo}?social_error=<code>&social_platform=<réseau>`.
+ *
+ * Rappels de Meta (serveur à serveur, signed_request vérifié) :
+ * - POST /social-connect/<meta|instagram|instagram_facebook>/deauthorize ;
+ * - POST /social-connect/<meta|instagram|instagram_facebook>/data-deletion ;
+ * - GET /social-connect/meta/data-deletion/<code> : page de suivi.
  */
 const router = express.Router();
 
@@ -35,14 +48,53 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-router.get("/:platform/callback", async (req, res) => {
-  const { platform } = req.params;
-  if (!isSupportedPlatform(platform)) return res.status(404).end();
+// Corps des rappels de Meta (formulaire signed_request=…)
+const metaCallbackBody = express.urlencoded({ extended: false, limit: "20kb" });
+
+const metaCallback = (handler) => async (req, res) => {
   try {
-    const redirectUrl = await completeDirectConnect(platform, req.query || {});
+    const result = await handler(req.body?.signed_request);
+    if (!result.body) return res.status(result.status).end();
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    logger.error("[SocialConnect] Erreur dans un rappel Meta:", error);
+    return res.status(500).end();
+  }
+};
+
+META_CALLBACK_SOURCES.forEach((source) => {
+  router.post(
+    `/${source}/deauthorize`,
+    metaCallbackBody,
+    metaCallback((signedRequest) => handleDeauthorize(source, signedRequest)),
+  );
+  router.post(
+    `/${source}/data-deletion`,
+    metaCallbackBody,
+    metaCallback((signedRequest) => handleDataDeletion(source, signedRequest)),
+  );
+});
+
+router.get("/meta/data-deletion/:code", async (req, res) => {
+  try {
+    const page = await dataDeletionStatusPage(req.params.code);
+    if (!page) return res.status(404).end();
+    return res.type("html").send(page);
+  } catch (error) {
+    logger.error("[SocialConnect] Page de suivi de suppression:", error);
+    return res.status(500).end();
+  }
+});
+
+// « / » final accepté (adresse déclarée chez TikTok Business)
+router.get("/:key/callback", async (req, res) => {
+  const { key } = req.params;
+  if (!connectorByKey(key)) return res.status(404).end();
+  try {
+    const redirectUrl = await completeDirectConnect(key, req.query || {});
     return res.redirect(redirectUrl);
   } catch (error) {
-    logger.error(`[SocialConnect] Erreur au retour OAuth ${platform}:`, error);
+    logger.error(`[SocialConnect] Erreur au retour OAuth ${key}:`, error);
     return res.redirect(fallbackRedirect());
   }
 });

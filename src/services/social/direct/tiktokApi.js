@@ -1,5 +1,6 @@
 import storage from "../socialMediaStorage.js";
 import {
+  DRAFT_PENDING_LIMIT_MESSAGE,
   PLATFORM_RULES,
   isVideoMedia,
   validateTikTokVideoDuration,
@@ -81,9 +82,6 @@ const CONTENT_CODES = new Set([
   "picture_size_check_failed",
   "invalid_file_upload",
 ]);
-// Limite des brouillons, détail affiché avec le message de quota
-export const DRAFT_PENDING_LIMIT_MESSAGE =
-  "TikTok limite à 5 brouillons en attente par 24 heures.";
 // Vidéo refusée par TikTok (fail_reason) : détail affiché en français
 const VIDEO_REJECTED_CODES = {
   duration_check_failed: "durée non acceptée",

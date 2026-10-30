@@ -2,7 +2,10 @@ import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import logger from "../../utils/logger.js";
 import { DirectApiError } from "./direct/directHttp.js";
 import { SocialProviderError } from "./providers/zernioProvider.js";
-import { platformLabel } from "./socialPostRules.js";
+import {
+  DRAFT_PENDING_LIMIT_MESSAGE,
+  platformLabel,
+} from "./socialPostRules.js";
 
 /**
  * Messages français prêts à afficher (le site les montre tels quels dans un
@@ -40,10 +43,17 @@ export function targetErrorMessage(target) {
       return `La connexion à ${network} a expiré. Reconnectez le compte dans Paramètres > Intégrations.`;
     case "user_content":
       return `${network} a refusé le contenu : ${target.errorMessage || "contenu non conforme"}`;
+    case "quota_exhausted":
+      // Brouillons TikTok : 5 en attente par 24 heures
+      if (target.errorMessage === DRAFT_PENDING_LIMIT_MESSAGE) {
+        return `${network} limite le nombre de publications. ${DRAFT_PENDING_LIMIT_MESSAGE}`;
+      }
+      return `${network} limite le nombre de publications. Réessayez plus tard.`;
     case "user_abuse":
     case "platform_rate_limit":
-    case "quota_exhausted":
       return `${network} limite le nombre de publications. Réessayez plus tard.`;
+    case "sound_rejected":
+      return `Le son choisi n'est plus disponible sur ${network}. Choisissez-en un autre.`;
     case "account_issue":
       // Appli TikTok pas encore auditée : posts privés seulement
       if (target.platform === "tiktok") {
@@ -55,7 +65,8 @@ export function targetErrorMessage(target) {
     case "video_rejected":
       return `${network} a refusé la vidéo${target.errorMessage ? ` : ${target.errorMessage}` : "."}`;
     case "video_too_long":
-      // Message français déjà complet (durée maximale du créateur TikTok)
+      // Message français déjà complet (durée maximale du créateur TikTok,
+      // ou d'une story)
       return target.errorMessage || `La vidéo est trop longue pour ${network}.`;
     case "video_processing_timeout":
       return `${network} n'a pas terminé le traitement de la vidéo à temps. Réessayez plus tard.`;
@@ -103,6 +114,11 @@ function directToUserError(error, action) {
   ) {
     return userError(
       `${label} limite le nombre de publications. Réessayez plus tard.`,
+    );
+  }
+  if (error.category === "sound_rejected") {
+    return userError(
+      `Le son choisi n'est plus disponible sur ${label}. Choisissez-en un autre.`,
     );
   }
   if (action === "connect") {
