@@ -1,8 +1,18 @@
 import mongoose from "mongoose";
-import { STREET_REGEX } from "../../utils/validators.js";
+import {
+  STREET_REGEX,
+  CITY_REGEX,
+  COUNTRY_REGEX,
+  FULL_NAME_REGEX,
+} from "../../utils/validators.js";
 
 /**
  * Schéma d'adresse réutilisable
+ *
+ * Les règles acceptent les vraies adresses (« n° », « 12/14 », « Cedex »,
+ * apostrophe typographique, nom d'entreprise comme destinataire) et refusent
+ * les balises (< et >). Elles sont plus larges que les anciennes, jamais plus
+ * strictes : une adresse déjà enregistrée reste valide.
  */
 const addressSchema = new mongoose.Schema({
   fullName: {
@@ -10,15 +20,10 @@ const addressSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: function (v) {
-        return (
-          !v ||
-          (v.length >= 2 &&
-            v.length <= 100 &&
-            /^[a-zA-ZÀ-ÿ\s'-]{2,100}$/.test(v))
-        );
+        return !v || FULL_NAME_REGEX.test(v);
       },
       message:
-        "Le nom complet doit contenir entre 2 et 100 caractères (lettres, espaces, apostrophes et tirets uniquement)",
+        "Le nom complet doit contenir entre 2 et 100 caractères (< et > interdits)",
     },
   },
   street: {
@@ -28,7 +33,8 @@ const addressSchema = new mongoose.Schema({
       validator: function (v) {
         return !v || STREET_REGEX.test(v);
       },
-      message: "Veuillez fournir une adresse valide (3 à 200 caractères)",
+      message:
+        "L'adresse doit contenir entre 3 et 100 caractères (< et > interdits)",
     },
   },
   city: {
@@ -36,14 +42,10 @@ const addressSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: function (v) {
-        return (
-          !v ||
-          (v.length >= 2 &&
-            v.length <= 50 &&
-            /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s'-./()[\]]{2,50}$/.test(v))
-        );
+        return !v || CITY_REGEX.test(v);
       },
-      message: "La ville doit contenir entre 2 et 50 caractères",
+      message:
+        "La ville doit contenir entre 2 et 50 caractères (< et > interdits)",
     },
   },
   postalCode: {
@@ -63,13 +65,10 @@ const addressSchema = new mongoose.Schema({
     trim: true,
     validate: {
       validator: function (v) {
-        return (
-          !v ||
-          (v.length >= 2 && v.length <= 50 && /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(v))
-        );
+        return !v || COUNTRY_REGEX.test(v);
       },
       message:
-        "Le pays doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes et tirets uniquement)",
+        "Le pays doit contenir entre 2 et 50 caractères (lettres, espaces, apostrophes, tirets, points, virgules et parenthèses uniquement)",
     },
   },
 });

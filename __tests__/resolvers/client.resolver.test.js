@@ -315,6 +315,39 @@ describe("Client Resolver - Mutation.createClient", () => {
 
     expect(result.name).toBe("Jean Dupont");
   });
+
+  // Noms réels (ligature, apostrophe typographique, alphabets étrangers) :
+  // la création répondait jamais (exception levée par le message de validation)
+  it.each([
+    ["COMPANY", { name: "Cœur de Lion SARL" }],
+    ["COMPANY", { name: "L’Atelier du Bois" }],
+    ["INDIVIDUAL", { firstName: "Anne", lastName: "Lecœur" }],
+    ["INDIVIDUAL", { firstName: "Thị", lastName: "Nguyễn" }],
+  ])("creates a %s client with a real name %o", async (type, champs) => {
+    const input = buildClientInput({ type, ...champs });
+
+    const result = await resolver(null, { input }, ctx());
+
+    const persisted = await Client.findById(result._id).lean();
+    if (champs.name) expect(persisted.name).toBe(champs.name);
+    else expect(persisted.lastName).toBe(champs.lastName);
+  });
+
+  it("rejects a name with a tag with a message, instead of hanging", async () => {
+    const input = buildClientInput({ type: "COMPANY", name: "Atelier <b>" });
+
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow(
+      /< et > interdits/,
+    );
+  });
+
+  it("accepts a phone number with dots or an international prefix", async () => {
+    for (const phone of ["06.12.34.56.78", "+33 6 12 34 56 78"]) {
+      const input = buildClientInput({ type: "COMPANY", phone });
+      const result = await resolver(null, { input }, ctx());
+      expect((await Client.findById(result._id).lean()).phone).toBe(phone);
+    }
+  });
 });
 
 describe("Client Resolver - Mutation.deleteClient (RBAC enforced)", () => {
