@@ -53,6 +53,9 @@ const targetSchema = new mongoose.Schema(
     submittedAt: { type: Date, default: null },
     // Adresse du post encore attendue jusqu'à cette date (TikTok)
     urlCheckUntil: { type: Date, default: null },
+    // État intermédiaire d'une publication en deux temps, gardé jusqu'à la
+    // publication : conteneur Instagram, URN de vidéo LinkedIn, media_id X
+    processingRef: { type: String, default: null },
   },
   { _id: false },
 );
@@ -60,10 +63,17 @@ const targetSchema = new mongoose.Schema(
 const mediaSchema = new mongoose.Schema(
   {
     mediaId: { type: mongoose.Schema.Types.ObjectId, ref: "SocialPostMedia" },
+    // « image » ou « video » (une seule vidéo par post, jamais avec des
+    // images) ; toujours prête au moment de programmer
+    kind: { type: String, default: "image" },
     url: { type: String, required: true },
     width: { type: Number, default: null },
     height: { type: Number, default: null },
     contentType: { type: String, default: "image/jpeg" },
+    // Vidéo : vignette JPEG, durée et poids (envoi à LinkedIn et X)
+    thumbnailUrl: { type: String, default: null },
+    durationMs: { type: Number, default: null },
+    size: { type: Number, default: null },
   },
   { _id: false },
 );
@@ -120,6 +130,9 @@ const socialPostSchema = new mongoose.Schema(
           // promotionnel) et contenu de marque (partenariat rémunéré)
           brandOrganic: Boolean,
           brandContent: Boolean,
+          // Vidéo seulement : duos et collages (Stitch)
+          allowDuet: Boolean,
+          allowStitch: Boolean,
         },
         { _id: false },
       ),

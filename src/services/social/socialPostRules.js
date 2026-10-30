@@ -6,7 +6,10 @@
  *
  * Même logique que NewbiV2/src/utils/social-post-rules.js (le site affiche les
  * compteurs et bloque avant l'envoi) ; l'API reste la source de vérité.
- * Images seulement en v1 (pas de vidéo).
+ *
+ * Un post contient soit des images, soit une seule vidéo (jamais les deux).
+ * Les limites vidéo par réseau s'appliquent à la vidéo préparée par le
+ * serveur (socialVideoProcessing.js : MP4 H.264, durée, poids).
  */
 
 export const SOCIAL_PLATFORMS = [
@@ -17,13 +20,47 @@ export const SOCIAL_PLATFORMS = [
   "tiktok",
 ];
 
-// Limites publiées par chaque réseau (voir la doc Zernio, platforms/*)
+// ── Vidéo ──────────────────────────────────────────────────────────────────
+
+// Formats acceptés à l'envoi (préparés ensuite en MP4 H.264 par le serveur)
+export const VIDEO_CONTENT_TYPES = [
+  "video/mp4",
+  "video/quicktime",
+  "video/x-m4v",
+  "video/webm",
+];
+export const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm"];
+// 500 Mo à l'envoi (octets binaires : la limite la plus large, le site peut
+// être plus strict)
+export const VIDEO_MAX_INPUT_BYTES = 500 * 1024 * 1024;
+export const VIDEO_MIN_DURATION_MS = 3000;
+export const VIDEO_MAX_DURATION_MS = 10 * 60 * 1000;
+
+export const UNSUPPORTED_VIDEO_MESSAGE =
+  "Format de vidéo non pris en charge. Formats acceptés : MP4, MOV, M4V et WebM.";
+export const VIDEO_TOO_LARGE_MESSAGE = "Vidéo trop lourde (500 Mo maximum).";
+export const VIDEO_TOO_SHORT_MESSAGE =
+  "Vidéo trop courte (3 secondes minimum).";
+export const VIDEO_TOO_LONG_MESSAGE = "Vidéo trop longue (10 minutes maximum).";
+export const VIDEO_NOT_READY_MESSAGE =
+  "La vidéo est encore en préparation. Patientez quelques instants.";
+export const VIDEO_DIRECT_ONLY_MESSAGE =
+  "La vidéo n'est disponible que pour les comptes connectés directement.";
+export const MIXED_MEDIA_MESSAGE =
+  "Un post contient soit des photos, soit une vidéo, pas les deux.";
+export const SINGLE_VIDEO_MESSAGE = "Une seule vidéo par post.";
+
+// Limites publiées par chaque réseau (voir la doc Zernio, platforms/*, et la
+// doc de chaque API pour la vidéo). Poids des vidéos en octets décimaux
+// (« 300 Mo » chez Meta), la lecture la plus prudente.
 export const PLATFORM_RULES = {
   twitter: {
     label: "X",
     maxText: 280,
     maxImages: 4,
     imageRequired: false,
+    // Comptes non Premium : 2 min 20
+    video: { maxDurationMs: 140 * 1000, maxBytes: 512 * 1000 * 1000 },
   },
   instagram: {
     label: "Instagram",
@@ -33,12 +70,22 @@ export const PLATFORM_RULES = {
     // Fil et carrousel : du plus haut (9:16) au plus large (1,91:1)
     minRatio: 0.5625,
     maxRatio: 1.91,
+    // Reel : 3 s à 15 min chez Meta, plafonné par notre limite de 10 min
+    video: {
+      minDurationMs: 3000,
+      maxDurationMs: VIDEO_MAX_DURATION_MS,
+      maxBytes: 300 * 1000 * 1000,
+    },
   },
   facebook: {
     label: "Facebook",
     maxText: 63206,
     maxImages: 10,
     imageRequired: false,
+    video: {
+      maxDurationMs: VIDEO_MAX_DURATION_MS,
+      maxBytes: 1000 * 1000 * 1000,
+    },
   },
   linkedin: {
     label: "LinkedIn",
@@ -47,6 +94,12 @@ export const PLATFORM_RULES = {
     imageRequired: false,
     minWidth: 552,
     minHeight: 276,
+    video: {
+      minDurationMs: 3000,
+      maxDurationMs: VIDEO_MAX_DURATION_MS,
+      minBytes: 75 * 1000,
+      maxBytes: 500 * 1000 * 1000,
+    },
   },
   tiktok: {
     label: "TikTok",
@@ -54,6 +107,14 @@ export const PLATFORM_RULES = {
     maxText: 4000,
     maxImages: 35,
     imageRequired: true,
+    // Titre d'une vidéo : 2 200 caractères comptés en UTF-16 ; durée
+    // maximale propre au créateur (max_video_post_duration_sec)
+    video: {
+      maxText: 2200,
+      minDurationMs: 3000,
+      maxDurationMs: VIDEO_MAX_DURATION_MS,
+      maxBytes: 4000 * 1000 * 1000,
+    },
   },
 };
 
@@ -89,10 +150,12 @@ export const joinLabels = (labels = []) => {
 
 /**
  * Nombre de caractères du texte pour un réseau : caractères Unicode (un
- * emoji compte pour un), et sur X chaque adresse compte pour 23.
+ * emoji compte pour un), et sur X chaque adresse compte pour 23. Titre
+ * d'une vidéo TikTok : unités UTF-16 (un emoji compte souvent pour deux).
  */
-export function countPostCharacters(text, platform) {
+export function countPostCharacters(text, platform, { video = false } = {}) {
   const value = typeof text === "string" ? text : "";
+  if (platform === "tiktok" && video) return value.length;
   if (platform !== "twitter") return Array.from(value).length;
   let count = 0;
   let lastIndex = 0;
@@ -114,15 +177,109 @@ export function isInstagramRatioValid(width, height) {
   );
 }
 
+export const isVideoMedia = (media) => media?.kind === "video";
+
 /**
- * Contenu d'un post pour les réseaux visés : texte ou image, limites de
- * texte et d'images, image obligatoire (Instagram, TikTok), format des
- * images (Instagram, LinkedIn).
+ * Durée lisible : « 45 s », « 2 min 20 », « 3 min 05 », « 10 min ».
+ * Une durée réelle est arrondie à la seconde supérieure (une vidéo de
+ * 140,4 s dépasse bien 2 min 20).
+ */
+export function formatVideoDuration(ms, { roundUp = false } = {}) {
+  const value = Math.max(0, Number(ms) || 0) / 1000;
+  const total = roundUp ? Math.ceil(value) : Math.floor(value);
+  if (total < 60) return `${total} s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return seconds
+    ? `${minutes} min ${String(seconds).padStart(2, "0")}`
+    : `${minutes} min`;
+}
+
+/** Poids lisible en unités décimales : « 75 Ko », « 300 Mo », « 1 Go ». */
+export function formatVideoBytes(bytes) {
+  const value = Number(bytes) || 0;
+  const format = (n) =>
+    Number.isInteger(n)
+      ? n.toLocaleString("fr-FR")
+      : n.toLocaleString("fr-FR", { maximumFractionDigits: 1 });
+  if (value >= 1e9) return `${format(value / 1e9)} Go`;
+  if (value >= 1e6) return `${format(value / 1e6)} Mo`;
+  return `${format(Math.ceil(value / 1e3))} Ko`;
+}
+
+/**
+ * Vidéo (déjà préparée) pour un réseau : durée et poids.
+ * @param {{durationMs?: number, size?: number}} video
+ * @returns {string|null} message d'erreur, ou null
+ */
+export function validateVideoForPlatform(video, platform) {
+  const rules = PLATFORM_RULES[platform];
+  const limits = rules?.video;
+  if (!limits) return null;
+  const durationMs = Number(video?.durationMs) || 0;
+  const size = Number(video?.size) || 0;
+  if (durationMs && limits.maxDurationMs && durationMs > limits.maxDurationMs) {
+    return `${rules.label} accepte des vidéos de ${formatVideoDuration(limits.maxDurationMs)} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
+  }
+  if (durationMs && limits.minDurationMs && durationMs < limits.minDurationMs) {
+    return `${rules.label} exige une vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`;
+  }
+  if (size && limits.maxBytes && size > limits.maxBytes) {
+    return `La vidéo est trop lourde pour ${rules.label} (${formatVideoBytes(limits.maxBytes)} maximum après préparation).`;
+  }
+  if (size && limits.minBytes && size < limits.minBytes) {
+    return `La vidéo est trop légère pour ${rules.label} (${formatVideoBytes(limits.minBytes)} minimum).`;
+  }
+  return null;
+}
+
+/**
+ * Durée d'une vidéo face à la limite du créateur TikTok
+ * (max_video_post_duration_sec de creator_info, inconnue : rien à dire).
+ * @returns {string|null}
+ */
+export function validateTikTokVideoDuration(durationMs, maxDurationSec) {
+  const max = Number(maxDurationSec);
+  if (!Number.isFinite(max) || max <= 0 || !durationMs) return null;
+  if (durationMs <= max * 1000) return null;
+  return `TikTok accepte des vidéos de ${formatVideoDuration(max * 1000)} au maximum pour ce compte (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
+}
+
+/** Fichier vidéo accepté à l'envoi (type annoncé ou extension). */
+export function isAcceptedVideoFile({ fileName = "", contentType = "" } = {}) {
+  const type = String(contentType || "")
+    .toLowerCase()
+    .split(";")[0]
+    .trim();
+  if (VIDEO_CONTENT_TYPES.includes(type)) return true;
+  const extension = String(fileName || "")
+    .toLowerCase()
+    .split(".")
+    .pop();
+  // Type vide ou générique (certains navigateurs) : l'extension décide
+  const generic = !type || type === "application/octet-stream";
+  return generic && VIDEO_EXTENSIONS.includes(extension);
+}
+
+/**
+ * Position de la couverture (vignette) d'une vidéo, en millisecondes :
+ * 1 seconde, ou la moitié d'une vidéo plus courte. Sert aussi à Instagram
+ * (thumb_offset) et TikTok (video_cover_timestamp_ms).
+ */
+export const videoCoverOffsetMs = (durationMs) =>
+  Math.max(0, Math.min(1000, Math.floor((Number(durationMs) || 0) / 2)));
+
+/**
+ * Contenu d'un post pour les réseaux visés : texte ou média, limites de
+ * texte et d'images, média obligatoire (Instagram, TikTok), format des
+ * images (Instagram, LinkedIn), une seule vidéo sans photo, durée et poids
+ * de la vidéo par réseau.
  *
  * @param {object} params
  * @param {string[]} params.platforms - réseaux visés
  * @param {string} params.content - texte du post
- * @param {{width?: number, height?: number}[]} params.media - images
+ * @param {{kind?: string, width?: number, height?: number, durationMs?: number, size?: number}[]} params.media
+ *   images ou vidéo (kind « video »)
  * @returns {string|null} message d'erreur prêt à afficher, ou null
  */
 export function validatePostContent({
@@ -138,22 +295,34 @@ export function validatePostContent({
   if (unsupported) return `Le réseau ${unsupported} n'est pas pris en charge.`;
 
   const text = typeof content === "string" ? content.trim() : "";
-  const images = Array.isArray(media) ? media : [];
-  if (!text && images.length === 0) {
+  const items = Array.isArray(media) ? media.filter(Boolean) : [];
+  const videos = items.filter(isVideoMedia);
+  const images = items.filter((item) => !isVideoMedia(item));
+  if (!text && items.length === 0) {
     return "Écrivez un texte ou ajoutez une image.";
   }
+  if (videos.length > 0 && images.length > 0) return MIXED_MEDIA_MESSAGE;
+  if (videos.length > 1) return SINGLE_VIDEO_MESSAGE;
+  const video = videos[0] || null;
 
   for (const platform of targets) {
     const rules = PLATFORM_RULES[platform];
-    const count = countPostCharacters(text, platform);
-    if (count > rules.maxText) {
-      return `Le texte dépasse la limite de ${rules.maxText.toLocaleString("fr-FR")} caractères pour ${rules.label} (${count.toLocaleString("fr-FR")} caractères).`;
+    const maxText = (video && rules.video?.maxText) || rules.maxText;
+    const count = countPostCharacters(text, platform, {
+      video: Boolean(video),
+    });
+    if (count > maxText) {
+      return `Le texte dépasse la limite de ${maxText.toLocaleString("fr-FR")} caractères pour ${rules.label} (${count.toLocaleString("fr-FR")} caractères).`;
     }
-    if (rules.imageRequired && images.length === 0) {
-      return `${rules.label} exige au moins une image.`;
+    if (rules.imageRequired && items.length === 0) {
+      return `${rules.label} exige une image ou une vidéo.`;
     }
     if (images.length > rules.maxImages) {
       return `${rules.label} accepte au maximum ${rules.maxImages} images.`;
+    }
+    if (video) {
+      const error = validateVideoForPlatform(video, platform);
+      if (error) return error;
     }
   }
 
@@ -209,10 +378,13 @@ export function validateScheduleDate(scheduledFor, { now = new Date() } = {}) {
 /**
  * Réglages TikTok obligatoires dès qu'un compte TikTok est visé : qui peut
  * voir le post, commentaires, et accord explicite (confirmation
- * d'utilisation de la musique).
+ * d'utilisation de la musique). Avec une vidéo : duos et collages (Stitch)
+ * en plus, exigés par les consignes d'intégration de TikTok.
+ * @param {object} settings
+ * @param {{video?: boolean}} [options]
  * @returns {string|null} message d'erreur, ou null
  */
-export function validateTikTokSettings(settings) {
+export function validateTikTokSettings(settings, { video = false } = {}) {
   if (!settings) {
     return "Choisissez les options TikTok (qui peut voir le post, commentaires).";
   }
@@ -224,6 +396,12 @@ export function validateTikTokSettings(settings) {
   }
   if (typeof settings.allowComment !== "boolean") {
     return "Indiquez si les commentaires sont autorisés sur TikTok.";
+  }
+  if (video && typeof settings.allowDuet !== "boolean") {
+    return "Indiquez si les duos sont autorisés sur TikTok.";
+  }
+  if (video && typeof settings.allowStitch !== "boolean") {
+    return "Indiquez si les collages (Stitch) sont autorisés sur TikTok.";
   }
   if (settings.consentGiven !== true) {
     return "Acceptez la confirmation d'utilisation de la musique de TikTok pour publier.";

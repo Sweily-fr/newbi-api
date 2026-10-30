@@ -23,6 +23,12 @@ import {
   assertSocialPublishingEnabled,
 } from "../services/social/socialPublishingService.js";
 import { toUserError } from "../services/social/socialPostMessages.js";
+import {
+  completeVideoUpload,
+  getPostMedia,
+  startVideoUpload,
+  uploadVideoChunk,
+} from "../services/social/socialVideoUpload.js";
 import { availablePlatforms } from "../services/social/socialProviders.js";
 import { isZernioConfigured } from "../services/social/providers/zernioProvider.js";
 import { getXPostQuota } from "../services/social/xPostQuota.js";
@@ -36,8 +42,9 @@ import { getXPostQuota } from "../services/social/xPostQuota.js";
  *   banques » > Connecter et configurer, et abonnement actif ;
  * - lecture : lecture du kanban, et accès au tableau comme la requête
  *   `board` ;
- * - programmer, téléverser une image : création dans le kanban ; modifier,
- *   annuler, réessayer : modification dans le kanban ; abonnement actif.
+ * - programmer, téléverser une image ou une vidéo : création dans le
+ *   kanban ; modifier, annuler, réessayer : modification dans le kanban ;
+ *   abonnement actif ; suivi d'une vidéo : lecture du kanban.
  * L'espace est toujours celui validé par RBAC (context.workspaceId).
  */
 
@@ -111,6 +118,13 @@ const socialPublishingResolvers = {
     )(async (_, { accountId }, { workspaceId }) =>
       getTikTokCreatorInfo({ workspaceId, accountId }),
     ),
+
+    socialPostMedia: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { id }, { workspaceId }) =>
+      getPostMedia({ workspaceId, mediaId: id }),
+    ),
   },
 
   Mutation: {
@@ -163,6 +177,46 @@ const socialPublishingResolvers = {
       withActiveSubscription(async (_, { file }, { workspaceId, user }) =>
         uploadPostMedia({ workspaceId, userId: user._id || user.id, file }),
       ),
+    ),
+
+    startSocialVideoUpload: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(
+        async (_, { fileName, size, contentType }, { workspaceId, user }) => {
+          assertSocialPublishingEnabled();
+          return startVideoUpload({
+            workspaceId,
+            userId: user._id || user.id,
+            fileName,
+            size,
+            contentType,
+          });
+        },
+      ),
+    ),
+
+    uploadSocialVideoChunk: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(
+        async (_, { mediaId, index, chunk }, { workspaceId }) => {
+          assertSocialPublishingEnabled();
+          return uploadVideoChunk({ workspaceId, mediaId, index, chunk });
+        },
+      ),
+    ),
+
+    completeSocialVideoUpload: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(async (_, { mediaId }, { workspaceId }) => {
+        assertSocialPublishingEnabled();
+        return completeVideoUpload({ workspaceId, mediaId });
+      }),
     ),
 
     scheduleSocialPost: requireWorkspaceAction(

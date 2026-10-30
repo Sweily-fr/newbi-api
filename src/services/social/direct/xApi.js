@@ -1,9 +1,11 @@
-import storage from "../socialMediaStorage.js";
+import storage, { ownVideoId } from "../socialMediaStorage.js";
+import { isVideoMedia } from "../socialPostRules.js";
 import {
   DirectApiError,
   configError,
   directRequest,
   readHeader,
+  timing,
 } from "./directHttp.js";
 
 /**
@@ -16,10 +18,16 @@ import {
  *
  * Jeton d'accès de 2 h ; le jeton de rafraîchissement tourne (on garde
  * toujours le dernier reçu, rafraîchissements sérialisés par compte).
+ * Vidéo : envoi en morceaux de l'API média v2 (initialize, append par
+ * morceaux de 4 Mo lus par plage dans R2, finalize), traitement suivi par
+ * STATUS : attendu sur place s'il est court, sinon post créé plus tard par
+ * checkPublication (media_id gardé dans processingRef).
+ *
  * En local, X refuse « localhost » dans l'adresse de retour : utiliser
  * NEXT_PUBLIC_API_URL=http://127.0.0.1:4000.
  * Doc : docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code,
- * /x-api/media/upload-media, /x-api/posts/create-post
+ * /x-api/media/upload-media, /x-api/media/quickstart/media-upload-chunked,
+ * /x-api/posts/create-post
  */
 
 export const NETWORK = "x";
@@ -36,6 +44,12 @@ const SCOPES = [
 ];
 const PUBLISH_TIMEOUT_MS = 30000;
 const UPLOAD_TIMEOUT_MS = 60000;
+// Morceaux de 5 Mo au plus (conseil de X)
+const VIDEO_SEGMENT_BYTES = 4 * 1024 * 1024;
+// Traitement attendu sur place jusqu'à ce délai, sinon au tour suivant
+const VIDEO_INLINE_WAIT_MS = 45 * 1000;
+const VIDEO_MIN_CHECK_MS = 30 * 1000;
+export const MAX_PROCESSING_MS = 30 * 60 * 1000;
 
 export const isConfigured = () =>
   Boolean(process.env.X_CLIENT_ID && process.env.X_CLIENT_SECRET);
@@ -96,6 +110,10 @@ export function classifyXError(response, data, label = "") {
   if (status === 403) {
     if (/duplicate/i.test(detail || ""))
       return make({ category: "user_content" });
+    // « This user is not allowed to post a video longer than … »
+    if (/video|media/i.test(detail || "")) {
+      return make({ category: "video_rejected" });
+    }
     if (type.endsWith("/client-forbidden")) {
       return make({ category: "platform_rejected" });
     }
@@ -263,9 +281,94 @@ async function uploadImage(token, media) {
   return String(id);
 }
 
-export async function publish({ account, accessToken, content, media }) {
-  const mediaIds = [];
-  for (const item of media) mediaIds.push(await uploadImage(accessToken, item));
+const mediaApi = (token, method, path, { json, body, query, timeoutMs } = {}) =>
+  directRequest({
+    network: NETWORK,
+    method,
+    url: `${API_URL}/media/upload${path}`,
+    headers: { Authorization: `Bearer ${token}` },
+    json,
+    body,
+    query,
+    timeoutMs: timeoutMs || UPLOAD_TIMEOUT_MS,
+    check: classifyXError,
+  });
+
+/** Dépose une vidéo en morceaux ; renvoie son media_id et son traitement. */
+async function uploadVideo(token, video) {
+  const size =
+    Number(video.size) || (await storage.videoSize(ownVideoId(video.url)));
+  if (!size) {
+    throw new DirectApiError("x : poids de la vidéo inconnu", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const { data } = await mediaApi(token, "POST", "/initialize", {
+    json: {
+      media_type: "video/mp4",
+      total_bytes: size,
+      media_category: "tweet_video",
+    },
+  });
+  const mediaId = data?.data?.id;
+  if (!mediaId) {
+    throw new DirectApiError("x : vidéo sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const segments = Math.ceil(size / VIDEO_SEGMENT_BYTES);
+  for (let index = 0; index < segments; index += 1) {
+    const start = index * VIDEO_SEGMENT_BYTES;
+    const end = Math.min(size, start + VIDEO_SEGMENT_BYTES) - 1;
+    const bytes = await storage.readVideoRange(video.url, start, end);
+    const form = new FormData();
+    form.append("segment_index", String(index));
+    form.append("media", new Blob([bytes], { type: "video/mp4" }), "video.mp4");
+    await mediaApi(token, "POST", `/${mediaId}/append`, { body: form });
+  }
+  const { data: finalized } = await mediaApi(
+    token,
+    "POST",
+    `/${mediaId}/finalize`,
+  );
+  return {
+    mediaId: String(mediaId),
+    processing: finalized?.data?.processing_info || null,
+  };
+}
+
+/** Traitement d'une vidéo chez X (null : terminé). */
+async function videoStatus(token, mediaId) {
+  const { data } = await mediaApi(token, "GET", "", {
+    query: { command: "STATUS", media_id: mediaId },
+  });
+  return data?.data?.processing_info || null;
+}
+
+/** État du traitement : « ready », « pending » (délai conseillé) ou refus levé. */
+function processingState(info) {
+  const state = String(info?.state || "succeeded").toLowerCase();
+  if (state === "succeeded") return { ready: true };
+  if (state === "failed") {
+    throw new DirectApiError("x : vidéo refusée", {
+      network: NETWORK,
+      status: 422,
+      category: "video_rejected",
+      detail: info?.error?.message || info?.error?.name || null,
+    });
+  }
+  return {
+    ready: false,
+    delayMs: Math.max(1, Number(info?.check_after_secs) || 5) * 1000,
+  };
+}
+
+/** Crée le post (texte et médias). */
+async function createTweet({ account, accessToken, content, mediaIds }) {
   const body = {};
   if (content) body.text = content;
   if (mediaIds.length) body.media = { media_ids: mediaIds };
@@ -295,6 +398,62 @@ export async function publish({ account, accessToken, content, media }) {
   };
 }
 
+/**
+ * Vidéo : déposée, traitement attendu sur place s'il est court ; sinon le
+ * post sera créé par checkPublication.
+ */
+async function publishVideo({ account, accessToken, content, video }) {
+  const { mediaId, processing } = await uploadVideo(accessToken, video);
+  let state = processingState(processing);
+  let waited = 0;
+  while (!state.ready && waited + state.delayMs <= VIDEO_INLINE_WAIT_MS) {
+    await timing.sleep(state.delayMs);
+    waited += state.delayMs;
+    state = processingState(await videoStatus(accessToken, mediaId));
+  }
+  if (!state.ready) {
+    return {
+      status: "publishing",
+      externalPostId: null,
+      processingRef: mediaId,
+      platformPostUrl: null,
+      nextCheckMs: Math.max(VIDEO_MIN_CHECK_MS, state.delayMs),
+    };
+  }
+  return createTweet({ account, accessToken, content, mediaIds: [mediaId] });
+}
+
+export async function publish({ account, accessToken, content, media }) {
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    return publishVideo({ account, accessToken, content, video: media[0] });
+  }
+  const mediaIds = [];
+  for (const item of media) mediaIds.push(await uploadImage(accessToken, item));
+  return createTweet({ account, accessToken, content, mediaIds });
+}
+
+/** Suivi d'une vidéo en traitement : prête → post créé ; sinon à relire. */
+export async function checkPublication({
+  account,
+  accessToken,
+  processingRef,
+  content,
+}) {
+  const state = processingState(await videoStatus(accessToken, processingRef));
+  if (!state.ready) {
+    return {
+      status: "publishing",
+      nextCheckMs: Math.max(VIDEO_MIN_CHECK_MS, state.delayMs),
+    };
+  }
+  return createTweet({
+    account,
+    accessToken,
+    content,
+    mediaIds: [processingRef],
+  });
+}
+
 export default {
   NETWORK,
   PLATFORMS,
@@ -304,5 +463,7 @@ export default {
   exchangeCode,
   refreshCredentials,
   publish,
+  checkPublication,
+  maxProcessingMs: MAX_PROCESSING_MS,
   revoke,
 };
