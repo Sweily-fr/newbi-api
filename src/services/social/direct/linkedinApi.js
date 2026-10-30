@@ -1,4 +1,5 @@
-import storage from "../socialMediaStorage.js";
+import storage, { ownVideoId } from "../socialMediaStorage.js";
+import { isVideoMedia } from "../socialPostRules.js";
 import {
   DirectApiError,
   configError,
@@ -24,11 +25,17 @@ import {
  * rafraîchir son jeton avec les bons identifiants : les profils connectés
  * avant la validation continuent de publier sans reconnexion.
  *
+ * Vidéo (Videos API, mêmes permissions que les images) : envoi en parties
+ * (plages données par initializeUpload, relues par plage dans R2), ETag de
+ * chaque partie, finalizeUpload, puis post en deux temps : la vidéo doit
+ * être traitée (AVAILABLE) avant le post, sinon il resterait invisible.
+ *
  * Jetons de 60 jours ; jeton de rafraîchissement seulement si LinkedIn
  * l'accorde à l'appli (sinon : reconnexion à l'expiration).
  * Version épinglée par LINKEDIN_API_VERSION (en-tête Linkedin-Version).
  * Doc : learn.microsoft.com/linkedin/marketing/community-management/shares/
- * posts-api, images-api, little-text-format ; /shared/authentication/
+ * posts-api, images-api, videos-api, little-text-format ;
+ * /shared/authentication/
  */
 
 export const NETWORK = "linkedin";
@@ -42,6 +49,11 @@ const PUBLISH_TIMEOUT_MS = 60000;
 const UPLOAD_TIMEOUT_MS = 60000;
 const IMAGE_POLL_ATTEMPTS = 5;
 const IMAGE_POLL_DELAY_MS = 2000;
+const VIDEO_CHECK_MS = 30 * 1000;
+// Statut illisible pour l'appli « Share on LinkedIn » : on publie après ce
+// délai de traitement
+const VIDEO_BLIND_WAIT_MS = 2 * 60 * 1000;
+export const MAX_PROCESSING_MS = 60 * 60 * 1000;
 // Rôles d'une page qui peuvent publier (la doc écrit CONTENT_ADMIN ou
 // CONTENT_ADMINISTRATOR selon les pages)
 const PUBLISHING_ROLES = new Set([
@@ -470,14 +482,82 @@ async function uploadImage({ token, owner, media }) {
   return image;
 }
 
-export async function publish({ account, accessToken, content, media }) {
-  const author = account.externalAccountId;
-  const images = [];
-  for (const item of media) {
-    images.push(
-      await uploadImage({ token: accessToken, owner: author, media: item }),
-    );
+const missingUpload = (message) =>
+  new DirectApiError(`linkedin : ${message}`, {
+    network: NETWORK,
+    status: 502,
+    transient: true,
+  });
+
+/**
+ * Dépose une vidéo chez LinkedIn (parties lues par plage dans notre
+ * stockage) et renvoie son URN (urn:li:video:…), en cours de traitement.
+ */
+async function uploadVideo({ token, owner, video }) {
+  const size =
+    Number(video.size) || (await storage.videoSize(ownVideoId(video.url)));
+  if (!size) throw missingUpload("poids de la vidéo inconnu");
+  const { data } = await rest("POST", "videos", {
+    token,
+    query: { action: "initializeUpload" },
+    json: {
+      initializeUploadRequest: {
+        owner,
+        fileSizeBytes: size,
+        uploadCaptions: false,
+        uploadThumbnail: false,
+      },
+    },
+  });
+  const value = data?.value || {};
+  const instructions = Array.isArray(value.uploadInstructions)
+    ? value.uploadInstructions
+    : [];
+  if (!value.video || instructions.length === 0) {
+    throw missingUpload("adresses de dépôt de la vidéo absentes");
   }
+  const partIds = [];
+  for (const part of instructions) {
+    const first = Number(part.firstByte);
+    const last = Number(part.lastByte);
+    const bytes = await storage.readVideoRange(video.url, first, last);
+    const { response } = await directRequest({
+      network: NETWORK,
+      method: "PUT",
+      url: part.uploadUrl,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/octet-stream",
+      },
+      body: bytes,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+      check: classifyLinkedInError,
+    });
+    // L'ETag de chaque partie identifie la partie au finalizeUpload
+    const etag = String(readHeader(response, "etag") || "").replace(
+      /^"|"$/g,
+      "",
+    );
+    if (!etag) throw missingUpload("partie de vidéo sans ETag");
+    partIds.push(etag);
+  }
+  await rest("POST", "videos", {
+    token,
+    query: { action: "finalizeUpload" },
+    json: {
+      finalizeUploadRequest: {
+        video: value.video,
+        uploadToken: value.uploadToken || "",
+        uploadedPartIds: partIds,
+      },
+    },
+    timeoutMs: PUBLISH_TIMEOUT_MS,
+  });
+  return value.video;
+}
+
+/** Crée le post (texte et média éventuel) et renvoie son adresse. */
+async function createPost({ token, author, content, postContent }) {
   const body = {
     author,
     commentary: escapeLittleText(content || ""),
@@ -490,13 +570,9 @@ export async function publish({ account, accessToken, content, media }) {
     lifecycleState: "PUBLISHED",
     isReshareDisabledByAuthor: false,
   };
-  if (images.length === 1) {
-    body.content = { media: { id: images[0] } };
-  } else if (images.length > 1) {
-    body.content = { multiImage: { images: images.map((id) => ({ id })) } };
-  }
+  if (postContent) body.content = postContent;
   const { response } = await rest("POST", "posts", {
-    token: accessToken,
+    token,
     json: body,
     timeoutMs: PUBLISH_TIMEOUT_MS,
   });
@@ -510,6 +586,83 @@ export async function publish({ account, accessToken, content, media }) {
   };
 }
 
+export async function publish({ account, accessToken, content, media }) {
+  const author = account.externalAccountId;
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    // Vidéo déposée maintenant, post créé quand LinkedIn l'a traitée
+    const video = await uploadVideo({
+      token: accessToken,
+      owner: author,
+      video: media[0],
+    });
+    return {
+      status: "publishing",
+      externalPostId: null,
+      processingRef: video,
+      platformPostUrl: null,
+      nextCheckMs: VIDEO_CHECK_MS,
+    };
+  }
+  const images = [];
+  for (const item of media) {
+    images.push(
+      await uploadImage({ token: accessToken, owner: author, media: item }),
+    );
+  }
+  let postContent = null;
+  if (images.length === 1) {
+    postContent = { media: { id: images[0] } };
+  } else if (images.length > 1) {
+    postContent = { multiImage: { images: images.map((id) => ({ id })) } };
+  }
+  return createPost({ token: accessToken, author, content, postContent });
+}
+
+/**
+ * Suivi d'une vidéo déposée : traitée (AVAILABLE) → post créé ; échec du
+ * traitement → refus ; sinon à relire. Statut illisible pour l'appli
+ * « Share on LinkedIn » : post créé 2 minutes après le dépôt.
+ */
+export async function checkPublication({
+  account,
+  accessToken,
+  processingRef,
+  submittedAt,
+  content,
+  now = new Date(),
+}) {
+  let ready = false;
+  try {
+    const { data } = await rest(
+      "GET",
+      `videos/${encodeURIComponent(processingRef)}`,
+      { token: accessToken },
+    );
+    if (data?.status === "PROCESSING_FAILED") {
+      throw new DirectApiError("linkedin : vidéo refusée", {
+        network: NETWORK,
+        status: 422,
+        category: "video_rejected",
+        detail: data?.processingFailureReason || null,
+      });
+    }
+    ready = data?.status === "AVAILABLE";
+  } catch (error) {
+    if (error?.category === "video_rejected") throw error;
+    if (error?.status !== 403 && error?.status !== 401) throw error;
+    const elapsed =
+      new Date(now).getTime() - new Date(submittedAt || now).getTime();
+    ready = elapsed >= VIDEO_BLIND_WAIT_MS;
+  }
+  if (!ready) return { status: "publishing", nextCheckMs: VIDEO_CHECK_MS };
+  return createPost({
+    token: accessToken,
+    author: account.externalAccountId,
+    content,
+    postContent: { media: { id: processingRef } },
+  });
+}
+
 export default {
   NETWORK,
   PLATFORMS,
@@ -519,4 +672,6 @@ export default {
   exchangeCode,
   refreshCredentials,
   publish,
+  checkPublication,
+  maxProcessingMs: MAX_PROCESSING_MS,
 };

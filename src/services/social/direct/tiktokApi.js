@@ -1,12 +1,23 @@
 import storage from "../socialMediaStorage.js";
+import {
+  PLATFORM_RULES,
+  isVideoMedia,
+  validateTikTokVideoDuration,
+  videoCoverOffsetMs,
+} from "../socialPostRules.js";
 import { DirectApiError, configError, directRequest } from "./directHttp.js";
 
 /**
  * TikTok : Login Kit v2 (web, sans PKCE : le secret reste sur le serveur)
- * et Content Posting API, publication directe de photos (carrousel).
+ * et Content Posting API, publication directe de photos (carrousel) ou
+ * d'une vidéo.
  *
  * - creator_info est relu avant chaque publication (confidentialités
- *   proposées, commentaires coupés, compte bloqué) ;
+ *   proposées, commentaires, duos et collages coupés, durée maximale d'une
+ *   vidéo, compte bloqué) ;
+ * - la vidéo passe aussi par PULL_FROM_URL (notre route .mp4) ; titre de
+ *   2 200 caractères UTF-16 au plus, couverture à la position de notre
+ *   vignette ;
  * - les photos passent uniquement par PULL_FROM_URL, depuis un domaine
  *   vérifié chez TikTok (route /social-media de l'API sous newbi.fr), en
  *   JPEG de 1080p au plus ;
@@ -18,7 +29,9 @@ import { DirectApiError, configError, directRequest } from "./directHttp.js";
  * à chaque rafraîchissement.
  * Doc : developers.tiktok.com/doc/login-kit-web,
  * /oauth-user-access-token-management, /content-posting-api-reference-
- * photo-post, /content-posting-api-reference-get-video-status
+ * photo-post, /content-posting-api-reference-direct-post,
+ * /content-posting-api-reference-query-creator-info,
+ * /content-posting-api-reference-get-video-status
  */
 
 export const NETWORK = "tiktok";
@@ -59,6 +72,11 @@ const CONTENT_CODES = new Set([
   "picture_size_check_failed",
   "invalid_file_upload",
 ]);
+// Vidéo refusée par TikTok (fail_reason) : détail affiché en français
+const VIDEO_REJECTED_CODES = {
+  duration_check_failed: "durée non acceptée",
+  frame_rate_check_failed: "nombre d'images par seconde non accepté",
+};
 const TRANSIENT_CODES = new Set([
   "internal_error",
   "internal",
@@ -94,6 +112,13 @@ export function tiktokError(code, message, status = null) {
   }
   if (CONTENT_CODES.has(code)) {
     return new DirectApiError(text, { ...base, category: "user_content" });
+  }
+  if (VIDEO_REJECTED_CODES[code]) {
+    return new DirectApiError(text, {
+      ...base,
+      category: "video_rejected",
+      detail: VIDEO_REJECTED_CODES[code],
+    });
   }
   if (TRANSIENT_CODES.has(code) || (status && status >= 500)) {
     return new DirectApiError(text, { ...base, transient: true });
@@ -199,6 +224,13 @@ export async function getCreatorInfo({ accessToken }) {
     avatarUrl: info.creator_avatar_url || null,
     canPostMore: true,
     commentDisabled: info.comment_disabled === true,
+    // Vidéo seulement (sans objet pour les photos)
+    duetDisabled: info.duet_disabled === true,
+    stitchDisabled: info.stitch_disabled === true,
+    maxVideoPostDurationSec:
+      Number(info.max_video_post_duration_sec) > 0
+        ? Number(info.max_video_post_duration_sec)
+        : null,
     privacyLevels: (info.privacy_level_options || []).map((value) => ({
       value,
       label: value,
@@ -279,14 +311,86 @@ export async function revoke({ accessToken }) {
 
 // ── Publication ────────────────────────────────────────────────────────────
 
-const postUrl = (username, postId) =>
+const postUrl = (username, postId, kind = "photo") =>
   username && postId
-    ? `https://www.tiktok.com/@${username}/photo/${postId}`
+    ? `https://www.tiktok.com/@${username}/${kind}/${postId}`
     : null;
 
+/** Texte coupé à `max` unités UTF-16, sans couper un emoji en deux. */
+export function sliceUtf16(text, max) {
+  const value = String(text || "");
+  if (value.length <= max) return value;
+  let sliced = value.slice(0, max);
+  if (/[\uD800-\uDBFF]$/.test(sliced)) sliced = sliced.slice(0, -1);
+  return sliced;
+}
+
+const publishIdOf = (data) => {
+  const publishId = data?.data?.publish_id;
+  if (!publishId) {
+    throw new DirectApiError("tiktok : publish_id absent", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return String(publishId);
+};
+
 /**
- * Lance la publication d'un carrousel photo (asynchrone chez TikTok).
- * tiktokSettings : { privacyLevel, allowComment, brandOrganic, brandContent }
+ * Lance la publication d'une vidéo (TikTok va la chercher à notre
+ * adresse), après contrôle de la durée maximale du créateur.
+ */
+async function publishVideo({
+  account,
+  accessToken,
+  content,
+  video,
+  tiktokSettings,
+  creator,
+}) {
+  const tooLong = validateTikTokVideoDuration(
+    video.durationMs,
+    creator.maxVideoPostDurationSec,
+  );
+  if (tooLong) {
+    throw new DirectApiError("tiktok : vidéo trop longue pour ce créateur", {
+      network: NETWORK,
+      category: "video_too_long",
+      detail: tooLong,
+    });
+  }
+  const title = sliceUtf16(content, PLATFORM_RULES.tiktok.video.maxText);
+  const { data } = await api("POST", "post/publish/video/init/", {
+    token: accessToken,
+    json: {
+      post_info: {
+        ...(title ? { title } : {}),
+        privacy_level: tiktokSettings.privacyLevel,
+        disable_comment:
+          !tiktokSettings.allowComment || creator.commentDisabled,
+        disable_duet: !tiktokSettings.allowDuet || creator.duetDisabled,
+        disable_stitch: !tiktokSettings.allowStitch || creator.stitchDisabled,
+        video_cover_timestamp_ms: videoCoverOffsetMs(video.durationMs),
+        brand_content_toggle: Boolean(tiktokSettings.brandContent),
+        brand_organic_toggle: Boolean(tiktokSettings.brandOrganic),
+      },
+      source_info: { source: "PULL_FROM_URL", video_url: video.url },
+    },
+  });
+  return {
+    status: "publishing",
+    externalPostId: publishIdOf(data),
+    platformPostUrl: null,
+    username: creator.username || account.username || null,
+  };
+}
+
+/**
+ * Lance la publication d'un carrousel photo ou d'une vidéo (asynchrone
+ * chez TikTok).
+ * tiktokSettings : { privacyLevel, allowComment, brandOrganic, brandContent,
+ * allowDuet, allowStitch }
  */
 export async function publish({
   account,
@@ -303,6 +407,16 @@ export async function publish({
       "privacy_level_option_mismatch",
       "cette confidentialité n'est plus proposée par TikTok",
     );
+  }
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    return publishVideo({
+      account,
+      accessToken,
+      content,
+      video: media[0],
+      tiktokSettings,
+      creator,
+    });
   }
   const images = [];
   for (const item of media) {
@@ -332,17 +446,9 @@ export async function publish({
       },
     },
   });
-  const publishId = data?.data?.publish_id;
-  if (!publishId) {
-    throw new DirectApiError("tiktok : publish_id absent", {
-      network: NETWORK,
-      status: 502,
-      transient: true,
-    });
-  }
   return {
     status: "publishing",
-    externalPostId: String(publishId),
+    externalPostId: publishIdOf(data),
     platformPostUrl: null,
     username: creator.username || account.username || null,
   };
@@ -356,6 +462,7 @@ export async function checkPublication({
   account,
   accessToken,
   externalPostId,
+  media = [],
 }) {
   const { data, text } = await api("POST", "post/publish/status/fetch/", {
     token: accessToken,
@@ -375,7 +482,11 @@ export async function checkPublication({
     return {
       status: "published",
       externalPostId: postId || externalPostId,
-      platformPostUrl: postUrl(account.username, postId),
+      platformPostUrl: postUrl(
+        account.username,
+        postId,
+        media.length === 1 && isVideoMedia(media[0]) ? "video" : "photo",
+      ),
     };
   }
   return { status: "publishing", externalPostId, platformPostUrl: null };

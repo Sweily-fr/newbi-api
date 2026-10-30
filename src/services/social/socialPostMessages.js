@@ -52,6 +52,13 @@ export function targetErrorMessage(target) {
       return `Le compte ${network} n'est pas configuré pour publier (ex. Instagram doit être un compte professionnel).`;
     case "platform_rejected":
       return `${network} a refusé ce post.`;
+    case "video_rejected":
+      return `${network} a refusé la vidéo${target.errorMessage ? ` : ${target.errorMessage}` : "."}`;
+    case "video_too_long":
+      // Message français déjà complet (durée maximale du créateur TikTok)
+      return target.errorMessage || `La vidéo est trop longue pour ${network}.`;
+    case "video_processing_timeout":
+      return `${network} n'a pas terminé le traitement de la vidéo à temps. Réessayez plus tard.`;
     default:
       return `La publication sur ${network} a échoué. Réessayez dans quelques minutes.`;
   }

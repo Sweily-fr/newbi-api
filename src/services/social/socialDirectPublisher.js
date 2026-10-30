@@ -23,7 +23,10 @@ import {
  *   exige toujours ce bail (deux passes ne publient jamais deux fois).
  * - Erreur passagère : nouvel essai avec délai, 3 fois au plus ; erreur
  *   définitive : échec avec une errorCategory de socialPostMessages.js.
- * - TikTok : envoi accepté puis suivi du statut jusqu'à la publication.
+ * - Publication en deux temps (TikTok, et vidéos Instagram, LinkedIn, X) :
+ *   envoi accepté, puis suivi par checkPublication du réseau jusqu'à la
+ *   publication, sans jamais bloquer le cron pendant le traitement chez le
+ *   réseau (état intermédiaire gardé dans processingRef).
  * - Statut global du post : agrégé depuis toutes ses cibles (Zernio et
  *   direct), notification de l'auteur une seule fois au statut final.
  */
@@ -35,11 +38,12 @@ export const LOCK_MS = 15 * 60 * 1000;
 export const MAX_ATTEMPTS = 4;
 const RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000];
 const MAX_RETRY_AFTER_MS = 60 * 60 * 1000;
-const TIKTOK_FIRST_CHECK_MS = 30 * 1000;
-const TIKTOK_CHECK_MS = 60 * 1000;
-const TIKTOK_MAX_PROCESSING_MS = 2 * 60 * 60 * 1000;
+const FIRST_CHECK_MS = 30 * 1000;
+const CHECK_MS = 60 * 1000;
+// Traitement chez le réseau au plus (sauf maxProcessingMs du réseau)
+const MAX_PROCESSING_MS = 2 * 60 * 60 * 1000;
 const TIKTOK_URL_WATCH_MS = 60 * 60 * 1000;
-const TIKTOK_URL_CHECK_MS = 2 * 60 * 1000;
+const RECHECK_MS = 2 * 60 * 1000;
 const BATCH_SIZE = 25;
 
 // Tarif X à la création d'un post (docs.x.com/x-api/getting-started/pricing)
@@ -92,7 +96,8 @@ export const dueTargetMatch = (now) => ({
     {
       $or: [
         { status: "pending" },
-        // Publication TikTok en cours, ou envoi interrompu (bail expiré)
+        // Publication en deux temps en cours, ou envoi interrompu (bail
+        // expiré)
         { status: "publishing" },
         // Adresse du post TikTok encore attendue
         { status: "published", urlCheckUntil: { $gt: now } },
@@ -286,7 +291,7 @@ async function publishTarget(post, target, lockUntil, now) {
     );
 
     if (result.status === "publishing") {
-      // TikTok : publication acceptée, suivie au tour suivant
+      // Publication acceptée, suivie aux tours suivants (TikTok, vidéos)
       if (result.username && result.username !== account.username) {
         await SocialAccount.updateOne(
           { _id: account._id },
@@ -295,9 +300,12 @@ async function publishTarget(post, target, lockUntil, now) {
       }
       await writeTarget(post._id, target, lockUntil, {
         status: "publishing",
-        externalPostId: result.externalPostId,
+        externalPostId: result.externalPostId || null,
+        processingRef: result.processingRef || null,
         submittedAt: now,
-        nextAttemptAt: new Date(now.getTime() + TIKTOK_FIRST_CHECK_MS),
+        nextAttemptAt: new Date(
+          now.getTime() + (result.nextCheckMs ?? FIRST_CHECK_MS),
+        ),
         errorMessage: null,
         errorCategory: null,
       });
@@ -343,7 +351,37 @@ async function publishTarget(post, target, lockUntil, now) {
   }
 }
 
-/** Suivi d'une publication TikTok en cours, ou de l'adresse du post. */
+const isVideoPost = (post) =>
+  (post.media || []).some((media) => media?.kind === "video");
+
+/**
+ * Nouvelle publication complète après un état intermédiaire perdu chez le
+ * réseau (conteneur Instagram expiré, jamais publié) : la cible repart
+ * comme un nouvel essai, dans la limite des essais.
+ */
+async function restartTarget(post, target, lockUntil, now, error) {
+  const attempts = target.attempts || 1;
+  if (attempts >= MAX_ATTEMPTS) {
+    await writeTarget(post._id, target, lockUntil, failedFields(error));
+    return "failed";
+  }
+  await writeTarget(post._id, target, lockUntil, {
+    status: "pending",
+    externalPostId: null,
+    processingRef: null,
+    submittedAt: null,
+    nextAttemptAt: new Date(now.getTime() + retryDelay(attempts, error)),
+    errorMessage: null,
+    errorCategory: null,
+  });
+  return "retry";
+}
+
+/**
+ * Suivi d'une publication en deux temps (TikTok, vidéos Instagram, LinkedIn
+ * et X) : le réseau termine son traitement, puis checkPublication publie
+ * (ou constate la publication) ; ou suivi de l'adresse d'un post TikTok.
+ */
 async function checkTarget(post, target, lockUntil, now, mode) {
   const { account, missing } = await loadTargetAccount(post, target);
   const network = account ? directNetworkFor(account.platform) : null;
@@ -360,10 +398,19 @@ async function checkTarget(post, target, lockUntil, now, mode) {
         account,
         accessToken,
         externalPostId: target.externalPostId,
+        processingRef: target.processingRef || null,
+        submittedAt: target.submittedAt || null,
+        content: post.content || "",
+        media: post.media || [],
+        tiktokSettings: post.tiktokSettings || null,
+        workspaceId: post.workspaceId,
+        now,
       }),
     );
     if (result.status === "published") {
+      // Adresse attendue après la modération : TikTok seulement
       const watchUrl =
+        account.platform === "tiktok" &&
         !result.platformPostUrl &&
         post.tiktokSettings?.privacyLevel === "PUBLIC_TO_EVERYONE";
       const fields = {
@@ -380,46 +427,75 @@ async function checkTarget(post, target, lockUntil, now, mode) {
               : null,
         nextAttemptAt:
           watchUrl || (mode === "url" && !result.platformPostUrl)
-            ? new Date(now.getTime() + TIKTOK_URL_CHECK_MS)
+            ? new Date(now.getTime() + RECHECK_MS)
             : null,
       };
-      if (mode !== "url") fields.publishedAt = now;
+      // Identifiant du post publié (TikTok garde son publish_id, relu pour
+      // l'adresse)
+      if (!target.externalPostId && result.externalPostId) {
+        fields.externalPostId = result.externalPostId;
+      }
+      if (mode !== "url") {
+        fields.publishedAt = now;
+        fields.errorMessage = null;
+        fields.errorCategory = null;
+      }
       await writeTarget(post._id, target, lockUntil, fields);
+      if (mode !== "url" && account.platform === "twitter") {
+        logXCost(post, post.content);
+      }
+      if (mode !== "url") {
+        logger.info(
+          `[SocialDirect] Post ${post._id} publié sur ${account.platform} (compte ${account._id}) après traitement`,
+        );
+      }
       return "published";
     }
     const startedAt = new Date(
       target.submittedAt || post.scheduledFor,
     ).getTime();
-    if (
-      mode === "check" &&
-      now.getTime() - startedAt > TIKTOK_MAX_PROCESSING_MS
-    ) {
+    const maxProcessingMs = network.maxProcessingMs || MAX_PROCESSING_MS;
+    if (mode === "check" && now.getTime() - startedAt > maxProcessingMs) {
+      const video = isVideoPost(post);
       await writeTarget(
         post._id,
         target,
         lockUntil,
         failedFields(
-          new DirectApiError("TikTok n'a pas confirmé la publication", {
-            category: "platform_rejected",
-            detail: "publication non confirmée",
-          }),
+          new DirectApiError(
+            `${account.platform} n'a pas confirmé la publication`,
+            {
+              category: video
+                ? "video_processing_timeout"
+                : "platform_rejected",
+              detail: "publication non confirmée",
+            },
+          ),
         ),
       );
       return "failed";
     }
     await writeTarget(post._id, target, lockUntil, {
-      nextAttemptAt: new Date(now.getTime() + TIKTOK_CHECK_MS),
+      nextAttemptAt: new Date(now.getTime() + (result.nextCheckMs ?? CHECK_MS)),
+      // État intermédiaire mis à jour par le réseau (au besoin)
+      ...(result.processingRef ? { processingRef: result.processingRef } : {}),
     });
     return "publishing";
   } catch (rawError) {
     const error = asDirectError(rawError);
     if (error.authInvalid) await markNeedsReconnect(account, error.message);
+    if (mode === "check" && error.restart) {
+      logger.warn(
+        `[SocialDirect] Publication à reprendre sur ${account.platform} (post ${post._id}) : ${error.message}`,
+      );
+      return restartTarget(post, target, lockUntil, now, error);
+    }
     if (mode === "check" && !error.transient) {
       await writeTarget(post._id, target, lockUntil, failedFields(error));
       return "failed";
     }
     await writeTarget(post._id, target, lockUntil, {
-      nextAttemptAt: new Date(now.getTime() + TIKTOK_URL_CHECK_MS),
+      nextAttemptAt: new Date(now.getTime() + RECHECK_MS),
       ...(mode === "url" && !error.transient ? { urlCheckUntil: null } : {}),
     });
     return "retry";
@@ -427,16 +503,16 @@ async function checkTarget(post, target, lockUntil, now, mode) {
 }
 
 /**
- * Traite une cible directe due : envoi, suivi TikTok, ou envoi interrompu
- * (bail expiré sans résultat : marqué en échec, jamais renvoyé, pour ne pas
- * publier deux fois).
+ * Traite une cible directe due : envoi, suivi d'une publication en deux
+ * temps, ou envoi interrompu (bail expiré sans résultat : marqué en échec,
+ * jamais renvoyé, pour ne pas publier deux fois).
  */
 async function processTarget(postId, target, now) {
   const mode =
     target.status === "pending"
       ? "publish"
       : target.status === "publishing"
-        ? target.externalPostId
+        ? target.externalPostId || target.processingRef
           ? "check"
           : "stale"
         : "url";
@@ -588,6 +664,7 @@ export async function resetFailedDirectTargets(postId) {
         "targets.$[t].lockedUntil": null,
         "targets.$[t].errorMessage": null,
         "targets.$[t].errorCategory": null,
+        "targets.$[t].processingRef": null,
         status: "publishing",
       },
     },

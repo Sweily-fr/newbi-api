@@ -16,7 +16,9 @@ const DEFAULT_TIMEOUT_MS = 20000;
  * - category : errorCategory de la cible (voir socialPostMessages.js) ;
  * - transient : on peut réessayer plus tard sans rien changer ;
  * - authInvalid : jeton expiré ou révoqué (le compte doit être reconnecté,
- *   sauf si un rafraîchissement le sauve).
+ *   sauf si un rafraîchissement le sauve) ;
+ * - restart : publication en deux temps à reprendre depuis le début
+ *   (conteneur Instagram expiré, jamais publié).
  */
 export class DirectApiError extends Error {
   constructor(
@@ -32,6 +34,7 @@ export class DirectApiError extends Error {
       authInvalid = false,
       retryAfterMs = null,
       detail = null,
+      restart = false,
     } = {},
   ) {
     super(message);
@@ -47,6 +50,7 @@ export class DirectApiError extends Error {
     this.retryAfterMs = retryAfterMs;
     // Message du réseau, gardé pour l'affichage (contenu refusé)
     this.detail = detail;
+    this.restart = restart;
   }
 }
 

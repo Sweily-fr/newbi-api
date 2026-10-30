@@ -1,3 +1,4 @@
+import { isVideoMedia } from "../socialPostRules.js";
 import { DirectApiError, configError, directRequest } from "./directHttp.js";
 
 /**
@@ -11,8 +12,13 @@ import { DirectApiError, configError, directRequest } from "./directHttp.js";
  * dont on tire les jetons de page (/me/accounts, sans date d'expiration).
  * Seuls les jetons de page sont gardés (chiffrés) : un compte par page.
  *
+ * Vidéo : vidéo de page (POST graph-video.facebook.com/<page>/videos,
+ * file_url = notre route .mp4), publiée dès la réponse ; Facebook la traite
+ * ensuite de son côté (1 Go et 20 minutes au plus par adresse).
+ *
  * Version de l'API épinglée par META_GRAPH_VERSION.
  * Doc : developers.facebook.com/docs/pages-api/posts,
+ * /docs/graph-api/reference/page/videos/, /docs/video-api/guides/publishing,
  * /docs/facebook-login/facebook-login-for-business
  */
 
@@ -21,8 +27,11 @@ export const PLATFORMS = ["facebook"];
 
 const DEFAULT_GRAPH_VERSION = "v26.0";
 const GRAPH_URL = "https://graph.facebook.com";
+const GRAPH_VIDEO_URL = "https://graph-video.facebook.com";
 const DIALOG_URL = "https://www.facebook.com";
 const PUBLISH_TIMEOUT_MS = 60000;
+// Facebook va chercher la vidéo pendant la requête
+const VIDEO_PUBLISH_TIMEOUT_MS = 90000;
 
 // Permissions demandées (vérifiées par l'App Review de Meta)
 const FACEBOOK_SCOPES = [
@@ -50,6 +59,10 @@ const CONTENT_SUBCODES = new Set([
   2207004, 2207005, 2207009, 2207010, 2207028, 2207040, 2207052,
 ]);
 const CONTENT_CODES = new Set([324, 506, 9004, 36000, 36001, 36003, 36004]);
+// Vidéos : fichier refusé (format, fichier endommagé…) ; vidéo introuvable
+// à l'adresse donnée ou envoi interrompu chez Facebook (passagers)
+const VIDEO_CONTENT_CODES = new Set([351, 352, 353, 356, 357]);
+const VIDEO_TRANSIENT_CODES = new Set([389, 390, 6000, 6001]);
 
 /** Délai annoncé par X-Business-Use-Case-Usage (minutes), en ms. */
 function retryAfterFromUsage(response) {
@@ -122,17 +135,24 @@ export function classifyMetaError(
   }
   if (code === 368) return make({ category: "user_abuse" });
   if (CONTENT_CODES.has(code)) return make({ category: "user_content" });
+  if (VIDEO_CONTENT_CODES.has(code))
+    return make({ category: "video_rejected" });
+  if (VIDEO_TRANSIENT_CODES.has(code)) return make({ transient: true });
   if (TRANSIENT_CODES.has(code) || response.status >= 500) {
     return make({ transient: true });
   }
   return make({ category: "platform_rejected" });
 }
 
-const graph = (method, path, { token, query, form, timeoutMs } = {}) =>
+const graph = (
+  method,
+  path,
+  { token, query, form, timeoutMs, host = GRAPH_URL } = {},
+) =>
   directRequest({
     network: NETWORK,
     method,
-    url: `${GRAPH_URL}/${graphVersion()}/${path}`,
+    url: `${host}/${graphVersion()}/${path}`,
     // Jeton en paramètre (méthode documentée) ; jamais journalisé
     query: method === "GET" ? { ...query, access_token: token } : query,
     form: method === "GET" ? undefined : { ...form, access_token: token },
@@ -259,7 +279,50 @@ async function permalink(id, token, field) {
   }
 }
 
+/** Adresse absolue (permalink_url d'une vidéo est parfois relative). */
+const absoluteFacebookUrl = (url) => {
+  if (!url) return null;
+  return url.startsWith("/") ? `https://www.facebook.com${url}` : url;
+};
+
+/** Vidéo de page : Facebook va la chercher à notre adresse. */
+async function publishFacebookVideo({ account, accessToken, content, video }) {
+  const { data } = await graph("POST", `${account.externalAccountId}/videos`, {
+    host: GRAPH_VIDEO_URL,
+    token: accessToken,
+    form: {
+      file_url: video.url,
+      description: content || undefined,
+      published: "true",
+    },
+    timeoutMs: VIDEO_PUBLISH_TIMEOUT_MS,
+  });
+  const videoId = data?.id || data?.video_id;
+  if (!videoId) {
+    throw new DirectApiError("meta : vidéo sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    status: "published",
+    externalPostId: String(videoId),
+    platformPostUrl: absoluteFacebookUrl(
+      await permalink(String(videoId), accessToken, "permalink_url"),
+    ),
+  };
+}
+
 async function publishFacebook({ account, accessToken, content, media }) {
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    return publishFacebookVideo({
+      account,
+      accessToken,
+      content,
+      video: media[0],
+    });
+  }
   const pageId = account.externalAccountId;
   let postId;
   if (media.length === 0) {
@@ -321,7 +384,8 @@ async function publishFacebook({ account, accessToken, content, media }) {
 
 /**
  * Publie tout de suite sur une page Facebook.
- * media : [{ url, width, height }] (adresses publiques).
+ * media : [{ url, width, height }] (adresses publiques), ou une vidéo
+ * [{ kind: "video", url }].
  */
 export const publish = (params) => publishFacebook(params);
 
