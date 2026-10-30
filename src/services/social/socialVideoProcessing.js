@@ -177,6 +177,7 @@ export const videoTools = {
       [
         "-v",
         "error",
+        ...SAFE_INPUT,
         "-print_format",
         "json",
         "-show_format",
@@ -310,7 +311,17 @@ export function targetFps(info) {
   return null;
 }
 
-const COMMON_INPUT = ["-hide_banner", "-nostdin", "-y"];
+// Fichier envoyé par le client, donc non fiable : lu seulement comme un
+// conteneur vidéo (MP4/MOV, Matroska/WebM) et sur le disque. Sinon une
+// playlist (HLS, concat) déguisée en vidéo ferait lire à ffmpeg d'autres
+// fichiers du serveur ou des adresses du réseau.
+export const SAFE_INPUT = [
+  "-protocol_whitelist",
+  "file",
+  "-format_whitelist",
+  "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm",
+];
+const COMMON_INPUT = ["-hide_banner", "-nostdin", "-y", ...SAFE_INPUT];
 // Première piste vidéo et première piste son, sans sous-titres, données ni
 // métadonnées (lieu de tournage)
 const COMMON_MAPPING = [

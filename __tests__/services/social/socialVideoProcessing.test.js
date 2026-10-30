@@ -179,6 +179,13 @@ describe("analyse de la vidéo (ffprobe)", () => {
 
     const remux = buildRemuxArgs("in.mov", "out.mp4").join(" ");
     expect(remux).toContain("-c copy -movflags +faststart");
+
+    // Fichier du client lu seulement comme conteneur vidéo, sur le disque
+    for (const args of [joined, remux]) {
+      expect(args).toMatch(
+        /-protocol_whitelist file -format_whitelist mov,mp4,m4a,3gp,3g2,mj2,matroska,webm .*-i in\.mov/,
+      );
+    }
   });
 });
 
@@ -532,5 +539,16 @@ describe.skipIf(!hasBinaries || !sourceCodec)(
         0,
       );
     }, 120000);
+
+    it("refuse une playlist déguisée en vidéo (pas de lecture d'autres fichiers)", async () => {
+      const input = path.join(dir, "input");
+      await fs.promises.writeFile(
+        input,
+        "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nfile:///etc/hosts\n#EXT-X-ENDLIST\n",
+      );
+      await expect(prepareVideoFile(input, dir)).rejects.toThrow(
+        VIDEO_UNREADABLE_MESSAGE,
+      );
+    }, 60000);
   },
 );
