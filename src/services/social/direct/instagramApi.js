@@ -1,11 +1,6 @@
-import { isVideoMedia, videoCoverOffsetMs } from "../socialPostRules.js";
-import { classifyMetaError, graphVersion } from "./metaApi.js";
-import {
-  DirectApiError,
-  configError,
-  directRequest,
-  timing,
-} from "./directHttp.js";
+import { classifyMetaError } from "./metaApi.js";
+import { DirectApiError, configError, directRequest } from "./directHttp.js";
+import { createInstagramPublisher } from "./instagramPublishing.js";
 
 /**
  * Comptes Instagram professionnels par « Instagram API with Instagram
@@ -19,7 +14,10 @@ import {
  * Vidéo : publiée en Reel (media_type REELS, share_to_feed), en deux temps
  * (le traitement chez Meta prend souvent plus d'une minute) : publish crée
  * le conteneur, checkPublication lit son statut (une lecture par minute,
- * conseil de Meta) et le publie quand il est prêt.
+ * conseil de Meta) et le publie quand il est prêt. Stories : photos ou une
+ * vidéo (instagramPublishing.js, commun avec la connexion via Facebook).
+ * Pas de son tendance : l'API Audio n'existe que pour la connexion via
+ * Facebook (instagramFacebookApi.js).
  *
  * Jeton utilisateur longue durée (60 jours), rafraîchi tant qu'il est
  * valide et vieux d'au moins 24 h : on le rafraîchit 15 jours avant son
@@ -38,11 +36,6 @@ const SCOPES = [
   "instagram_business_basic",
   "instagram_business_content_publish",
 ];
-const CONTAINER_POLL_ATTEMPTS = 10;
-const CONTAINER_POLL_DELAY_MS = 3000;
-const PUBLISH_TIMEOUT_MS = 60000;
-// Reel : statut du conteneur lu une fois par minute (conseil de Meta)
-const VIDEO_CHECK_MS = 60 * 1000;
 // Au-delà, la vidéo est considérée comme non traitée par Meta
 export const MAX_PROCESSING_MS = 30 * 60 * 1000;
 // Rafraîchi 15 jours avant l'expiration (au-delà de 60 jours sans
@@ -77,17 +70,13 @@ function classifyInstagramError(response, data, label) {
   return classifyMetaError(response, data, label, NETWORK);
 }
 
-const graph = (method, path, { token, query, json, timeoutMs } = {}) =>
-  directRequest({
-    network: NETWORK,
-    method,
-    url: `${GRAPH_URL}/${graphVersion()}/${path}`,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    query,
-    json,
-    timeoutMs,
-    check: classifyInstagramError,
-  });
+const publisher = createInstagramPublisher({
+  network: NETWORK,
+  graphUrl: GRAPH_URL,
+  tokenIn: "header",
+  classify: classifyInstagramError,
+});
+const { graph } = publisher;
 
 // ── Connexion ──────────────────────────────────────────────────────────────
 
@@ -204,201 +193,8 @@ export async function refreshCredentials({ accessToken, now = new Date() }) {
 
 // ── Publication ────────────────────────────────────────────────────────────
 
-/**
- * Conteneur en erreur → DirectApiError classée (« status » porte le
- * sous-code, ex. 2207009 : format). Vidéo : refus de la vidéo.
- */
-function containerError(data, { video = false } = {}) {
-  const subcode = Number(String(data?.status || "").match(/\d{7}/)?.[0]);
-  const error = classifyMetaError(
-    { ok: false, status: 400, headers: null },
-    {
-      error: {
-        message: data?.status || "Conteneur en erreur",
-        code: 100,
-        error_subcode: subcode || null,
-      },
-    },
-    "container",
-    NETWORK,
-  );
-  if (
-    video &&
-    !error.transient &&
-    !error.authInvalid &&
-    ["platform_rejected", "user_content"].includes(error.category)
-  ) {
-    error.category = "video_rejected";
-  }
-  return error;
-}
-
-/** Attend qu'un conteneur soit prêt (FINISHED). */
-async function waitForContainer(containerId, token) {
-  for (let attempt = 1; attempt <= CONTAINER_POLL_ATTEMPTS; attempt += 1) {
-    const { data } = await graph("GET", containerId, {
-      token,
-      query: { fields: "status_code,status" },
-    });
-    const status = data?.status_code;
-    if (status === "FINISHED" || status === "PUBLISHED") return;
-    if (status === "ERROR") throw containerError(data);
-    if (status === "EXPIRED") {
-      throw new DirectApiError("instagram : conteneur expiré", {
-        network: NETWORK,
-        transient: true,
-      });
-    }
-    await timing.sleep(CONTAINER_POLL_DELAY_MS);
-  }
-  throw new DirectApiError("instagram : conteneur pas encore prêt", {
-    network: NETWORK,
-    transient: true,
-  });
-}
-
-async function createContainer(igUserId, accessToken, json) {
-  const { data } = await graph("POST", `${igUserId}/media`, {
-    token: accessToken,
-    json,
-    timeoutMs: PUBLISH_TIMEOUT_MS,
-  });
-  if (!data?.id) {
-    throw new DirectApiError("instagram : conteneur sans identifiant", {
-      network: NETWORK,
-      status: 502,
-      transient: true,
-    });
-  }
-  return String(data.id);
-}
-
-/** Publie un conteneur prêt, puis lit l'adresse du post (au mieux). */
-async function publishContainer(igUserId, containerId, accessToken) {
-  const { data } = await graph("POST", `${igUserId}/media_publish`, {
-    token: accessToken,
-    json: { creation_id: containerId },
-    timeoutMs: PUBLISH_TIMEOUT_MS,
-  });
-  if (!data?.id) {
-    throw new DirectApiError("instagram : publication sans identifiant", {
-      network: NETWORK,
-      status: 502,
-      transient: true,
-    });
-  }
-  let platformPostUrl = null;
-  try {
-    const { data: info } = await graph("GET", String(data.id), {
-      token: accessToken,
-      query: { fields: "permalink" },
-    });
-    platformPostUrl = info?.permalink || null;
-  } catch {
-    // Publié : l'adresse manquante ne doit pas faire croire à un échec
-  }
-  return {
-    status: "published",
-    externalPostId: String(data.id),
-    platformPostUrl,
-  };
-}
-
-/**
- * Reel : conteneur créé (Instagram va chercher la vidéo à notre adresse),
- * publié plus tard par checkPublication.
- */
-async function publishReel({ account, accessToken, content, video }) {
-  const containerId = await createContainer(
-    account.externalAccountId,
-    accessToken,
-    {
-      media_type: "REELS",
-      video_url: video.url,
-      share_to_feed: true,
-      thumb_offset: videoCoverOffsetMs(video.durationMs),
-      ...(content ? { caption: content } : {}),
-    },
-  );
-  return {
-    status: "publishing",
-    externalPostId: null,
-    processingRef: containerId,
-    platformPostUrl: null,
-    nextCheckMs: VIDEO_CHECK_MS,
-  };
-}
-
-/**
- * Suivi d'un Reel : conteneur prêt → publié ; en cours → à relire ; en
- * erreur → refus ; expiré (jamais publié) → publication à reprendre.
- */
-export async function checkPublication({
-  account,
-  accessToken,
-  processingRef,
-}) {
-  const { data } = await graph("GET", processingRef, {
-    token: accessToken,
-    query: { fields: "status_code,status" },
-  });
-  const status = data?.status_code;
-  if (status === "FINISHED") {
-    return publishContainer(
-      account.externalAccountId,
-      processingRef,
-      accessToken,
-    );
-  }
-  if (status === "PUBLISHED") {
-    // Publié au tour précédent (réponse perdue) : identifiant inconnu
-    return { status: "published", externalPostId: null, platformPostUrl: null };
-  }
-  if (status === "ERROR") throw containerError(data, { video: true });
-  if (status === "EXPIRED") {
-    throw new DirectApiError("instagram : conteneur expiré", {
-      network: NETWORK,
-      transient: true,
-      restart: true,
-    });
-  }
-  return { status: "publishing", nextCheckMs: VIDEO_CHECK_MS };
-}
-
-/**
- * Publie une image ou un carrousel (2 à 10 images), ou lance un Reel (une
- * vidéo). Les médias doivent être à une adresse publique (Instagram va les
- * chercher).
- */
-export async function publish({ account, accessToken, content, media }) {
-  if (media.length === 1 && isVideoMedia(media[0])) {
-    return publishReel({ account, accessToken, content, video: media[0] });
-  }
-  const igUserId = account.externalAccountId;
-  const create = (json) => createContainer(igUserId, accessToken, json);
-
-  let containerId;
-  if (media.length === 1) {
-    containerId = await create({
-      image_url: media[0].url,
-      ...(content ? { caption: content } : {}),
-    });
-  } else {
-    const children = [];
-    for (const item of media) {
-      children.push(
-        await create({ image_url: item.url, is_carousel_item: true }),
-      );
-    }
-    containerId = await create({
-      media_type: "CAROUSEL",
-      children: children.join(","),
-      ...(content ? { caption: content } : {}),
-    });
-  }
-  await waitForContainer(containerId, accessToken);
-  return publishContainer(igUserId, containerId, accessToken);
-}
+/** Photo, carrousel, Reel ou stories (instagramPublishing.js). */
+export const { publish, checkPublication } = publisher;
 
 export default {
   NETWORK,

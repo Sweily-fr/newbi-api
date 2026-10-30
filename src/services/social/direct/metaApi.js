@@ -16,10 +16,20 @@ import { DirectApiError, configError, directRequest } from "./directHttp.js";
  * file_url = notre route .mp4), publiée dès la réponse ; Facebook la traite
  * ensuite de son côté (1 Go et 20 minutes au plus par adresse).
  *
+ * Stories de page (facebookSettings.format « story ») : une story par photo
+ * (photo déposée sans être publiée, puis photo_stories), progression
+ * enregistrée après chacune ; ou une vidéo (video_stories en trois temps :
+ * start, envoi de notre adresse à upload_url, finish), publiée dès la
+ * réponse. Pas de texte (l'API n'a pas de légende pour les stories).
+ *
+ * L'identifiant de l'utilisateur pour notre appli (GET /me) est gardé sur
+ * chaque page (platformData.metaUserId) : les rappels de Meta
+ * (désautorisation, suppression des données) le transmettent.
+ *
  * Version de l'API épinglée par META_GRAPH_VERSION.
  * Doc : developers.facebook.com/docs/pages-api/posts,
  * /docs/graph-api/reference/page/videos/, /docs/video-api/guides/publishing,
- * /docs/facebook-login/facebook-login-for-business
+ * /docs/facebook-login/facebook-login-for-business, /docs/page-stories-api
  */
 
 export const NETWORK = "meta";
@@ -229,6 +239,11 @@ export async function exchangeCode({ code, redirectUri }) {
     },
   });
   const userToken = long?.access_token || short.access_token;
+  const { data: me } = await graph("GET", "me", {
+    token: userToken,
+    query: { fields: "id" },
+  });
+  const metaUserId = me?.id ? String(me.id) : null;
   const pages = await listPages(userToken);
 
   const accounts = [];
@@ -248,7 +263,7 @@ export async function exchangeCode({ code, redirectUri }) {
       avatarUrl: page.picture?.data?.url || null,
       credentials: { accessToken: page.access_token, tokenExpiresAt: null },
       credentialGroup: null,
-      platformData: null,
+      platformData: { metaUserId },
     });
   }
   return { accounts };
@@ -314,7 +329,132 @@ async function publishFacebookVideo({ account, accessToken, content, video }) {
   };
 }
 
-async function publishFacebook({ account, accessToken, content, media }) {
+const missingId = (what) =>
+  new DirectApiError(`meta : ${what} sans identifiant`, {
+    network: NETWORK,
+    status: 502,
+    transient: true,
+  });
+
+/**
+ * Stories photo : chaque photo déposée sans être publiée, puis publiée en
+ * story, dans l'ordre, en reprenant après la dernière déjà publiée
+ * (progress.storyIds) ; progression enregistrée après chaque story.
+ */
+async function publishPhotoStories({
+  account,
+  accessToken,
+  media,
+  progress,
+  saveProgress,
+}) {
+  const pageId = account.externalAccountId;
+  const storyIds = [...(progress?.storyIds || [])];
+  for (let index = storyIds.length; index < media.length; index += 1) {
+    const { data: photo } = await graph("POST", `${pageId}/photos`, {
+      token: accessToken,
+      form: { url: media[index].url, published: "false" },
+      timeoutMs: PUBLISH_TIMEOUT_MS,
+    });
+    if (!photo?.id) throw missingId("photo");
+    const { data: story } = await graph("POST", `${pageId}/photo_stories`, {
+      token: accessToken,
+      form: { photo_id: String(photo.id) },
+      timeoutMs: PUBLISH_TIMEOUT_MS,
+    });
+    if (!story?.post_id) throw missingId("story");
+    storyIds.push(String(story.post_id));
+    if (saveProgress) await saveProgress({ storyIds: [...storyIds] });
+  }
+  return {
+    status: "published",
+    externalPostId: storyIds[0] || null,
+    platformPostUrl: storyIds[0]
+      ? absoluteFacebookUrl(
+          await permalink(storyIds[0], accessToken, "permalink_url"),
+        )
+      : null,
+    storyIds,
+  };
+}
+
+/**
+ * Story vidéo : session ouverte (start), Facebook va chercher la vidéo à
+ * notre adresse (en-tête file_url sur upload_url), puis publication
+ * (finish).
+ */
+async function publishVideoStory({
+  account,
+  accessToken,
+  video,
+  progress,
+  saveProgress,
+}) {
+  const done = progress?.storyIds || [];
+  if (done.length > 0) {
+    // Déjà publiée (résultat perdu) : rien à republier
+    return {
+      status: "published",
+      externalPostId: done[0],
+      platformPostUrl: null,
+      storyIds: [...done],
+    };
+  }
+  const pageId = account.externalAccountId;
+  const { data: session } = await graph("POST", `${pageId}/video_stories`, {
+    token: accessToken,
+    form: { upload_phase: "start" },
+    timeoutMs: PUBLISH_TIMEOUT_MS,
+  });
+  if (!session?.video_id || !session?.upload_url) throw missingId("vidéo");
+  const { data: upload } = await directRequest({
+    network: NETWORK,
+    method: "POST",
+    url: session.upload_url,
+    headers: { Authorization: `OAuth ${accessToken}`, file_url: video.url },
+    timeoutMs: VIDEO_PUBLISH_TIMEOUT_MS,
+    check: classifyMetaError,
+  });
+  if (upload?.success !== true) {
+    throw new DirectApiError("meta : vidéo de story non reçue", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const { data: story } = await graph("POST", `${pageId}/video_stories`, {
+    token: accessToken,
+    form: { upload_phase: "finish", video_id: String(session.video_id) },
+    timeoutMs: VIDEO_PUBLISH_TIMEOUT_MS,
+  });
+  if (!story?.post_id) throw missingId("story");
+  const storyIds = [String(story.post_id)];
+  if (saveProgress) await saveProgress({ storyIds });
+  return {
+    status: "published",
+    externalPostId: storyIds[0],
+    platformPostUrl: absoluteFacebookUrl(
+      await permalink(storyIds[0], accessToken, "permalink_url"),
+    ),
+    storyIds,
+  };
+}
+
+async function publishFacebook({
+  account,
+  accessToken,
+  content,
+  media,
+  facebookSettings = null,
+  progress = null,
+  saveProgress = null,
+}) {
+  if (facebookSettings?.format === "story") {
+    const params = { account, accessToken, media, progress, saveProgress };
+    return media.length === 1 && isVideoMedia(media[0])
+      ? publishVideoStory({ ...params, video: media[0] })
+      : publishPhotoStories(params);
+  }
   if (media.length === 1 && isVideoMedia(media[0])) {
     return publishFacebookVideo({
       account,
@@ -383,7 +523,7 @@ async function publishFacebook({ account, accessToken, content, media }) {
 }
 
 /**
- * Publie tout de suite sur une page Facebook.
+ * Publie tout de suite sur une page Facebook (ou en stories).
  * media : [{ url, width, height }] (adresses publiques), ou une vidéo
  * [{ kind: "video", url }].
  */
