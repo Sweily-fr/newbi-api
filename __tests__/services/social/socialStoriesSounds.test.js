@@ -62,6 +62,7 @@ import {
   resetFailedDirectTargets,
 } from "../../../src/services/social/socialDirectPublisher.js";
 import { clearSoundsCache } from "../../../src/services/social/socialPublishingService.js";
+import { refreshExpiringTokens } from "../../../src/services/social/socialAccountCredentials.js";
 import { buildOutcomeMessage } from "../../../src/services/social/socialPostNotifications.js";
 import { parseSignedRequest } from "../../../src/services/social/socialMetaCallbacks.js";
 import {
@@ -1086,6 +1087,58 @@ describe("publication des stories et des brouillons", () => {
       status: "failed",
       errorCategory: "auth_expired",
     });
+  });
+});
+
+// ── Jetons des connecteurs ─────────────────────────────────────────────────
+
+describe("jetons des connecteurs", () => {
+  it("Instagram via Facebook : jeton partagé rafraîchi une fois pour tout le groupe", async () => {
+    const soon = later(5 * 24 * 60 * 60 * 1000);
+    await SocialAccount.updateOne(
+      { _id: accounts.igFacebook._id },
+      { $set: { tokenExpiresAt: soon } },
+    );
+    const second = await SocialAccount.create(
+      directAccount({
+        platform: "instagram",
+        connector: "facebook",
+        externalAccountId: "17841400000000009",
+        credentialGroup: "meta-user:mu_1",
+        tokenExpiresAt: soon,
+        platformData: { metaUserId: "mu_1" },
+      }),
+    );
+    const refresh = vi
+      .spyOn(instagramFacebookApi, "refreshCredentials")
+      .mockResolvedValue({
+        accessToken: "user_new",
+        tokenExpiresAt: later(60 * 24 * 60 * 60 * 1000),
+      });
+    const viaLogin = vi.spyOn(instagramApi, "refreshCredentials");
+    expect(await refreshExpiringTokens({ now: NOW })).toBe(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(viaLogin).not.toHaveBeenCalled();
+    const fresh = await SocialAccount.findById(second._id).select(
+      "+accessToken",
+    );
+    expect(decrypt(fresh.accessToken)).toBe("user_new");
+  });
+
+  it("déconnexion d'un compte TikTok Business : révocation par l'API for Business", async () => {
+    const business = vi
+      .spyOn(tiktokBusinessApi, "revoke")
+      .mockResolvedValue(undefined);
+    const loginKit = vi.spyOn(tiktokApi, "revoke");
+    await Mutation.disconnectSocialAccount(
+      null,
+      { accountId: idOf(accounts.tiktokBiz) },
+      ctx,
+    );
+    expect(business).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: "token" }),
+    );
+    expect(loginKit).not.toHaveBeenCalled();
   });
 });
 
