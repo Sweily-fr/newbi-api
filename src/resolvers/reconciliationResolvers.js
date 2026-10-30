@@ -412,6 +412,19 @@ const reconciliationResolvers = {
             };
           }
 
+          // La transaction et la facture doivent être celles de l'espace :
+          // sinon rien n'est délié, et la réponse ne l'annonce pas.
+          const [ownTransaction, ownInvoice] = await Promise.all([
+            Transaction.exists({ _id: transactionId, workspaceId }),
+            Invoice.exists({ _id: invoiceId, workspaceId }),
+          ]);
+          if (!ownTransaction || !ownInvoice) {
+            return {
+              success: false,
+              message: "Transaction ou facture introuvable",
+            };
+          }
+
           // Délier côté transaction ($pull idempotent), origine du lien comprise.
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },

@@ -20,7 +20,10 @@ import {
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { syncCategoryFromTransaction } from "../utils/purchaseInvoiceCategorySync.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
-import { buildPageQuery } from "../utils/transaction-page-query.js";
+import {
+  buildPageQuery,
+  UNCATEGORIZED_PREDICATE,
+} from "../utils/transaction-page-query.js";
 import {
   LINKED_INVOICE_FIELDS,
   LINKED_PURCHASE_INVOICE_FIELDS,
@@ -167,6 +170,24 @@ const bankingResolvers = {
         };
       },
     ),
+
+    // Compteurs « À traiter » de l'accueil : mêmes règles que l'onglet
+    // « Justificatif manquant » de la page Transactions, et transactions sans
+    // catégorie
+    transactionTodoCounts: readBanking(async (parent, { workspaceId }) => {
+      const now = new Date();
+      const [missingReceipt, uncategorized] = await Promise.all([
+        Transaction.countDocuments(
+          buildPageQuery(workspaceId, {}, "MISSING_RECEIPT", now),
+        ),
+        Transaction.countDocuments({
+          workspaceId,
+          deletedAt: null,
+          ...UNCATEGORIZED_PREDICATE,
+        }),
+      ]);
+      return { missingReceipt, uncategorized };
+    }),
 
     transaction: readBanking(async (parent, { id }, { user, workspaceId }) => {
       const transaction = await Transaction.findOne({

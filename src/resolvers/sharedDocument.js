@@ -2059,7 +2059,16 @@ const sharedDocumentResolvers = {
             context,
             workspaceId,
           );
-          const ids = requestedIds.filter((id) => canAccess(id));
+          // Suppression définitive réservée aux dossiers de la corbeille : un
+          // dossier actif passe d'abord par la corbeille (deleteSharedFolder)
+          const trashedFolders = await SharedFolder.find({
+            _id: { $in: requestedIds.filter((id) => canAccess(id)) },
+            workspaceId,
+            trashedAt: { $ne: null },
+          })
+            .select("_id")
+            .lean();
+          const ids = trashedFolders.map((folder) => folder._id);
 
           // Récupérer les documents dans ces dossiers pour supprimer de R2
           const docsInFolders = await SharedDocument.find({
@@ -2086,10 +2095,11 @@ const sharedDocumentResolvers = {
             trashedAt: { $ne: null },
           });
 
-          // Supprimer les dossiers
+          // Supprimer les dossiers (ceux de la corbeille retrouvés ci-dessus)
           const result = await SharedFolder.deleteMany({
             _id: { $in: ids },
             workspaceId,
+            trashedAt: { $ne: null },
           });
 
           return {

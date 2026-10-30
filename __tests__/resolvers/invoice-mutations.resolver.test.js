@@ -127,6 +127,38 @@ const insertInvoice = (overrides = {}) =>
     ...overrides,
   });
 
+describe("Invoice Resolver - Invoice.paymentLink", () => {
+  it("donne le lien de paiement à chaque facture en attente de la liste (compte lu une fois)", async () => {
+    await mongoose.connection.db.collection("stripeconnectaccounts").insertOne({
+      organizationId: organizationId.toString(),
+      userId,
+      accountId: "acct_test",
+      chargesEnabled: true,
+    });
+    const context = ctx();
+    const factures = [1, 2, 3].map(() => ({
+      _id: new mongoose.Types.ObjectId(),
+      status: "PENDING",
+      workspaceId: organizationId,
+    }));
+
+    const liens = await Promise.all(
+      factures.map((f) => invoiceResolvers.Invoice.paymentLink(f, {}, context)),
+    );
+    // Une facture plus tard dans la même requête (après la première lecture)
+    const dernier = await invoiceResolvers.Invoice.paymentLink(
+      { ...factures[0], _id: new mongoose.Types.ObjectId() },
+      {},
+      context,
+    );
+
+    liens.forEach((lien, i) =>
+      expect(lien).toMatch(new RegExp(`/pay/invoice/${factures[i]._id}$`)),
+    );
+    expect(dernier).toMatch(/\/pay\/invoice\/[0-9a-f]{24}$/);
+  });
+});
+
 describe("Invoice Resolver - Query.invoiceStats", () => {
   const resolver = invoiceResolvers.Query.invoiceStats;
 
@@ -173,16 +205,34 @@ describe("Invoice Resolver - Mutation.deleteInvoice", () => {
     expect(await Invoice.collection.findOne({ _id: insertedId })).toBeNull();
   });
 
-  it("deletes a PENDING invoice", async () => {
+  it("refuse de supprimer une facture en attente (trou dans la numérotation)", async () => {
     const { insertedId } = await insertInvoice({ status: "PENDING" });
 
-    const result = await resolver(
-      null,
-      { id: insertedId.toString(), workspaceId: organizationId.toString() },
-      ctx(),
-    );
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
+    expect(
+      await Invoice.collection.findOne({ _id: insertedId }),
+    ).not.toBeNull();
+  });
 
-    expect(result).toBe(true);
+  it("refuse de supprimer une facture annulée", async () => {
+    const { insertedId } = await insertInvoice({ status: "CANCELED" });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(/Seul un brouillon peut être supprimé/);
+    expect(
+      await Invoice.collection.findOne({ _id: insertedId }),
+    ).not.toBeNull();
   });
 
   it("refuse de supprimer une facture transmise en e-facturation", async () => {
@@ -206,19 +256,19 @@ describe("Invoice Resolver - Mutation.deleteInvoice", () => {
     ).not.toBeNull();
   });
 
-  it("supprime une facture en attente dont l'envoi e-invoicing a échoué", async () => {
+  it("refuse aussi une facture en attente dont l'envoi e-invoicing a échoué (facture émise)", async () => {
     const { insertedId } = await insertInvoice({
       status: "PENDING",
       eInvoiceStatus: "ERROR",
     });
 
-    const result = await resolver(
-      null,
-      { id: insertedId.toString(), workspaceId: organizationId.toString() },
-      ctx(),
-    );
-
-    expect(result).toBe(true);
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), workspaceId: organizationId.toString() },
+        ctx(),
+      ),
+    ).rejects.toThrow(/Seul un brouillon peut être supprimé/);
   });
 
   it("blocks deletion of a COMPLETED invoice", async () => {
@@ -230,7 +280,7 @@ describe("Invoice Resolver - Mutation.deleteInvoice", () => {
         { id: insertedId.toString(), workspaceId: organizationId.toString() },
         ctx(),
       ),
-    ).rejects.toThrow(/finalisée|completed/i);
+    ).rejects.toThrow(/Seul un brouillon peut être supprimé/);
   });
 
   it("throws NOT_FOUND when invoice does not exist", async () => {
@@ -412,7 +462,72 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
   });
 });
 
-describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifiée)", () => {
+// Brouillon : entièrement modifiable (articles, remise, client)
+const BROUILLON = { status: "DRAFT", number: "DRAFT-0001" };
+
+describe("Invoice Resolver - Mutation.updateInvoice (facture émise figée)", () => {
+  const resolver = invoiceResolvers.Mutation.updateInvoice;
+  const items = [
+    { description: "Service", quantity: 1, unitPrice: 9999, vatRate: 20 },
+  ];
+
+  it("refuse de changer les articles d'une facture en attente : montant intact", async () => {
+    const { insertedId } = await insertInvoice();
+
+    await expect(
+      resolver(null, { id: insertedId.toString(), input: { items } }, ctx()),
+    ).rejects.toThrow(/Corrigez-la par un avoir/);
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.finalTotalTTC).toBe(1200);
+    expect(stored.items[0].unitPrice).toBe(1000);
+  });
+
+  it("refuse la remise d'une facture payée, même à un administrateur", async () => {
+    const { insertedId } = await insertInvoice({ status: "COMPLETED" });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: { discount: 50, discountType: "PERCENTAGE" },
+        },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.finalTotalTTC).toBe(1200);
+  });
+
+  it("laisse modifier les notes d'une facture en attente", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { footerNotes: "Merci" } },
+      ctx(),
+    );
+
+    expect(result.footerNotes).toBe("Merci");
+    expect(result.finalTotalTTC).toBe(1200);
+  });
+
+  it("laisse un brouillon changer ses articles", async () => {
+    const { insertedId } = await insertInvoice(BROUILLON);
+
+    const result = await resolver(
+      null,
+      { id: insertedId.toString(), input: { items } },
+      ctx(),
+    );
+
+    expect(result.finalTotalHT).toBe(9999);
+  });
+});
+
+describe("Invoice Resolver - Mutation.updateInvoice (facture modifiée)", () => {
   const resolver = invoiceResolvers.Mutation.updateInvoice;
   const items = [
     { description: "Service", quantity: 1, unitPrice: 1000, vatRate: 20 },
@@ -432,6 +547,7 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
 
   it("une remise remise à 0 n'est plus reprise de l'ancienne valeur", async () => {
     const { insertedId } = await insertInvoice({
+      ...BROUILLON,
       discount: 10,
       discountType: "PERCENTAGE",
       finalTotalHT: 900,
@@ -451,7 +567,7 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
   });
 
   it("recalcule les totaux quand seule la remise change", async () => {
-    const { insertedId } = await insertInvoice();
+    const { insertedId } = await insertInvoice(BROUILLON);
 
     const result = await resolver(
       null,
@@ -467,7 +583,7 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
   });
 
   it("n'applique pas la remise en % aux frais de port", async () => {
-    const { insertedId } = await insertInvoice();
+    const { insertedId } = await insertInvoice(BROUILLON);
 
     const result = await resolver(
       null,
@@ -513,7 +629,7 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
 
     await resolver(
       null,
-      { id: insertedId.toString(), input: { items, discount: 5 } },
+      { id: insertedId.toString(), input: { headerNotes: "Notes corrigées" } },
       ctx(),
     );
 
@@ -527,7 +643,8 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     expect(triggerInvoiceFacturXArchive).toHaveBeenCalledTimes(1);
     const [archived, workspaceId] = triggerInvoiceFacturXArchive.mock.calls[0];
     expect(archived._id.toString()).toBe(insertedId.toString());
-    expect(archived.finalTotalHT).toBe(995);
+    expect(archived.headerNotes).toBe("Notes corrigées");
+    expect(archived.finalTotalHT).toBe(1000);
     expect(workspaceId.toString()).toBe(organizationId.toString());
   });
 
@@ -618,78 +735,33 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture en attente modifié
     expect(triggerInvoiceFacturXArchive).not.toHaveBeenCalled();
   });
 
-  it("ne garde pas les champs client de l'ancien client quand il est remplacé", async () => {
-    const { insertedId } = await insertInvoice({
-      client: {
-        id: "client-1",
-        name: "Acme",
-        email: "client@test.fr",
-        address: {
-          street: "1 rue Test",
-          city: "Paris",
-          postalCode: "75001",
-          country: "France",
-        },
-        documentFields: [{ label: "Code client", value: "ACME-1" }],
-      },
-    });
+  it("refuse de remplacer le client d'une facture émise", async () => {
+    const { insertedId } = await insertInvoice();
 
-    const result = await resolver(
-      null,
-      {
-        id: insertedId.toString(),
-        input: {
-          client: {
-            id: "client-2",
-            name: "Beta",
-            email: "beta@test.fr",
-            address: {
-              street: "2 rue Test",
-              city: "Paris",
-              postalCode: "75002",
-              country: "France",
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: {
+            client: {
+              id: "client-2",
+              name: "Beta",
+              email: "beta@test.fr",
+              address: {
+                street: "2 rue Test",
+                city: "Paris",
+                postalCode: "75002",
+                country: "France",
+              },
             },
           },
         },
-      },
-      ctx(),
-    );
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
 
-    expect(result.client.name).toBe("Beta");
-    expect(result.client.documentFields).toHaveLength(0);
-  });
-
-  it("garde les champs client figés quand le même client est renvoyé sans eux", async () => {
-    const { insertedId } = await insertInvoice({
-      client: {
-        id: "client-1",
-        name: "Acme",
-        email: "client@test.fr",
-        address: {
-          street: "1 rue Test",
-          city: "Paris",
-          postalCode: "75001",
-          country: "France",
-        },
-        documentFields: [{ label: "Code client", value: "ACME-1" }],
-      },
-    });
-
-    const result = await resolver(
-      null,
-      {
-        id: insertedId.toString(),
-        input: { client: { id: "client-1", name: "Acme SAS" } },
-      },
-      ctx(),
-    );
-
-    expect(result.client.name).toBe("Acme SAS");
-    expect(
-      result.client.documentFields.map(({ label, value }) => ({
-        label,
-        value,
-      })),
-    ).toEqual([{ label: "Code client", value: "ACME-1" }]);
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.client.name).toBe("Acme");
   });
 });

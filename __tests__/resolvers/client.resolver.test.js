@@ -162,6 +162,35 @@ describe("Client Resolver - Query.clients", () => {
     expect(result.items[0].name).toBe("Acme (France)");
   });
 
+  it("filtre par type sur tous les contacts, pas seulement la page demandée", async () => {
+    for (let i = 0; i < 12; i++) {
+      await Client.create(
+        buildClientDoc({
+          workspaceId: organizationId,
+          createdBy: userId,
+          name: `Entreprise ${String(i).padStart(2, "0")}`,
+        }),
+      );
+    }
+    await Client.collection.insertOne({
+      ...buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+      name: "Zoé Particulier",
+      type: "INDIVIDUAL",
+    });
+
+    const result = await resolver(
+      null,
+      { page: 1, limit: 10, types: ["INDIVIDUAL"] },
+      ctx(),
+    );
+
+    expect(result.totalItems).toBe(1);
+    expect(result.items.map((c) => c.name)).toEqual(["Zoé Particulier"]);
+
+    const tous = await resolver(null, { page: 1, limit: 10, types: [] }, ctx());
+    expect(tous.totalItems).toBe(13);
+  });
+
   it("scopes results to the active workspace", async () => {
     const otherOrg = buildOrganizationId();
     await Client.create(
@@ -314,6 +343,39 @@ describe("Client Resolver - Mutation.createClient", () => {
     const result = await resolver(null, { input }, ctx());
 
     expect(result.name).toBe("Jean Dupont");
+  });
+
+  // Noms réels (ligature, apostrophe typographique, alphabets étrangers) :
+  // la création répondait jamais (exception levée par le message de validation)
+  it.each([
+    ["COMPANY", { name: "Cœur de Lion SARL" }],
+    ["COMPANY", { name: "L’Atelier du Bois" }],
+    ["INDIVIDUAL", { firstName: "Anne", lastName: "Lecœur" }],
+    ["INDIVIDUAL", { firstName: "Thị", lastName: "Nguyễn" }],
+  ])("creates a %s client with a real name %o", async (type, champs) => {
+    const input = buildClientInput({ type, ...champs });
+
+    const result = await resolver(null, { input }, ctx());
+
+    const persisted = await Client.findById(result._id).lean();
+    if (champs.name) expect(persisted.name).toBe(champs.name);
+    else expect(persisted.lastName).toBe(champs.lastName);
+  });
+
+  it("rejects a name with a tag with a message, instead of hanging", async () => {
+    const input = buildClientInput({ type: "COMPANY", name: "Atelier <b>" });
+
+    await expect(resolver(null, { input }, ctx())).rejects.toThrow(
+      /< et > interdits/,
+    );
+  });
+
+  it("accepts a phone number with dots or an international prefix", async () => {
+    for (const phone of ["06.12.34.56.78", "+33 6 12 34 56 78"]) {
+      const input = buildClientInput({ type: "COMPANY", phone });
+      const result = await resolver(null, { input }, ctx());
+      expect((await Client.findById(result._id).lean()).phone).toBe(phone);
+    }
   });
 });
 

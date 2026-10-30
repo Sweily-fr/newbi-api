@@ -131,6 +131,39 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
 }
 
 /**
+ * Filtre Mongo d'un compte bancaire choisi par son identifiant Newbi (_id)
+ * ou par celui de la banque (externalId). Une chaîne qui n'est pas un
+ * ObjectId n'est cherchée que dans externalId (sinon erreur de cast).
+ */
+function accountLookup(accountId) {
+  const value = String(accountId);
+  return /^[0-9a-f]{24}$/i.test(value)
+    ? { $or: [{ _id: value }, { externalId: value }] }
+    : { externalId: value };
+}
+
+/**
+ * Valeurs de `fromAccount` des transactions d'un compte. Le sélecteur de
+ * compte de l'accueil envoie l'identifiant Newbi du compte (id), alors que
+ * les transactions portent celui de la banque (externalId) : filtrer sur
+ * l'id seul ne retrouvait aucune transaction (encaissements à 0).
+ */
+async function accountTransactionFilter(workspaceId, accountId) {
+  const account = await AccountBanking.findOne({
+    workspaceId,
+    ...accountLookup(accountId),
+  })
+    .select("_id externalId")
+    .lean();
+  const values = new Set([String(accountId)]);
+  if (account) {
+    values.add(String(account._id));
+    if (account.externalId) values.add(String(account.externalId));
+  }
+  return { $in: [...values] };
+}
+
+/**
  * Récupère le solde total des comptes bancaires (avec filtre optionnel).
  *
  * En vue globale (sans accountId), on ajoute au solde la somme signée des
@@ -144,9 +177,7 @@ async function getAccountsBalance(
   { excludeManual = false } = {},
 ) {
   const filter = { workspaceId };
-  if (accountId) {
-    filter.$or = [{ _id: accountId }, { externalId: accountId }];
-  }
+  if (accountId) Object.assign(filter, accountLookup(accountId));
 
   const accountsPromise = AccountBanking.find(filter).lean();
   // excludeManual : solde strictement Bridge (on n'ajoute pas la somme des
@@ -277,7 +308,12 @@ const dashboardAggregationResolvers = {
     dashboardSummary: readTreasurySummary(
       async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        }
         // Bridge-only : exclut les transactions manuelles (provider "manual")
         // des revenus/dépenses. Le solde suit le même filtre (getAccountsBalance).
         if (excludeManual) matchFilter.provider = { $ne: "manual" };
@@ -360,7 +396,12 @@ const dashboardAggregationResolvers = {
           deletedAt: null,
           date: { $gte: startDate, $lte: endDate },
         };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        }
         // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
         // pour que le graph suive uniquement le solde des comptes connectés.
         if (excludeManual) matchFilter.provider = { $ne: "manual" };
@@ -556,7 +597,12 @@ const dashboardAggregationResolvers = {
           date: { $gte: startDate, $lte: endDate },
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        }
         // Bridge-only : exclut les transactions manuelles (provider "manual").
         // Le CA injecté depuis les factures émises (plus bas) n'est pas concerné.
         if (excludeManual) matchFilter.provider = { $ne: "manual" };
