@@ -10,15 +10,20 @@ import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { userHasWorkspaceAction } from "../../utils/workspace-membership.js";
 import provider, { SocialProviderError } from "./providers/zernioProvider.js";
 import {
+  VIDEO_DIRECT_ONLY_MESSAGE,
+  VIDEO_NOT_READY_MESSAGE,
   buildTaskTitle,
   contentToTaskDescription,
   isSupportedPlatform,
+  isVideoMedia,
   platformLabel,
   uniquePlatforms,
   validatePostContent,
   validateScheduleDate,
   validateTikTokSettings,
 } from "./socialPostRules.js";
+import { serializeMedia } from "./socialVideoUpload.js";
+import { VIDEO_PROCESSING_FAILED_MESSAGE } from "./socialVideoProcessing.js";
 import {
   FEATURE_UNAVAILABLE_MESSAGE,
   notFoundError,
@@ -141,13 +146,9 @@ export const serializeAccount = (account) => ({
   connectedAt: toIso(account.createdAt),
 });
 
-export const serializeMedia = (media) => ({
-  id: String(media._id || media.mediaId),
-  url: media.url,
-  width: media.width ?? null,
-  height: media.height ?? null,
-  contentType: media.contentType || "image/jpeg",
-});
+export { serializeMedia };
+
+const optionalBoolean = (value) => (typeof value === "boolean" ? value : null);
 
 function serializePost(post, existingAccountIds) {
   return {
@@ -155,12 +156,10 @@ function serializePost(post, existingAccountIds) {
     boardId: String(post.boardId),
     taskId: String(post.taskId),
     content: post.content || "",
+    // Médias d'un post : toujours prêts (contrôlés à la programmation)
     media: (post.media || []).map((media) => ({
+      ...serializeMedia({ ...(media.toObject?.() || media), status: "ready" }),
       id: idString(media.mediaId) || "",
-      url: media.url,
-      width: media.width ?? null,
-      height: media.height ?? null,
-      contentType: media.contentType || "image/jpeg",
     })),
     targets: (post.targets || []).map((target) => ({
       accountId:
@@ -185,6 +184,8 @@ function serializePost(post, existingAccountIds) {
           allowComment: Boolean(post.tiktokSettings.allowComment),
           brandOrganic: Boolean(post.tiktokSettings.brandOrganic),
           brandContent: Boolean(post.tiktokSettings.brandContent),
+          allowDuet: optionalBoolean(post.tiktokSettings.allowDuet),
+          allowStitch: optionalBoolean(post.tiktokSettings.allowStitch),
         }
       : null,
     createdBy: idString(post.createdBy),
@@ -701,6 +702,13 @@ export async function getTikTokCreatorInfo({ workspaceId, accountId }) {
     return {
       username: account.username || null,
       ...info,
+      // Vidéo : réglages coupés par le créateur et durée maximale
+      duetDisabled: info.duetDisabled === true,
+      stitchDisabled: info.stitchDisabled === true,
+      maxVideoPostDurationSec:
+        Number(info.maxVideoPostDurationSec) > 0
+          ? Number(info.maxVideoPostDurationSec)
+          : null,
       privacyLevels: info.privacyLevels.map((level) => ({
         value: level.value,
         label: TIKTOK_PRIVACY_LABELS[level.value] || level.label,
@@ -735,6 +743,9 @@ async function readDirectCreatorInfo(account) {
       nickname: account.displayName || null,
       canPostMore: false,
       commentDisabled: false,
+      duetDisabled: false,
+      stitchDisabled: false,
+      maxVideoPostDurationSec: null,
       privacyLevels: [],
     };
   }
@@ -855,7 +866,10 @@ async function loadTargetAccounts(workspaceId, accountIds) {
   return ordered;
 }
 
-/** Images : celles téléversées par l'espace, dans l'ordre reçu. */
+/**
+ * Médias : ceux téléversés par l'espace, dans l'ordre reçu ; une vidéo doit
+ * être prête.
+ */
 async function loadMedia(workspaceId, mediaIds) {
   const ids = uniqueIds(mediaIds);
   if (ids.length === 0) return [];
@@ -873,7 +887,27 @@ async function loadMedia(workspaceId, mediaIds) {
     throw userError("Une des images est introuvable. Ajoutez-la de nouveau.");
   }
   const byId = new Map(found.map((media) => [String(media._id), media]));
-  return ids.map((id) => byId.get(id));
+  const ordered = ids.map((id) => byId.get(id));
+  const failed = ordered.find((media) => media.status === "failed");
+  if (failed) {
+    throw userError(failed.errorMessage || VIDEO_PROCESSING_FAILED_MESSAGE);
+  }
+  if (ordered.some((media) => (media.status || "ready") !== "ready")) {
+    throw userError(VIDEO_NOT_READY_MESSAGE);
+  }
+  return ordered;
+}
+
+const hasVideo = (media) => (media || []).some(isVideoMedia);
+
+/** Vidéo : comptes connectés directement seulement (pas de Zernio). */
+function assertVideoTargets(media, accounts) {
+  if (
+    hasVideo(media) &&
+    accounts.some((account) => !isDirectAccount(account))
+  ) {
+    throw userError(VIDEO_DIRECT_ONLY_MESSAGE);
+  }
 }
 
 const normalizeContent = (value) => {
@@ -898,8 +932,8 @@ function normalizeTimezone(value) {
   }
 }
 
-function normalizeTikTokSettings(input) {
-  const error = validateTikTokSettings(input);
+function normalizeTikTokSettings(input, { video = false } = {}) {
+  const error = validateTikTokSettings(input, { video });
   if (error) throw userError(error);
   const privacyLevel = input.privacyLevel.trim();
   // Règle TikTok : un contenu de marque ne peut pas être privé
@@ -913,6 +947,10 @@ function normalizeTikTokSettings(input) {
     allowComment: input.allowComment,
     brandOrganic: Boolean(input.brandOrganic),
     brandContent: Boolean(input.brandContent),
+    // Vidéo seulement (sans objet pour un carrousel photo)
+    ...(video
+      ? { allowDuet: input.allowDuet, allowStitch: input.allowStitch }
+      : {}),
   };
 }
 
@@ -923,6 +961,12 @@ const storedTikTokSettings = (settings) =>
         allowComment: Boolean(settings.allowComment),
         brandOrganic: Boolean(settings.brandOrganic),
         brandContent: Boolean(settings.brandContent),
+        ...(typeof settings.allowDuet === "boolean"
+          ? { allowDuet: settings.allowDuet }
+          : {}),
+        ...(typeof settings.allowStitch === "boolean"
+          ? { allowStitch: settings.allowStitch }
+          : {}),
       }
     : null;
 
@@ -953,10 +997,14 @@ const localTargets = (accounts) =>
 const postMedia = (media) =>
   media.map((item) => ({
     mediaId: item._id || item.mediaId,
+    kind: item.kind || "image",
     url: item.url,
     width: item.width ?? null,
     height: item.height ?? null,
     contentType: item.contentType || "image/jpeg",
+    thumbnailUrl: item.thumbnailUrl || null,
+    durationMs: item.durationMs ?? null,
+    size: item.size ?? null,
   }));
 
 // ── État renvoyé par le fournisseur ────────────────────────────────────────
@@ -1055,13 +1103,14 @@ export async function schedulePost({
     accounts.map((account) => account.platform),
   );
   assertValid(validatePostContent({ platforms, content, media }));
+  assertVideoTargets(media, accounts);
 
   const publishNow = input.publishNow === true;
   const scheduledFor = publishNow ? now : parseDate(input.scheduledFor);
   if (!publishNow) assertValid(validateScheduleDate(scheduledFor, { now }));
   const timezone = normalizeTimezone(input.timezone);
   const tiktokSettings = platforms.includes("tiktok")
-    ? normalizeTikTokSettings(input.tiktokSettings)
+    ? normalizeTikTokSettings(input.tiktokSettings, { video: hasVideo(media) })
     : null;
   await assertXPostQuota(workspaceId, {
     xCount: countXTargets(accounts),
@@ -1203,6 +1252,7 @@ export async function updatePost({
     accounts.map((account) => account.platform),
   );
   assertValid(validatePostContent({ platforms, content, media }));
+  assertVideoTargets(media, accounts);
 
   let scheduledFor = post.scheduledFor;
   if (input.scheduledFor !== undefined && input.scheduledFor !== null) {
@@ -1226,10 +1276,14 @@ export async function updatePost({
   }
   let tiktokSettings = null;
   if (platforms.includes("tiktok")) {
+    const video = hasVideo(media);
+    const stored = storedTikTokSettings(post.tiktokSettings);
     tiktokSettings = input.tiktokSettings
-      ? normalizeTikTokSettings(input.tiktokSettings)
-      : storedTikTokSettings(post.tiktokSettings) ||
-        normalizeTikTokSettings(null);
+      ? normalizeTikTokSettings(input.tiktokSettings, { video })
+      : stored
+        ? // Réglages gardés : complets pour une vidéo (duos, collages)
+          normalizeTikTokSettings({ ...stored, consentGiven: true }, { video })
+        : normalizeTikTokSettings(null);
   }
 
   // Part Zernio : mise à jour, suppression ou création de son post selon

@@ -1,8 +1,16 @@
 import crypto from "crypto";
+import fs from "fs";
+import { pipeline } from "stream/promises";
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 
@@ -18,6 +26,12 @@ import sharp from "sharp";
  * DNS de newbi.fr passe chez Cloudflare. Instagram et Facebook vont aussi
  * chercher l'image à cette adresse ; LinkedIn et X reçoivent les octets
  * (relus directement dans R2).
+ *
+ * Vidéos : original envoyé en morceaux (envoi multipart R2 sous
+ * social/uploads/<uuid>, les morceaux arrivent sur des instances PM2
+ * différentes), préparé en MP4 sous social/<id>.mp4 (+ vignette
+ * social/<id>.jpg), servi avec prise en charge des plages (Range) et relu
+ * par plages pour LinkedIn et X (jamais tout en mémoire).
  */
 
 const DOWNLOAD_TIMEOUT_MS = 30000;
@@ -59,25 +73,41 @@ const r2 = () => {
 };
 
 const keyOf = (id) => `social/${id}.jpg`;
+export const videoKeyOf = (id) => `social/${id}.mp4`;
+export const videoUrlOf = (id) => `${apiBase()}${MEDIA_ROUTE}${id}.mp4`;
 
-/** Identifiant d'une image servie par notre route (null sinon). */
+/** Identifiant d'une image ou d'une vidéo servie par notre route (null sinon). */
 export function ownMediaId(url) {
   if (typeof url !== "string") return null;
   const prefix = `${apiBase()}${MEDIA_ROUTE}`;
   if (!url.startsWith(prefix)) return null;
-  const id = url.slice(prefix.length).replace(/\.jpg$/, "");
+  const id = url.slice(prefix.length).replace(/\.(jpg|mp4)$/, "");
   return MEDIA_ID_PATTERN.test(id) ? id : null;
 }
 
 export const isOwnMediaUrl = (url) => Boolean(ownMediaId(url));
 
+/** Identifiant d'une vidéo servie par notre route (null sinon). */
+export const ownVideoId = (url) =>
+  typeof url === "string" && url.endsWith(".mp4") ? ownMediaId(url) : null;
+
+const isNotFound = (error) =>
+  error?.name === "NoSuchKey" ||
+  error?.name === "NotFound" ||
+  error?.$metadata?.httpStatusCode === 404;
+
 /**
  * Dépose une image (déjà normalisée en JPEG) et renvoie son adresse
- * publique (identifiant aléatoire, impossible à deviner).
+ * publique (identifiant aléatoire, impossible à deviner ; celui de sa
+ * vidéo pour une vignette).
  * @returns {Promise<{url: string, key: string}>}
  */
-async function storeImage({ buffer, contentType = "image/jpeg", workspaceId }) {
-  const id = crypto.randomUUID();
+async function storeImage({
+  buffer,
+  contentType = "image/jpeg",
+  workspaceId,
+  id = crypto.randomUUID(),
+}) {
   await r2().send(
     new PutObjectCommand({
       Bucket: process.env.SOCIAL_MEDIA_BUCKET,
@@ -110,14 +140,188 @@ async function readImage(id) {
       contentLength: result.ContentLength ?? null,
     };
   } catch (error) {
-    if (
-      error?.name === "NoSuchKey" ||
-      error?.$metadata?.httpStatusCode === 404
-    ) {
-      return null;
-    }
+    if (isNotFound(error)) return null;
     throw error;
   }
+}
+
+// ── Vidéos : envoi en morceaux ─────────────────────────────────────────────
+
+/**
+ * Ouvre l'envoi multipart d'un original de vidéo.
+ * @returns {Promise<{key: string, uploadId: string}>}
+ */
+async function createVideoUpload({ contentType, workspaceId }) {
+  const key = `social/uploads/${crypto.randomUUID()}`;
+  const result = await r2().send(
+    new CreateMultipartUploadCommand({
+      Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+      Key: key,
+      ContentType: contentType || "application/octet-stream",
+      Metadata: { workspaceId: String(workspaceId || "") },
+    }),
+  );
+  if (!result?.UploadId) throw new Error("Envoi multipart sans identifiant");
+  return { key, uploadId: result.UploadId };
+}
+
+/** Dépose un morceau (PartNumber à partir de 1) et renvoie son ETag. */
+async function uploadVideoPart({ key, uploadId, partNumber, body }) {
+  const result = await r2().send(
+    new UploadPartCommand({
+      Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: body,
+      ContentLength: body.length,
+    }),
+  );
+  if (!result?.ETag) throw new Error("Morceau déposé sans ETag");
+  return result.ETag;
+}
+
+/** Assemble les morceaux (ETag par index, dans l'ordre). */
+async function completeVideoUpload({ key, uploadId, etags }) {
+  await r2().send(
+    new CompleteMultipartUploadCommand({
+      Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: etags.map((etag, index) => ({
+          ETag: etag,
+          PartNumber: index + 1,
+        })),
+      },
+    }),
+  );
+}
+
+async function abortVideoUpload({ key, uploadId }) {
+  await r2().send(
+    new AbortMultipartUploadCommand({
+      Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+      Key: key,
+      UploadId: uploadId,
+    }),
+  );
+}
+
+// ── Vidéos : fichiers et lectures par plage ────────────────────────────────
+
+/** Copie un objet du bucket dans un fichier local (en flux). */
+async function downloadToFile(key, filePath) {
+  const result = await r2().send(
+    new GetObjectCommand({ Bucket: process.env.SOCIAL_MEDIA_BUCKET, Key: key }),
+  );
+  if (!result?.Body) throw new Error("Objet vide dans le stockage");
+  await pipeline(result.Body, fs.createWriteStream(filePath));
+}
+
+/**
+ * Dépose la vidéo préparée (MP4) depuis un fichier local, en flux.
+ * @returns {Promise<{url: string, key: string, size: number}>}
+ */
+async function storeVideoFile({ filePath, id, workspaceId }) {
+  const { size } = await fs.promises.stat(filePath);
+  await r2().send(
+    new PutObjectCommand({
+      Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+      Key: videoKeyOf(id),
+      Body: fs.createReadStream(filePath),
+      ContentLength: size,
+      ContentType: "video/mp4",
+      Metadata: { workspaceId: String(workspaceId || "") },
+    }),
+  );
+  return { url: videoUrlOf(id), key: videoKeyOf(id), size };
+}
+
+/** Supprime un objet (au mieux : absent, rien à faire). */
+async function deleteObject(key) {
+  if (!key) return;
+  try {
+    await r2().send(
+      new DeleteObjectCommand({
+        Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+        Key: key,
+      }),
+    );
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+  }
+}
+
+/**
+ * Poids d'une vidéo du bucket (null si elle n'existe pas). Les vidéos ne
+ * changent jamais : poids gardé en mémoire (route Range, lue par plages).
+ */
+const sizeCache = new Map();
+const SIZE_CACHE_MAX = 500;
+async function videoSize(id) {
+  if (!MEDIA_ID_PATTERN.test(String(id || ""))) return null;
+  if (sizeCache.has(id)) return sizeCache.get(id);
+  try {
+    const head = await r2().send(
+      new HeadObjectCommand({
+        Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+        Key: videoKeyOf(id),
+      }),
+    );
+    const size = Number(head?.ContentLength);
+    if (!Number.isFinite(size)) return null;
+    if (sizeCache.size >= SIZE_CACHE_MAX) {
+      sizeCache.delete(sizeCache.keys().next().value);
+    }
+    sizeCache.set(id, size);
+    return size;
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * Lit une vidéo du bucket, en entier ou une plage d'octets (bornes
+ * incluses), pour la route publique.
+ * @returns {Promise<{body: any, contentLength: number|null}|null>}
+ */
+async function readVideo(id, { start = null, end = null } = {}) {
+  if (!MEDIA_ID_PATTERN.test(String(id || ""))) return null;
+  try {
+    const result = await r2().send(
+      new GetObjectCommand({
+        Bucket: process.env.SOCIAL_MEDIA_BUCKET,
+        Key: videoKeyOf(id),
+        ...(start !== null ? { Range: `bytes=${start}-${end ?? ""}` } : {}),
+      }),
+    );
+    return {
+      body: result.Body,
+      contentLength: result.ContentLength ?? null,
+    };
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * Octets d'une plage de notre vidéo (bornes incluses) : envoi par morceaux
+ * à LinkedIn et X (quelques Mo à la fois).
+ * @returns {Promise<Buffer>}
+ */
+async function readVideoRange(url, start, end) {
+  const id = ownVideoId(url);
+  if (!id) throw new Error("Adresse de vidéo invalide");
+  const video = await storage.readVideo(id, { start, end });
+  if (!video) throw new Error("Vidéo introuvable dans le stockage");
+  const buffer = await streamToBuffer(video.body);
+  if (buffer.length !== end - start + 1) {
+    throw new Error("Lecture incomplète de la vidéo");
+  }
+  return buffer;
 }
 
 async function streamToBuffer(body) {
@@ -203,6 +407,16 @@ const storage = {
   readImage,
   fetchImage,
   prepareTikTokImage,
+  createVideoUpload,
+  uploadVideoPart,
+  completeVideoUpload,
+  abortVideoUpload,
+  downloadToFile,
+  storeVideoFile,
+  deleteObject,
+  videoSize,
+  readVideo,
+  readVideoRange,
 };
 
 export default storage;

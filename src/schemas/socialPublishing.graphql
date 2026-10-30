@@ -44,10 +44,31 @@ type SocialXPostQuota {
 
 type SocialPostMedia {
   id: ID!
+  "image | video"
+  kind: String!
+  "uploading | processing | ready | failed (les images sont toujours ready)"
+  status: String!
+  "Message français si failed"
+  errorMessage: String
+  "Chaîne vide tant qu'une vidéo n'est pas prête"
   url: String!
+  "Vidéo : image JPEG extraite (aperçu, couverture)"
+  thumbnailUrl: String
+  "Vidéo : après rotation"
   width: Int
   height: Int
+  "Vidéo : durée en millisecondes"
+  durationMs: Int
+  "Poids en octets (vidéo : après préparation, une fois prête)"
+  size: Int
   contentType: String
+}
+
+type SocialVideoUpload {
+  media: SocialPostMedia!
+  "Taille de chaque morceau en octets (le dernier peut être plus petit)"
+  chunkSize: Int!
+  chunkCount: Int!
 }
 
 type SocialPostTarget {
@@ -71,6 +92,10 @@ type SocialPostTikTokSettings {
   brandOrganic: Boolean
   "Contenu de marque (partenariat rémunéré)"
   brandContent: Boolean
+  "Vidéo seulement : duos autorisés"
+  allowDuet: Boolean
+  "Vidéo seulement : collages (Stitch) autorisés"
+  allowStitch: Boolean
 }
 
 type SocialPost {
@@ -102,6 +127,12 @@ type TikTokCreatorInfo {
   nickname: String
   canPostMore: Boolean!
   commentDisabled: Boolean!
+  "Duos coupés par le créateur dans TikTok (ou compte privé)"
+  duetDisabled: Boolean!
+  "Collages (Stitch) coupés par le créateur dans TikTok (ou compte privé)"
+  stitchDisabled: Boolean!
+  "Durée maximale d'une vidéo pour ce créateur (secondes), null si inconnue"
+  maxVideoPostDurationSec: Int
   privacyLevels: [TikTokPrivacyLevel!]!
 }
 
@@ -118,6 +149,10 @@ input SocialPostTikTokSettingsInput {
   brandOrganic: Boolean
   "Contenu de marque (partenariat rémunéré) : interdit avec SELF_ONLY"
   brandContent: Boolean
+  "Obligatoire avec une vidéo : duos autorisés"
+  allowDuet: Boolean
+  "Obligatoire avec une vidéo : collages (Stitch) autorisés"
+  allowStitch: Boolean
   "Doit valoir true (case à cocher obligatoire)"
   consentGiven: Boolean!
 }
@@ -129,7 +164,7 @@ input ScheduleSocialPostInput {
   "SocialAccount locaux"
   accountIds: [ID!]!
   content: String!
-  "Renvoyés par uploadSocialPostMedia"
+  "Renvoyés par uploadSocialPostMedia (images) ou startSocialVideoUpload (une vidéo prête)"
   mediaIds: [ID!]
   "Obligatoire sauf publishNow ; au moins 5 minutes dans le futur"
   scheduledFor: String
@@ -153,6 +188,8 @@ extend type Query {
   boardSocialPosts(boardId: ID!, workspaceId: ID): [SocialPost!]!
   socialPost(id: ID!, workspaceId: ID): SocialPost
   tiktokCreatorInfo(accountId: ID!, workspaceId: ID): TikTokCreatorInfo!
+  "Suivi de la préparation d'une vidéo (null si introuvable)"
+  socialPostMedia(id: ID!, workspaceId: ID): SocialPostMedia
 }
 
 extend type Mutation {
@@ -165,6 +202,22 @@ extend type Mutation {
   disconnectSocialAccount(accountId: ID!, workspaceId: ID): Boolean!
   refreshSocialAccounts(workspaceId: ID): [SocialAccount!]!
   uploadSocialPostMedia(file: Upload!, workspaceId: ID): SocialPostMedia!
+  "Ouvre l'envoi d'une vidéo en morceaux (MP4, MOV, M4V, WebM, 500 Mo au plus)"
+  startSocialVideoUpload(
+    fileName: String!
+    size: Int!
+    contentType: String!
+    workspaceId: ID
+  ): SocialVideoUpload!
+  "Un morceau de la vidéo (index à partir de 0) ; renvoyer un morceau le remplace"
+  uploadSocialVideoChunk(
+    mediaId: ID!
+    index: Int!
+    chunk: Upload!
+    workspaceId: ID
+  ): Boolean!
+  "Assemble les morceaux et lance la préparation (asynchrone) : renvoie le média en processing"
+  completeSocialVideoUpload(mediaId: ID!, workspaceId: ID): SocialPostMedia!
   scheduleSocialPost(
     input: ScheduleSocialPostInput!
     workspaceId: ID

@@ -350,7 +350,7 @@ describe("scheduleSocialPost", () => {
     };
     await expect(
       schedule({ ...base, accountIds: [String(instagram._id)] }),
-    ).rejects.toThrow("Instagram exige au moins une image.");
+    ).rejects.toThrow("Instagram exige une image ou une vidéo.");
     await expect(
       schedule({
         ...base,

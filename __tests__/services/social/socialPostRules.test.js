@@ -4,14 +4,28 @@ import {
   buildTaskTitle,
   contentToTaskDescription,
   countPostCharacters,
+  formatVideoDuration,
+  isAcceptedVideoFile,
   isInstagramRatioValid,
   validatePostContent,
   validateScheduleDate,
   validateTikTokSettings,
+  validateTikTokVideoDuration,
+  videoCoverOffsetMs,
+  MIXED_MEDIA_MESSAGE,
   SCHEDULE_TOO_SOON_MESSAGE,
+  SINGLE_VIDEO_MESSAGE,
 } from "../../../src/services/social/socialPostRules.js";
 
 const image = (width = 1080, height = 1080) => ({ width, height });
+const video = (fields = {}) => ({
+  kind: "video",
+  width: 1080,
+  height: 1920,
+  durationMs: 30 * 1000,
+  size: 20 * 1000 * 1000,
+  ...fields,
+});
 
 describe("countPostCharacters", () => {
   it("compte les caractères Unicode (un emoji = un)", () => {
@@ -80,13 +94,20 @@ describe("validatePostContent", () => {
     ).toBeNull();
   });
 
-  it("exige une image pour Instagram et TikTok", () => {
+  it("exige une image ou une vidéo pour Instagram et TikTok", () => {
     expect(
       validatePostContent({ platforms: ["instagram"], content: "Hello" }),
-    ).toBe("Instagram exige au moins une image.");
+    ).toBe("Instagram exige une image ou une vidéo.");
     expect(
       validatePostContent({ platforms: ["tiktok"], content: "Hello" }),
-    ).toBe("TikTok exige au moins une image.");
+    ).toBe("TikTok exige une image ou une vidéo.");
+    expect(
+      validatePostContent({
+        platforms: ["instagram", "tiktok"],
+        content: "Hello",
+        media: [video()],
+      }),
+    ).toBeNull();
   });
 
   it("limite le nombre d'images par réseau", () => {
@@ -126,6 +147,145 @@ describe("validatePostContent", () => {
   });
 });
 
+describe("vidéo", () => {
+  it("une seule vidéo, jamais avec des photos", () => {
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "x",
+        media: [video(), image()],
+      }),
+    ).toBe(MIXED_MEDIA_MESSAGE);
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "x",
+        media: [video(), video()],
+      }),
+    ).toBe(SINGLE_VIDEO_MESSAGE);
+    expect(
+      validatePostContent({
+        platforms: ["facebook", "linkedin", "twitter"],
+        content: "",
+        media: [video()],
+      }),
+    ).toBeNull();
+  });
+
+  it("durée maximale par réseau (X : 2 min 20), arrondie à la seconde supérieure", () => {
+    expect(
+      validatePostContent({
+        platforms: ["linkedin", "twitter"],
+        content: "x",
+        media: [video({ durationMs: 185 * 1000 })],
+      }),
+    ).toBe(
+      "X accepte des vidéos de 2 min 20 au maximum (cette vidéo dure 3 min 05).",
+    );
+    expect(
+      validatePostContent({
+        platforms: ["twitter"],
+        content: "x",
+        media: [video({ durationMs: 140 * 1000 })],
+      }),
+    ).toBeNull();
+    expect(
+      validatePostContent({
+        platforms: ["twitter"],
+        content: "x",
+        media: [video({ durationMs: 140400 })],
+      }),
+    ).toMatch(/cette vidéo dure 2 min 21/);
+  });
+
+  it("poids maximal après préparation (Instagram : 300 Mo), minimal sur LinkedIn", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "x",
+        media: [video({ size: 301 * 1000 * 1000 })],
+      }),
+    ).toBe(
+      "La vidéo est trop lourde pour Instagram (300 Mo maximum après préparation).",
+    );
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "x",
+        media: [video({ size: 301 * 1000 * 1000 })],
+      }),
+    ).toBeNull();
+    expect(
+      validatePostContent({
+        platforms: ["linkedin"],
+        content: "x",
+        media: [video({ size: 50 * 1000 })],
+      }),
+    ).toBe("La vidéo est trop légère pour LinkedIn (75 Ko minimum).");
+  });
+
+  it("pas de contrôle de format pour une vidéo Instagram ni LinkedIn", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram", "linkedin"],
+        content: "x",
+        media: [video({ width: 3000, height: 200 })],
+      }),
+    ).toBeNull();
+  });
+
+  it("titre d'une vidéo TikTok : 2 200 caractères comptés en UTF-16", () => {
+    const emojis = "👋".repeat(1101);
+    expect(countPostCharacters(emojis, "tiktok", { video: true })).toBe(2202);
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: emojis,
+        media: [video()],
+      }),
+    ).toMatch(/limite de 2.200 caractères pour TikTok \(2.202 caractères\)/);
+    // Carrousel photo : 4 000 caractères Unicode
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: emojis,
+        media: [image()],
+      }),
+    ).toBeNull();
+  });
+
+  it("durée maximale du créateur TikTok", () => {
+    expect(validateTikTokVideoDuration(70 * 1000, 60)).toBe(
+      "TikTok accepte des vidéos de 1 min au maximum pour ce compte (cette vidéo dure 1 min 10).",
+    );
+    expect(validateTikTokVideoDuration(60 * 1000, 60)).toBeNull();
+    expect(validateTikTokVideoDuration(70 * 1000, null)).toBeNull();
+  });
+
+  it("formats acceptés à l'envoi : type annoncé, ou extension si le type est vide", () => {
+    expect(isAcceptedVideoFile({ contentType: "video/quicktime" })).toBe(true);
+    expect(
+      isAcceptedVideoFile({ fileName: "IMG_1234.MOV", contentType: "" }),
+    ).toBe(true);
+    expect(
+      isAcceptedVideoFile({
+        fileName: "film.avi",
+        contentType: "video/x-msvideo",
+      }),
+    ).toBe(false);
+    expect(
+      isAcceptedVideoFile({ fileName: "film.mp4", contentType: "image/png" }),
+    ).toBe(false);
+  });
+
+  it("durées lisibles et position de la couverture", () => {
+    expect(formatVideoDuration(45 * 1000)).toBe("45 s");
+    expect(formatVideoDuration(10 * 60 * 1000)).toBe("10 min");
+    expect(videoCoverOffsetMs(30 * 1000)).toBe(1000);
+    expect(videoCoverOffsetMs(1500)).toBe(750);
+  });
+});
+
 describe("validateScheduleDate", () => {
   const now = new Date("2026-10-28T10:00:00.000Z");
 
@@ -160,6 +320,21 @@ describe("validateTikTokSettings", () => {
 
   it("accepte des réglages complets", () => {
     expect(validateTikTokSettings(valid)).toBeNull();
+  });
+
+  it("vidéo : duos et collages (Stitch) obligatoires", () => {
+    expect(validateTikTokSettings(valid, { video: true })).toBe(
+      "Indiquez si les duos sont autorisés sur TikTok.",
+    );
+    expect(
+      validateTikTokSettings({ ...valid, allowDuet: false }, { video: true }),
+    ).toBe("Indiquez si les collages (Stitch) sont autorisés sur TikTok.");
+    expect(
+      validateTikTokSettings(
+        { ...valid, allowDuet: false, allowStitch: true },
+        { video: true },
+      ),
+    ).toBeNull();
   });
 
   it("exige le consentement explicite et le niveau de visibilité", () => {
