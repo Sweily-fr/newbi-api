@@ -162,6 +162,35 @@ describe("Client Resolver - Query.clients", () => {
     expect(result.items[0].name).toBe("Acme (France)");
   });
 
+  it("filtre par type sur tous les contacts, pas seulement la page demandée", async () => {
+    for (let i = 0; i < 12; i++) {
+      await Client.create(
+        buildClientDoc({
+          workspaceId: organizationId,
+          createdBy: userId,
+          name: `Entreprise ${String(i).padStart(2, "0")}`,
+        }),
+      );
+    }
+    await Client.collection.insertOne({
+      ...buildClientDoc({ workspaceId: organizationId, createdBy: userId }),
+      name: "Zoé Particulier",
+      type: "INDIVIDUAL",
+    });
+
+    const result = await resolver(
+      null,
+      { page: 1, limit: 10, types: ["INDIVIDUAL"] },
+      ctx(),
+    );
+
+    expect(result.totalItems).toBe(1);
+    expect(result.items.map((c) => c.name)).toEqual(["Zoé Particulier"]);
+
+    const tous = await resolver(null, { page: 1, limit: 10, types: [] }, ctx());
+    expect(tous.totalItems).toBe(13);
+  });
+
   it("scopes results to the active workspace", async () => {
     const otherOrg = buildOrganizationId();
     await Client.create(

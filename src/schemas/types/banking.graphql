@@ -579,6 +579,14 @@ type TransactionPage {
   tabCounts: TransactionTabCounts!
 }
 
+# Compteurs « À traiter » de l'accueil, sur toutes les transactions de
+# l'espace : sans justificatif (même règle que l'onglet « Justificatif
+# manquant ») et sans catégorie
+type TransactionTodoCounts {
+  missingReceipt: Int!
+  uncategorized: Int!
+}
+
 input MetricsFiltersInput {
   provider: BankingProvider
   startDate: DateTime!
@@ -680,6 +688,8 @@ extend type Query {
     page: Int = 1
     limit: Int = 20
   ): TransactionPage!
+  # Compteurs « Justificatifs manquants » et « Transactions à catégoriser »
+  transactionTodoCounts(workspaceId: ID!): TransactionTodoCounts!
   transaction(id: ID!): Transaction
   transactionByExternalId(
     provider: BankingProvider!

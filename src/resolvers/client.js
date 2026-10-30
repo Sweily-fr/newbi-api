@@ -97,6 +97,7 @@ const clientResolvers = {
           limit = 10,
           search,
           searchExact = false,
+          types,
           workspaceId: inputWorkspaceId,
         },
         context,
@@ -125,6 +126,12 @@ const clientResolvers = {
             { siret: searchRegex },
             { vatNumber: searchRegex },
           ];
+        }
+
+        // Filtre « Type » (particuliers, entreprises) : côté serveur, pour
+        // porter sur tous les contacts et pas seulement sur la page affichée
+        if (Array.isArray(types) && types.length > 0) {
+          query.type = { $in: types };
         }
 
         // Convertir en nombres pour éviter les problèmes de type

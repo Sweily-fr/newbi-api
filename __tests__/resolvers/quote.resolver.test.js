@@ -884,3 +884,35 @@ describe("Quote Resolver - Mutation.updateQuote (numérotation)", () => {
     ).toEqual([{ label: "Code client", value: "C-042" }]);
   });
 });
+
+describe("Quote Resolver - Query.quoteBalances (devis en attente)", () => {
+  const resolver = quoteResolvers.Query.quoteBalances;
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("ne compte pas les devis dont la validité est passée (affichés « Expiré »)", async () => {
+    await insertQuote({
+      number: "0101",
+      finalTotalHT: 400,
+      validUntil: new Date(Date.now() + 10 * DAY),
+    });
+    await insertQuote({
+      number: "0102",
+      finalTotalHT: 900,
+      validUntil: new Date(Date.now() - 5 * DAY),
+    });
+    // Sans date de validité : toujours en attente
+    await insertQuote({ number: "0103", finalTotalHT: 50 });
+    await insertQuote({ number: "0104", status: "COMPLETED", finalTotalHT: 7 });
+
+    const result = await resolver(
+      null,
+      { workspaceId: organizationId.toString() },
+      ctx(),
+    );
+
+    expect(result.pendingCount).toBe(2);
+    expect(result.pendingAmount).toBe(450);
+    // Le total devisé garde tous les devis émis
+    expect(result.totalQuoted).toBe(1357);
+  });
+});
