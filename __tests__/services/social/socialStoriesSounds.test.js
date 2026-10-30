@@ -752,6 +752,141 @@ describe("programmer : stories, sons, brouillons", () => {
   });
 });
 
+// ── Ce qu'envoie le site (NewbiV2#1532) ────────────────────────────────────
+
+describe("envois du site", () => {
+  it("connector toujours transmis : la clé du réseau = connexion habituelle ; clé d'un autre réseau refusée", async () => {
+    const instagram = new URL(
+      await Mutation.connectSocialAccount(
+        null,
+        { platform: "instagram", connector: "instagram" },
+        ctx,
+      ),
+    );
+    expect(instagram.origin + instagram.pathname).toBe(
+      "https://www.instagram.com/oauth/authorize",
+    );
+    expect(
+      await SocialConnectState.findOne({
+        token: instagram.searchParams.get("state"),
+      }).lean(),
+    ).toMatchObject({ platform: "instagram", connector: "instagram" });
+    const tiktok = new URL(
+      await Mutation.connectSocialAccount(
+        null,
+        { platform: "tiktok", connector: "tiktok" },
+        ctx,
+      ),
+    );
+    expect(tiktok.searchParams.get("client_key")).toBe("tt_key");
+    await expect(
+      Mutation.connectSocialAccount(
+        null,
+        { platform: "instagram", connector: "facebook" },
+        ctx,
+      ),
+    ).rejects.toThrow("Ce mode de connexion n'est pas pris en charge.");
+  });
+
+  it('brouillon : { mode: "draft" } seul ; vidéo sans limite de texte TikTok', async () => {
+    const { post } = await schedule({
+      accountIds: [idOf(accounts.tiktok)],
+      content: "a".repeat(3000),
+      mediaIds: [idOf(videoMedia)],
+      tiktokSettings: { mode: "draft" },
+    });
+    expect(post.tiktokSettings.mode).toBe("draft");
+    // Publication directe : limite du titre d'une vidéo
+    await expect(
+      schedule({
+        accountIds: [idOf(accounts.tiktok)],
+        content: "a".repeat(3000),
+        mediaIds: [idOf(videoMedia)],
+        tiktokSettings: directSettings(),
+      }),
+    ).rejects.toThrow(/2.200 caractères pour TikTok/);
+  });
+
+  it("sound: null retire le son existant (Instagram et TikTok)", async () => {
+    const { post } = await schedule({
+      accountIds: [idOf(accounts.igFacebook), idOf(accounts.tiktokBiz)],
+      mediaIds: [idOf(videoMedia)],
+      instagramSettings: { format: "post", sound: sound() },
+      tiktokSettings: directSettings({ sound: sound({ id: "clip_1" }) }),
+    });
+    expect(post.instagramSettings.sound).not.toBeNull();
+    expect(post.tiktokSettings.sound).not.toBeNull();
+    const updated = await Mutation.updateSocialPost(
+      null,
+      {
+        id: post.id,
+        input: {
+          instagramSettings: { format: "post", sound: null },
+          tiktokSettings: directSettings({ sound: null }),
+        },
+      },
+      ctx,
+    );
+    expect(updated.instagramSettings.sound).toBeNull();
+    expect(updated.tiktokSettings.sound).toBeNull();
+    const stored = await SocialPost.findById(post.id).lean();
+    expect(stored.instagramSettings.sound).toBeUndefined();
+    expect(stored.tiktokSettings.sound).toBeUndefined();
+  });
+
+  it("photos TikTok Business : videoVolume reçu et gardé, sans effet", async () => {
+    const { post } = await schedule({
+      accountIds: [idOf(accounts.tiktokBiz)],
+      mediaIds: [idOf(photos[0])],
+      tiktokSettings: directSettings({
+        privacyLevel: "SELF_ONLY",
+        sound: sound({ id: "clip_1", videoVolume: 50 }),
+      }),
+    });
+    expect(post.tiktokSettings.sound).toMatchObject({
+      id: "clip_1",
+      videoVolume: 50,
+    });
+  });
+
+  it("comptes mélangés : story avec un compte Zernio, brouillon avec un compte sans video.upload (ou Zernio)", async () => {
+    await expect(
+      schedule({
+        accountIds: [idOf(accounts.igLogin), idOf(accounts.igZernio)],
+        mediaIds: [idOf(photos[0])],
+        instagramSettings: { format: "story", sound: null },
+      }),
+    ).rejects.toThrow(
+      "Les stories ne sont disponibles que pour les comptes connectés directement.",
+    );
+    await expect(
+      schedule({
+        accountIds: [idOf(accounts.tiktok), idOf(accounts.tiktokOld)],
+        mediaIds: [idOf(videoMedia)],
+        tiktokSettings: { mode: "draft" },
+      }),
+    ).rejects.toThrow(
+      "Reconnectez votre compte TikTok pour envoyer en brouillon.",
+    );
+    const tiktokZernio = await SocialAccount.create({
+      workspaceId: organizationId,
+      platform: "tiktok",
+      externalAccountId: "za_tt",
+      username: "zernio_tt",
+    });
+    await expect(
+      schedule({
+        accountIds: [idOf(accounts.tiktok), idOf(tiktokZernio)],
+        // Photos (une vidéo serait refusée avant : comptes directs seulement)
+        mediaIds: [idOf(photos[0])],
+        tiktokSettings: { mode: "draft" },
+      }),
+    ).rejects.toThrow(
+      "Reconnectez votre compte TikTok pour envoyer en brouillon.",
+    );
+  });
+});
+
 // ── Sons tendance ──────────────────────────────────────────────────────────
 
 describe("socialTrendingSounds", () => {

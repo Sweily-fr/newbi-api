@@ -53,8 +53,6 @@ export const VIDEO_DIRECT_ONLY_MESSAGE =
   "La vidéo n'est disponible que pour les comptes connectés directement.";
 export const STORY_DIRECT_ONLY_MESSAGE =
   "Les stories ne sont disponibles que pour les comptes connectés directement.";
-export const DRAFT_DIRECT_ONLY_MESSAGE =
-  "Les brouillons TikTok ne sont disponibles que pour les comptes connectés directement.";
 export const DRAFT_NEEDS_RECONNECT_MESSAGE =
   "Reconnectez votre compte TikTok pour envoyer en brouillon.";
 // Brouillons TikTok : détail d'un refus de quota (5 en attente par 24 h)
@@ -263,9 +261,7 @@ export function validateVideoForPlatform(video, platform, { format } = {}) {
     return `${rules.label} accepte des ${story ? "stories vidéo" : "vidéos"} de ${max} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
   }
   if (durationMs && limits.minDurationMs && durationMs < limits.minDurationMs) {
-    return story
-      ? `${rules.label} exige une story vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`
-      : `${rules.label} exige une vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`;
+    return `${rules.label} exige une vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`;
   }
   if (size && limits.maxBytes && size > limits.maxBytes) {
     return story
@@ -351,6 +347,8 @@ export const videoCoverOffsetMs = (durationMs) =>
  *   images ou vidéo (kind « video »)
  * @param {{instagram?: string, facebook?: string}} [params.formats] - « post »
  *   (défaut) ou « story » par réseau
+ * @param {string|null} [params.tiktokMode] - « draft » : pas de limite de
+ *   texte TikTok pour une vidéo (texte non transmis en brouillon)
  * @returns {string|null} message d'erreur prêt à afficher, ou null
  */
 export function validatePostContent({
@@ -358,6 +356,7 @@ export function validatePostContent({
   content = "",
   media = [],
   formats = {},
+  tiktokMode = null,
 }) {
   const targets = uniquePlatforms(platforms);
   if (targets.length === 0) return "Sélectionnez au moins un compte.";
@@ -380,6 +379,9 @@ export function validatePostContent({
   for (const platform of targets) {
     const rules = PLATFORM_RULES[platform];
     const story = isStoryFormat(platform, formats?.[platform]);
+    // Vidéo TikTok en brouillon : texte non transmis (écrit dans TikTok)
+    const textIgnored =
+      story || (platform === "tiktok" && tiktokMode === "draft" && video);
     if (story) {
       // Story : le texte n'est pas publié, aucune limite à vérifier
       if (items.length === 0) {
@@ -390,7 +392,7 @@ export function validatePostContent({
       const count = countPostCharacters(text, platform, {
         video: Boolean(video),
       });
-      if (count > maxText) {
+      if (!textIgnored && count > maxText) {
         return `Le texte dépasse la limite de ${maxText.toLocaleString("fr-FR")} caractères pour ${rules.label} (${count.toLocaleString("fr-FR")} caractères).`;
       }
       if (rules.imageRequired && items.length === 0) {

@@ -10,7 +10,6 @@ import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { userHasWorkspaceAction } from "../../utils/workspace-membership.js";
 import provider, { SocialProviderError } from "./providers/zernioProvider.js";
 import {
-  DRAFT_DIRECT_ONLY_MESSAGE,
   DRAFT_NEEDS_RECONNECT_MESSAGE,
   INSTAGRAM_SOUND_ACCOUNT_MESSAGE,
   INSTAGRAM_SOUND_REEL_ONLY_MESSAGE,
@@ -1207,9 +1206,9 @@ function normalizeTikTokSettings(
   if (error) throw userError(error);
   const tiktokAccounts = accountsOf(accounts, "tiktok");
   if (input.mode === "draft") {
-    if (tiktokAccounts.some((account) => !isDirectAccount(account))) {
-      throw userError(DRAFT_DIRECT_ONLY_MESSAGE);
-    }
+    // Chaque compte TikTok visé doit pouvoir recevoir un brouillon (compte
+    // direct avec video.upload) ; même message que le site, compte Zernio
+    // compris
     if (tiktokAccounts.some((a) => !accountCapabilities(a).drafts)) {
       throw userError(DRAFT_NEEDS_RECONNECT_MESSAGE);
     }
@@ -1430,7 +1429,15 @@ export async function schedulePost({
     instagram: input.instagramSettings,
     facebook: input.facebookSettings,
   });
-  assertValid(validatePostContent({ platforms, content, media, formats }));
+  assertValid(
+    validatePostContent({
+      platforms,
+      content,
+      media,
+      formats,
+      tiktokMode: input.tiktokSettings?.mode,
+    }),
+  );
   assertVideoTargets(media, accounts);
 
   const publishNow = input.publishNow === true;
@@ -1603,7 +1610,10 @@ export async function updatePost({
     instagram: instagramRaw,
     facebook: facebookRaw,
   });
-  assertValid(validatePostContent({ platforms, content, media, formats }));
+  const tiktokMode = (input.tiktokSettings || post.tiktokSettings)?.mode;
+  assertValid(
+    validatePostContent({ platforms, content, media, formats, tiktokMode }),
+  );
   assertVideoTargets(media, accounts);
 
   let scheduledFor = post.scheduledFor;

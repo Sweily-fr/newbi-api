@@ -478,7 +478,7 @@ describe("stories (Instagram, Facebook)", () => {
         media: [video({ durationMs: 2000 })],
         formats: { instagram: "story" },
       }),
-    ).toBe("Instagram exige une story vidéo d'au moins 3 s.");
+    ).toBe("Instagram exige une vidéo d'au moins 3 s.");
     // Même vidéo de 72 s en Reel : acceptée
     expect(
       validatePostContent({
@@ -501,6 +501,43 @@ describe("stories (Instagram, Facebook)", () => {
 });
 
 describe("brouillon TikTok", () => {
+  it("vidéo en brouillon : texte non transmis, aucune limite TikTok ; photos : description comptée", () => {
+    const long = "a".repeat(3000);
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: long,
+        media: [video()],
+        tiktokMode: "draft",
+      }),
+    ).toBeNull();
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: long,
+        media: [video()],
+        tiktokMode: "direct",
+      }),
+    ).toMatch(/2.200 caractères pour TikTok/);
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: "a".repeat(5000),
+        media: [image()],
+        tiktokMode: "draft",
+      }),
+    ).toMatch(/4.000 caractères pour TikTok/);
+    // Les autres réseaux du post gardent leur limite
+    expect(
+      validatePostContent({
+        platforms: ["tiktok", "twitter"],
+        content: long,
+        media: [video()],
+        tiktokMode: "draft",
+      }),
+    ).toMatch(/pour X/);
+  });
+
   it("mode draft : aucun autre réglage exigé ; mode inconnu refusé", () => {
     expect(
       validateTikTokSettings({ mode: "draft" }, { video: true }),
