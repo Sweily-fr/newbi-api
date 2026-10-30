@@ -256,7 +256,11 @@ export function validateVideoForPlatform(video, platform, { format } = {}) {
   const durationMs = Number(video?.durationMs) || 0;
   const size = Number(video?.size) || 0;
   if (durationMs && limits.maxDurationMs && durationMs > limits.maxDurationMs) {
-    return `${rules.label} accepte des ${story ? "stories vidéo" : "vidéos"} de ${formatVideoDuration(limits.maxDurationMs)} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
+    // Story : limite écrite en secondes (« 60 s », comme chez Meta)
+    const max = story
+      ? `${Math.floor(limits.maxDurationMs / 1000)} s`
+      : formatVideoDuration(limits.maxDurationMs);
+    return `${rules.label} accepte des ${story ? "stories vidéo" : "vidéos"} de ${max} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
   }
   if (durationMs && limits.minDurationMs && durationMs < limits.minDurationMs) {
     return story
