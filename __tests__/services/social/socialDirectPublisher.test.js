@@ -529,6 +529,138 @@ describe("publication des cibles directes", () => {
   });
 });
 
+describe("vidéo : publication en deux temps", () => {
+  const reel = {
+    kind: "video",
+    url: "https://api.newbi.test/social-media/1b4e28ba-2fa1-11d2-883f-0016d3cca427.mp4",
+    width: 1080,
+    height: 1920,
+    durationMs: 20000,
+    size: 5000000,
+    contentType: "video/mp4",
+  };
+  let igAccount;
+
+  beforeEach(async () => {
+    igAccount = await SocialAccount.create({
+      workspaceId: organizationId,
+      provider: "direct",
+      platform: "instagram",
+      externalAccountId: "1784",
+      username: "acme_ig",
+      accessToken: "ig_access",
+      tokenExpiresAt: later(30 * 24 * 60 * 60 * 1000),
+    });
+  });
+
+  const createReelPost = () =>
+    createPost({
+      content: "Coulisses",
+      media: [reel],
+      targets: [directTarget(igAccount)],
+    });
+
+  it("Reel : conteneur gardé, suivi au rythme du réseau, publié sans suivi d'adresse", async () => {
+    const post = await createReelPost();
+    vi.spyOn(instagramApi, "publish").mockResolvedValue({
+      status: "publishing",
+      externalPostId: null,
+      processingRef: "c_1",
+      platformPostUrl: null,
+      nextCheckMs: 60 * 1000,
+    });
+    vi.spyOn(instagramApi, "checkPublication")
+      .mockResolvedValueOnce({ status: "publishing", nextCheckMs: 60 * 1000 })
+      .mockResolvedValueOnce({
+        status: "published",
+        externalPostId: "m_1",
+        platformPostUrl: "https://www.instagram.com/reel/abc/",
+      });
+
+    await publishDueDirectTargets({ now: NOW });
+    expect(instagramApi.publish.mock.calls[0][0].media[0]).toMatchObject({
+      kind: "video",
+      durationMs: 20000,
+    });
+    let target = await targetOf(post);
+    expect(target).toMatchObject({
+      status: "publishing",
+      processingRef: "c_1",
+      externalPostId: null,
+    });
+    expect(target.nextAttemptAt.getTime()).toBe(NOW.getTime() + 60 * 1000);
+
+    await publishDueDirectTargets({ now: target.nextAttemptAt });
+    target = await targetOf(post);
+    expect(target.status).toBe("publishing");
+
+    await publishDueDirectTargets({ now: target.nextAttemptAt });
+    expect(instagramApi.checkPublication.mock.calls[1][0]).toMatchObject({
+      processingRef: "c_1",
+      content: "Coulisses",
+    });
+    const saved = await SocialPost.findById(post._id).lean();
+    expect(saved.status).toBe("published");
+    expect(saved.targets[0]).toMatchObject({
+      status: "published",
+      externalPostId: "m_1",
+      platformPostUrl: "https://www.instagram.com/reel/abc/",
+      urlCheckUntil: null,
+      nextAttemptAt: null,
+    });
+  });
+
+  it("conteneur expiré : la cible repart comme un nouvel essai", async () => {
+    const post = await createReelPost();
+    vi.spyOn(instagramApi, "publish").mockResolvedValue({
+      status: "publishing",
+      processingRef: "c_1",
+      nextCheckMs: 60 * 1000,
+    });
+    vi.spyOn(instagramApi, "checkPublication").mockRejectedValue(
+      new DirectApiError("instagram : conteneur expiré", {
+        network: "instagram",
+        transient: true,
+        restart: true,
+      }),
+    );
+    await publishDueDirectTargets({ now: NOW });
+    let target = await targetOf(post);
+    await publishDueDirectTargets({ now: target.nextAttemptAt });
+    target = await targetOf(post);
+    expect(target).toMatchObject({
+      status: "pending",
+      processingRef: null,
+      attempts: 1,
+    });
+
+    await publishDueDirectTargets({ now: target.nextAttemptAt });
+    expect(instagramApi.publish).toHaveBeenCalledTimes(2);
+    expect((await targetOf(post)).attempts).toBe(2);
+  });
+
+  it("traitement trop long chez le réseau : échec « vidéo non traitée à temps »", async () => {
+    const post = await createReelPost();
+    vi.spyOn(instagramApi, "publish").mockResolvedValue({
+      status: "publishing",
+      processingRef: "c_1",
+      nextCheckMs: 60 * 1000,
+    });
+    vi.spyOn(instagramApi, "checkPublication").mockResolvedValue({
+      status: "publishing",
+      nextCheckMs: 60 * 1000,
+    });
+    await publishDueDirectTargets({ now: NOW });
+    await publishDueDirectTargets({ now: later(31 * 60 * 1000) });
+    const saved = await SocialPost.findById(post._id).lean();
+    expect(saved.status).toBe("failed");
+    expect(saved.targets[0]).toMatchObject({
+      status: "failed",
+      errorCategory: "video_processing_timeout",
+    });
+  });
+});
+
 describe("posts mixtes Zernio + direct", () => {
   it("statut agrégé depuis toutes les cibles", () => {
     const of = (...statuses) => ({
