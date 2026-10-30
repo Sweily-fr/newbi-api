@@ -96,6 +96,7 @@ describe("Facebook : connexion", () => {
         "/oauth/access_token",
         jsonResponse({ access_token: "user_short", expires_in: 3600 }),
       ),
+      on("GET", "/me?fields=id", jsonResponse({ id: "meta_user_7" })),
       on(
         "GET",
         "/me/accounts",
@@ -130,6 +131,8 @@ describe("Facebook : connexion", () => {
         displayName: "Boulangerie",
         avatarUrl: "https://cdn/p.jpg",
         credentials: { accessToken: "page_token_1", tokenExpiresAt: null },
+        // Identifiant de l'utilisateur pour notre appli (rappels de Meta)
+        platformData: { metaUserId: "meta_user_7" },
       }),
     ]);
     // Le jeton longue durée sert à lire les pages

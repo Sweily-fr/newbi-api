@@ -27,6 +27,12 @@ import {
  *   envoi accepté, puis suivi par checkPublication du réseau jusqu'à la
  *   publication, sans jamais bloquer le cron pendant le traitement chez le
  *   réseau (état intermédiaire gardé dans processingRef).
+ * - Stories (Instagram, Facebook) : une story par photo, la progression
+ *   (storyIds) écrite sous le bail après chaque story publiée ; un nouvel
+ *   essai ou « Réessayer » reprend après la dernière, jamais de story en
+ *   double.
+ * - Brouillon TikTok : terminé quand TikTok l'a livré dans l'appli du
+ *   client (deliveredAs « draft », sans adresse de post).
  * - Statut global du post : agrégé depuis toutes ses cibles (Zernio et
  *   direct), notification de l'auteur une seule fois au statut final.
  */
@@ -193,6 +199,45 @@ async function writeTarget(postId, target, lockUntil, fields) {
   return result.matchedCount > 0;
 }
 
+/**
+ * Progression d'une publication en plusieurs envois (stories), écrite SOUS
+ * LE BAIL et sans le libérer. Bail perdu : l'envoi s'arrête (erreur
+ * passagère), pour ne jamais publier deux fois la même story.
+ */
+async function saveTargetProgress(postId, target, lockUntil, { storyIds }) {
+  const result = await SocialPost.updateOne(
+    {
+      _id: postId,
+      targets: {
+        $elemMatch: {
+          socialAccountId: target.socialAccountId,
+          lockedUntil: lockUntil,
+        },
+      },
+    },
+    { $set: { "targets.$.storyIds": storyIds } },
+  );
+  if (result.matchedCount === 0) {
+    throw new DirectApiError(
+      "Bail perdu pendant la publication des stories, envoi arrêté",
+      { transient: true },
+    );
+  }
+}
+
+/** Paramètres communs des appels au réseau pour une cible. */
+const networkParams = (post, target, lockUntil) => ({
+  content: post.content || "",
+  media: post.media || [],
+  tiktokSettings: post.tiktokSettings || null,
+  instagramSettings: post.instagramSettings || null,
+  facebookSettings: post.facebookSettings || null,
+  workspaceId: post.workspaceId,
+  progress: { storyIds: [...(target.storyIds || [])] },
+  saveProgress: (progress) =>
+    saveTargetProgress(post._id, target, lockUntil, progress),
+});
+
 // ── Erreurs ────────────────────────────────────────────────────────────────
 
 const asDirectError = (error) =>
@@ -272,21 +317,18 @@ async function publishTarget(post, target, lockUntil, now) {
         authInvalid: true,
       });
     }
-    if (!isDirectNetworkReady(account.platform)) {
+    if (!isDirectNetworkReady(account.platform, account.connector)) {
       throw new DirectApiError("Appli du réseau non configurée", {
         network: account.platform,
         transient: true,
       });
     }
-    const network = directNetworkFor(account.platform);
+    const network = directNetworkFor(account.platform, account.connector);
     const result = await callWithFreshToken(account, now, (accessToken) =>
       network.publish({
         account,
         accessToken,
-        content: post.content || "",
-        media: post.media || [],
-        tiktokSettings: post.tiktokSettings || null,
-        workspaceId: post.workspaceId,
+        ...networkParams(post, target, lockUntil),
       }),
     );
 
@@ -320,6 +362,8 @@ async function publishTarget(post, target, lockUntil, now) {
       nextAttemptAt: null,
       errorMessage: null,
       errorCategory: null,
+      ...(result.storyIds ? { storyIds: result.storyIds } : {}),
+      ...(result.deliveredAs ? { deliveredAs: result.deliveredAs } : {}),
     });
     if (account.platform === "twitter") logXCost(post, post.content);
     logger.info(
@@ -357,7 +401,8 @@ const isVideoPost = (post) =>
 /**
  * Nouvelle publication complète après un état intermédiaire perdu chez le
  * réseau (conteneur Instagram expiré, jamais publié) : la cible repart
- * comme un nouvel essai, dans la limite des essais.
+ * comme un nouvel essai, dans la limite des essais (stories déjà publiées
+ * gardées).
  */
 async function restartTarget(post, target, lockUntil, now, error) {
   const attempts = target.attempts || 1;
@@ -384,7 +429,9 @@ async function restartTarget(post, target, lockUntil, now, error) {
  */
 async function checkTarget(post, target, lockUntil, now, mode) {
   const { account, missing } = await loadTargetAccount(post, target);
-  const network = account ? directNetworkFor(account.platform) : null;
+  const network = account
+    ? directNetworkFor(account.platform, account.connector)
+    : null;
   if (missing || !network?.checkPublication) {
     await writeTarget(post._id, target, lockUntil, {
       urlCheckUntil: null,
@@ -400,17 +447,16 @@ async function checkTarget(post, target, lockUntil, now, mode) {
         externalPostId: target.externalPostId,
         processingRef: target.processingRef || null,
         submittedAt: target.submittedAt || null,
-        content: post.content || "",
-        media: post.media || [],
-        tiktokSettings: post.tiktokSettings || null,
-        workspaceId: post.workspaceId,
+        ...networkParams(post, target, lockUntil),
         now,
       }),
     );
     if (result.status === "published") {
-      // Adresse attendue après la modération : TikTok seulement
+      // Adresse attendue après la modération : TikTok seulement (pas pour
+      // un brouillon, qui n'a pas de post)
       const watchUrl =
         account.platform === "tiktok" &&
+        result.deliveredAs !== "draft" &&
         !result.platformPostUrl &&
         post.tiktokSettings?.privacyLevel === "PUBLIC_TO_EVERYONE";
       const fields = {
@@ -440,6 +486,8 @@ async function checkTarget(post, target, lockUntil, now, mode) {
         fields.errorMessage = null;
         fields.errorCategory = null;
       }
+      if (result.storyIds) fields.storyIds = result.storyIds;
+      if (result.deliveredAs) fields.deliveredAs = result.deliveredAs;
       await writeTarget(post._id, target, lockUntil, fields);
       if (mode !== "url" && account.platform === "twitter") {
         logXCost(post, post.content);
@@ -650,7 +698,8 @@ export async function publishDueDirectTargets({
 
 /**
  * Nouvel essai demandé par l'utilisateur : les cibles directes en échec
- * repartent (compteur d'essais remis à zéro).
+ * repartent (compteur d'essais remis à zéro). Les stories déjà publiées
+ * (storyIds) sont gardées : la publication reprend après la dernière.
  * @returns {Promise<number>} nombre de cibles relancées
  */
 export async function resetFailedDirectTargets(postId) {

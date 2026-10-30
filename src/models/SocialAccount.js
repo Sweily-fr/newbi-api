@@ -26,6 +26,10 @@ const socialAccountSchema = new mongoose.Schema(
       required: true,
       enum: ["instagram", "facebook", "linkedin", "twitter", "tiktok"],
     },
+    // Mode de connexion « direct » : null (connexion habituelle du réseau),
+    // « facebook » (Instagram connecté via Facebook Login for Business, sons
+    // tendance) ou « business » (TikTok API for Business, sons tendance)
+    connector: { type: String, default: null },
     externalAccountId: { type: String, required: true },
     username: { type: String, default: null },
     displayName: { type: String, default: null },
@@ -56,7 +60,9 @@ const socialAccountSchema = new mongoose.Schema(
     // Comptes qui partagent le même jeton (profil et pages LinkedIn d'un
     // même membre) : un rafraîchissement les met tous à jour
     credentialGroup: { type: String, default: null },
-    // Données propres au réseau (ex. page Facebook liée au compte Instagram)
+    // Données propres au réseau : Instagram via Facebook { pageId,
+    // pageName, metaUserId }, page Facebook { metaUserId } (identifiant de
+    // l'utilisateur pour notre appli, lu par les rappels de Meta)
     platformData: { type: mongoose.Schema.Types.Mixed, default: null },
   },
   { timestamps: true },

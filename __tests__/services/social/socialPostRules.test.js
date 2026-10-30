@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  accountCapabilities,
+  isStoryFormat,
+  parsePostFormat,
+  soundAppliesTo,
+  validateSoundInput,
   buildTaskTitle,
   contentToTaskDescription,
   countPostCharacters,
@@ -375,5 +380,297 @@ describe("carte du post", () => {
       buildTaskTitle(["tiktok"], "Salut"),
     ];
     messages.forEach((message) => expect(message).not.toContain("—"));
+  });
+});
+
+describe("stories (Instagram, Facebook)", () => {
+  const story = { instagram: "story", facebook: "story" };
+
+  it("média exigé, texte ignoré (aucune limite), format d'image libre", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "Bonjour",
+        formats: { instagram: "story" },
+      }),
+    ).toBe("Une story Instagram exige une photo ou une vidéo.");
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "Bonjour",
+        formats: { facebook: "story" },
+      }),
+    ).toBe("Une story Facebook exige une photo ou une vidéo.");
+    // Texte au-delà de 2 200 caractères et panorama : acceptés en story
+    expect(
+      validatePostContent({
+        platforms: ["instagram", "facebook"],
+        content: "a".repeat(5000),
+        media: [image(3000, 1000)],
+        formats: story,
+      }),
+    ).toBeNull();
+    // Le même post en publication : refusé (texte trop long pour Instagram)
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "a".repeat(5000),
+        media: [image(1080, 1080)],
+      }),
+    ).toMatch(/2.200 caractères pour Instagram/);
+    // Sans texte, avec une photo : accepté
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [image()],
+        formats: { instagram: "story" },
+      }),
+    ).toBeNull();
+  });
+
+  it("10 photos au plus (une story par photo)", () => {
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "",
+        media: Array.from({ length: 11 }, () => image()),
+        formats: { facebook: "story" },
+      }),
+    ).toBe("Facebook accepte au maximum 10 images.");
+  });
+
+  it("vidéo en story : 3 à 60 s, 100 Mo pour Instagram", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video({ durationMs: 72 * 1000 })],
+        formats: { instagram: "story" },
+      }),
+    ).toBe(
+      "Instagram accepte des stories vidéo de 60 s au maximum (cette vidéo dure 1 min 12).",
+    );
+    expect(
+      validatePostContent({
+        platforms: ["facebook"],
+        content: "",
+        media: [video({ durationMs: 61 * 1000 })],
+        formats: { facebook: "story" },
+      }),
+    ).toBe(
+      "Facebook accepte des stories vidéo de 60 s au maximum (cette vidéo dure 1 min 01).",
+    );
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video({ size: 150 * 1000 * 1000 })],
+        formats: { instagram: "story" },
+      }),
+    ).toBe(
+      "La vidéo est trop lourde pour une story Instagram (100 Mo maximum après préparation).",
+    );
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video({ durationMs: 2000 })],
+        formats: { instagram: "story" },
+      }),
+    ).toBe("Instagram exige une vidéo d'au moins 3 s.");
+    // Même vidéo de 72 s en Reel : acceptée
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video({ durationMs: 72 * 1000 })],
+      }),
+    ).toBeNull();
+  });
+
+  it("format story ignoré pour un réseau sans stories ; format inconnu refusé", () => {
+    expect(isStoryFormat("linkedin", "story")).toBe(false);
+    expect(isStoryFormat("instagram", "story")).toBe(true);
+    expect(parsePostFormat(undefined)).toEqual({ format: "post", error: null });
+    expect(parsePostFormat("story")).toEqual({ format: "story", error: null });
+    expect(parsePostFormat("reel").error).toBe(
+      "Format de publication inconnu.",
+    );
+  });
+});
+
+describe("brouillon TikTok", () => {
+  it("vidéo en brouillon : texte non transmis, aucune limite TikTok ; photos : description comptée", () => {
+    const long = "a".repeat(3000);
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: long,
+        media: [video()],
+        tiktokMode: "draft",
+      }),
+    ).toBeNull();
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: long,
+        media: [video()],
+        tiktokMode: "direct",
+      }),
+    ).toMatch(/2.200 caractères pour TikTok/);
+    expect(
+      validatePostContent({
+        platforms: ["tiktok"],
+        content: "a".repeat(5000),
+        media: [image()],
+        tiktokMode: "draft",
+      }),
+    ).toMatch(/4.000 caractères pour TikTok/);
+    // Les autres réseaux du post gardent leur limite
+    expect(
+      validatePostContent({
+        platforms: ["tiktok", "twitter"],
+        content: long,
+        media: [video()],
+        tiktokMode: "draft",
+      }),
+    ).toMatch(/pour X/);
+  });
+
+  it("mode draft : aucun autre réglage exigé ; mode inconnu refusé", () => {
+    expect(
+      validateTikTokSettings({ mode: "draft" }, { video: true }),
+    ).toBeNull();
+    expect(validateTikTokSettings({ mode: "brouillon" })).toBe(
+      "Mode d'envoi TikTok inconnu.",
+    );
+    // Direct : mêmes exigences qu'avant
+    expect(validateTikTokSettings({ mode: "direct" })).toBe(
+      "Choisissez qui peut voir le post TikTok.",
+    );
+  });
+});
+
+describe("son tendance", () => {
+  const sound = (fields = {}) => ({
+    id: "a1",
+    title: "Titre",
+    artist: "Artiste",
+    coverUrl: "https://cdn/c.jpg",
+    volume: 80,
+    videoVolume: 50,
+    ...fields,
+  });
+
+  it("son choisi : identifiant, titre, volumes entiers de 0 à 100, pochette https", () => {
+    expect(validateSoundInput(sound())).toBeNull();
+    expect(
+      validateSoundInput(sound({ volume: 0, videoVolume: 100 })),
+    ).toBeNull();
+    expect(validateSoundInput(sound({ volume: 101 }))).toBe(
+      "Le volume doit être un nombre entier de 0 à 100.",
+    );
+    expect(validateSoundInput(sound({ videoVolume: 12.5 }))).toBe(
+      "Le volume doit être un nombre entier de 0 à 100.",
+    );
+    expect(validateSoundInput(sound({ id: " " }))).toBe(
+      "Choisissez un son valide.",
+    );
+    expect(validateSoundInput(sound({ coverUrl: "javascript:alert(1)" }))).toBe(
+      "Choisissez un son valide.",
+    );
+    expect(validateSoundInput(null)).toBe("Choisissez un son valide.");
+  });
+
+  it("s'applique : Instagram via Facebook en Reel, TikTok Business en direct", () => {
+    const igFb = {
+      provider: "direct",
+      platform: "instagram",
+      connector: "facebook",
+    };
+    const igLogin = {
+      provider: "direct",
+      platform: "instagram",
+      connector: null,
+    };
+    const ttBiz = {
+      provider: "direct",
+      platform: "tiktok",
+      connector: "business",
+    };
+    const tt = { provider: "direct", platform: "tiktok", connector: null };
+    expect(soundAppliesTo(igFb, { format: "post", media: [video()] })).toBe(
+      true,
+    );
+    expect(soundAppliesTo(igFb, { format: "story", media: [video()] })).toBe(
+      false,
+    );
+    expect(soundAppliesTo(igFb, { format: "post", media: [image()] })).toBe(
+      false,
+    );
+    expect(soundAppliesTo(igLogin, { format: "post", media: [video()] })).toBe(
+      false,
+    );
+    expect(soundAppliesTo(ttBiz, { mode: "direct", media: [image()] })).toBe(
+      true,
+    );
+    expect(soundAppliesTo(ttBiz, { mode: "draft", media: [video()] })).toBe(
+      false,
+    );
+    expect(soundAppliesTo(tt, { mode: "direct", media: [video()] })).toBe(
+      false,
+    );
+    expect(
+      soundAppliesTo({ ...ttBiz, provider: "zernio" }, { media: [video()] }),
+    ).toBe(false);
+  });
+});
+
+describe("capacités d'un compte", () => {
+  it("stories, sons, brouillons, reconnexion pour les brouillons", () => {
+    expect(
+      accountCapabilities({ provider: "direct", platform: "facebook" }),
+    ).toEqual({
+      stories: true,
+      sounds: false,
+      drafts: false,
+      draftsNeedReconnect: false,
+    });
+    expect(
+      accountCapabilities({
+        provider: "direct",
+        platform: "instagram",
+        connector: "facebook",
+      }),
+    ).toMatchObject({ stories: true, sounds: true });
+    expect(
+      accountCapabilities({ provider: "zernio", platform: "instagram" }),
+    ).toMatchObject({ stories: false, sounds: false });
+    expect(
+      accountCapabilities({
+        provider: "direct",
+        platform: "tiktok",
+        tokenScopes: ["user.info.basic", "video.publish"],
+      }),
+    ).toEqual({
+      stories: false,
+      sounds: false,
+      drafts: false,
+      draftsNeedReconnect: true,
+    });
+    expect(
+      accountCapabilities({
+        provider: "direct",
+        platform: "tiktok",
+        connector: "business",
+        tokenScopes: ["video.publish", "video.upload"],
+      }),
+    ).toEqual({
+      stories: false,
+      sounds: true,
+      drafts: true,
+      draftsNeedReconnect: false,
+    });
   });
 });

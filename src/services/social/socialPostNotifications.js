@@ -28,10 +28,21 @@ const labelsOf = (targets) => [
   ...new Set(targets.map((target) => platformLabel(target.platform))),
 ];
 
-/** Titre, message et type de la notification d'un post. */
+const DRAFTS_SENT = "envoyé dans vos brouillons TikTok";
+const DRAFTS_NEXT_STEP = "terminez la publication dans l'appli TikTok";
+
+/**
+ * Titre, message et type de la notification d'un post. Une cible envoyée
+ * en brouillon TikTok (deliveredAs « draft ») compte comme un succès, avec
+ * son propre libellé.
+ */
 export function buildOutcomeMessage(post) {
   const targets = post.targets || [];
-  const published = labelsOf(targets.filter((t) => t.status === "published"));
+  const isDraft = (t) => t.status === "published" && t.deliveredAs === "draft";
+  const published = labelsOf(
+    targets.filter((t) => t.status === "published" && !isDraft(t)),
+  );
+  const drafts = targets.some(isDraft);
   const failed = labelsOf(
     targets.filter((t) => t.status === "failed" || t.status === "cancelled"),
   );
@@ -39,6 +50,15 @@ export function buildOutcomeMessage(post) {
 
   switch (post.status) {
     case "published":
+      if (drafts) {
+        return {
+          type: "SOCIAL_POST_PUBLISHED",
+          title: published.length ? "Post publié" : "Post envoyé en brouillon",
+          message: published.length
+            ? `Votre post a été publié sur ${joinLabels(published)} et ${DRAFTS_SENT} : ${DRAFTS_NEXT_STEP}.`
+            : `Votre post a été ${DRAFTS_SENT} : ${DRAFTS_NEXT_STEP}.`,
+        };
+      }
       return {
         type: "SOCIAL_POST_PUBLISHED",
         title: "Post publié",
@@ -48,7 +68,9 @@ export function buildOutcomeMessage(post) {
       return {
         type: "SOCIAL_POST_FAILED",
         title: "Post publié en partie",
-        message: `Publié sur ${joinLabels(published)}, échec sur ${joinLabels(failed)}.`,
+        message: drafts
+          ? `${published.length ? `Publié sur ${joinLabels(published)}, ` : ""}${published.length ? DRAFTS_SENT : "Envoyé dans vos brouillons TikTok"}, échec sur ${joinLabels(failed)}.`
+          : `Publié sur ${joinLabels(published)}, échec sur ${joinLabels(failed)}.`,
       };
     case "cancelled":
       return {

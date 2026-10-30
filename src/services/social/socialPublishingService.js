@@ -10,16 +10,28 @@ import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { userHasWorkspaceAction } from "../../utils/workspace-membership.js";
 import provider, { SocialProviderError } from "./providers/zernioProvider.js";
 import {
+  DRAFT_NEEDS_RECONNECT_MESSAGE,
+  INSTAGRAM_SOUND_ACCOUNT_MESSAGE,
+  INSTAGRAM_SOUND_REEL_ONLY_MESSAGE,
+  STORY_DIRECT_ONLY_MESSAGE,
+  STORY_PLATFORMS,
+  TIKTOK_BUSINESS_PUBLIC_VIDEO_MESSAGE,
+  TIKTOK_SOUND_ACCOUNT_MESSAGE,
+  TIKTOK_SOUND_DRAFT_MESSAGE,
   VIDEO_DIRECT_ONLY_MESSAGE,
   VIDEO_NOT_READY_MESSAGE,
+  accountCapabilities,
   buildTaskTitle,
   contentToTaskDescription,
   isSupportedPlatform,
   isVideoMedia,
+  parsePostFormat,
   platformLabel,
+  soundAppliesTo,
   uniquePlatforms,
   validatePostContent,
   validateScheduleDate,
+  validateSoundInput,
   validateTikTokSettings,
 } from "./socialPostRules.js";
 import { serializeMedia } from "./socialVideoUpload.js";
@@ -36,9 +48,11 @@ import { notifySocialPostOutcome } from "./socialPostNotifications.js";
 import storage from "./socialMediaStorage.js";
 import {
   connectionProvider,
+  connectorByKey,
   directNetworkFor,
   isAccountProviderUsable,
-  isPlatformAvailable,
+  isConnectorAvailable,
+  isDirectNetworkReady,
   isSocialPublishingEnabled as anyProviderEnabled,
 } from "./socialProviders.js";
 import {
@@ -144,11 +158,45 @@ export const serializeAccount = (account) => ({
   avatarUrl: account.avatarUrl || null,
   status: account.status || "active",
   connectedAt: toIso(account.createdAt),
+  // null : connexion habituelle ; « facebook » ou « business » (sons)
+  connector: account.provider === "direct" ? account.connector || null : null,
+  capabilities: accountCapabilities(account),
 });
 
 export { serializeMedia };
 
 const optionalBoolean = (value) => (typeof value === "boolean" ? value : null);
+
+/** Son enregistré → SocialPostSound (identifiant exposé en `id`). */
+const serializeSound = (sound) =>
+  sound?.soundId
+    ? {
+        id: sound.soundId,
+        title: sound.title,
+        artist: sound.artist || null,
+        coverUrl: sound.coverUrl || null,
+        volume: Number(sound.volume) || 0,
+        videoVolume: Number(sound.videoVolume) || 0,
+      }
+    : null;
+
+function serializeTikTokSettings(settings) {
+  if (!settings?.privacyLevel && settings?.mode !== "draft") return null;
+  const mode = settings.mode === "draft" ? "draft" : "direct";
+  return {
+    privacyLevel: settings.privacyLevel || null,
+    allowComment: mode === "draft" ? null : Boolean(settings.allowComment),
+    brandOrganic: Boolean(settings.brandOrganic),
+    brandContent: Boolean(settings.brandContent),
+    allowDuet: optionalBoolean(settings.allowDuet),
+    allowStitch: optionalBoolean(settings.allowStitch),
+    mode,
+    sound: serializeSound(settings.sound),
+  };
+}
+
+const hasTarget = (post, platform) =>
+  (post.targets || []).some((target) => target.platform === platform);
 
 function serializePost(post, existingAccountIds) {
   return {
@@ -174,20 +222,25 @@ function serializePost(post, existingAccountIds) {
       platformPostUrl: target.platformPostUrl || null,
       errorMessage: targetErrorMessage(target),
       publishedAt: toIso(target.publishedAt),
+      deliveredAs: target.deliveredAs || null,
+      storyCount: Array.isArray(target.storyIds) ? target.storyIds.length : 0,
     })),
     scheduledFor: toIso(post.scheduledFor),
     timezone: post.timezone || DEFAULT_TIMEZONE,
     status: post.status,
-    tiktokSettings: post.tiktokSettings?.privacyLevel
-      ? {
-          privacyLevel: post.tiktokSettings.privacyLevel,
-          allowComment: Boolean(post.tiktokSettings.allowComment),
-          brandOrganic: Boolean(post.tiktokSettings.brandOrganic),
-          brandContent: Boolean(post.tiktokSettings.brandContent),
-          allowDuet: optionalBoolean(post.tiktokSettings.allowDuet),
-          allowStitch: optionalBoolean(post.tiktokSettings.allowStitch),
-        }
-      : null,
+    tiktokSettings: serializeTikTokSettings(post.tiktokSettings),
+    // Posts antérieurs aux stories : publication classique
+    instagramSettings:
+      post.instagramSettings || hasTarget(post, "instagram")
+        ? {
+            format: post.instagramSettings?.format || "post",
+            sound: serializeSound(post.instagramSettings?.sound),
+          }
+        : null,
+    facebookSettings:
+      post.facebookSettings || hasTarget(post, "facebook")
+        ? { format: post.facebookSettings?.format || "post" }
+        : null,
     createdBy: idString(post.createdBy),
     createdAt: toIso(post.createdAt),
     updatedAt: toIso(post.updatedAt),
@@ -416,6 +469,7 @@ export async function createConnectUrl({
   workspaceId,
   userId,
   platform,
+  connector = null,
   returnTo,
   now = new Date(),
 }) {
@@ -423,9 +477,15 @@ export async function createConnectUrl({
   if (!isSupportedPlatform(platform)) {
     throw userError("Ce réseau social n'est pas pris en charge.");
   }
-  if (!isPlatformAvailable(platform, workspaceId)) {
+  // Connecteur : celui du réseau par défaut, sinon une clé de la liste
+  // fermée (instagram_facebook, tiktok_business) du même réseau
+  const entry = connectorByKey(connector || platform);
+  if (!entry || entry.platform !== platform) {
+    throw userError("Ce mode de connexion n'est pas pris en charge.");
+  }
+  if (!isConnectorAvailable(entry.key, workspaceId)) {
     throw userError(
-      `La connexion à ${platformLabel(platform)} n'est pas encore disponible.`,
+      `La connexion à ${entry.label} n'est pas encore disponible.`,
     );
   }
   if (connectionProvider(platform, workspaceId) === "direct") {
@@ -434,6 +494,7 @@ export async function createConnectUrl({
         workspaceId,
         userId,
         platform,
+        connector: entry.key,
         returnTo,
         now,
       });
@@ -726,9 +787,11 @@ async function readDirectCreatorInfo(account) {
   const withTokens = await loadAccountWithTokens({ _id: account._id });
   const accessToken = await getFreshAccessToken(withTokens);
   try {
-    const info = await directNetworkFor("tiktok").getCreatorInfo({
-      accessToken,
-    });
+    // TikTok Business : réglages lus dans /business/video/settings/
+    const info = await directNetworkFor(
+      "tiktok",
+      account.connector,
+    ).getCreatorInfo({ accessToken, account });
     if (info.username && info.username !== account.username) {
       await SocialAccount.updateOne(
         { _id: account._id },
@@ -757,6 +820,106 @@ const TIKTOK_PRIVACY_LABELS = {
   FOLLOWER_OF_CREATOR: "Abonnés",
   SELF_ONLY: "Moi uniquement",
 };
+
+// ── Sons tendance ──────────────────────────────────────────────────────────
+
+// Liste par (compte, type, recherche) gardée 30 minutes en mémoire
+export const SOUNDS_CACHE_MS = 30 * 60 * 1000;
+const SOUNDS_CACHE_MAX_ENTRIES = 500;
+const SOUND_SEARCH_MAX_LENGTH = 100;
+const INSTAGRAM_SOUND_KINDS = ["music", "original_sound"];
+const soundsCache = new Map();
+
+/** Vide le cache des sons (tests). */
+export const clearSoundsCache = () => soundsCache.clear();
+
+function cachedSounds(key, now) {
+  const entry = soundsCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= now) {
+    soundsCache.delete(key);
+    return null;
+  }
+  return entry.sounds;
+}
+
+function cacheSounds(key, sounds, now) {
+  if (soundsCache.size >= SOUNDS_CACHE_MAX_ENTRIES) {
+    // Plus ancienne entrée retirée (ordre d'insertion de la Map)
+    soundsCache.delete(soundsCache.keys().next().value);
+  }
+  soundsCache.set(key, { sounds, expiresAt: now + SOUNDS_CACHE_MS });
+}
+
+/**
+ * Sons proposés pour un compte de l'espace qui permet le son tendance
+ * (Instagram via Facebook : tendances ou recherche, musique ou sons
+ * originaux ; TikTok Business : tendances, sans recherche).
+ */
+export async function listTrendingSounds({
+  workspaceId,
+  accountId,
+  search = null,
+  kind = null,
+  now = Date.now(),
+}) {
+  assertSocialPublishingEnabled();
+  const id = toObjectIdOrNull(String(accountId || ""));
+  const account = id
+    ? await SocialAccount.findOne({ _id: id, workspaceId, deletedAt: null })
+    : null;
+  if (!account) throw notFoundError("Compte introuvable.");
+  if (!accountCapabilities(account).sounds) {
+    throw userError(
+      account.platform === "tiktok"
+        ? TIKTOK_SOUND_ACCOUNT_MESSAGE
+        : account.platform === "instagram"
+          ? INSTAGRAM_SOUND_ACCOUNT_MESSAGE
+          : "Ce compte ne permet pas d'ajouter un son tendance.",
+    );
+  }
+  if (account.status !== "active") {
+    throw userError(
+      `Le compte ${platformLabel(account.platform)} doit être reconnecté avant de choisir un son.`,
+    );
+  }
+  const network = directNetworkFor(account.platform, account.connector);
+  if (
+    !network?.listSounds ||
+    !isDirectNetworkReady(account.platform, account.connector)
+  ) {
+    throw userError("Les sons tendance sont momentanément indisponibles.");
+  }
+  const instagram = account.platform === "instagram";
+  const soundKind = instagram ? kind || "music" : null;
+  if (instagram && !INSTAGRAM_SOUND_KINDS.includes(soundKind)) {
+    throw userError("Type de son inconnu.");
+  }
+  // Recherche par mot : Instagram seulement (TikTok n'a que les tendances)
+  const query =
+    instagram && typeof search === "string"
+      ? search.trim().slice(0, SOUND_SEARCH_MAX_LENGTH)
+      : "";
+  const key = [String(account._id), soundKind || "", query.toLowerCase()].join(
+    "|",
+  );
+  const cached = cachedSounds(key, now);
+  if (cached) return cached;
+  try {
+    const withTokens = await loadAccountWithTokens({ _id: account._id });
+    const accessToken = await getFreshAccessToken(withTokens);
+    const sounds = await network.listSounds({
+      account,
+      accessToken,
+      search: query,
+      kind: soundKind,
+    });
+    cacheSounds(key, sounds, now);
+    return sounds;
+  } catch (error) {
+    throw toUserError(error, "read");
+  }
+}
 
 // ── Médias ─────────────────────────────────────────────────────────────────
 
@@ -932,9 +1095,132 @@ function normalizeTimezone(value) {
   }
 }
 
-function normalizeTikTokSettings(input, { video = false } = {}) {
+// ── Réglages par réseau (format, son, mode TikTok) ─────────────────────────
+
+/** SocialPostSoundInput → son enregistré (identifiant gardé en soundId). */
+function normalizeSound(input) {
+  const error = validateSoundInput(input);
+  if (error) throw userError(error);
+  return {
+    soundId: input.id.trim(),
+    title: input.title.trim(),
+    artist: input.artist ? String(input.artist).trim() || null : null,
+    coverUrl: input.coverUrl || null,
+    volume: input.volume,
+    videoVolume: input.videoVolume,
+  };
+}
+
+/** Son enregistré → forme de l'input (relu à la modification d'un post). */
+const soundInputOf = (sound) =>
+  sound?.soundId
+    ? {
+        id: sound.soundId,
+        title: sound.title,
+        artist: sound.artist || null,
+        coverUrl: sound.coverUrl || null,
+        volume: sound.volume,
+        videoVolume: sound.videoVolume,
+      }
+    : null;
+
+const accountsOf = (accounts, platform) =>
+  accounts.filter((account) => account.platform === platform);
+
+/**
+ * Format de chaque réseau visé qui publie des stories (« post » par
+ * défaut) ; un réglage d'un réseau non visé est ignoré. Story : comptes
+ * connectés directement seulement.
+ * @param {object} settingsByPlatform - { instagram, facebook } (réglages reçus ou gardés)
+ * @returns {{instagram?: string, facebook?: string}}
+ */
+function resolveFormats(accounts, settingsByPlatform) {
+  const formats = {};
+  for (const platform of STORY_PLATFORMS) {
+    const targeted = accountsOf(accounts, platform);
+    if (targeted.length === 0) continue;
+    const { format, error } = parsePostFormat(
+      settingsByPlatform[platform]?.format,
+    );
+    if (error) throw userError(error);
+    if (format === "story" && targeted.some((a) => !isDirectAccount(a))) {
+      throw userError(STORY_DIRECT_ONLY_MESSAGE);
+    }
+    formats[platform] = format;
+  }
+  return formats;
+}
+
+/**
+ * Son d'un réseau : contrôlé, puis gardé seulement s'il s'applique à au
+ * moins un compte visé (les autres publient sans son). Réglage reçu
+ * incompatible : refus clair ; réglage gardé (modification) : son retiré.
+ */
+function resolveSound(rawSound, { accounts, media, format, mode, strict }) {
+  if (!rawSound) return null;
+  const sound = normalizeSound(rawSound);
+  if (accounts.some((a) => soundAppliesTo(a, { format, mode, media }))) {
+    return sound;
+  }
+  if (!strict) return null;
+  const platform = accounts[0]?.platform;
+  if (platform === "tiktok") {
+    throw userError(
+      mode === "draft"
+        ? TIKTOK_SOUND_DRAFT_MESSAGE
+        : TIKTOK_SOUND_ACCOUNT_MESSAGE,
+    );
+  }
+  const reel =
+    format !== "story" && (media || []).length === 1 && isVideoMedia(media[0]);
+  throw userError(
+    reel ? INSTAGRAM_SOUND_ACCOUNT_MESSAGE : INSTAGRAM_SOUND_REEL_ONLY_MESSAGE,
+  );
+}
+
+/** Réglages Instagram enregistrés (null si Instagram n'est pas visé). */
+function buildInstagramSettings({ accounts, media, formats, raw, strict }) {
+  const targeted = accountsOf(accounts, "instagram");
+  if (targeted.length === 0) return null;
+  const format = formats.instagram || "post";
+  const sound = resolveSound(raw?.sound, {
+    accounts: targeted,
+    media,
+    format,
+    strict,
+  });
+  return { format, ...(sound ? { sound } : {}) };
+}
+
+/**
+ * Réglages TikTok : mode « direct » (confidentialité, commentaires…
+ * obligatoires) ou « draft » (brouillon : comptes directs avec
+ * l'autorisation video.upload, rien d'autre). Compte TikTok Business +
+ * vidéo en direct : toujours public.
+ */
+function normalizeTikTokSettings(
+  input,
+  { video = false, accounts = [], media = [], strict = true } = {},
+) {
   const error = validateTikTokSettings(input, { video });
   if (error) throw userError(error);
+  const tiktokAccounts = accountsOf(accounts, "tiktok");
+  if (input.mode === "draft") {
+    // Chaque compte TikTok visé doit pouvoir recevoir un brouillon (compte
+    // direct avec video.upload) ; même message que le site, compte Zernio
+    // compris
+    if (tiktokAccounts.some((a) => !accountCapabilities(a).drafts)) {
+      throw userError(DRAFT_NEEDS_RECONNECT_MESSAGE);
+    }
+    // Le son se choisit dans l'appli TikTok
+    resolveSound(input.sound, {
+      accounts: tiktokAccounts,
+      media,
+      mode: "draft",
+      strict,
+    });
+    return { mode: "draft" };
+  }
   const privacyLevel = input.privacyLevel.trim();
   // Règle TikTok : un contenu de marque ne peut pas être privé
   if (input.brandContent === true && privacyLevel === "SELF_ONLY") {
@@ -942,7 +1228,24 @@ function normalizeTikTokSettings(input, { video = false } = {}) {
       "Le contenu de marque ne peut pas être visible par vous seul sur TikTok.",
     );
   }
+  // TikTok Business : pas de confidentialité pour une vidéo (publique)
+  if (
+    video &&
+    privacyLevel !== "PUBLIC_TO_EVERYONE" &&
+    tiktokAccounts.some(
+      (account) => isDirectAccount(account) && account.connector === "business",
+    )
+  ) {
+    throw userError(TIKTOK_BUSINESS_PUBLIC_VIDEO_MESSAGE);
+  }
+  const sound = resolveSound(input.sound, {
+    accounts: tiktokAccounts,
+    media,
+    mode: "direct",
+    strict,
+  });
   return {
+    mode: "direct",
     privacyLevel,
     allowComment: input.allowComment,
     brandOrganic: Boolean(input.brandOrganic),
@@ -951,12 +1254,16 @@ function normalizeTikTokSettings(input, { video = false } = {}) {
     ...(video
       ? { allowDuet: input.allowDuet, allowStitch: input.allowStitch }
       : {}),
+    ...(sound ? { sound } : {}),
   };
 }
 
-const storedTikTokSettings = (settings) =>
-  settings?.privacyLevel
+/** Réglages TikTok gardés → forme de l'input (modification d'un post). */
+const storedTikTokSettings = (settings) => {
+  if (settings?.mode === "draft") return { mode: "draft" };
+  return settings?.privacyLevel
     ? {
+        mode: "direct",
         privacyLevel: settings.privacyLevel,
         allowComment: Boolean(settings.allowComment),
         brandOrganic: Boolean(settings.brandOrganic),
@@ -966,6 +1273,21 @@ const storedTikTokSettings = (settings) =>
           : {}),
         ...(typeof settings.allowStitch === "boolean"
           ? { allowStitch: settings.allowStitch }
+          : {}),
+        ...(settings.sound?.soundId
+          ? { sound: soundInputOf(settings.sound) }
+          : {}),
+      }
+    : null;
+};
+
+/** Réglages Instagram gardés → forme de l'input. */
+const storedInstagramSettings = (settings) =>
+  settings
+    ? {
+        format: settings.format || "post",
+        ...(settings.sound?.soundId
+          ? { sound: soundInputOf(settings.sound) }
           : {}),
       }
     : null;
@@ -1102,7 +1424,20 @@ export async function schedulePost({
   const platforms = uniquePlatforms(
     accounts.map((account) => account.platform),
   );
-  assertValid(validatePostContent({ platforms, content, media }));
+  // Format par réseau (« post » ou « story »), absent = publication
+  const formats = resolveFormats(accounts, {
+    instagram: input.instagramSettings,
+    facebook: input.facebookSettings,
+  });
+  assertValid(
+    validatePostContent({
+      platforms,
+      content,
+      media,
+      formats,
+      tiktokMode: input.tiktokSettings?.mode,
+    }),
+  );
   assertVideoTargets(media, accounts);
 
   const publishNow = input.publishNow === true;
@@ -1110,7 +1445,21 @@ export async function schedulePost({
   if (!publishNow) assertValid(validateScheduleDate(scheduledFor, { now }));
   const timezone = normalizeTimezone(input.timezone);
   const tiktokSettings = platforms.includes("tiktok")
-    ? normalizeTikTokSettings(input.tiktokSettings, { video: hasVideo(media) })
+    ? normalizeTikTokSettings(input.tiktokSettings, {
+        video: hasVideo(media),
+        accounts,
+        media,
+      })
+    : null;
+  const instagramSettings = buildInstagramSettings({
+    accounts,
+    media,
+    formats,
+    raw: input.instagramSettings,
+    strict: true,
+  });
+  const facebookSettings = formats.facebook
+    ? { format: formats.facebook }
     : null;
   await assertXPostQuota(workspaceId, {
     xCount: countXTargets(accounts),
@@ -1185,6 +1534,8 @@ export async function schedulePost({
       timezone,
       status: publishNow ? "publishing" : "scheduled",
       tiktokSettings,
+      instagramSettings,
+      facebookSettings,
     });
     if (result) applyRemotePost(post, result.post, now);
     await post.save();
@@ -1251,7 +1602,18 @@ export async function updatePost({
   const platforms = uniquePlatforms(
     accounts.map((account) => account.platform),
   );
-  assertValid(validatePostContent({ platforms, content, media }));
+  // Réglages reçus, sinon ceux du post (relus sans exiger un nouvel accord)
+  const instagramRaw =
+    input.instagramSettings ?? storedInstagramSettings(post.instagramSettings);
+  const facebookRaw = input.facebookSettings ?? post.facebookSettings ?? null;
+  const formats = resolveFormats(accounts, {
+    instagram: instagramRaw,
+    facebook: facebookRaw,
+  });
+  const tiktokMode = (input.tiktokSettings || post.tiktokSettings)?.mode;
+  assertValid(
+    validatePostContent({ platforms, content, media, formats, tiktokMode }),
+  );
   assertVideoTargets(media, accounts);
 
   let scheduledFor = post.scheduledFor;
@@ -1279,12 +1641,30 @@ export async function updatePost({
     const video = hasVideo(media);
     const stored = storedTikTokSettings(post.tiktokSettings);
     tiktokSettings = input.tiktokSettings
-      ? normalizeTikTokSettings(input.tiktokSettings, { video })
+      ? normalizeTikTokSettings(input.tiktokSettings, {
+          video,
+          accounts,
+          media,
+        })
       : stored
-        ? // Réglages gardés : complets pour une vidéo (duos, collages)
-          normalizeTikTokSettings({ ...stored, consentGiven: true }, { video })
+        ? // Réglages gardés : complets pour une vidéo (duos, collages) ;
+          // son retiré s'il ne s'applique plus
+          normalizeTikTokSettings(
+            { ...stored, consentGiven: true },
+            { video, accounts, media, strict: false },
+          )
         : normalizeTikTokSettings(null);
   }
+  const instagramSettings = buildInstagramSettings({
+    accounts,
+    media,
+    formats,
+    raw: instagramRaw,
+    strict: Boolean(input.instagramSettings),
+  });
+  const facebookSettings = formats.facebook
+    ? { format: formats.facebook }
+    : null;
 
   // Part Zernio : mise à jour, suppression ou création de son post selon
   // les comptes Zernio qui restent visés ; la part directe est locale
@@ -1325,6 +1705,7 @@ export async function updatePost({
     throw toUserError(error, "update");
   }
 
+  // Cibles neuves : stories publiées (storyIds) et brouillon remis à zéro
   const targets = localTargets(accounts);
   const fields = {
     content,
@@ -1332,6 +1713,8 @@ export async function updatePost({
     targets,
     scheduledFor,
     tiktokSettings,
+    instagramSettings,
+    facebookSettings,
     provider: postProviderOf(targets),
     externalPostId,
     idempotencyKey,

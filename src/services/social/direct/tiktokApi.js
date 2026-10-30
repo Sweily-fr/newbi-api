@@ -1,5 +1,6 @@
 import storage from "../socialMediaStorage.js";
 import {
+  DRAFT_PENDING_LIMIT_MESSAGE,
   PLATFORM_RULES,
   isVideoMedia,
   validateTikTokVideoDuration,
@@ -22,7 +23,13 @@ import { DirectApiError, configError, directRequest } from "./directHttp.js";
  *   vérifié chez TikTok (route /social-media de l'API sous newbi.fr), en
  *   JPEG de 1080p au plus ;
  * - la publication est asynchrone : publish_id, puis suivi du statut par le
- *   cron (socialDirectPublisher.js).
+ *   cron (socialDirectPublisher.js) ;
+ * - brouillon (tiktokSettings.mode « draft », autorisation video.upload) :
+ *   vidéo par /post/publish/inbox/video/init/, photos en MEDIA_UPLOAD ; le
+ *   client reçoit une notification dans l'appli TikTok et y termine la
+ *   publication (son, texte, confidentialité). Le statut SEND_TO_USER_INBOX
+ *   termine la cible (deliveredAs « draft », pas d'adresse de post). 5
+ *   brouillons en attente par 24 h au plus.
  * Client non audité : posts « Moi uniquement » sur compte privé seulement.
  *
  * Jeton d'accès de 24 h, jeton de rafraîchissement d'un an qui peut changer
@@ -31,7 +38,8 @@ import { DirectApiError, configError, directRequest } from "./directHttp.js";
  * /oauth-user-access-token-management, /content-posting-api-reference-
  * photo-post, /content-posting-api-reference-direct-post,
  * /content-posting-api-reference-query-creator-info,
- * /content-posting-api-reference-get-video-status
+ * /content-posting-api-reference-get-video-status,
+ * /content-posting-api-reference-upload-video
  */
 
 export const NETWORK = "tiktok";
@@ -39,7 +47,9 @@ export const PLATFORMS = ["tiktok"];
 
 const AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/";
 const API_URL = "https://open.tiktokapis.com/v2";
-const SCOPES = ["user.info.basic", "video.publish"];
+// video.upload : brouillons (les comptes connectés avant ne l'ont pas tant
+// qu'ils ne se reconnectent pas)
+const SCOPES = ["user.info.basic", "video.publish", "video.upload"];
 const DESCRIPTION_MAX = 4000;
 
 export const isConfigured = () =>
@@ -102,7 +112,13 @@ export function tiktokError(code, message, status = null) {
     });
   }
   if (QUOTA_CODES.has(code)) {
-    return new DirectApiError(text, { ...base, category: "quota_exhausted" });
+    return new DirectApiError(text, {
+      ...base,
+      category: "quota_exhausted",
+      ...(code === "spam_risk_too_many_pending_share"
+        ? { detail: DRAFT_PENDING_LIMIT_MESSAGE }
+        : {}),
+    });
   }
   if (ABUSE_CODES.has(code)) {
     return new DirectApiError(text, { ...base, category: "user_abuse" });
@@ -386,11 +402,70 @@ async function publishVideo({
   };
 }
 
+/** Photos TikTok : JPEG de 1080p au plus, servis par notre domaine vérifié. */
+async function prepareImages(media, workspaceId) {
+  const images = [];
+  for (const item of media) {
+    images.push(await storage.prepareTikTokImage(item, workspaceId));
+  }
+  return images;
+}
+
+/**
+ * Brouillon : vidéo ou photos envoyées dans la boîte de réception de
+ * l'appli TikTok du client (ni confidentialité, ni réglages : TikTok les
+ * demande dans son appli). La vidéo n'a pas de champ texte ; les photos
+ * gardent la description.
+ */
+async function publishDraft({
+  account,
+  accessToken,
+  content,
+  media,
+  workspaceId,
+}) {
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    const { data } = await api("POST", "post/publish/inbox/video/init/", {
+      token: accessToken,
+      json: {
+        source_info: { source: "PULL_FROM_URL", video_url: media[0].url },
+      },
+    });
+    return {
+      status: "publishing",
+      externalPostId: publishIdOf(data),
+      platformPostUrl: null,
+      username: account.username || null,
+    };
+  }
+  const images = await prepareImages(media, workspaceId);
+  const text = Array.from(content || "");
+  const { data } = await api("POST", "post/publish/content/init/", {
+    token: accessToken,
+    json: {
+      media_type: "PHOTO",
+      post_mode: "MEDIA_UPLOAD",
+      post_info: { description: text.slice(0, DESCRIPTION_MAX).join("") },
+      source_info: {
+        source: "PULL_FROM_URL",
+        photo_cover_index: 0,
+        photo_images: images,
+      },
+    },
+  });
+  return {
+    status: "publishing",
+    externalPostId: publishIdOf(data),
+    platformPostUrl: null,
+    username: account.username || null,
+  };
+}
+
 /**
  * Lance la publication d'un carrousel photo ou d'une vidéo (asynchrone
- * chez TikTok).
- * tiktokSettings : { privacyLevel, allowComment, brandOrganic, brandContent,
- * allowDuet, allowStitch }
+ * chez TikTok), ou l'envoi en brouillon (mode « draft »).
+ * tiktokSettings : { mode, privacyLevel, allowComment, brandOrganic,
+ * brandContent, allowDuet, allowStitch }
  */
 export async function publish({
   account,
@@ -400,6 +475,9 @@ export async function publish({
   tiktokSettings,
   workspaceId,
 }) {
+  if (tiktokSettings?.mode === "draft") {
+    return publishDraft({ account, accessToken, content, media, workspaceId });
+  }
   const creator = await getCreatorInfo({ accessToken });
   const levels = creator.privacyLevels.map((level) => level.value);
   if (!levels.includes(tiktokSettings?.privacyLevel)) {
@@ -418,10 +496,7 @@ export async function publish({
       creator,
     });
   }
-  const images = [];
-  for (const item of media) {
-    images.push(await storage.prepareTikTokImage(item, workspaceId));
-  }
+  const images = await prepareImages(media, workspaceId);
   const text = Array.from(content || "");
   const { data } = await api("POST", "post/publish/content/init/", {
     token: accessToken,
@@ -456,7 +531,8 @@ export async function publish({
 
 /**
  * Statut d'une publication lancée : publiée (avec l'adresse si le post est
- * public et validé par la modération), en cours, ou erreur levée.
+ * public et validé par la modération), brouillon livré dans l'appli TikTok,
+ * en cours, ou erreur levée.
  */
 export async function checkPublication({
   account,
@@ -471,6 +547,15 @@ export async function checkPublication({
   const info = data?.data || {};
   if (info.status === "FAILED") {
     throw tiktokError(info.fail_reason || "publish_failed", info.fail_reason);
+  }
+  if (info.status === "SEND_TO_USER_INBOX") {
+    // Brouillon livré : le client termine la publication dans TikTok
+    return {
+      status: "published",
+      deliveredAs: "draft",
+      externalPostId,
+      platformPostUrl: null,
+    };
   }
   if (info.status === "PUBLISH_COMPLETE") {
     // Identifiant int64 (orthographe de TikTok : « publicaly ») : lu dans le

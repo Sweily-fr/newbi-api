@@ -2,7 +2,7 @@ import SocialAccount from "../../models/SocialAccount.js";
 import { decrypt, encrypt, isEncrypted } from "../../utils/encryption.js";
 import logger from "../../utils/logger.js";
 import { DirectApiError, timing } from "./direct/directHttp.js";
-import { directNetworkFor } from "./socialProviders.js";
+import { directConnectorsOf, directNetworkFor } from "./socialProviders.js";
 
 /**
  * Jetons des comptes « direct » : chiffrés au repos (utils/encryption.js),
@@ -94,7 +94,7 @@ export async function getFreshAccessToken(
   account,
   { now = new Date(), force = false } = {},
 ) {
-  const network = directNetworkFor(account.platform);
+  const network = directNetworkFor(account.platform, account.connector);
   const { accessToken, refreshToken } = decryptTokens(account);
   if (!accessToken) {
     await markNeedsReconnect(account, "jeton absent");
@@ -198,7 +198,8 @@ export async function getFreshAccessToken(
 
 /**
  * Rafraîchit à l'avance les jetons qui le demandent même sans publication
- * (Instagram : perdu après 60 jours sans rafraîchissement). Au mieux.
+ * (Instagram, par Instagram Login ou via Facebook : perdu après 60 jours
+ * sans rafraîchissement). Au mieux.
  * @returns {Promise<number>} nombre de comptes rafraîchis
  */
 export async function refreshExpiringTokens({
@@ -206,12 +207,15 @@ export async function refreshExpiringTokens({
   limit = 20,
 } = {}) {
   let count = 0;
-  for (const platform of ["instagram"]) {
-    const network = directNetworkFor(platform);
+  for (const { platform, connector, module: network } of directConnectorsOf(
+    "instagram",
+  )) {
     if (!network?.isConfigured() || !network.refreshAheadMs) continue;
     const accounts = await SocialAccount.find({
       provider: "direct",
       platform,
+      // null couvre aussi les comptes connectés avant les connecteurs
+      connector,
       status: "active",
       deletedAt: null,
       tokenExpiresAt: {
@@ -221,9 +225,17 @@ export async function refreshExpiringTokens({
     })
       .select("+accessToken +refreshToken")
       .limit(limit);
+    // Jeton partagé (comptes Instagram d'une même connexion via Facebook) :
+    // rafraîchi une fois pour tout le groupe
+    const refreshedGroups = new Set();
     for (const account of accounts) {
+      const group = account.credentialGroup
+        ? `${account.workspaceId}:${account.credentialGroup}`
+        : null;
+      if (group && refreshedGroups.has(group)) continue;
       try {
         await getFreshAccessToken(account, { now });
+        if (group) refreshedGroups.add(group);
         count += 1;
       } catch (error) {
         logger.warn(

@@ -52,9 +52,12 @@ export const apiPublicUrl = () =>
     "",
   );
 
-/** Adresse de retour OAuth de notre appli pour un réseau. */
-export const directRedirectUri = (platform) =>
-  `${apiPublicUrl()}/social-connect/${platform}/callback`;
+/**
+ * Adresse de retour OAuth de notre appli pour un connecteur (clé = réseau
+ * pour la connexion habituelle, ex. /social-connect/instagram_facebook/callback).
+ */
+export const directRedirectUri = (key) =>
+  `${apiPublicUrl()}/social-connect/${key}/callback`;
 
 /** Code d'erreur transmis au site (lettres, chiffres, « _ »). */
 export const safeCode = (value) =>
