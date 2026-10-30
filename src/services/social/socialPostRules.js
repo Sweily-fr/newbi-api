@@ -10,6 +10,11 @@
  * Un post contient soit des images, soit une seule vidéo (jamais les deux).
  * Les limites vidéo par réseau s'appliquent à la vidéo préparée par le
  * serveur (socialVideoProcessing.js : MP4 H.264, durée, poids).
+ *
+ * Instagram et Facebook peuvent publier le post en story (format « story »,
+ * comptes connectés directement) : média obligatoire, texte ignoré (les API
+ * n'ont pas de légende pour les stories), une story par photo, limites
+ * propres aux stories vidéo.
  */
 
 export const SOCIAL_PLATFORMS = [
@@ -46,6 +51,14 @@ export const VIDEO_NOT_READY_MESSAGE =
   "La vidéo est encore en préparation. Patientez quelques instants.";
 export const VIDEO_DIRECT_ONLY_MESSAGE =
   "La vidéo n'est disponible que pour les comptes connectés directement.";
+export const STORY_DIRECT_ONLY_MESSAGE =
+  "Les stories ne sont disponibles que pour les comptes connectés directement.";
+export const DRAFT_DIRECT_ONLY_MESSAGE =
+  "Les brouillons TikTok ne sont disponibles que pour les comptes connectés directement.";
+export const DRAFT_NEEDS_RECONNECT_MESSAGE =
+  "Reconnectez votre compte TikTok pour envoyer en brouillon.";
+export const TIKTOK_BUSINESS_PUBLIC_VIDEO_MESSAGE =
+  "Avec un compte TikTok Business, une vidéo est toujours publique : choisissez « Tout le monde ».";
 export const MIXED_MEDIA_MESSAGE =
   "Un post contient soit des photos, soit une vidéo, pas les deux.";
 export const SINGLE_VIDEO_MESSAGE = "Une seule vidéo par post.";
@@ -76,6 +89,14 @@ export const PLATFORM_RULES = {
       maxDurationMs: VIDEO_MAX_DURATION_MS,
       maxBytes: 300 * 1000 * 1000,
     },
+    // Story (ig-user/media, « Story » : vidéo de 3 à 60 s, 100 Mo)
+    story: {
+      video: {
+        minDurationMs: 3000,
+        maxDurationMs: 60 * 1000,
+        maxBytes: 100 * 1000 * 1000,
+      },
+    },
   },
   facebook: {
     label: "Facebook",
@@ -85,6 +106,15 @@ export const PLATFORM_RULES = {
     video: {
       maxDurationMs: VIDEO_MAX_DURATION_MS,
       maxBytes: 1000 * 1000 * 1000,
+    },
+    // Story de page (page-stories-api : vidéo de 3 à 60 s ; pas de poids
+    // publié, on garde celui de la vidéo de page)
+    story: {
+      video: {
+        minDurationMs: 3000,
+        maxDurationMs: 60 * 1000,
+        maxBytes: 1000 * 1000 * 1000,
+      },
     },
   },
   linkedin: {
@@ -208,29 +238,61 @@ export function formatVideoBytes(bytes) {
 }
 
 /**
- * Vidéo (déjà préparée) pour un réseau : durée et poids.
+ * Vidéo (déjà préparée) pour un réseau : durée et poids, ceux d'une story
+ * quand le post y part en story.
  * @param {{durationMs?: number, size?: number}} video
+ * @param {string} platform
+ * @param {{format?: string}} [options]
  * @returns {string|null} message d'erreur, ou null
  */
-export function validateVideoForPlatform(video, platform) {
+export function validateVideoForPlatform(video, platform, { format } = {}) {
   const rules = PLATFORM_RULES[platform];
-  const limits = rules?.video;
+  const story = isStoryFormat(platform, format);
+  const limits = story ? rules?.story?.video : rules?.video;
   if (!limits) return null;
   const durationMs = Number(video?.durationMs) || 0;
   const size = Number(video?.size) || 0;
   if (durationMs && limits.maxDurationMs && durationMs > limits.maxDurationMs) {
-    return `${rules.label} accepte des vidéos de ${formatVideoDuration(limits.maxDurationMs)} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
+    return `${rules.label} accepte des ${story ? "stories vidéo" : "vidéos"} de ${formatVideoDuration(limits.maxDurationMs)} au maximum (cette vidéo dure ${formatVideoDuration(durationMs, { roundUp: true })}).`;
   }
   if (durationMs && limits.minDurationMs && durationMs < limits.minDurationMs) {
-    return `${rules.label} exige une vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`;
+    return story
+      ? `${rules.label} exige une story vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`
+      : `${rules.label} exige une vidéo d'au moins ${formatVideoDuration(limits.minDurationMs)}.`;
   }
   if (size && limits.maxBytes && size > limits.maxBytes) {
-    return `La vidéo est trop lourde pour ${rules.label} (${formatVideoBytes(limits.maxBytes)} maximum après préparation).`;
+    return story
+      ? `La vidéo est trop lourde pour une story ${rules.label} (${formatVideoBytes(limits.maxBytes)} maximum après préparation).`
+      : `La vidéo est trop lourde pour ${rules.label} (${formatVideoBytes(limits.maxBytes)} maximum après préparation).`;
   }
   if (size && limits.minBytes && size < limits.minBytes) {
     return `La vidéo est trop légère pour ${rules.label} (${formatVideoBytes(limits.minBytes)} minimum).`;
   }
   return null;
+}
+
+// ── Format (publication ou story) ──────────────────────────────────────────
+
+export const POST_FORMATS = ["post", "story"];
+// Réseaux qui publient des stories par leur API
+export const STORY_PLATFORMS = ["instagram", "facebook"];
+
+/** Le post part en story sur ce réseau. */
+export const isStoryFormat = (platform, format) =>
+  format === "story" && STORY_PLATFORMS.includes(platform);
+
+/**
+ * Format d'un réseau : « post » (défaut) ou « story ».
+ * @returns {{format: string|null, error: string|null}}
+ */
+export function parsePostFormat(value) {
+  if (value === undefined || value === null || value === "") {
+    return { format: "post", error: null };
+  }
+  if (!POST_FORMATS.includes(value)) {
+    return { format: null, error: "Format de publication inconnu." };
+  }
+  return { format: value, error: null };
 }
 
 /**
@@ -280,12 +342,15 @@ export const videoCoverOffsetMs = (durationMs) =>
  * @param {string} params.content - texte du post
  * @param {{kind?: string, width?: number, height?: number, durationMs?: number, size?: number}[]} params.media
  *   images ou vidéo (kind « video »)
+ * @param {{instagram?: string, facebook?: string}} [params.formats] - « post »
+ *   (défaut) ou « story » par réseau
  * @returns {string|null} message d'erreur prêt à afficher, ou null
  */
 export function validatePostContent({
   platforms = [],
   content = "",
   media = [],
+  formats = {},
 }) {
   const targets = uniquePlatforms(platforms);
   if (targets.length === 0) return "Sélectionnez au moins un compte.";
@@ -307,26 +372,41 @@ export function validatePostContent({
 
   for (const platform of targets) {
     const rules = PLATFORM_RULES[platform];
-    const maxText = (video && rules.video?.maxText) || rules.maxText;
-    const count = countPostCharacters(text, platform, {
-      video: Boolean(video),
-    });
-    if (count > maxText) {
-      return `Le texte dépasse la limite de ${maxText.toLocaleString("fr-FR")} caractères pour ${rules.label} (${count.toLocaleString("fr-FR")} caractères).`;
-    }
-    if (rules.imageRequired && items.length === 0) {
-      return `${rules.label} exige une image ou une vidéo.`;
+    const story = isStoryFormat(platform, formats?.[platform]);
+    if (story) {
+      // Story : le texte n'est pas publié, aucune limite à vérifier
+      if (items.length === 0) {
+        return `Une story ${rules.label} exige une photo ou une vidéo.`;
+      }
+    } else {
+      const maxText = (video && rules.video?.maxText) || rules.maxText;
+      const count = countPostCharacters(text, platform, {
+        video: Boolean(video),
+      });
+      if (count > maxText) {
+        return `Le texte dépasse la limite de ${maxText.toLocaleString("fr-FR")} caractères pour ${rules.label} (${count.toLocaleString("fr-FR")} caractères).`;
+      }
+      if (rules.imageRequired && items.length === 0) {
+        return `${rules.label} exige une image ou une vidéo.`;
+      }
     }
     if (images.length > rules.maxImages) {
       return `${rules.label} accepte au maximum ${rules.maxImages} images.`;
     }
     if (video) {
-      const error = validateVideoForPlatform(video, platform);
+      const error = validateVideoForPlatform(video, platform, {
+        format: formats?.[platform],
+      });
       if (error) return error;
     }
   }
 
-  if (targets.includes("instagram")) {
+  // Fil Instagram seulement (pas de contrôle de format en story : 9:16
+  // conseillé, sans blocage)
+  if (
+    targets.includes("instagram") &&
+    !isStoryFormat("instagram", formats?.instagram)
+  ) {
     const index = images.findIndex(
       (image) => !isInstagramRatioValid(image?.width, image?.height),
     );
@@ -375,11 +455,16 @@ export function validateScheduleDate(scheduledFor, { now = new Date() } = {}) {
   return null;
 }
 
+// « direct » (publié tout de suite) ou « draft » (envoyé dans la boîte de
+// réception de l'appli TikTok du client, qui termine la publication)
+export const TIKTOK_MODES = ["direct", "draft"];
+
 /**
  * Réglages TikTok obligatoires dès qu'un compte TikTok est visé : qui peut
  * voir le post, commentaires, et accord explicite (confirmation
  * d'utilisation de la musique). Avec une vidéo : duos et collages (Stitch)
- * en plus, exigés par les consignes d'intégration de TikTok.
+ * en plus, exigés par les consignes d'intégration de TikTok. En brouillon
+ * (mode « draft ») : rien de plus, TikTok les demande dans son appli.
  * @param {object} settings
  * @param {{video?: boolean}} [options]
  * @returns {string|null} message d'erreur, ou null
@@ -388,6 +473,15 @@ export function validateTikTokSettings(settings, { video = false } = {}) {
   if (!settings) {
     return "Choisissez les options TikTok (qui peut voir le post, commentaires).";
   }
+  if (
+    settings.mode !== undefined &&
+    settings.mode !== null &&
+    !TIKTOK_MODES.includes(settings.mode)
+  ) {
+    return "Mode d'envoi TikTok inconnu.";
+  }
+  // Brouillon : TikTok demande lui-même ces réglages dans son appli
+  if (settings.mode === "draft") return null;
   if (
     typeof settings.privacyLevel !== "string" ||
     !settings.privacyLevel.trim()
@@ -407,6 +501,110 @@ export function validateTikTokSettings(settings, { video = false } = {}) {
     return "Acceptez la confirmation d'utilisation de la musique de TikTok pour publier.";
   }
   return null;
+}
+
+// ── Son tendance ───────────────────────────────────────────────────────────
+
+// Réseaux dont l'API ajoute un son choisi : Instagram (comptes connectés via
+// Facebook, Reel seulement) et TikTok (comptes TikTok Business)
+export const SOUND_PLATFORMS = ["instagram", "tiktok"];
+export const SOUND_ID_MAX_LENGTH = 200;
+export const SOUND_TEXT_MAX_LENGTH = 300;
+
+export const INSTAGRAM_SOUND_REEL_ONLY_MESSAGE =
+  "Le son tendance Instagram s'ajoute seulement à une vidéo publiée en Reel (ni photo, ni story).";
+export const INSTAGRAM_SOUND_ACCOUNT_MESSAGE =
+  "Le son tendance Instagram demande un compte connecté via Facebook.";
+export const TIKTOK_SOUND_ACCOUNT_MESSAGE =
+  "Le son tendance TikTok demande un compte TikTok Business.";
+export const TIKTOK_SOUND_DRAFT_MESSAGE =
+  "En brouillon, le son se choisit dans l'appli TikTok.";
+
+const isVolume = (value) =>
+  Number.isInteger(value) && value >= 0 && value <= 100;
+
+/**
+ * Son choisi (SocialPostSoundInput) : identifiant et titre, volumes entiers
+ * de 0 à 100, pochette en https.
+ * @returns {string|null} message d'erreur, ou null
+ */
+export function validateSoundInput(sound) {
+  if (!sound || typeof sound !== "object") return "Choisissez un son valide.";
+  const id = typeof sound.id === "string" ? sound.id.trim() : "";
+  const title = typeof sound.title === "string" ? sound.title.trim() : "";
+  if (!id || id.length > SOUND_ID_MAX_LENGTH || !title) {
+    return "Choisissez un son valide.";
+  }
+  if (title.length > SOUND_TEXT_MAX_LENGTH) return "Choisissez un son valide.";
+  if (
+    sound.artist !== undefined &&
+    sound.artist !== null &&
+    (typeof sound.artist !== "string" ||
+      sound.artist.length > SOUND_TEXT_MAX_LENGTH)
+  ) {
+    return "Choisissez un son valide.";
+  }
+  if (!isVolume(sound.volume) || !isVolume(sound.videoVolume)) {
+    return "Le volume doit être un nombre entier de 0 à 100.";
+  }
+  if (sound.coverUrl !== undefined && sound.coverUrl !== null) {
+    let valid = false;
+    try {
+      valid =
+        typeof sound.coverUrl === "string" &&
+        sound.coverUrl.length <= 2000 &&
+        new URL(sound.coverUrl).protocol === "https:";
+    } catch {
+      valid = false;
+    }
+    if (!valid) return "Choisissez un son valide.";
+  }
+  return null;
+}
+
+/**
+ * Le son choisi s'applique à ce compte : Instagram connecté via Facebook
+ * pour un Reel (une vidéo, format « post ») ; TikTok Business en envoi
+ * direct, vidéo ou photos. Les autres comptes du réseau publient sans son.
+ */
+export function soundAppliesTo(account, { format = "post", mode, media = [] }) {
+  const items = (media || []).filter(Boolean);
+  if (account?.provider !== "direct") return false;
+  if (account.platform === "instagram") {
+    return (
+      account.connector === "facebook" &&
+      format !== "story" &&
+      items.length === 1 &&
+      isVideoMedia(items[0])
+    );
+  }
+  if (account.platform === "tiktok") {
+    return (
+      account.connector === "business" && mode !== "draft" && items.length > 0
+    );
+  }
+  return false;
+}
+
+/**
+ * Ce que permet un compte connecté (affiché par le site) : stories
+ * (Instagram et Facebook en direct), son tendance (Instagram via Facebook,
+ * TikTok Business), brouillon TikTok (autorisation video.upload accordée).
+ */
+export function accountCapabilities(account) {
+  const direct = account?.provider === "direct";
+  const platform = account?.platform;
+  const scopes = Array.isArray(account?.tokenScopes) ? account.tokenScopes : [];
+  const tiktok = direct && platform === "tiktok";
+  return {
+    stories: direct && STORY_PLATFORMS.includes(platform),
+    sounds:
+      direct &&
+      ((platform === "instagram" && account.connector === "facebook") ||
+        (platform === "tiktok" && account.connector === "business")),
+    drafts: tiktok && scopes.includes("video.upload"),
+    draftsNeedReconnect: tiktok && !scopes.includes("video.upload"),
+  };
 }
 
 /**

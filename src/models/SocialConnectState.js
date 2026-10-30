@@ -30,6 +30,9 @@ const socialConnectStateSchema = new mongoose.Schema(
     platform: { type: String, required: true },
     // « zernio » ou « direct » (OAuth de notre propre appli chez le réseau)
     provider: { type: String, default: "zernio" },
+    // Clé du connecteur « direct » (socialProviders.js : instagram,
+    // instagram_facebook, tiktok_business…) ; null = celui du réseau
+    connector: { type: String, default: null },
     // Vérificateur PKCE (X), jamais transmis au navigateur
     codeVerifier: { type: String, default: null },
     returnTo: { type: String, required: true },

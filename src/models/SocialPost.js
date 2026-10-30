@@ -56,6 +56,27 @@ const targetSchema = new mongoose.Schema(
     // État intermédiaire d'une publication en deux temps, gardé jusqu'à la
     // publication : conteneur Instagram, URN de vidéo LinkedIn, media_id X
     processingRef: { type: String, default: null },
+    // Stories déjà publiées (Instagram, Facebook), dans l'ordre : un nouvel
+    // essai reprend après la dernière, jamais de story en double
+    storyIds: { type: [String], default: undefined },
+    // « draft » : envoyé dans les brouillons TikTok du client (pas d'adresse
+    // de post) ; null sinon
+    deliveredAs: { type: String, default: null },
+  },
+  { _id: false },
+);
+
+// Son choisi pour un réseau (Instagram via Facebook, TikTok Business) :
+// identifiant du réseau, affichage (titre, artiste, pochette) et volumes
+const soundSchema = new mongoose.Schema(
+  {
+    soundId: { type: String, required: true },
+    title: { type: String, required: true },
+    artist: { type: String, default: null },
+    coverUrl: { type: String, default: null },
+    // Musique et son d'origine de la vidéo, de 0 à 100
+    volume: { type: Number, default: 80 },
+    videoVolume: { type: Number, default: 50 },
   },
   { _id: false },
 );
@@ -133,7 +154,31 @@ const socialPostSchema = new mongoose.Schema(
           // Vidéo seulement : duos et collages (Stitch)
           allowDuet: Boolean,
           allowStitch: Boolean,
+          // « direct » (défaut) ou « draft » (brouillon dans l'appli TikTok)
+          mode: String,
+          // Comptes TikTok Business seulement
+          sound: { type: soundSchema, default: undefined },
         },
+        { _id: false },
+      ),
+      default: null,
+    },
+    // Instagram : « post » ou « story », son du Reel (comptes connectés via
+    // Facebook) ; null quand Instagram n'est pas visé
+    instagramSettings: {
+      type: new mongoose.Schema(
+        {
+          format: { type: String, default: "post" },
+          sound: { type: soundSchema, default: undefined },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+    // Facebook : « post » ou « story » ; null quand Facebook n'est pas visé
+    facebookSettings: {
+      type: new mongoose.Schema(
+        { format: { type: String, default: "post" } },
         { _id: false },
       ),
       default: null,
