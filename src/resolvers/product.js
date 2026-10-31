@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import cloudflareService from "../services/cloudflareService.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
+import { boundedPage } from "../utils/pageBounds.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   isAcceptedProductImage,
@@ -209,11 +210,17 @@ const productResolvers = {
           query.category = category;
         }
 
-        const skip = (page - 1) * limit;
+        // Page et taille bornées : le catalogue charge tous ses produits
+        // d'un coup (taille = nombre total), d'où une borne haute large
+        const bounds = boundedPage(page, limit, {
+          defaultLimit: 20,
+          maxLimit: 10000,
+        });
+        const skip = bounds.skip;
         let sortOptions = { name: 1 };
 
         const [products, totalCount] = await Promise.all([
-          Product.find(query).sort(sortOptions).skip(skip).limit(limit),
+          Product.find(query).sort(sortOptions).skip(skip).limit(bounds.limit),
           Product.countDocuments(query),
         ]);
 

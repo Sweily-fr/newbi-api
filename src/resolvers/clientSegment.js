@@ -12,6 +12,7 @@ import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { assertPlanFeature } from "../services/planLimits.js";
+import { boundedPage } from "../utils/pageBounds.js";
 
 // Opérateurs qui se suffisent à eux-mêmes ; tous les autres comparent le
 // champ à une valeur, sans laquelle la règle ne veut rien dire (et le calcul
@@ -312,14 +313,17 @@ export const clientSegmentResolvers = {
           }
         }
 
-        const currentPage = parseInt(page, 10);
-        const itemsPerPage = parseInt(limit, 10);
+        const {
+          page: currentPage,
+          limit: itemsPerPage,
+          skip,
+        } = boundedPage(page, limit);
         const totalItems = await Client.countDocuments(query);
         const totalPages = Math.ceil(totalItems / itemsPerPage);
 
         const items = await Client.find(query)
           .sort({ name: 1 })
-          .skip((currentPage - 1) * itemsPerPage)
+          .skip(skip)
           .limit(itemsPerPage);
 
         return { items, totalItems, currentPage, totalPages };

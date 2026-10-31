@@ -29,6 +29,7 @@ import { isInternationalEntity } from "../utils/validators.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import { sanitizeRichText } from "../utils/richText.js";
+import { boundedPage } from "../utils/pageBounds.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -206,17 +207,17 @@ const clientResolvers = {
           query.type = { $in: types };
         }
 
-        // Convertir en nombres pour éviter les problèmes de type
-        const currentPage = parseInt(page, 10);
-        const itemsPerPage = parseInt(limit, 10);
+        // Page et taille bornées (page 0, taille 0 ou démesurée)
+        const {
+          page: currentPage,
+          limit: itemsPerPage,
+          skip,
+        } = boundedPage(page, limit);
 
         // Nombre total de clients et page demandée, lus en parallèle
         const [totalItems, items] = await Promise.all([
           Client.countDocuments(query),
-          Client.find(query)
-            .sort({ name: 1 })
-            .skip((currentPage - 1) * itemsPerPage)
-            .limit(itemsPerPage),
+          Client.find(query).sort({ name: 1 }).skip(skip).limit(itemsPerPage),
         ]);
 
         // Calculer le nombre total de pages

@@ -3,6 +3,7 @@ import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { boundedPage } from "../utils/pageBounds.js";
 import {
   requireAction,
   requireRead,
@@ -182,18 +183,19 @@ export const clientListResolvers = {
           }
 
           const totalItems = await Client.countDocuments(query);
-          const skip = (page - 1) * limit;
+          // Page et taille bornées (page 0, taille 0 ou démesurée)
+          const bounds = boundedPage(page, limit);
 
           const items = await Client.find(query)
-            .skip(skip)
-            .limit(limit)
+            .skip(bounds.skip)
+            .limit(bounds.limit)
             .sort({ createdAt: -1 });
 
           return {
             items,
             totalItems,
-            currentPage: page,
-            totalPages: Math.ceil(totalItems / limit),
+            currentPage: bounds.page,
+            totalPages: Math.ceil(totalItems / bounds.limit),
           };
         } catch (error) {
           console.error(
