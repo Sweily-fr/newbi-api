@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { MAX_FORECAST_AMOUNT } from "./ManualCashflowEntry.js";
 
 const FORECAST_TYPE = {
   INCOME: "INCOME",
@@ -61,6 +62,10 @@ const treasuryForecastSchema = new mongoose.Schema(
       required: true,
       default: 0,
       min: [0, "Le montant prévisionnel doit être positif"],
+      max: [
+        MAX_FORECAST_AMOUNT,
+        "Le montant prévisionnel ne peut pas dépasser 1 000 000 000 €",
+      ],
     },
     notes: {
       type: String,
