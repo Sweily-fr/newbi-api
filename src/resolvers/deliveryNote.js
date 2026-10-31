@@ -7,6 +7,7 @@ import {
   loadWorkspaceInvoices,
   loadWorkspaceQuote,
 } from "../utils/workspaceDocumentLoaders.js";
+import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -333,15 +334,26 @@ const deliveryNoteResolvers = {
     },
     // Documents liés via les DataLoaders de la requête (une requête pour toute
     // la liste au lieu d'une par bon de livraison).
+    // Chacun suit « Voir » de sa page : le devis (et ses prix) et les
+    // factures ne sont pas renvoyés à un rôle limité aux bons de livraison.
     sourceQuote: async (dn, _args, context) => {
       if (!dn.sourceQuote) return null;
+      if (!(await canViewLinkedPage(context, dn.workspaceId, "quotes"))) {
+        return null;
+      }
       return loadWorkspaceQuote(context, dn.sourceQuote, dn.workspaceId);
     },
     sourceInvoice: async (dn, _args, context) => {
       if (!dn.sourceInvoice) return null;
+      if (!(await canViewLinkedPage(context, dn.workspaceId, "invoices"))) {
+        return null;
+      }
       return loadWorkspaceInvoice(context, dn.sourceInvoice, dn.workspaceId);
     },
     linkedInvoices: async (dn, _args, context) => {
+      if (!(await canViewLinkedPage(context, dn.workspaceId, "invoices"))) {
+        return [];
+      }
       if (dn.linkedInvoices && dn.linkedInvoices.length > 0) {
         return loadWorkspaceInvoices(
           context,
@@ -1252,7 +1264,12 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    createDeliveryNoteFromInvoice: requireAction("deliveryNotes", "create")(
+    // Bon de livraison depuis une facture : « Créer » sur les bons de
+    // livraison ET « Voir » sur les factures (il en recopie client et lignes)
+    createDeliveryNoteFromInvoice: requireAllActions([
+      ["deliveryNotes", "create"],
+      ["invoices", "view"],
+    ])(
       async (_, { invoiceId, workspaceId: inputWorkspaceId }, context) => {
         const { user, workspaceId } = context;
         const invoice = await Invoice.findOne({ _id: invoiceId, workspaceId });

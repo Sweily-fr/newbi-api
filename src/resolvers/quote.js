@@ -12,6 +12,7 @@ import {
   loadWorkspaceInvoices,
   quoteHasInvoicedPurchaseOrder,
 } from "../utils/workspaceDocumentLoaders.js";
+import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -197,8 +198,13 @@ const quoteResolvers = {
     },
     // Documents liés lus via les DataLoaders de la requête : une requête
     // pour toute la liste au lieu d'une par devis (workspaceDocumentLoaders).
+    // Chacun suit « Voir » de sa page (factures, bons de commande, bons de
+    // livraison) : un rôle limité aux devis ne lit pas leurs montants.
     convertedToInvoice: async (quote, _args, context) => {
       if (!quote.convertedToInvoice) return null;
+      if (!(await canViewLinkedPage(context, quote.workspaceId, "invoices"))) {
+        return null;
+      }
       return loadWorkspaceInvoice(
         context,
         quote.convertedToInvoice,
@@ -206,6 +212,9 @@ const quoteResolvers = {
       );
     },
     linkedInvoices: async (quote, _args, context) => {
+      if (!(await canViewLinkedPage(context, quote.workspaceId, "invoices"))) {
+        return [];
+      }
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
         return loadWorkspaceInvoices(
           context,
@@ -224,7 +233,12 @@ const quoteResolvers = {
     },
     // Bons de commande créés depuis ce devis — résolus à l'inverse via
     // PurchaseOrder.sourceQuoteId (le devis ne stocke pas de référence vers les BC)
-    linkedPurchaseOrders: async (quote) => {
+    linkedPurchaseOrders: async (quote, _args, context) => {
+      if (
+        !(await canViewLinkedPage(context, quote.workspaceId, "purchaseOrders"))
+      ) {
+        return [];
+      }
       return await PurchaseOrder.find({
         sourceQuoteId: quote._id,
         workspaceId: quote.workspaceId,
@@ -234,8 +248,14 @@ const quoteResolvers = {
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
     // les doublons devis→facture vs devis→BC→facture.
     // Bons de livraison créés à partir de ce devis (DeliveryNote.sourceQuote)
-    linkedDeliveryNotes: async (quote, _args, context) =>
-      loadQuoteDeliveryNotes(context, quote),
+    linkedDeliveryNotes: async (quote, _args, context) => {
+      if (
+        !(await canViewLinkedPage(context, quote.workspaceId, "deliveryNotes"))
+      ) {
+        return [];
+      }
+      return loadQuoteDeliveryNotes(context, quote);
+    },
     hasPurchaseOrderInvoices: async (quote, _args, context) =>
       quoteHasInvoicedPurchaseOrder(context, quote),
     // Calculer le total des factures de situation liées à ce devis

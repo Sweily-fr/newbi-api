@@ -10,6 +10,7 @@ import {
   loadWorkspaceInvoices,
   loadWorkspaceQuote,
 } from "../utils/workspaceDocumentLoaders.js";
+import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -210,11 +211,18 @@ const purchaseOrderResolvers = {
     },
     // Documents liés via les DataLoaders de la requête (une requête pour toute
     // la liste au lieu d'une par bon de commande).
+    // Chacun suit « Voir » de sa page (devis d'origine, factures)
     sourceQuote: async (po, _args, context) => {
       if (!po.sourceQuoteId) return null;
+      if (!(await canViewLinkedPage(context, po.workspaceId, "quotes"))) {
+        return null;
+      }
       return loadWorkspaceQuote(context, po.sourceQuoteId, po.workspaceId);
     },
     linkedInvoices: async (po, _args, context) => {
+      if (!(await canViewLinkedPage(context, po.workspaceId, "invoices"))) {
+        return [];
+      }
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
         return loadWorkspaceInvoices(
           context,
