@@ -10,6 +10,7 @@ import eInvoiceRoutingService from "../services/eInvoiceRoutingService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { assertInvoiceResendable } from "../utils/eInvoiceLock.js";
 import logger from "../utils/logger.js";
 
 // Réglages de la facturation électronique (Paramètres > Facturation
@@ -396,6 +397,12 @@ const eInvoicingResolvers = {
           );
         }
 
+        // Renvoi réservé à une facture émise jamais déposée (ou dont le
+        // dépôt a échoué) qui relève de la facturation électronique : une
+        // facture annulée, déclarée en e-reporting ou déjà déposée ne se
+        // redépose pas (doublon sur la plateforme).
+        assertInvoiceResendable(invoice);
+
         // Envoyer à SuperPDP
         const result = await superPdpService.sendInvoice(workspaceId, invoice);
 
@@ -434,6 +441,7 @@ const eInvoicingResolvers = {
           };
         }
       } catch (error) {
+        if (error instanceof AppError) throw error;
         logger.error("Erreur renvoi facture SuperPDP:", error);
         throw new AppError(
           error.message || "Erreur lors du renvoi de la facture",
