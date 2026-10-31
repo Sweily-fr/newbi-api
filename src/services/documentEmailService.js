@@ -12,6 +12,7 @@ import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
 import cloudflareService from "./cloudflareService.js";
 import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
+import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
 import { APP_URL, escapeHtml, typo } from "../utils/trialEmails.js";
 import {
   createEmailLog,
@@ -917,7 +918,12 @@ async function sendDocumentEmail({
       const stripeAccount = await StripeConnectAccount.findOne({
         organizationId: workspaceId.toString(),
       });
-      if (stripeAccount && stripeAccount.chargesEnabled) {
+      // Facture soldée par avoir : plus de bouton de paiement
+      if (
+        stripeAccount &&
+        stripeAccount.chargesEnabled &&
+        !(await isInvoiceFullyCredited(document))
+      ) {
         const backendUrl = process.env.BACKEND_URL || "http://localhost:4000";
         paymentUrl = `${backendUrl}/pay/invoice/${documentId}`;
       }

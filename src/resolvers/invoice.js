@@ -76,6 +76,10 @@ import {
   assertInvoiceDeletable,
   assertIssuedInvoiceContentUnchanged,
 } from "../utils/issuedInvoiceLock.js";
+import {
+  creditedTTCForWorkspace,
+  isCoveredByCredit,
+} from "../utils/invoiceCredit.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -329,6 +333,21 @@ const invoiceResolvers = {
         }
         const account = await cache.get(organizationId);
         if (!account || !account.chargesEnabled) return null;
+        // Facture soldée par avoir : plus payable. Avoirs de l'espace lus une
+        // fois par requête (liste de factures).
+        const creditCache = context
+          ? (context._creditedTTCByOrg ??= new Map())
+          : new Map();
+        if (!creditCache.has(organizationId)) {
+          creditCache.set(
+            organizationId,
+            creditedTTCForWorkspace(invoice.workspaceId),
+          );
+        }
+        const credited = (await creditCache.get(organizationId)).get(
+          invoice._id.toString(),
+        );
+        if (isCoveredByCredit(invoice, credited)) return null;
         const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
         return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
       } catch (error) {

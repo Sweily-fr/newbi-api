@@ -1,6 +1,10 @@
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
+import {
+  fullyCreditedInvoiceIds,
+  isInvoiceFullyCredited,
+} from "../utils/invoiceCredit.js";
 import Client from "../models/Client.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
@@ -96,8 +100,15 @@ async function processWorkspaceReminders(settings) {
 
   if (overdueInvoices.length === 0) return;
 
+  // Factures soldées par avoir : plus rien à relancer
+  const credited = await fullyCreditedInvoiceIds(overdueInvoices, workspaceId);
+  const dueInvoices = overdueInvoices.filter(
+    (inv) => !credited.has(String(inv._id)),
+  );
+  if (dueInvoices.length === 0) return;
+
   // Batch-load tous les logs de relance pour éviter N+1 queries
-  const invoiceIds = overdueInvoices.map((inv) => inv._id);
+  const invoiceIds = dueInvoices.map((inv) => inv._id);
   const allReminderLogs = await InvoiceReminderLog.find({
     invoiceId: { $in: invoiceIds },
     reminderType: { $in: ["FIRST", "SECOND"] },
@@ -112,7 +123,7 @@ async function processWorkspaceReminders(settings) {
   // Batch-load les EmailSettings pour ce workspace (1 seule query)
   const emailSettings = await EmailSettings.findOne({ workspaceId });
 
-  for (const invoice of overdueInvoices) {
+  for (const invoice of dueInvoices) {
     await processInvoiceReminder(
       invoice,
       settings,
@@ -450,6 +461,13 @@ async function sendManualReminder(invoiceId, workspaceId) {
       success: false,
       message:
         "Seules les factures en attente de paiement peuvent être relancées.",
+    };
+  }
+  if (await isInvoiceFullyCredited(invoice)) {
+    return {
+      success: false,
+      message:
+        "Cette facture est entièrement annulée par un avoir : il n'y a plus rien à relancer.",
     };
   }
   if (!invoice.client?.email) {

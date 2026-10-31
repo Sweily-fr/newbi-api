@@ -4,6 +4,7 @@ import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import stripeConnectService from "../services/stripeConnectService.js";
 import { applyInvoicePaid } from "../resolvers/invoice.js";
 import logger from "../utils/logger.js";
+import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -56,6 +57,16 @@ export const redirectToInvoicePayment = async (req, res) => {
         409,
         "Facture non payable",
         "Cette facture ne peut pas être réglée en ligne pour le moment.",
+      );
+    }
+
+    // Facture soldée par avoir : plus rien à régler
+    if (await isInvoiceFullyCredited(invoice)) {
+      return infoPage(
+        res,
+        409,
+        "Facture soldée par avoir",
+        "Cette facture a été entièrement annulée par un avoir : il n'y a plus rien à régler.",
       );
     }
 
