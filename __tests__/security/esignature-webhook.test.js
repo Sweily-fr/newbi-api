@@ -78,7 +78,9 @@ async function insertQuote(workspaceId = organizationId, fields = {}) {
     prefix: "D-202610",
     issueDate: new Date("2026-10-01T00:00:00.000Z"),
     validUntil: new Date("2026-11-01T00:00:00.000Z"),
-    items: [{ description: "Prestation", quantity: 1, unitPrice: 1000, vatRate: 20 }],
+    items: [
+      { description: "Prestation", quantity: 1, unitPrice: 1000, vatRate: 20 },
+    ],
     totalHT: 1000,
     totalVAT: 200,
     totalTTC: 1200,
@@ -91,7 +93,12 @@ async function insertQuote(workspaceId = organizationId, fields = {}) {
       id: "client-1",
       name: "Acme",
       email: "acme@test.fr",
-      address: { street: "1 rue Test", city: "Paris", postalCode: "75001", country: "France" },
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
     },
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -100,7 +107,11 @@ async function insertQuote(workspaceId = organizationId, fields = {}) {
   return insertedId;
 }
 
-async function insertSignature(quoteId, workspaceId = organizationId, fields = {}) {
+async function insertSignature(
+  quoteId,
+  workspaceId = organizationId,
+  fields = {},
+) {
   const quote = await Quote.findById(quoteId);
   return SignatureRequest.create({
     organizationId: String(workspaceId),
@@ -119,7 +130,10 @@ async function insertSignature(quoteId, workspaceId = organizationId, fields = {
 
 /** Demande et devis tels qu'en base, sans les dates de mise à jour. */
 async function snapshot() {
-  const requests = await SignatureRequest.collection.find({}).sort({ _id: 1 }).toArray();
+  const requests = await SignatureRequest.collection
+    .find({})
+    .sort({ _id: 1 })
+    .toArray();
   const quotes = await Quote.collection.find({}).sort({ _id: 1 }).toArray();
   return JSON.stringify({
     requests: requests.map(({ updatedAt, ...r }) => r),
@@ -163,7 +177,10 @@ afterEach(() => {
 describe("webhook e-signature : authentification", () => {
   const cases = [
     ["sans en-tête", {}],
-    ["avec un mauvais secret", { "x-webhook-secret": "pas-le-bon-secret-du-webhook" }],
+    [
+      "avec un mauvais secret",
+      { "x-webhook-secret": "pas-le-bon-secret-du-webhook" },
+    ],
     ["avec un secret plus long", { "x-webhook-secret": `${SECRET}-et-plus` }],
     ["avec un secret plus court", { "x-webhook-secret": SECRET.slice(0, -1) }],
   ];
@@ -203,7 +220,9 @@ describe("webhook e-signature : authentification", () => {
 
     expect(response.status).toBe(200);
     expect((await SignatureRequest.findById(request._id)).status).toBe("DONE");
-    expect((await Quote.collection.findOne({ _id: quoteId })).status).toBe("COMPLETED");
+    expect((await Quote.collection.findOne({ _id: quoteId })).status).toBe(
+      "COMPLETED",
+    );
   });
 
   it("en production sans secret configuré : 401, rien de modifié", async () => {
@@ -251,7 +270,9 @@ describe("webhook e-signature : identifiants hostiles", () => {
   it("un opérateur à la place de l'identifiant interne ne modifie aucune demande", async () => {
     const quoteId = await insertQuote();
     await insertSignature(quoteId);
-    const otherQuoteId = await insertQuote(otherOrganizationId, { number: "000002" });
+    const otherQuoteId = await insertQuote(otherOrganizationId, {
+      number: "000002",
+    });
     await insertSignature(otherQuoteId, otherOrganizationId);
     const before = await snapshot();
 
@@ -289,8 +310,13 @@ describe("webhook e-signature : identifiants hostiles", () => {
   it("l'identifiant interne d'une demande d'une autre organisation, avec un autre identifiant prestataire : rien de modifié", async () => {
     const quoteId = await insertQuote();
     const ownRequest = await insertSignature(quoteId);
-    const otherQuoteId = await insertQuote(otherOrganizationId, { number: "000002" });
-    const otherRequest = await insertSignature(otherQuoteId, otherOrganizationId);
+    const otherQuoteId = await insertQuote(otherOrganizationId, {
+      number: "000002",
+    });
+    const otherRequest = await insertSignature(
+      otherQuoteId,
+      otherOrganizationId,
+    );
     const before = await snapshot();
 
     const response = await post({
@@ -321,10 +347,15 @@ describe("webhook e-signature : identifiants hostiles", () => {
     const quoteId = await insertQuote();
     const request = await insertSignature(quoteId);
 
-    const response = await post({ id: request.externalSignatureId, state: "ERROR" });
+    const response = await post({
+      id: request.externalSignatureId,
+      state: "ERROR",
+    });
 
     expect(response.status).toBe(200);
     expect((await SignatureRequest.findById(request._id)).status).toBe("ERROR");
-    expect((await Quote.collection.findOne({ _id: quoteId })).status).toBe("PENDING");
+    expect((await Quote.collection.findOne({ _id: quoteId })).status).toBe(
+      "PENDING",
+    );
   });
 });
