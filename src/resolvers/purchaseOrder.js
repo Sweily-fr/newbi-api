@@ -477,6 +477,7 @@ const purchaseOrderResolvers = {
           Model: PurchaseOrder,
           docType: "purchaseOrder",
           draftStatus: "DRAFT",
+          lockedStatuses: ["DELIVERED"],
           workspaceId,
           docId: purchaseOrderId,
           file,

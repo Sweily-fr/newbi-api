@@ -642,6 +642,7 @@ const deliveryNoteResolvers = {
           Model: DeliveryNote,
           docType: "deliveryNote",
           draftStatus: "DRAFT",
+          lockedStatuses: ["DELIVERED"],
           workspaceId,
           docId: deliveryNoteId,
           file,

@@ -716,6 +716,7 @@ const quoteResolvers = {
           Model: Quote,
           docType: "quote",
           draftStatus: "DRAFT",
+          lockedStatuses: ["COMPLETED"],
           workspaceId,
           docId: quoteId,
           file,
