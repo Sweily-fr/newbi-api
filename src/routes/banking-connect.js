@@ -299,9 +299,10 @@ router.get("/bridge/callback", async (req, res) => {
     // Ce callback sert principalement à rediriger l'utilisateur
     logger.info(`Session Bridge terminée: ${session_id}`);
 
-    // Rediriger vers le dashboard avec succès
+    // Rediriger vers le dashboard avec succès. L'identifiant vient de
+    // l'adresse : encodé, il ne peut pas ajouter de paramètre à celle du site.
     res.redirect(
-      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&session_id=${session_id}`,
+      `${process.env.FRONTEND_URL}/dashboard?banking_success=true&session_id=${encodeURIComponent(String(session_id))}`,
     );
   } catch (error) {
     logger.error("Erreur callback Bridge:", error);
