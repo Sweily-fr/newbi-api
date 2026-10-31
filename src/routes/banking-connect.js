@@ -5,6 +5,7 @@ import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import { requireWorkspacePermission } from "../middlewares/require-workspace-membership.js";
 import logger from "../utils/logger.js";
+import { assertBankConnectionCapacity } from "../services/planLimits.js";
 
 const router = express.Router();
 
@@ -133,6 +134,19 @@ router.get(
       );
       if (!workspaceId) {
         return res.status(400).json({ error: "WorkspaceId requis" });
+      }
+
+      // Nombre de banques de l'offre, avant tout appel au prestataire : le
+      // site grise le bouton, l'application mobile et un appel direct
+      // passent par ici.
+      try {
+        await assertBankConnectionCapacity(workspaceId);
+      } catch (limitError) {
+        if (limitError?.code !== "FORBIDDEN") throw limitError;
+        return res.status(403).json({
+          error: limitError.message,
+          code: "BANK_CONNECTION_LIMIT",
+        });
       }
 
       // Initialiser le service banking avec Bridge
