@@ -19,6 +19,10 @@ import {
 } from "../utils/reconciliationMatching.js";
 import { transactionHasNoLinks } from "../utils/transactionLinks.js";
 import {
+  reconciliationPaymentMarker,
+  unlinkTransactionFromSalesInvoice,
+} from "../utils/salesInvoiceLink.js";
+import {
   buildReconciliationLinkEntry,
   forgetReconciliationLink,
   reconciliationLinkPull,
@@ -346,6 +350,7 @@ const reconciliationResolvers = {
               $set: {
                 status: "COMPLETED",
                 paymentDate: targetInvoice.paymentDate || transaction.date,
+                ...reconciliationPaymentMarker(targetInvoice),
               },
             },
             { new: true },
@@ -398,7 +403,7 @@ const reconciliationResolvers = {
     ),
 
     unlinkTransactionFromInvoice: reconcileBanking(
-      async (parent, { input }, { user, workspaceId }) => {
+      async (parent, { input }, { workspaceId }) => {
         try {
           const { transactionId, invoiceId } = input;
 
@@ -412,73 +417,21 @@ const reconciliationResolvers = {
             };
           }
 
-          // La transaction et la facture doivent être celles de l'espace :
-          // sinon rien n'est délié, et la réponse ne l'annonce pas.
-          const [ownTransaction, ownInvoice] = await Promise.all([
-            Transaction.exists({ _id: transactionId, workspaceId }),
-            Invoice.exists({ _id: invoiceId, workspaceId }),
-          ]);
-          if (!ownTransaction || !ownInvoice) {
-            return {
-              success: false,
-              message: "Transaction ou facture introuvable",
-            };
-          }
+          // Les deux documents doivent être ceux de l'espace et liés entre
+          // eux ; seul un statut posé par le rapprochement est rétabli.
+          const result = await unlinkTransactionFromSalesInvoice({
+            transactionId,
+            invoiceId,
+            workspaceId,
+          });
 
-          // Délier côté transaction ($pull idempotent), origine du lien comprise.
-          const transaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId },
-            {
-              $pull: {
-                linkedInvoiceIds: invoiceId,
-                ...reconciliationLinkPull("INVOICE", [invoiceId]),
-              },
-            },
-            { new: true },
-          );
-
-          // Si plus aucun lien (ni facture de vente, ni facture d'achat) →
-          // status unmatched. updateOne ciblé plutôt que save() : ne revalide
-          // pas tout le document (données legacy hors enum).
-          if (transaction && transactionHasNoLinks(transaction)) {
-            await Transaction.updateOne(
-              { _id: transactionId, workspaceId },
-              {
-                $set: {
-                  reconciliationStatus: "unmatched",
-                  reconciliationDate: null,
-                },
-              },
+          if (result.success) {
+            logger.info(
+              `[RECONCILIATION-GQL] Déliaison: Transaction ${transactionId} <-> Facture ${invoiceId}`,
             );
-            transaction.reconciliationStatus = "unmatched";
-            transaction.reconciliationDate = null;
           }
 
-          // Délier côté facture.
-          const invoice = await Invoice.findOneAndUpdate(
-            { _id: invoiceId, workspaceId },
-            { $pull: { linkedTransactionIds: transactionId } },
-            { new: true },
-          );
-
-          // Si plus aucune transaction liée → facture repasse PENDING sans
-          // date de paiement. Sinon on garde COMPLETED (les autres transactions
-          // liées la maintiennent payée).
-          if (invoice && (invoice.linkedTransactionIds || []).length === 0) {
-            invoice.status = "PENDING";
-            invoice.paymentDate = null;
-            await invoice.save();
-          }
-
-          logger.info(
-            `[RECONCILIATION-GQL] Déliaison: Transaction ${transactionId} <-> Facture ${invoiceId}`,
-          );
-
-          return {
-            success: true,
-            message: "Déliaison effectuée avec succès",
-            transaction: transaction || null,
-          };
+          return result;
         } catch (error) {
           logger.error("[RECONCILIATION-GQL] Erreur déliaison:", error);
           return { success: false, message: error.message };
@@ -590,6 +543,27 @@ const reconciliationResolvers = {
       async (parent, { input }, { workspaceId }) => {
         try {
           const { transactionId, importedInvoiceId } = input;
+
+          // Rien n'est modifié si les deux documents ne sont pas liés : une
+          // facture encaissée par ailleurs garde son statut.
+          const [linkedTransaction, linkedInvoice] = await Promise.all([
+            Transaction.exists({
+              _id: transactionId,
+              workspaceId,
+              linkedImportedInvoiceIds: importedInvoiceId,
+            }),
+            ImportedInvoice.exists({
+              _id: importedInvoiceId,
+              workspaceId,
+              linkedTransactionIds: transactionId,
+            }),
+          ]);
+          if (!linkedTransaction && !linkedInvoice) {
+            return {
+              success: false,
+              message: "Cette transaction n'est pas rattachée à cette facture",
+            };
+          }
 
           const transaction = await Transaction.findOneAndUpdate(
             { _id: transactionId, workspaceId },
