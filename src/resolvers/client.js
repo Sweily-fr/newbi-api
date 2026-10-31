@@ -62,6 +62,53 @@ function completeAddress(address) {
   };
 }
 
+// Clés techniques d'un sous-document, absentes des entrées GraphQL
+const TECHNICAL_KEYS = new Set(["_id", "createdAt", "updatedAt"]);
+
+const isEmptyValue = (value) =>
+  value === null ||
+  value === undefined ||
+  value === "" ||
+  value === false ||
+  (Array.isArray(value) && value.length === 0);
+
+/**
+ * Forme comparable d'une valeur de la fiche client, enregistrée (document
+ * Mongoose : sous-document d'adresse avec son _id, ObjectId, dates) ou reçue
+ * (entrée GraphQL) : identifiants en texte, clés techniques retirées, clés
+ * triées, valeurs vides (null, "", false, tableau vide) confondues.
+ */
+export function comparableValue(value) {
+  if (value && typeof value.toObject === "function") {
+    value = value.toObject({ depopulate: true });
+  }
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) {
+    const items = value.map(comparableValue);
+    return items.length ? items : null;
+  }
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) {
+      if (TECHNICAL_KEYS.has(key)) continue;
+      const item = comparableValue(value[key]);
+      if (!isEmptyValue(item)) result[key] = item;
+    }
+    return Object.keys(result).length ? result : null;
+  }
+  return isEmptyValue(value) ? null : value;
+}
+
+/** Valeurs des champs personnalisés par champ, sans les valeurs vides. */
+function comparableCustomFields(list) {
+  const entries = (list || [])
+    .map((cf) => [cf?.fieldId?.toString(), comparableValue(cf?.value)])
+    .filter(([fieldId, value]) => fieldId && value !== null)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
 // Actions précises de la page « Mes clients » (éditeur de rôles)
 // L'import de clients crée les fiches une à une : « Importer » suffit aussi
 const requireCreate = requireAction("clients", ["create", "import"]);
@@ -342,19 +389,12 @@ const clientResolvers = {
           }
         }
 
-        // Fonction pour comparer deux valeurs en profondeur
-        const hasChanged = (oldVal, newVal) => {
-          // Si les deux sont null/undefined, pas de changement
-          if (oldVal == null && newVal == null) return false;
-          // Si l'un est null/undefined et pas l'autre, changement
-          if ((oldVal == null) !== (newVal == null)) return true;
-          // Pour les objets, comparer en JSON (trié pour éviter les faux positifs)
-          if (typeof oldVal === "object" && typeof newVal === "object") {
-            return JSON.stringify(oldVal) !== JSON.stringify(newVal);
-          }
-          // Pour les valeurs primitives, comparaison directe
-          return oldVal !== newVal;
-        };
+        // Valeur enregistrée et valeur reçue comparées sous une même forme
+        // (voir comparableValue) : enregistrer une fiche sans rien changer
+        // n'écrit ni activité ni brouillons
+        const hasChanged = (oldVal, newVal) =>
+          JSON.stringify(comparableValue(oldVal)) !==
+          JSON.stringify(comparableValue(newVal));
 
         // Tracker les changements
         const changes = [];
@@ -384,8 +424,16 @@ const clientResolvers = {
             const newValue =
               key === "email" ? updateData[key].toLowerCase() : updateData[key];
 
-            // Vérifier si la valeur a réellement changé
-            if (hasChanged(oldValue, newValue)) {
+            // Vérifier si la valeur a réellement changé (champs personnalisés :
+            // valeurs par champ, quel que soit l'ordre reçu)
+            const changed =
+              key === "customFields"
+                ? hasChanged(
+                    comparableCustomFields(oldValue),
+                    comparableCustomFields(newValue),
+                  )
+                : hasChanged(oldValue, newValue);
+            if (changed) {
               if (key === "customFields") {
                 // Identifier quels champs personnalisés ont changé
                 // .toString() pour uniformiser ObjectId vs string
@@ -408,7 +456,10 @@ const clientResolvers = {
                 ]);
                 const changedFieldNames = [];
                 for (const fieldId of allFieldIds) {
-                  if (oldFields.get(fieldId) !== newFields.get(fieldId)) {
+                  // Choix multiples : tableaux comparés par leur contenu
+                  if (
+                    hasChanged(oldFields.get(fieldId), newFields.get(fieldId))
+                  ) {
                     const name = customFieldNamesMap[fieldId];
                     if (name) {
                       changedFieldNames.push(`le champ "${name}"`);
