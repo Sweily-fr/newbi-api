@@ -56,6 +56,7 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
@@ -1788,6 +1789,11 @@ const quoteResolvers = {
             );
             // Ne pas faire échouer le changement de statut si l'activité échoue
           }
+        }
+
+        // Automatisations de listes de contacts « Devis accepté »
+        if (status === "COMPLETED") {
+          await automationService.onQuoteAccepted(quote, workspaceId);
         }
 
         // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
