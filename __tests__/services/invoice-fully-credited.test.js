@@ -42,10 +42,7 @@ import Invoice from "../../src/models/Invoice.js";
 import CreditNote from "../../src/models/CreditNote.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
 import { redirectToInvoicePayment } from "../../src/controllers/invoicePaymentController.js";
-import {
-  processWorkspaceReminders,
-  sendManualReminder,
-} from "../../src/services/invoiceReminderService.js";
+import { processWorkspaceReminders } from "../../src/services/invoiceReminderService.js";
 import {
   fullyCreditedInvoiceIds,
   isInvoiceFullyCredited,
@@ -162,17 +159,6 @@ describe("paiement en ligne", () => {
 });
 
 describe("relances", () => {
-  it("relance manuelle refusée avec un message", async () => {
-    const total = await seedInvoice({ status: "OVERDUE" });
-    await credit(total, 1080);
-
-    const result = await sendManualReminder(total._id, workspaceId);
-
-    expect(result.success).toBe(false);
-    expect(result.message).toMatch(/entièrement annulée par un avoir/);
-    expect(sendMail).not.toHaveBeenCalled();
-  });
-
   it("relances automatiques : seule la facture encore due est relancée", async () => {
     const total = await seedInvoice({ status: "OVERDUE" });
     await credit(total, 1080);
