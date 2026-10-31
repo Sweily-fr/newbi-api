@@ -18,6 +18,7 @@ import heicDecode from "heic-decode";
 import sharp from "sharp";
 import cloudflareService from "./cloudflareService.js";
 import logger from "../utils/logger.js";
+import { fetchPublicHttps } from "../utils/publicHttpsFetch.js";
 import { ICONS_BUCKET, ICON_PNG_SIZE } from "./signatureRenderer/constants.js";
 import {
   iconKey,
@@ -457,10 +458,51 @@ export async function storeSignatureImage({
   };
 }
 
+// Hôtes d'où une photo de profil peut être importée : stockages publics de
+// Newbi, photos des comptes Google et GitHub, buckets publics Cloudflare R2
+const PHOTO_HOSTS = ["avatars.githubusercontent.com"];
+const PHOTO_HOST_SUFFIXES = [".googleusercontent.com", ".r2.dev"];
+
+function newbiPublicHosts() {
+  return [
+    cloudflareService.profilePublicUrl,
+    cloudflareService.publicUrl,
+    cloudflareService.signaturePublicUrl,
+    cloudflareService.companyImagesPublicUrl,
+  ]
+    .map((value) => {
+      try {
+        return new URL(value).hostname.toLowerCase();
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+/** Adresse https d'un hôte d'où une photo de profil peut être importée. */
+export function isImportablePhotoUrl(url) {
+  let parsed;
+  try {
+    parsed = url instanceof URL ? url : new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  return (
+    PHOTO_HOSTS.includes(host) ||
+    PHOTO_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix)) ||
+    newbiPublicHosts().includes(host)
+  );
+}
+
 /**
  * Importe une image distante (photo de profil de l'utilisateur) et la traite
- * comme un envoi. Délai court : la création d'une signature ne doit pas
- * attendre un hébergeur lent.
+ * comme un envoi. L'adresse vient du profil, modifiable par l'utilisateur :
+ * seuls les hôtes de isImportablePhotoUrl sont joints, à une adresse IP
+ * publique, sans redirection hors de ces hôtes, 10 Mo au plus. Délai court :
+ * la création d'une signature ne doit pas attendre un hébergeur lent.
  */
 export async function importSignatureImage({
   url,
@@ -469,13 +511,11 @@ export async function importSignatureImage({
   signatureId,
   timeoutMs = 5000,
 }) {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
+  const buffer = await fetchPublicHttps(url, {
+    isAllowedUrl: isImportablePhotoUrl,
+    maxBytes: MAX_IMAGE_BYTES,
+    timeoutMs,
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const length = Number(response.headers.get("content-length") || 0);
-  if (length > MAX_IMAGE_BYTES) throw new Error("Image trop lourde");
-  const buffer = Buffer.from(await response.arrayBuffer());
   return storeSignatureImage({ buffer, kind, userId, signatureId });
 }
 
