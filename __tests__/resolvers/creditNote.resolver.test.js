@@ -327,6 +327,107 @@ describe("CreditNote Resolver — createCreditNote", () => {
   });
 });
 
+describe("CreditNote Resolver — client et émetteur de la facture d'origine", () => {
+  const invoiceClient = {
+    id: "client-lumiere",
+    name: "Boulangerie Lumière",
+    email: "compta@lumiere.test",
+    type: "COMPANY",
+    address: {
+      street: "12 rue de la République",
+      city: "Lyon",
+      postalCode: "69002",
+      country: "France",
+    },
+  };
+  const invoiceCompany = {
+    name: "Studio Émetteur",
+    email: "studio@test.fr",
+    siret: "98765432100012",
+    address: {
+      street: "1 rue de la Paix",
+      city: "Paris",
+      postalCode: "75001",
+      country: "France",
+    },
+  };
+  const otherClient = {
+    name: "Cabinet Dumas",
+    email: "contact@dumas.test",
+    address: {
+      street: "7 boulevard Haussmann",
+      city: "Paris",
+      postalCode: "75009",
+      country: "France",
+    },
+  };
+  const otherCompany = {
+    name: "Société fictive",
+    email: "fictive@test.fr",
+    siret: "12345678900011",
+    address: {
+      street: "2 rue Ailleurs",
+      city: "Nantes",
+      postalCode: "44000",
+      country: "France",
+    },
+  };
+
+  it("à la création, client et émetteur saisis sont ignorés : ceux de la facture", async () => {
+    const inv = await insertInvoice({
+      client: invoiceClient,
+      companyInfo: invoiceCompany,
+    });
+    const input = buildCreditNoteInput(inv._id, {
+      client: otherClient,
+      companyInfo: otherCompany,
+    });
+
+    const result = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input },
+      ctx(),
+    );
+
+    const saved = await CreditNote.collection.findOne({ _id: result._id });
+    expect(saved.client.name).toBe(invoiceClient.name);
+    expect(saved.client.email).toBe(invoiceClient.email);
+    expect(saved.client.address.city).toBe("Lyon");
+    expect(saved.companyInfo.name).toBe(invoiceCompany.name);
+    expect(saved.companyInfo.siret).toBe(invoiceCompany.siret);
+  });
+
+  it("à la modification, client et émetteur ne changent pas", async () => {
+    const inv = await insertInvoice({
+      client: invoiceClient,
+      companyInfo: invoiceCompany,
+    });
+    const created = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      {
+        id: created._id.toString(),
+        input: {
+          client: otherClient,
+          companyInfo: otherCompany,
+          reason: "Motif corrigé",
+        },
+      },
+      ctx(),
+    );
+
+    const saved = await CreditNote.collection.findOne({ _id: created._id });
+    expect(saved.reason).toBe("Motif corrigé");
+    expect(saved.client.name).toBe(invoiceClient.name);
+    expect(saved.companyInfo.name).toBe(invoiceCompany.name);
+  });
+});
+
 describe("CreditNote Resolver — numérotation", () => {
   it("accepte un avoir 0001 sous deux préfixes mensuels distincts la même année (index avec prefix)", async () => {
     // Le bug d'origine : l'index unique (number, workspaceId, issueYear) sans

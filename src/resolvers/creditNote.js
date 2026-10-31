@@ -111,6 +111,15 @@ export const calculateCreditNoteTotals = (
 
 const readCreditNotes = requireWorkspaceLevel("creditNotes", "read");
 
+/** Champs de UpdateCreditNoteInput ignorés : ils viennent de la facture d'origine. */
+const LOCKED_UPDATE_FIELDS = ["client", "companyInfo", "originalInvoiceId"];
+
+/** Sous-document Mongoose (ou objet) en objet simple, null si absent. */
+const plainObject = (value) =>
+  value && typeof value.toObject === "function"
+    ? value.toObject()
+    : value || null;
+
 const creditNoteResolvers = {
   Query: {
     // URL d'aperçu de l'avoir archivé (R2) — null si pas encore archivé
@@ -367,9 +376,12 @@ const creditNoteResolvers = {
             manualNumber,
           });
 
-          // Toujours snapshot companyInfo pour les avoirs (pas de statut DRAFT)
-          let creditNoteCompanyInfo =
-            input.companyInfo || originalInvoice.companyInfo;
+          // L'avoir corrige la facture d'origine : même émetteur et même
+          // client que la facture, jamais ceux de la saisie. Émetteur :
+          // celui figé sur la facture, sinon l'organisation (pas de brouillon
+          // pour un avoir, il est figé dès sa création).
+          const invoiceClient = plainObject(originalInvoice.client);
+          let creditNoteCompanyInfo = plainObject(originalInvoice.companyInfo);
           if (!creditNoteCompanyInfo || !creditNoteCompanyInfo.name) {
             const org = await getOrganizationInfo(workspaceId);
             creditNoteCompanyInfo = mapOrganizationToCompanyInfo(org);
@@ -390,7 +402,7 @@ const creditNoteResolvers = {
             // Copier l'auto-liquidation depuis la facture originale
             isReverseCharge: originalInvoice.isReverseCharge || false,
             client: {
-              ...input.client,
+              ...(invoiceClient?.name ? invoiceClient : input.client),
               // Pour les avoirs, ne pas copier l'adresse de livraison du client
               // car on utilise celle de la facture originale dans le champ shipping
               hasDifferentShippingAddress: false,
@@ -629,8 +641,11 @@ const creditNoteResolvers = {
             }
           }
 
-          // Mettre à jour l'avoir
-          Object.assign(creditNote, input, totals);
+          // Mettre à jour l'avoir. Client, émetteur et facture d'origine
+          // restent ceux de la facture : ils ne se changent pas après coup.
+          const editable = { ...input };
+          for (const field of LOCKED_UPDATE_FIELDS) delete editable[field];
+          Object.assign(creditNote, editable, totals);
           // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
           // envois sans PDF joint : elle date d'avant la modification.
           if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
