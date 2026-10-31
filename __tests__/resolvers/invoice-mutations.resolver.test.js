@@ -59,6 +59,9 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Invoice from "../../src/models/Invoice.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
 import { triggerInvoiceFacturXArchive } from "../../src/services/invoiceFacturXArchiveService.js";
+import { reportPaymentIfNeeded } from "../../src/utils/eInvoiceRoutingHelper.js";
+import documentAutomationService from "../../src/services/documentAutomationService.js";
+import { automationService } from "../../src/resolvers/clientAutomation.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -342,6 +345,59 @@ describe("Invoice Resolver - Mutation.markInvoiceAsPaid", () => {
     );
 
     expect(result.status).toBe("COMPLETED");
+  });
+
+  it("facture déjà payée : changer la date ne rejoue ni déclaration, ni notification, ni automatisations", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: new Date("2026-10-01T00:00:00.000Z"),
+      eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+      eReportingPaymentStatus: "REPORTED",
+    });
+    reportPaymentIfNeeded.mockClear();
+    documentAutomationService.executeAutomations.mockClear();
+    automationService.executeAutomations.mockClear();
+
+    await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        paymentDate: "2026-10-02",
+      },
+      ctx(),
+    );
+
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate.toISOString().slice(0, 10)).toBe("2026-10-02");
+    expect(reportPaymentIfNeeded).not.toHaveBeenCalled();
+    expect(documentAutomationService.executeAutomations).not.toHaveBeenCalled();
+    expect(automationService.executeAutomations).not.toHaveBeenCalled();
+  });
+
+  it("facture payée par carte en ligne : sa date de paiement ne se modifie pas", async () => {
+    const paidAt = new Date("2026-10-01T10:00:00.000Z");
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: paidAt,
+      paymentMethod: "CARD",
+      stripePaymentStatus: "paid",
+    });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          workspaceId: organizationId.toString(),
+          paymentDate: "2026-09-15",
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/payée par carte/);
+
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate.toISOString()).toBe(paidAt.toISOString());
   });
 
   it("blocks marking a DRAFT invoice as paid", async () => {

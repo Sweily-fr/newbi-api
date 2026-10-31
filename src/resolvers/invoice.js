@@ -3359,6 +3359,19 @@ const invoiceResolvers = {
           ) {
             return invoice; // Aucun changement nécessaire
           }
+          // Payée par carte en ligne : la date vient du paiement Stripe
+          if (invoice.stripePaymentStatus === "paid") {
+            throw new AppError(
+              "Cette facture a été payée par carte en ligne : sa date de paiement vient du paiement et ne se modifie pas.",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+          // Déjà payée : seule la date change. L'encaissement a déjà été
+          // déclaré, notifié et a déjà déclenché les automatisations : ne
+          // pas les rejouer (seconde déclaration à l'administration).
+          invoice.paymentDate = new Date(paymentDate);
+          await invoice.save();
+          return await invoice.populate("createdBy");
         }
 
         // Mettre à jour le statut + déclencher tous les effets de bord (centralisé)

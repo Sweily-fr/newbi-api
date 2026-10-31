@@ -154,6 +154,8 @@ export async function reportPaymentIfNeeded(invoice, workspaceId, paymentDate) {
   if (invoice.companyInfo?.vatPaymentCondition !== "ENCAISSEMENTS")
     return false;
   if (!paymentDate) return false;
+  // Encaissement déjà déclaré : jamais de seconde déclaration
+  if (invoice.eReportingPaymentStatus === "REPORTED") return false;
 
   try {
     const result = await superPdpService.submitB2cPayment(
