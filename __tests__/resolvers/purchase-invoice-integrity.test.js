@@ -318,3 +318,55 @@ describe("unreconcilePurchaseInvoice : facture sans transaction liée", () => {
   });
 });
 
+describe("bulkUpdatePurchaseInvoiceStatus vers « payée »", () => {
+  it("une facture déjà payée garde sa date de paiement", async () => {
+    const paid = await insertInvoice({ status: "PAID", paymentDate: paidAt });
+    const toPay = await insertInvoice({ status: "TO_PAY" });
+
+    const result = await M.bulkUpdatePurchaseInvoiceStatus(
+      null,
+      { ids: [String(paid), String(toPay)], status: "PAID" },
+      ctx(),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.updatedCount).toBe(1);
+    expect((await rawInvoice(paid)).paymentDate).toEqual(paidAt);
+    const newlyPaid = await rawInvoice(toPay);
+    expect(newlyPaid.status).toBe("PAID");
+    expect(newlyPaid.paymentDate).toBeInstanceOf(Date);
+    expect(Date.now() - newlyPaid.paymentDate.getTime()).toBeLessThan(60_000);
+  });
+
+  it("une facture d'un autre espace n'est pas touchée", async () => {
+    const foreign = await insertInvoice({
+      status: "TO_PAY",
+      workspaceId: otherOrganizationId,
+    });
+
+    const result = await M.bulkUpdatePurchaseInvoiceStatus(
+      null,
+      { ids: [String(foreign)], status: "PAID" },
+      ctx(),
+    );
+
+    expect(result.updatedCount).toBe(0);
+    expect((await rawInvoice(foreign)).status).toBe("TO_PAY");
+  });
+
+  it("les autres statuts restent appliqués à toute la sélection", async () => {
+    const paid = await insertInvoice({ status: "PAID", paymentDate: paidAt });
+    const toPay = await insertInvoice({ status: "TO_PAY" });
+
+    const result = await M.bulkUpdatePurchaseInvoiceStatus(
+      null,
+      { ids: [String(paid), String(toPay)], status: "ARCHIVED" },
+      ctx(),
+    );
+
+    expect(result.updatedCount).toBe(2);
+    expect((await rawInvoice(paid)).status).toBe("ARCHIVED");
+    expect((await rawInvoice(paid)).paymentDate).toEqual(paidAt);
+  });
+});
+

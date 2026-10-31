@@ -1569,20 +1569,26 @@ const purchaseInvoiceResolvers = {
         context.workspaceId || context.organizationId,
       );
       const updateData = { status };
+      let filter = { _id: { $in: ids }, workspaceId };
       if (status === "PAID") {
         updateData.paymentDate = new Date();
+        // Une facture déjà payée garde sa date de paiement (reprise du débit
+        // bancaire, saisie à la main) : seules les autres passent payées.
+        const toPay = await PurchaseInvoice.find({
+          ...filter,
+          status: { $ne: "PAID" },
+        }).select("_id");
+        filter = { _id: { $in: toPay.map((inv) => inv._id) }, workspaceId };
       }
 
-      const result = await PurchaseInvoice.updateMany(
-        { _id: { $in: ids }, workspaceId },
-        { $set: updateData },
-      );
+      const result = await PurchaseInvoice.updateMany(filter, {
+        $set: updateData,
+      });
 
       // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
       if (status === "PAID") {
         const superPdpInvoices = await PurchaseInvoice.find({
-          _id: { $in: ids },
-          workspaceId,
+          ...filter,
           source: "SUPERPDP",
           superPdpInvoiceId: { $exists: true, $ne: null },
         });
