@@ -16,6 +16,9 @@ beforeAll(async () => {
   app.use(express.json());
   app.use(graphqlUploadMiddleware({ maxFileSize: 10, maxFiles: 1 }));
   app.post("/graphql", async (req, res) => {
+    if (req.body?.variables?.echo) {
+      return res.json({ variables: req.body.variables });
+    }
     const upload = await req.body?.variables?.file?.promise;
     res.json({ ok: true, filename: upload?.filename ?? null });
   });
@@ -87,5 +90,29 @@ describe("graphqlUploadMiddleware", () => {
       body: JSON.stringify({ query: "{ __typename }" }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it("retire les clés « $ » des variables d'un multipart, comme pour un corps JSON", async () => {
+    const form = new FormData();
+    form.append(
+      "operations",
+      JSON.stringify({
+        query: "mutation($input: X!) { up(input: $input) }",
+        variables: {
+          echo: true,
+          input: {
+            rules: [{ field: "name", value: { $regex: "^(a|aa)+$" } }],
+            customFields: [{ fieldId: "f", value: { $gt: "" } }],
+          },
+        },
+      }),
+    );
+    form.append("map", JSON.stringify({}));
+    const res = await fetch(baseUrl, { method: "POST", body: form });
+    expect(res.status).toBe(200);
+    const { variables } = await res.json();
+    expect(variables.input.rules[0].value).toEqual({});
+    expect(variables.input.customFields[0].value).toEqual({});
+    expect(JSON.stringify(variables)).not.toContain("$");
   });
 });
