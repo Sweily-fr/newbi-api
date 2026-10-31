@@ -1,5 +1,9 @@
 import cloudflareService from "../services/cloudflareService.js";
 import { AppError, ERROR_CODES } from "./errors.js";
+import {
+  assertArchiveReplaceable,
+  readUploadedPdf,
+} from "./archivePdfGuard.js";
 
 /**
  * Helpers partagés d'archivage PDF des documents (devis, avoirs, bons de commande)
@@ -54,22 +58,8 @@ export async function archiveDocumentPdf({
     );
   }
 
-  const { createReadStream, mimetype } = await file;
-  if (mimetype && mimetype !== "application/pdf") {
-    throw new AppError(
-      "Le document à archiver doit être un PDF",
-      ERROR_CODES.VALIDATION_ERROR,
-    );
-  }
-
-  const chunks = [];
-  for await (const chunk of createReadStream()) {
-    chunks.push(chunk);
-  }
-  const pdfBuffer = Buffer.concat(chunks);
-  if (pdfBuffer.length > 20 * 1024 * 1024) {
-    throw new AppError("PDF trop volumineux", ERROR_CODES.VALIDATION_ERROR);
-  }
+  assertArchiveReplaceable(doc, docType);
+  const pdfBuffer = await readUploadedPdf(file);
 
   const fileName = `${docType}_${doc.prefix || ""}${doc.number || docId}.pdf`;
   const { key } = await cloudflareService.uploadDocumentPdf(
