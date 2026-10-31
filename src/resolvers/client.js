@@ -109,6 +109,9 @@ function comparableCustomFields(list) {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
+// Activités que le site ajoute lui-même au journal d'un contact
+const MANUAL_ACTIVITY_TYPES = ["reminder_created"];
+
 // Actions précises de la page « Mes clients » (éditeur de rôles)
 // L'import de clients crée les fiches une à une : « Importer » suffit aussi
 const requireCreate = requireAction("clients", ["create", "import"]);
@@ -1036,6 +1039,16 @@ const clientResolvers = {
           _id: clientId,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
+
+        // Seul le rappel est écrit par le site : les autres événements du
+        // journal (facture créée, e-mail envoyé, blocage…) sont posés par
+        // l'API elle-même et ne doivent pas pouvoir être inventés
+        if (!MANUAL_ACTIVITY_TYPES.includes(input.type)) {
+          throw new AppError(
+            "Ce type d'activité ne peut pas être ajouté manuellement.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
 
         if (!client) {
           throw createNotFoundError("Client");
