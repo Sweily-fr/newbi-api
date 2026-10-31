@@ -120,10 +120,12 @@ const bankingResolvers = {
 
         // raw (réponse brute du fournisseur bancaire) n'est ni exposé ni lu :
         // exclu pour ne pas le transférer depuis Mongo à chaque liste.
+        // Décalage et taille négatifs ramenés à zéro : la requête ne doit pas
+        // échouer (la taille n'est pas plafonnée, des écrans en dépendent).
         return await Transaction.find(query)
           .sort({ date: -1, createdAt: -1 })
-          .limit(limit)
-          .skip(offset)
+          .limit(Math.max(0, Math.floor(Number(limit)) || 0))
+          .skip(Math.max(0, Math.floor(Number(offset)) || 0))
           .select("-raw")
           .lean();
       },

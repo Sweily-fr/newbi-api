@@ -153,6 +153,15 @@ const deletePurchaseInvoiceFilesFromR2 = async (
   }
 };
 
+// Pagination des listes : page à partir de 1, 1 à 1 000 éléments par page
+// (le site demande au plus 1 000 factures pour l'export). Une page ou une
+// taille hors bornes ne fait plus échouer la requête.
+const MAX_PAGE_SIZE = 1000;
+const boundedPage = (page, limit) => ({
+  page: Math.max(1, Math.floor(Number(page)) || 1),
+  limit: Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(limit)) || 1)),
+});
+
 // Actions précises de la page « Factures d'achat » (éditeur de rôles)
 const requireCreatePurchases = requireAction("expenses", "create");
 const requireMarkPurchasesPaid = requireAction("expenses", "markPaid");
@@ -259,7 +268,8 @@ const purchaseInvoiceResolvers = {
       const sort = {};
       sort[sortField] = sortOrder === "ASC" ? 1 : -1;
 
-      const skip = (page - 1) * limit;
+      const { page: safePage, limit: safeLimit } = boundedPage(page, limit);
+      const skip = (safePage - 1) * safeLimit;
       const [items, totalCount] = await Promise.all([
         // Données OCR brutes et XML e-invoicing exclus de la liste : lourds et
         // demandés seulement par la fiche (purchaseInvoice), ni par la liste du
@@ -267,7 +277,7 @@ const purchaseInvoiceResolvers = {
         PurchaseInvoice.find(query)
           .sort(sort)
           .skip(skip)
-          .limit(limit)
+          .limit(safeLimit)
           .select("-ocrData -rawExtractedText -eInvoiceRawData -files.ocrData")
           .lean(),
         PurchaseInvoice.countDocuments(query),
@@ -276,9 +286,9 @@ const purchaseInvoiceResolvers = {
       return {
         items,
         totalCount,
-        currentPage: page,
-        totalPages: Math.ceil(totalCount / limit) || 1,
-        hasNextPage: page * limit < totalCount,
+        currentPage: safePage,
+        totalPages: Math.ceil(totalCount / safeLimit) || 1,
+        hasNextPage: safePage * safeLimit < totalCount,
       };
     }),
 
@@ -741,17 +751,22 @@ const purchaseInvoiceResolvers = {
           query.name = { $regex: escapeRegex(search), $options: "i" };
         }
 
-        const skip = (page - 1) * limit;
+        const { page: safePage, limit: safeLimit } = boundedPage(page, limit);
+        const skip = (safePage - 1) * safeLimit;
         const [items, totalCount] = await Promise.all([
-          Supplier.find(query).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+          Supplier.find(query)
+            .sort({ name: 1 })
+            .skip(skip)
+            .limit(safeLimit)
+            .lean(),
           Supplier.countDocuments(query),
         ]);
 
         return {
           items,
           totalCount,
-          currentPage: page,
-          totalPages: Math.ceil(totalCount / limit) || 1,
+          currentPage: safePage,
+          totalPages: Math.ceil(totalCount / safeLimit) || 1,
         };
       },
     ),
@@ -2247,11 +2262,37 @@ const purchaseInvoiceResolvers = {
       if (!supplier) return null;
       return { ...supplier, id: supplier._id.toString() };
     },
+    // Auteur vu par les autres membres de l'espace : son identité seulement,
+    // jamais son abonnement, son code de parrainage ni les coordonnées
+    // bancaires de son entreprise.
     createdBy: async (parent) => {
       const User = mongoose.model("User");
-      const user = await User.findById(parent.createdBy).lean();
+      const user = await User.findById(parent.createdBy)
+        .select(
+          "email profile emailVerified isEmailVerified isDisabled createdAt updatedAt",
+        )
+        .lean();
       if (!user) return null;
-      return { ...user, id: user._id.toString() };
+      const iso = (d) => (d ? new Date(d).toISOString() : "");
+      return {
+        id: user._id.toString(),
+        email: user.email,
+        isEmailVerified: Boolean(user.isEmailVerified ?? user.emailVerified),
+        isDisabled: Boolean(user.isDisabled),
+        profile: user.profile
+          ? {
+              firstName: user.profile.firstName ?? null,
+              lastName: user.profile.lastName ?? null,
+              profilePicture: user.profile.profilePicture ?? null,
+            }
+          : null,
+        company: null,
+        subscription: null,
+        isPartner: null,
+        referralCode: null,
+        createdAt: iso(user.createdAt),
+        updatedAt: iso(user.updatedAt),
+      };
     },
   },
 
