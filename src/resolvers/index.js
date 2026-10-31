@@ -6,7 +6,6 @@ import quoteResolvers from "./quote.js";
 import creditNoteResolvers from "./creditNote.js";
 import clientResolvers from "./client.js";
 import productResolvers from "./product.js";
-import contactResolvers from "./contact.js";
 import companySearchResolvers from "./companySearch.js";
 import emailSignatureResolvers from "./emailSignature.js";
 import emailSignatureV2Resolvers from "./emailSignatureV2.js";
@@ -88,7 +87,6 @@ const resolvers = mergeResolvers([
   clientResolvers,
   clientListResolvers,
   productResolvers,
-  contactResolvers,
   companySearchResolvers,
   emailSignatureResolvers,
   emailSignatureV2Resolvers,

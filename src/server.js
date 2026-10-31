@@ -518,6 +518,10 @@ async function startServer() {
       process.env.ENABLE_GRAPHQL_INTROSPECTION === "true",
     // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
     validationRules: [depthLimit(10)],
+    // Une opération par requête HTTP : ni le site ni l'application mobile
+    // n'envoient de lots, et chaque opération reste ainsi comptée par la
+    // limite de débit globale.
+    allowBatchedHttpRequests: false,
     context: async ({ req }) => {
       // DataLoaders instanciés par requête (cache per-request, évite les N+1)
       const loaders = createDataLoaders();
