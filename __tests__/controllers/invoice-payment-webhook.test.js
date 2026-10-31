@@ -16,7 +16,6 @@ import {
   beforeEach,
   vi,
 } from "vitest";
-import mongoose from "mongoose";
 import Stripe from "stripe";
 
 vi.mock("../../src/config/redis.js", () => ({
