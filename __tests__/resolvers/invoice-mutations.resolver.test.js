@@ -456,6 +456,73 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     expect(result.status).toBe("CANCELED");
   });
 
+  for (const [cas, fields, message] of [
+    [
+      "transmise en facturation électronique",
+      {
+        superPdpInvoiceId: "spdp-123",
+        eInvoiceStatus: "VALIDATED",
+        eInvoiceFlowType: "E_INVOICING",
+      },
+      /transmise en facturation électronique.*Créez un avoir/,
+    ],
+    [
+      "déposée sans identifiant mais au statut transmis",
+      { eInvoiceStatus: "SENT_TO_RECIPIENT" },
+      /transmise en facturation électronique.*Créez un avoir/,
+    ],
+    [
+      "déclarée en e-reporting",
+      {
+        eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+        eReportingStatus: "REPORTED",
+      },
+      /déclarée à l'administration.*Créez un avoir/,
+    ],
+  ]) {
+    it(`refuse d'annuler une facture ${cas} : elle s'annule par un avoir`, async () => {
+      const { insertedId } = await insertInvoice({
+        status: "PENDING",
+        ...fields,
+      });
+
+      await expect(
+        resolver(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            status: "CANCELED",
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow(message);
+
+      const untouched = await Invoice.collection.findOne({ _id: insertedId });
+      expect(untouched.status).toBe("PENDING");
+    });
+  }
+
+  it("laisse annuler une facture dont l'envoi e-invoicing a échoué avant dépôt", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      eInvoiceStatus: "ERROR",
+      eReportingStatus: "ERROR",
+    });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        status: "CANCELED",
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("CANCELED");
+  });
+
   it("throws NOT_FOUND when invoice does not exist", async () => {
     const fakeId = new mongoose.Types.ObjectId().toString();
     await expect(
