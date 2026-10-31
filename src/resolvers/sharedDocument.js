@@ -37,6 +37,11 @@ const { ObjectId } = mongoose.Types;
 // n'entre pas dans les statistiques.
 const DOCUMENT_NOT_FOUND = "Document non trouvé";
 const FOLDER_NOT_FOUND = "Dossier non trouvé";
+const PARENT_FOLDER_MESSAGES = {
+  CYCLE:
+    "Impossible de déplacer un dossier dans lui-même ou dans un de ses sous-dossiers",
+  TRASHED: "Le dossier de destination est dans la corbeille",
+};
 
 /** Identifiants des documents du lot visibles par l'utilisateur. */
 async function visibleDocumentIds(context, workspaceId, ids) {
@@ -1440,7 +1445,7 @@ const sharedDocumentResolvers = {
           // Dossier parent d'un autre espace ou privé inaccessible : comme
           // introuvable
           if (input.parentId) {
-            const { canTarget } = await sharedFolderAccessFor(
+            const { canTarget, parentProblem } = await sharedFolderAccessFor(
               context,
               workspaceId,
             );
@@ -1448,6 +1453,14 @@ const sharedDocumentResolvers = {
               return {
                 success: false,
                 message: FOLDER_NOT_FOUND,
+                folder: null,
+              };
+            }
+            const problem = parentProblem(null, input.parentId);
+            if (problem) {
+              return {
+                success: false,
+                message: PARENT_FOLDER_MESSAGES[problem],
                 folder: null,
               };
             }
@@ -1509,10 +1522,8 @@ const sharedDocumentResolvers = {
       async (_, { id, workspaceId, input }, context) => {
         try {
           const folder = await SharedFolder.findOne({ _id: id, workspaceId });
-          const { canAccess, canTarget } = await sharedFolderAccessFor(
-            context,
-            workspaceId,
-          );
+          const { canAccess, canTarget, parentProblem } =
+            await sharedFolderAccessFor(context, workspaceId);
 
           if (!folder || !canAccess(folder._id)) {
             return {
@@ -1526,6 +1537,16 @@ const sharedDocumentResolvers = {
           // inaccessible : refusé
           if (input.parentId && !canTarget(input.parentId)) {
             return { success: false, message: FOLDER_NOT_FOUND, folder: null };
+          }
+
+          // Ni sous lui-même, ni sous un de ses sous-dossiers, ni en corbeille
+          const problem = parentProblem(folder._id, input.parentId);
+          if (problem) {
+            return {
+              success: false,
+              message: PARENT_FOLDER_MESSAGES[problem],
+              folder: null,
+            };
           }
 
           // Visibilité : mêmes règles que updateFolderVisibility (le créateur,
@@ -1621,25 +1642,32 @@ const sharedDocumentResolvers = {
 
           const now = new Date();
 
-          // Fonction récursive pour collecter tous les IDs de sous-dossiers
-          const getAllSubfolderIds = async (parentId) => {
-            const subfolders = await SharedFolder.find({
-              workspaceId,
-              parentId,
-              trashedAt: null,
-            });
-            let allIds = subfolders.map((f) => f._id);
-
-            for (const subfolder of subfolders) {
-              const childIds = await getAllSubfolderIds(subfolder._id);
-              allIds = allIds.concat(childIds);
+          // Collecte de tous les IDs de sous-dossiers (parcours en largeur ;
+          // un dossier déjà visité n'est jamais repris, même sur un cycle)
+          const getAllSubfolderIds = async (rootId) => {
+            const visited = new Set([String(rootId)]);
+            const allIds = [];
+            let frontier = [rootId];
+            while (frontier.length > 0) {
+              const subfolders = await SharedFolder.find({
+                workspaceId,
+                parentId: { $in: frontier },
+                trashedAt: null,
+              }).select("_id");
+              frontier = [];
+              for (const subfolder of subfolders) {
+                const key = String(subfolder._id);
+                if (visited.has(key)) continue;
+                visited.add(key);
+                allIds.push(subfolder._id);
+                frontier.push(subfolder._id);
+              }
             }
-
             return allIds;
           };
 
           // Collecter tous les IDs de sous-dossiers
-          const subfolderIds = await getAllSubfolderIds(id);
+          const subfolderIds = await getAllSubfolderIds(folder._id);
           const allFolderIds = [id, ...subfolderIds];
 
           // Mettre tous les documents de ces dossiers en corbeille
@@ -1821,16 +1849,24 @@ const sharedDocumentResolvers = {
             // dossier donné (via originalParentId, posé lors de la mise en
             // corbeille). Permet de restaurer toute l'arborescence et pas
             // seulement les fichiers directement contenus dans le dossier.
-            const collectTrashedDescendants = async (parentId) => {
-              const children = await SharedFolder.find({
-                workspaceId,
-                originalParentId: parentId,
-                trashedAt: { $ne: null },
-              });
-              let all = [];
-              for (const child of children) {
-                all.push(child);
-                all = all.concat(await collectTrashedDescendants(child._id));
+            const collectTrashedDescendants = async (rootId) => {
+              const visited = new Set([String(rootId)]);
+              const all = [];
+              let frontier = [rootId];
+              while (frontier.length > 0) {
+                const children = await SharedFolder.find({
+                  workspaceId,
+                  originalParentId: { $in: frontier },
+                  trashedAt: { $ne: null },
+                });
+                frontier = [];
+                for (const child of children) {
+                  const key = String(child._id);
+                  if (visited.has(key)) continue;
+                  visited.add(key);
+                  all.push(child);
+                  frontier.push(child._id);
+                }
               }
               return all;
             };

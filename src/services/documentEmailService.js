@@ -11,6 +11,8 @@ import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
 import cloudflareService from "./cloudflareService.js";
+import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
+import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
 import { APP_URL, escapeHtml, typo } from "../utils/trialEmails.js";
 import {
   createEmailLog,
@@ -916,7 +918,12 @@ async function sendDocumentEmail({
       const stripeAccount = await StripeConnectAccount.findOne({
         organizationId: workspaceId.toString(),
       });
-      if (stripeAccount && stripeAccount.chargesEnabled) {
+      // Facture soldée par avoir : plus de bouton de paiement
+      if (
+        stripeAccount &&
+        stripeAccount.chargesEnabled &&
+        !(await isInvoiceFullyCredited(document))
+      ) {
         const backendUrl = process.env.BACKEND_URL || "http://localhost:4000";
         paymentUrl = `${backendUrl}/pay/invoice/${documentId}`;
       }
@@ -951,7 +958,24 @@ async function sendDocumentEmail({
     pdfBuffer = Buffer.from(pdfBase64, "base64");
   }
 
-  // 2) Sinon, réutiliser le PDF binaire déjà mis en cache dans R2 (aucun base64)
+  // 2) Document finalisé : PDF archivé sur R2 (archivedPdfKey), la version
+  // légale du document, prioritaire sur la copie en cache. Le desktop passe
+  // toujours pdfBase64 (étape 1) : ce chemin concerne les clients qui n'en
+  // envoient pas (mobile, automatisations).
+  if (!pdfBuffer && document.archivedPdfKey && document.status !== "DRAFT") {
+    try {
+      pdfBuffer = await readArchivedDocumentPdf(documentType, document);
+      if (pdfBuffer) pdfFromCache = true; // déjà durable sur R2
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "⚠️ [DocumentEmail] Échec lecture du PDF archivé R2:",
+        err.message,
+      );
+    }
+  }
+
+  // 2 bis) Sinon, réutiliser le PDF binaire déjà mis en cache dans R2
   if (!pdfBuffer && document.cachedPdf?.url) {
     try {
       const cachedResponse = await axios.get(document.cachedPdf.url, {
@@ -964,26 +988,6 @@ async function sendDocumentEmail({
       // eslint-disable-next-line no-console
       console.warn(
         "⚠️ [DocumentEmail] Échec lecture du PDF en cache R2:",
-        err.message,
-      );
-    }
-  }
-
-  // 2 bis) Réutiliser le PDF déjà archivé sur R2 (archivedPdfKey) : un document
-  // finalisé y est déjà stocké, inutile de le régénérer. Le desktop passe
-  // toujours pdfBase64 (étape 1), donc ce fallback ne concerne que les clients
-  // qui n'envoient pas de base64 (mobile) — sans altérer la logique desktop.
-  if (!pdfBuffer && document.archivedPdfKey) {
-    try {
-      pdfBuffer = await cloudflareService.getDocumentObjectBuffer(
-        documentType,
-        document.archivedPdfKey,
-      );
-      pdfFromCache = true; // déjà durable sur R2 : pas besoin de re-cacher
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "⚠️ [DocumentEmail] Échec lecture du PDF archivé R2:",
         err.message,
       );
     }

@@ -16,6 +16,7 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { validateMonthPeriod } from "../utils/periodBounds.js";
 import {
   loadScenarioOverlay,
   projectableRecurrenceFilter,
@@ -378,9 +379,11 @@ const treasuryForecastResolvers = {
         const overlay = await loadScenarioOverlay(scenarioId, wId);
         const scenario = overlay.scenario;
 
-        // Parse start/end as YYYY-MM
-        const startMonth = startDate.substring(0, 7);
-        const endMonth = endDate.substring(0, 7);
+        // Mois de début et de fin (YYYY-MM) validés : format, bornes, durée
+        const { startMonth, endMonth } = validateMonthPeriod(
+          startDate,
+          endDate,
+        );
         const monthRange = getMonthRange(startMonth, endMonth);
 
         // Requêtes du calcul : modèles, compte(s) bancaire(s) et bornes de dates

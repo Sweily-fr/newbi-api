@@ -60,7 +60,10 @@ import documentAutomationService from "../services/documentAutomationService.js"
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "../services/abbySyncHelper.js";
-import { cancelActiveQuoteSignatures } from "../services/quoteSignatureSync.js";
+import {
+  cancelActiveQuoteSignatures,
+  findActiveClientQuoteSignature,
+} from "../services/quoteSignatureSync.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 // (règles communes aux documents de vente : voir utils/documentTotals.js,
@@ -79,6 +82,22 @@ export const calculateQuoteTotals = (
     shipping,
     isReverseCharge,
   });
+
+
+/**
+ * Refuse la modification d'un devis dont une demande de signature client
+ * est en cours (le client signe la version envoyée).
+ */
+async function assertNoActiveQuoteSignature(quote) {
+  if (quote.status === "DRAFT") return;
+  const active = await findActiveClientQuoteSignature(quote._id);
+  if (!active) return;
+  throw new AppError(
+    "Une demande de signature est en cours pour ce devis : annulez-la avant de le modifier.",
+    ERROR_CODES.RESOURCE_LOCKED,
+    { resource: "quote", reason: "SIGNATURE_PENDING" },
+  );
+}
 
 const quoteResolvers = {
   Quote: {
@@ -1077,6 +1096,10 @@ const quoteResolvers = {
           );
         }
 
+        // Devis envoyé en signature : le client signe la version envoyée.
+        // Le modifier exige d'annuler d'abord la demande en cours.
+        await assertNoActiveQuoteSignature(quote);
+
         // Garde-fou de transition : updateQuote gère l'édition de contenu et la
         // SEULE transition DRAFT → PENDING (finalisation, numérotée plus bas).
         // Tout autre changement de statut doit passer par changeQuoteStatus
@@ -1509,6 +1532,12 @@ const quoteResolvers = {
 
         if (!allowedTransitions[quote.status].includes(status)) {
           throw createStatusTransitionError("Devis", quote.status, status);
+        }
+
+        // Retour en brouillon : il rouvrirait l'édition d'un devis dont le
+        // client est en train de signer la version envoyée.
+        if (status === "DRAFT") {
+          await assertNoActiveQuoteSignature(quote);
         }
 
         const oldStatus = quote.status;
