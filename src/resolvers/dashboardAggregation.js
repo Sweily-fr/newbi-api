@@ -28,6 +28,16 @@ function endOfCurrentDay(now) {
 }
 
 /**
+ * Transactions qui n'ont jamais déplacé d'argent : opération supprimée par la
+ * banque (Bridge l'enregistre « cancelled », sans deletedAt) ou paiement
+ * échoué. Les Analytiques et la Prévision ne les comptent pas non plus.
+ */
+const MOVED_MONEY = { $nin: ["cancelled", "failed"] };
+
+/** Comptes dont le solde compte dans la trésorerie : ceux de la liste des comptes. */
+const ACTIVE_ACCOUNT_STATUSES = ["active", "ACTIVE"];
+
+/**
  * Résout les dates de début/fin à partir d'un preset ou de dates custom
  */
 function resolvePeriodDates(period) {
@@ -179,9 +189,10 @@ async function getAccountsBalance(
   accountId,
   { excludeManual = false } = {},
 ) {
-  // Un compte déconnecté n'est plus synchronisé : son dernier solde connu
-  // ne compte plus dans la trésorerie.
-  const filter = { workspaceId, status: { $ne: "disconnected" } };
+  // Seuls les comptes actifs (ceux de la liste des comptes et de la
+  // Prévision) : un compte déconnecté, fermé ou inactif n'est plus
+  // synchronisé, son dernier solde connu ne compte plus dans la trésorerie.
+  const filter = { workspaceId, status: { $in: ACTIVE_ACCOUNT_STATUSES } };
   if (accountId) Object.assign(filter, accountLookup(accountId));
 
   const accountsPromise = AccountBanking.find(filter).lean();
@@ -191,7 +202,14 @@ async function getAccountsBalance(
     accountId || excludeManual
       ? Promise.resolve(0)
       : Transaction.aggregate([
-          { $match: { workspaceId, deletedAt: null, provider: "manual" } },
+          {
+            $match: {
+              workspaceId,
+              deletedAt: null,
+              provider: "manual",
+              status: MOVED_MONEY,
+            },
+          },
           { $group: { _id: null, total: { $sum: "$amount" } } },
         ]).then((res) => res[0]?.total ?? 0);
 
@@ -312,7 +330,11 @@ const dashboardAggregationResolvers = {
     // les Analytiques (comme la courbe de trésorerie)
     dashboardSummary: readTreasurySummary(
       async (parent, { workspaceId, accountId, excludeManual }) => {
-        const matchFilter = { workspaceId, deletedAt: null };
+        const matchFilter = {
+          workspaceId,
+          deletedAt: null,
+          status: MOVED_MONEY,
+        };
         if (accountId) {
           matchFilter.fromAccount = await accountTransactionFilter(
             workspaceId,
@@ -399,6 +421,7 @@ const dashboardAggregationResolvers = {
         const matchFilter = {
           workspaceId,
           deletedAt: null,
+          status: MOVED_MONEY,
           date: { $gte: startDate, $lte: endDate },
         };
         if (accountId) {
@@ -407,12 +430,12 @@ const dashboardAggregationResolvers = {
             accountId,
           );
         } else {
-          // La courbe part du solde des comptes connectés : les transactions
-          // conservées d'un compte déconnecté (hors de ce solde) en sont
-          // écartées.
+          // La courbe part du solde des comptes actifs : les transactions
+          // conservées d'un compte déconnecté ou inactif (hors de ce solde)
+          // en sont écartées.
           const disconnected = await AccountBanking.distinct("externalId", {
             workspaceId,
-            status: "disconnected",
+            status: { $nin: ACTIVE_ACCOUNT_STATUSES },
           });
           if (disconnected.length > 0) {
             matchFilter.fromAccount = { $nin: disconnected };
@@ -615,6 +638,7 @@ const dashboardAggregationResolvers = {
         const matchFilter = {
           workspaceId,
           deletedAt: null,
+          status: MOVED_MONEY,
           date: { $gte: startDate, $lte: endDate },
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
