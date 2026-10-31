@@ -179,7 +179,9 @@ async function getAccountsBalance(
   accountId,
   { excludeManual = false } = {},
 ) {
-  const filter = { workspaceId };
+  // Un compte déconnecté n'est plus synchronisé : son dernier solde connu
+  // ne compte plus dans la trésorerie.
+  const filter = { workspaceId, status: { $ne: "disconnected" } };
   if (accountId) Object.assign(filter, accountLookup(accountId));
 
   const accountsPromise = AccountBanking.find(filter).lean();
@@ -404,6 +406,17 @@ const dashboardAggregationResolvers = {
             workspaceId,
             accountId,
           );
+        } else {
+          // La courbe part du solde des comptes connectés : les transactions
+          // conservées d'un compte déconnecté (hors de ce solde) en sont
+          // écartées.
+          const disconnected = await AccountBanking.distinct("externalId", {
+            workspaceId,
+            status: "disconnected",
+          });
+          if (disconnected.length > 0) {
+            matchFilter.fromAccount = { $nin: disconnected };
+          }
         }
         // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
         // pour que le graph suive uniquement le solde des comptes connectés.
