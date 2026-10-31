@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
   requireAction,
   requireRead,
@@ -51,6 +52,29 @@ const makeScopedMutation = (action) => (fn) =>
 const scopedCreateMutation = makeScopedMutation("create");
 const scopedMutation = makeScopedMutation("edit");
 const scopedDeleteMutation = makeScopedMutation("delete");
+
+const listNameTaken = () =>
+  new AppError("Une liste porte déjà ce nom.", ERROR_CODES.ALREADY_EXISTS);
+
+/** Nom de liste déjà pris dans l'espace : message clair. */
+async function assertListNameFree(workspaceId, name, exceptId = null) {
+  const existing = await ClientList.findOne({
+    workspaceId,
+    name: typeof name === "string" ? name.trim() : name,
+    ...(exceptId ? { _id: { $ne: exceptId } } : {}),
+  });
+  if (existing) throw listNameTaken();
+}
+
+/** Enregistre une liste ; création simultanée sous le même nom : message clair. */
+async function saveList(list) {
+  try {
+    await list.save();
+  } catch (error) {
+    if (error?.code === 11000) throw listNameTaken();
+    throw error;
+  }
+}
 
 const buildActivityActor = (user) => ({
   userId: user?.id || user?._id,
@@ -208,6 +232,7 @@ export const clientListResolvers = {
     createClientList: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
+          await assertListNameFree(workspaceId, input.name);
           const newList = new ClientList({
             name: input.name,
             description: input.description || "",
@@ -218,7 +243,7 @@ export const clientListResolvers = {
             clients: [],
           });
 
-          await newList.save();
+          await saveList(newList);
           return newList;
         } catch (error) {
           console.error("Erreur lors de la création de la liste:", error);
@@ -243,13 +268,16 @@ export const clientListResolvers = {
             );
           }
 
+          if (input.name && input.name !== list.name) {
+            await assertListNameFree(workspaceId, input.name, list._id);
+          }
           if (input.name) list.name = input.name;
           if (input.description !== undefined)
             list.description = input.description;
           if (input.color) list.color = input.color;
           if (input.icon) list.icon = input.icon;
 
-          await list.save();
+          await saveList(list);
           return list.populate("clients");
         } catch (error) {
           console.error("Erreur lors de la mise à jour de la liste:", error);
