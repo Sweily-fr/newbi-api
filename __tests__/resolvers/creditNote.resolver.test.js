@@ -428,6 +428,40 @@ describe("CreditNote Resolver — client et émetteur de la facture d'origine", 
   });
 });
 
+describe("CreditNote Resolver — date de l'avoir", () => {
+  it("un avoir daté d'avant sa facture est refusé, à la création comme à la modification", async () => {
+    const inv = await insertInvoice({
+      issueDate: new Date("2026-10-15T10:00:00.000Z"),
+    });
+
+    await expect(
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: buildCreditNoteInput(inv._id, { issueDate: "2026-10-01" }) },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      /ne peut pas précéder celle de la facture d'origine \(15\/10\/2026\)/,
+    );
+    expect(await CreditNote.countDocuments({ originalInvoice: inv._id })).toBe(
+      0,
+    );
+
+    const created = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id, { issueDate: "2026-10-15" }) },
+      ctx(),
+    );
+    await expect(
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        { id: created._id.toString(), input: { issueDate: "2026-10-14" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/ne peut pas précéder/);
+  });
+});
+
 describe("CreditNote Resolver — avoirs simultanés", () => {
   const sumCredited = async (invoiceId) =>
     (await CreditNote.collection.find({ originalInvoice: invoiceId }).toArray())
@@ -549,7 +583,11 @@ describe("CreditNote Resolver — numérotation", () => {
     // prefix rejetait le 2e "0001" d'une même année alors que le préfixe
     // mensuel diffère. L'index inclut désormais prefix.
     await CreditNote.syncIndexes();
-    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    // Facture du 1er janvier : les avoirs de janvier et février la suivent
+    const inv = await insertInvoice({
+      finalTotalTTC: 100000,
+      issueDate: new Date("2026-01-01T09:00:00.000Z"),
+    });
 
     const resolver = creditNoteResolvers.Mutation.createCreditNote;
 

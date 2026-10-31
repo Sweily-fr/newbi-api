@@ -29,6 +29,7 @@ import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXAr
 import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
 import { creditNoteDeletionRefused } from "../utils/issuedInvoiceLock.js";
 import { withDocumentLock } from "../utils/documentLock.js";
+import { parisDay } from "../utils/invoiceRecurrenceSchedule.js";
 import {
   generateCreditNoteNumber,
   previewCreditNoteNumber,
@@ -112,6 +113,25 @@ export const calculateCreditNoteTotals = (
 };
 
 const readCreditNotes = requireWorkspaceLevel("creditNotes", "read");
+
+/**
+ * Refuse un avoir daté d'avant sa facture d'origine (jour calendaire à
+ * Paris) : il corrige une facture déjà émise.
+ */
+const assertCreditNoteAfterInvoice = (issueDate, originalInvoice) => {
+  if (!issueDate || !originalInvoice?.issueDate) return;
+  const day = new Date(issueDate);
+  if (Number.isNaN(day.getTime())) return;
+  const creditDay = parisDay(day);
+  const invoiceDay = parisDay(new Date(originalInvoice.issueDate));
+  if (creditDay < invoiceDay) {
+    const [y, m, d] = invoiceDay.split("-");
+    throw createValidationError(
+      `La date de l'avoir ne peut pas précéder celle de la facture d'origine (${d}/${m}/${y}).`,
+      { issueDate: "Date antérieure à la facture d'origine" },
+    );
+  }
+};
 
 /** Numéro provisoire le temps de valider l'avoir, avant d'attribuer le vrai. */
 const PENDING_NUMBER = "0000";
@@ -293,6 +313,9 @@ const creditNoteResolvers = {
               "Un avoir ne peut être créé que pour une facture en attente, terminée ou annulée",
             );
           }
+
+          // Un avoir corrige une facture déjà émise : il ne la précède pas
+          assertCreditNoteAfterInvoice(input.issueDate, originalInvoice);
 
           // Totaux du nouvel avoir : auto-liquidation et frais de port de la
           // facture d'origine (repris par l'aperçu et le PDF de l'avoir)
@@ -607,6 +630,16 @@ const creditNoteResolvers = {
                 },
               );
             }
+          }
+
+          if (input.issueDate) {
+            const originalInvoice = await Invoice.findOne({
+              _id: creditNote.originalInvoice,
+              workspaceId: creditNote.workspaceId,
+            })
+              .select("issueDate")
+              .lean();
+            assertCreditNoteAfterInvoice(input.issueDate, originalInvoice);
           }
 
           // Plafond vérifié et avoir enregistré seul (même verrou que la
