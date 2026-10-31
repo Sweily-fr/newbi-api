@@ -10,6 +10,45 @@ import {
 } from "../middlewares/rbac.js";
 import emailReminderService from "../services/emailReminderService.js";
 import { assertPlanFeature } from "../services/planLimits.js";
+import { createValidationError } from "../utils/errors.js";
+import { isValidEmail } from "../utils/validators.js";
+import { escapeHtml } from "../utils/trialEmails.js";
+import { recordAttempt } from "../utils/attemptLimiter.js";
+
+// E-mails de test : envoyés à l'adresse du compte connecté seulement,
+// TEST_EMAIL_MAX envois par fenêtre de TEST_EMAIL_WINDOW_SECONDS
+const TEST_EMAIL_MAX = 5;
+const TEST_EMAIL_WINDOW_SECONDS = 10 * 60;
+const SENDER_NAME_MAX_LENGTH = 100;
+
+/**
+ * Expéditeur saisi (création ou modification) : adresses vides ou valides,
+ * une seule à la fois ; nom d'expéditeur court, sur une ligne, sans
+ * guillemets ni chevrons.
+ */
+function assertEmailSender(email) {
+  if (!email) return;
+  for (const field of ["fromEmail", "replyTo"]) {
+    const value = email[field];
+    if (value && (String(value).length > 254 || !isValidEmail(value))) {
+      throw createValidationError(
+        field === "fromEmail"
+          ? "Adresse de l'expéditeur invalide."
+          : "Adresse de réponse invalide.",
+      );
+    }
+  }
+  const fromName = email.fromName;
+  if (
+    fromName &&
+    (String(fromName).length > SENDER_NAME_MAX_LENGTH ||
+      /["<>\r\n]/.test(fromName))
+  ) {
+    throw createValidationError(
+      `Nom de l'expéditeur invalide : ${SENDER_NAME_MAX_LENGTH} caractères au plus, sur une ligne, sans guillemets ni chevrons.`,
+    );
+  }
+}
 
 // preferArgsWorkspace : les resolvers lisent args.workspaceId, le rôle est
 // vérifié sur ce même espace
@@ -77,6 +116,8 @@ const crmEmailAutomationResolvers = {
       if (customField.fieldType !== "DATE") {
         throw new Error("Le champ personnalisé doit être de type Date");
       }
+
+      assertEmailSender(input.email);
 
       const automation = new CrmEmailAutomation({
         ...input,
@@ -155,6 +196,7 @@ const crmEmailAutomationResolvers = {
       }
 
       if (input.email) {
+        assertEmailSender(input.email);
         automation.email = {
           fromName:
             input.email.fromName !== undefined
@@ -222,9 +264,24 @@ const crmEmailAutomationResolvers = {
       return automation;
     }),
 
+    // L'e-mail de test part à l'adresse du compte connecté, jamais à une
+    // adresse saisie
     testCrmEmailAutomation: requireWrite("automations", {
       preferArgsWorkspace: true,
-    })(async (_, { workspaceId, id, testEmail }) => {
+    })(async (_, { workspaceId, id }, context) => {
+      const testEmail = context.user?.email;
+      if (!testEmail) {
+        throw createValidationError(
+          "Aucune adresse e-mail n'est associée à votre compte.",
+        );
+      }
+
+      await assertPlanFeature(
+        workspaceId,
+        "crmEmailAutomations",
+        "les automatisations d'e-mails",
+      );
+
       const automation = await CrmEmailAutomation.findOne({
         _id: id,
         workspaceId,
@@ -232,6 +289,17 @@ const crmEmailAutomationResolvers = {
 
       if (!automation) {
         throw new Error("Automatisation non trouvée");
+      }
+
+      const userId = String(context.user.id || context.user._id);
+      const sentInWindow = await recordAttempt(
+        `crm-test-email:${userId}`,
+        TEST_EMAIL_WINDOW_SECONDS,
+      );
+      if (sentInWindow > TEST_EMAIL_MAX) {
+        throw createValidationError(
+          "Plusieurs e-mails de test viennent d'être envoyés : réessayez dans quelques minutes.",
+        );
       }
 
       const customField = await ClientCustomField.findById(
@@ -257,7 +325,7 @@ const crmEmailAutomationResolvers = {
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <p style="color: #666; font-size: 12px; background: #f5f5f5; padding: 10px; border-radius: 4px;">
-            ⚠️ Ceci est un email de test pour l'automatisation "${automation.name}"
+            ⚠️ Ceci est un email de test pour l'automatisation "${escapeHtml(automation.name)}"
           </p>
           <div style="margin-top: 20px;">
             ${body.replace(/\n/g, "<br>")}

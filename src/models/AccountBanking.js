@@ -39,6 +39,11 @@ const accountBankingSchema = new mongoose.Schema(
       default: "active",
       index: true,
     },
+    // Date de déconnexion par l'utilisateur (status "disconnected") : le
+    // compte reste en base pour ses transactions conservées.
+    disconnectedAt: {
+      type: Date,
+    },
 
     // Solde du compte
     balance: {

@@ -514,6 +514,75 @@ describe("Invoice Resolver - Mutation.updateInvoice (facture émise figée)", ()
     expect(result.finalTotalTTC).toBe(1200);
   });
 
+  it("refuse de changer l'IBAN d'une facture en attente : coordonnées intactes", async () => {
+    const bankDetails = {
+      iban: "FR7630006000011234567890189",
+      bic: "AGRIFRPP",
+      bankName: "Banque d'origine",
+    };
+    const { insertedId } = await insertInvoice({
+      showBankDetails: true,
+      bankDetails,
+    });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          input: {
+            showBankDetails: true,
+            bankDetails: {
+              iban: "FR7612739000706541765734534",
+              bic: "BNPAFRPP",
+              bankName: "Autre",
+            },
+          },
+        },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({
+      code: "RESOURCE_LOCKED",
+      details: expect.objectContaining({
+        fields: ["showBankDetails", "bankDetails"],
+      }),
+    });
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.bankDetails).toEqual(bankDetails);
+  });
+
+  it("refuse de déplacer la date d'émission d'une facture émise", async () => {
+    const issueDate = new Date("2026-10-15T00:00:00.000Z");
+    const { insertedId } = await insertInvoice({ issueDate });
+
+    await expect(
+      resolver(
+        null,
+        { id: insertedId.toString(), input: { issueDate: "2026-01-01" } },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: "RESOURCE_LOCKED" });
+
+    const stored = await Invoice.collection.findOne({ _id: insertedId });
+    expect(stored.issueDate).toEqual(issueDate);
+  });
+
+  it("laisse modifier l'échéance et la présentation d'une facture en attente", async () => {
+    const { insertedId } = await insertInvoice();
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        input: { dueDate: "2026-12-31", clientPositionRight: true },
+      },
+      ctx(),
+    );
+
+    expect(result.clientPositionRight).toBe(true);
+  });
+
   it("laisse un brouillon changer ses articles", async () => {
     const { insertedId } = await insertInvoice(BROUILLON);
 

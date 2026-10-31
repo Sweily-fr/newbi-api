@@ -9,6 +9,8 @@ import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { aggregateByCategory } from "../utils/bank-categories.js";
+import { createValidationError } from "../utils/errors.js";
+import { MAX_PERIOD_DAYS, validateDayPeriod } from "../utils/periodBounds.js";
 
 /**
  * Fin de journée (UTC) du jour calendaire courant en France.
@@ -32,14 +34,15 @@ function resolvePeriodDates(period) {
   const now = new Date();
 
   if (period.startDate && period.endDate && !period.preset) {
+    // Dates validées (format, jour réel, bornes, durée) avant tout calcul.
     // Date du picker (YYYY-MM-DD) parsée à minuit UTC → étendre à la fin
     // de journée pour que la borne de fin soit inclusive.
-    const endDate = new Date(period.endDate);
+    const { startDate, endDate } = validateDayPeriod(
+      period.startDate,
+      period.endDate,
+    );
     endDate.setUTCHours(23, 59, 59, 999);
-    return {
-      startDate: new Date(period.startDate),
-      endDate,
-    };
+    return { startDate, endDate };
   }
 
   const endDate = endOfCurrentDay(now);
@@ -176,7 +179,9 @@ async function getAccountsBalance(
   accountId,
   { excludeManual = false } = {},
 ) {
-  const filter = { workspaceId };
+  // Un compte déconnecté n'est plus synchronisé : son dernier solde connu
+  // ne compte plus dans la trésorerie.
+  const filter = { workspaceId, status: { $ne: "disconnected" } };
   if (accountId) Object.assign(filter, accountLookup(accountId));
 
   const accountsPromise = AccountBanking.find(filter).lean();
@@ -401,6 +406,17 @@ const dashboardAggregationResolvers = {
             workspaceId,
             accountId,
           );
+        } else {
+          // La courbe part du solde des comptes connectés : les transactions
+          // conservées d'un compte déconnecté (hors de ce solde) en sont
+          // écartées.
+          const disconnected = await AccountBanking.distinct("externalId", {
+            workspaceId,
+            status: "disconnected",
+          });
+          if (disconnected.length > 0) {
+            matchFilter.fromAccount = { $nin: disconnected };
+          }
         }
         // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
         // pour que le graph suive uniquement le solde des comptes connectés.
@@ -437,6 +453,11 @@ const dashboardAggregationResolvers = {
         const daysDiff = Math.ceil(
           (endDate - startDate) / (1000 * 60 * 60 * 24),
         );
+        if (!(daysDiff >= 0 && daysDiff <= MAX_PERIOD_DAYS + 1)) {
+          throw createValidationError(
+            "Période trop longue : 20 ans au maximum",
+          );
+        }
         const dataPoints = [];
         for (let i = 0; i <= daysDiff; i++) {
           const d = new Date(startDate);

@@ -6,6 +6,7 @@ import DeliveryNote from "../models/DeliveryNote.js";
 import CreditNote from "../models/CreditNote.js";
 import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
+import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
 import { publishEmailTrackingUpdate } from "../resolvers/documentEmail.js";
 import { markEmailLogOpened } from "../services/documentEmailLogService.js";
 import {
@@ -14,6 +15,13 @@ import {
 } from "../services/documentAutomationService.js";
 
 const router = express.Router();
+
+// Nom de fichier du PDF servi inline (préfixe-numéro, caractères sûrs)
+const pdfBaseName = (doc) =>
+  `${doc.prefix ? `${doc.prefix}-` : ""}${doc.number || doc._id}`.replace(
+    /[^\w.-]/g,
+    "_",
+  );
 
 // Image GIF transparente 1x1 pixel
 const TRANSPARENT_PIXEL = Buffer.from(
@@ -182,6 +190,25 @@ router.get("/click/:token", async (req, res) => {
     logger.warn(`[EmailTracking] Erreur tracking clic: ${error.message}`);
   }
 
+  // Document finalisé : servir son PDF archivé (version légale), prioritaire
+  // sur la copie en cache.
+  if (foundDoc && foundDoc.status !== "DRAFT" && foundDoc.archivedPdfKey) {
+    try {
+      const archived = await readArchivedDocumentPdf(foundType, foundDoc);
+      if (archived?.length) {
+        res.set({
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${pdfBaseName(foundDoc)}.pdf"`,
+        });
+        return res.send(archived);
+      }
+    } catch (error) {
+      logger.warn(
+        `[EmailTracking] PDF archivé illisible, repli sur le cache: ${error.message}`,
+      );
+    }
+  }
+
   if (redirectUrl) {
     return res.redirect(302, redirectUrl);
   }
@@ -208,12 +235,9 @@ router.get("/click/:token", async (req, res) => {
           ),
         );
 
-        const baseName = `${foundDoc.prefix ? `${foundDoc.prefix}-` : ""}${
-          foundDoc.number || foundDoc._id
-        }`.replace(/[^\w.-]/g, "_");
         res.set({
           "Content-Type": "application/pdf",
-          "Content-Disposition": `inline; filename="${baseName}.pdf"`,
+          "Content-Disposition": `inline; filename="${pdfBaseName(foundDoc)}.pdf"`,
         });
         return res.send(pdfBuffer);
       }

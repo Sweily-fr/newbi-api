@@ -1,5 +1,6 @@
 import logger from "../../../utils/logger.js";
 import { BankingProvider } from "../interfaces/BankingProvider.js";
+import { createKeptTransactionAdopter } from "../keptTransactions.js";
 import axios from "axios";
 import {
   repointTransactionReferences,
@@ -608,25 +609,41 @@ export class BridgeProvider extends BankingProvider {
       );
 
       // Récupérer les comptes explicitement déconnectés par l'utilisateur
-      // pour ne pas les réactiver lors de la sync
+      // pour ne pas les réactiver lors de la sync de la même connexion
+      // (item). Une nouvelle connexion qui renverrait le même compte le
+      // réactive.
       const disconnectedAccounts = await AccountBanking.find({
         workspaceId: workspaceStringId,
         provider: this.name,
         status: "disconnected",
-      }).select("externalId");
-      const disconnectedExternalIds = new Set(
-        disconnectedAccounts.map((a) => a.externalId),
+      }).select("externalId raw.item_id");
+      const disconnectedItemByExternalId = new Map(
+        disconnectedAccounts.map((a) => [
+          a.externalId,
+          a.raw?.item_id != null ? String(a.raw.item_id) : null,
+        ]),
       );
+      const isDisconnectedHere = (accountData) => {
+        if (!disconnectedItemByExternalId.has(accountData.externalId)) {
+          return false;
+        }
+        const item = disconnectedItemByExternalId.get(accountData.externalId);
+        const incomingItem =
+          accountData.raw?.item_id != null
+            ? String(accountData.raw.item_id)
+            : null;
+        return item === null || incomingItem === null || item === incomingItem;
+      };
 
-      if (disconnectedExternalIds.size > 0) {
+      if (disconnectedItemByExternalId.size > 0) {
         logger.debug(
-          `⏭️ ${disconnectedExternalIds.size} compte(s) déconnecté(s) seront ignorés lors de la sync`,
+          `⏭️ ${disconnectedItemByExternalId.size} compte(s) déconnecté(s) seront ignorés lors de la sync`,
         );
       }
 
       for (const accountData of accounts) {
         // Ne pas réactiver les comptes que l'utilisateur a déconnectés
-        if (disconnectedExternalIds.has(accountData.externalId)) {
+        if (isDisconnectedHere(accountData)) {
           logger.debug(
             `⏭️ Compte ignoré (déconnecté par l'utilisateur): ${accountData.name} (${accountData.externalId})`,
           );
@@ -991,13 +1008,23 @@ export class BridgeProvider extends BankingProvider {
       // Pas besoin de conversion en ObjectId
       const workspaceStringId = workspaceId.toString();
 
+      // Reprise des transactions conservées d'un compte déconnecté puis
+      // reconnecté (nouveaux identifiants chez le prestataire)
+      const adoptKeptTransaction = createKeptTransactionAdopter({
+        workspaceId: workspaceStringId,
+        provider: this.name,
+      });
+
       for (const transactionData of transactions) {
         // Vérifier si la transaction existe déjà (pour ne pas écraser un PCG manuel)
-        const existing = await Transaction.findOne({
+        let existing = await Transaction.findOne({
           externalId: transactionData.externalId,
           workspaceId: workspaceStringId,
           provider: this.name,
         });
+        if (!existing) {
+          existing = await adoptKeptTransaction(transactionData);
+        }
 
         // Respecter le soft-delete: si l'utilisateur a supprimé cette
         // transaction bancaire, on ne la recrée pas lors des syncs suivantes.

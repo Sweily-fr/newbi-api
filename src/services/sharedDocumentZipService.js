@@ -47,6 +47,10 @@ async function getAllSubfolders(
   const folderObjectId = new mongoose.Types.ObjectId(folderId);
   const workspaceObjectId = new mongoose.Types.ObjectId(workspaceId);
 
+  // Dossiers déjà parcourus : un cycle parent/enfant en base ne fait jamais
+  // reparcourir un dossier.
+  const visited = new Set([folderObjectId.toString()]);
+
   async function fetchChildren(parentId) {
     const children = await SharedFolder.find({
       workspaceId: workspaceObjectId,
@@ -55,6 +59,9 @@ async function getAllSubfolders(
     });
 
     for (const child of children) {
+      const key = child._id.toString();
+      if (visited.has(key)) continue;
+      visited.add(key);
       if (!canAccess(child._id)) continue;
       folders.push(child);
       await fetchChildren(child._id);
@@ -85,9 +92,15 @@ async function getAllSubfolders(
  */
 function buildFolderPath(folder, folderMap, rootFolderId) {
   const pathParts = [];
+  const visited = new Set();
   let currentFolder = folder;
 
-  while (currentFolder && currentFolder._id.toString() !== rootFolderId) {
+  while (
+    currentFolder &&
+    currentFolder._id.toString() !== rootFolderId &&
+    !visited.has(currentFolder._id.toString())
+  ) {
+    visited.add(currentFolder._id.toString());
     pathParts.unshift(sanitizeFileName(currentFolder.name));
     currentFolder = folderMap.get(currentFolder.parentId?.toString());
   }
