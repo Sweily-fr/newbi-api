@@ -1,5 +1,6 @@
 import emailReminderService from "./emailReminderService.js";
 import logger from "../utils/logger.js";
+import { escapeHtml } from "../utils/trialEmails.js";
 
 /**
  * Service d'envoi des emails d'invitation à signer un document.
@@ -14,6 +15,12 @@ const NEWBI_LOGO_BLACK =
   "https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_Texte_Black.png";
 const NEWBI_LOGO_PURPLE =
   "https://pub-866a54f5560d449cb224411e60410621.r2.dev/Logo_NI_Purple.png";
+
+// Adresse insérée dans un attribut href ou src : http(s) seulement, échappée
+function safeUrl(value) {
+  const url = String(value ?? "").trim();
+  return /^https?:\/\//i.test(url) ? escapeHtml(url) : "";
+}
 
 /**
  * Gabarit HTML de l'email d'invitation à signer (logo centré, carte blanche,
@@ -32,7 +39,13 @@ function buildSigningEmailHtml({
   // Le bouton passe par le lien tracké (enregistre l'ouverture même quand le
   // client mail bloque les images) ; le lien de secours en clair reste l'URL
   // directe du prestataire pour ne dépendre de l'API sur aucun chemin.
-  const buttonUrl = trackedSigningUrl || signingUrl;
+  // Toutes les valeurs sont échappées avant d'entrer dans le HTML.
+  const buttonUrl = safeUrl(trackedSigningUrl || signingUrl);
+  const directUrl = safeUrl(signingUrl);
+  const pixelUrl = safeUrl(trackingPixelUrl);
+  const safeSignerName = escapeHtml(signerName);
+  const safeCompanyName = escapeHtml(companyName);
+  const safeDocumentNumber = escapeHtml(documentNumber);
   const todayFormatted = new Date().toLocaleDateString("fr-FR", {
     day: "numeric",
     month: "long",
@@ -45,7 +58,7 @@ function buildSigningEmailHtml({
     return `
                 <tr>
                   <td style="padding:6px 0;font-size:14px;color:#6b7280;">${label}</td>
-                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${value}</td>
+                  <td style="padding:6px 0;font-size:14px;color:#1a1a1a;text-align:right;font-weight:${weight};word-break:break-word;">${escapeHtml(value)}</td>
                 </tr>`;
   };
 
@@ -60,10 +73,10 @@ function buildSigningEmailHtml({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Signature du devis ${documentNumber}</title>
+  <title>Signature du devis ${safeDocumentNumber}</title>
 </head>
 <body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background-color:#fafafa;color:#1a1a1a;">
-  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${companyName} vous invite à signer le devis ${documentNumber}.</div>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:#fafafa;font-size:1px;line-height:1px;">${safeCompanyName} vous invite à signer le devis ${safeDocumentNumber}.</div>
   <div style="max-width:600px;margin:0 auto;padding:0 20px;background-color:#fafafa;">
 
     <!-- Logo -->
@@ -96,9 +109,9 @@ function buildSigningEmailHtml({
 
       <!-- Message -->
       <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">
-        Bonjour ${signerName},<br><br>
-        <strong style="color:#1a1a1a;">${companyName}</strong> vous invite à signer électroniquement le devis
-        <strong style="color:#1a1a1a;">${documentNumber}</strong>. La signature vaut bon pour accord.
+        Bonjour ${safeSignerName},<br><br>
+        <strong style="color:#1a1a1a;">${safeCompanyName}</strong> vous invite à signer électroniquement le devis
+        <strong style="color:#1a1a1a;">${safeDocumentNumber}</strong>. La signature vaut bon pour accord.
       </div>
 
       <!-- Note niveau de signature -->
@@ -114,7 +127,7 @@ function buildSigningEmailHtml({
 
       <!-- Bouton CTA -->
       <a href="${buttonUrl}" style="display:block;background-color:#1a1a1a;color:#ffffff;text-decoration:none;padding:16px 24px;border-radius:6px;font-weight:500;font-size:15px;text-align:center;">Signer le devis</a>
-      <p style="font-size:12px;color:#9ca3af;margin:16px 0 0 0;text-align:center;line-height:1.6;">Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br><span style="color:#5a50ff;word-break:break-all;">${signingUrl}</span></p>
+      <p style="font-size:12px;color:#9ca3af;margin:16px 0 0 0;text-align:center;line-height:1.6;">Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur :<br><span style="color:#5a50ff;word-break:break-all;">${directUrl}</span></p>
     </div>
 
     <!-- Footer -->
@@ -123,7 +136,7 @@ function buildSigningEmailHtml({
         <img src="${NEWBI_LOGO_PURPLE}" alt="Newbi" style="height:28px;width:auto;">
       </div>
       <p style="font-size:13px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;">Votre gestion, simplifiée.</p>
-      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">Cette demande de signature a été envoyée par ${companyName} depuis Newbi, logiciel de gestion.</p>
+      <p style="font-size:12px;color:#9ca3af;margin:0 0 24px 0;line-height:1.8;">Cette demande de signature a été envoyée par ${safeCompanyName} depuis Newbi, logiciel de gestion.</p>
       <div style="font-size:11px;color:#9ca3af;line-height:1.6;">
         <p style="margin:0 0 4px 0;">SWEILY (SAS),</p>
         <p style="margin:0;">229 rue Saint-Honoré, 75001 Paris, FRANCE</p>
@@ -131,7 +144,7 @@ function buildSigningEmailHtml({
     </div>
 
   </div>
-  ${trackingPixelUrl ? `<img src="${trackingPixelUrl}" width="1" height="1" border="0" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;text-decoration:none;">` : ""}
+  ${pixelUrl ? `<img src="${pixelUrl}" width="1" height="1" border="0" alt="" style="display:block;width:1px;height:1px;border:0;outline:none;text-decoration:none;">` : ""}
 </body>
 </html>`;
 }
