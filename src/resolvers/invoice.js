@@ -1974,9 +1974,11 @@ const invoiceResolvers = {
           // et webhooks SuperPDP.)
           assertNotEInvoiceTransmitted(invoiceData, "invoice");
 
-          // Facture émise : ses articles, ses montants et son client sont
-          // figés (elle se corrige par un avoir). Le brouillon, finalisation
-          // comprise, reste entièrement modifiable.
+          // Facture émise : ses articles, ses montants, son client, ses
+          // coordonnées bancaires et ses mentions sont figés (elle se corrige
+          // par un avoir) ; seuls notes, conditions, présentation et échéance
+          // restent modifiables. Le brouillon, finalisation comprise, reste
+          // entièrement modifiable.
           assertIssuedInvoiceContentUnchanged(invoiceData, input);
 
           // Garde-fou de transition : updateInvoice gère l'édition de contenu
