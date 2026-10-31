@@ -42,6 +42,10 @@ import {
   findPurchaseInvoicesForTransaction,
 } from "../utils/reconciliationMatching.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import {
+  CREDIT_ON_PURCHASE_INVOICE_MESSAGE,
+  hasBankCredit,
+} from "../utils/reconciliationDirection.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
 import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
@@ -1717,6 +1721,13 @@ const purchaseInvoiceResolvers = {
           throw new AppError(
             "Certaines transactions sont introuvables",
             ERROR_CODES.NOT_FOUND,
+          );
+        }
+        // Une facture d'achat est payée par une sortie d'argent.
+        if (await hasBankCredit(transactionIds, workspaceId)) {
+          throw new AppError(
+            CREDIT_ON_PURCHASE_INVOICE_MESSAGE,
+            ERROR_CODES.VALIDATION_ERROR,
           );
         }
 
