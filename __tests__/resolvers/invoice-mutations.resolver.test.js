@@ -558,6 +558,45 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
   });
 });
 
+describe("Invoice Resolver - Query.nextInvoiceNumber (lecture seule)", () => {
+  it("l'aperçu d'un numéro de brouillon ne change ni le compteur ni les brouillons", async () => {
+    await insertInvoice({ status: "PENDING", number: "0001" });
+    await insertInvoice({
+      _id: new mongoose.Types.ObjectId(),
+      status: "DRAFT",
+      number: "DRAFT-0002",
+    });
+    const db = mongoose.connection.db;
+    await db.collection("documentcounters").insertOne({
+      documentType: "invoice",
+      prefix: "F-202604",
+      workspaceId: organizationId.toString(),
+      lastNumber: 1,
+    });
+    const photo = async () =>
+      JSON.stringify([
+        await db.collection("documentcounters").find().toArray(),
+        await db.collection("invoices").find().sort({ _id: 1 }).toArray(),
+      ]);
+    const avant = await photo();
+
+    const read = () =>
+      invoiceResolvers.Query.nextInvoiceNumber(
+        null,
+        {
+          workspaceId: organizationId.toString(),
+          prefix: "F-202604",
+          isDraft: true,
+        },
+        ctx(),
+      );
+    const lectures = [await read(), await read(), await read()];
+
+    expect(lectures).toEqual(["DRAFT-0002", "DRAFT-0002", "DRAFT-0002"]);
+    expect(await photo()).toBe(avant);
+  });
+});
+
 describe("Invoice Resolver - Mutation.createInvoice (statut de création)", () => {
   const resolver = invoiceResolvers.Mutation.createInvoice;
   const input = (status) => ({

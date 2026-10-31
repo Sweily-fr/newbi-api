@@ -31,6 +31,7 @@ import { creditNoteDeletionRefused } from "../utils/issuedInvoiceLock.js";
 import { withDocumentLock } from "../utils/documentLock.js";
 import {
   generateCreditNoteNumber,
+  previewCreditNoteNumber,
   validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -111,6 +112,9 @@ export const calculateCreditNoteTotals = (
 };
 
 const readCreditNotes = requireWorkspaceLevel("creditNotes", "read");
+
+/** Numéro provisoire le temps de valider l'avoir, avant d'attribuer le vrai. */
+const PENDING_NUMBER = "0000";
 
 /** Champs de UpdateCreditNoteInput ignorés : ils viennent de la facture d'origine. */
 const LOCKED_UPDATE_FIELDS = ["client", "companyInfo", "originalInvoiceId"];
@@ -234,13 +238,14 @@ const creditNoteResolvers = {
       );
     }),
 
+    // Lecture seule : aperçu du prochain numéro, sans avancer le compteur
+    // (l'application l'interroge à chaque ouverture de l'écran d'avoir : un
+    // numéro consommé par une lecture laissait un trou dans la séquence)
     nextCreditNoteNumber: readCreditNotes(
-      async (parent, { prefix, isDraft }, { workspaceId }) => {
-        const number = await generateCreditNoteNumber(prefix, {
+      async (parent, { prefix }, { workspaceId }) => {
+        return previewCreditNoteNumber(prefix, {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
-          isDraft: isDraft || false,
         });
-        return number;
       },
     ),
   },
@@ -380,13 +385,6 @@ const creditNoteResolvers = {
                 }
               }
 
-              // Générer le numéro d'avoir
-              const number = await generateCreditNoteNumber(effectivePrefix, {
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                isDraft: false,
-                manualNumber,
-              });
-
               // L'avoir corrige la facture d'origine : même émetteur et même
               // client que la facture, jamais ceux de la saisie. Émetteur :
               // celui figé sur la facture, sinon l'organisation (pas de brouillon
@@ -403,7 +401,8 @@ const creditNoteResolvers = {
               // Créer l'avoir
               const newCreditNote = new CreditNote({
                 ...input,
-                number,
+                // Numéro attribué après la validation (plus bas)
+                number: PENDING_NUMBER,
                 // Fixer le préfixe validé/généré (et pas seulement le défaut du
                 // modèle) pour garantir que le numéro et le préfixe stockés
                 // décrivent la même séquence.
@@ -452,6 +451,17 @@ const creditNoteResolvers = {
                 createdBy: new mongoose.Types.ObjectId(context.user.id),
                 ...totals,
               });
+              // Avoir validé AVANT de consommer un numéro : un avoir refusé
+              // (champ invalide) ne laisse pas de trou dans la séquence.
+              await newCreditNote.validate();
+              newCreditNote.number = await generateCreditNoteNumber(
+                effectivePrefix,
+                {
+                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                  isDraft: false,
+                  manualNumber,
+                },
+              );
               await newCreditNote.save();
               return newCreditNote;
             },

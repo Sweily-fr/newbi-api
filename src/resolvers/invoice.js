@@ -39,6 +39,7 @@ import {
 import { refreshDraftDates } from "../utils/draftDates.js";
 import {
   generateInvoiceNumber,
+  previewInvoiceDraftNumber,
   validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
@@ -862,11 +863,13 @@ const invoiceResolvers = {
         }
 
         if (isDraft) {
+          // Lecture seule : aperçu du numéro de brouillon, sans avancer le
+          // compteur ni renommer un brouillon existant (une lecture qui
+          // consomme un numéro laisse un trou dans la séquence).
           const userObj = await mongoose.model("User").findById(user._id);
           const customPrefix = prefix || userObj?.settings?.invoiceNumberPrefix;
-          return await generateInvoiceNumber(customPrefix, {
+          return await previewInvoiceDraftNumber(customPrefix, {
             workspaceId: workspaceId,
-            isDraft: true,
             userId: user._id,
           });
         }

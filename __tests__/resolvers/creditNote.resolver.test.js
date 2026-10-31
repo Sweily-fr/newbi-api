@@ -494,6 +494,56 @@ describe("CreditNote Resolver — avoirs simultanés", () => {
 });
 
 describe("CreditNote Resolver — numérotation", () => {
+  const smallCredit = (inv, overrides = {}) =>
+    buildCreditNoteInput(inv._id, {
+      prefix: "AV-TEST",
+      items: [{ description: "R", quantity: 1, unitPrice: 10, vatRate: 20 }],
+      ...overrides,
+    });
+
+  it("lire le prochain numéro ne le consomme pas : l'avoir suivant ne saute aucun numéro", async () => {
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    const create = (overrides) =>
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: smallCredit(inv, overrides) },
+        ctx(),
+      );
+    const next = () =>
+      creditNoteResolvers.Query.nextCreditNoteNumber(
+        null,
+        { workspaceId: organizationId.toString(), prefix: "AV-TEST" },
+        ctx(),
+      );
+
+    expect((await create()).number).toBe("0001");
+    const counters = () =>
+      mongoose.connection.db.collection("documentcounters").find().toArray();
+    const avant = JSON.stringify(await counters());
+    expect([await next(), await next(), await next()]).toEqual([
+      "0002",
+      "0002",
+      "0002",
+    ]);
+    expect(JSON.stringify(await counters())).toBe(avant);
+
+    expect((await create()).number).toBe("0002");
+  });
+
+  it("un avoir refusé à l'enregistrement ne consomme pas de numéro", async () => {
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    const create = (overrides) =>
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: smallCredit(inv, overrides) },
+        ctx(),
+      );
+
+    expect((await create()).number).toBe("0001");
+    await expect(create({ refundMethod: "INCONNU" })).rejects.toThrow();
+    expect((await create()).number).toBe("0002");
+  });
+
   it("accepte un avoir 0001 sous deux préfixes mensuels distincts la même année (index avec prefix)", async () => {
     // Le bug d'origine : l'index unique (number, workspaceId, issueYear) sans
     // prefix rejetait le 2e "0001" d'une même année alors que le préfixe
