@@ -549,6 +549,7 @@ router.post(
           const bridgeAccounts = await AccountBanking.find({
             workspaceId,
             provider: "bridge",
+            status: { $ne: "disconnected" },
           }).select("raw.item_id");
           const uniqueItemIds = [
             ...new Set(
