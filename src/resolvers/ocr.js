@@ -87,121 +87,133 @@ const ocrResolvers = {
             .update(fileBuffer)
             .digest("hex");
 
-          // Vérifier le cache Redis
+          // Cache Redis : seule l'extraction (texte, données lues) est
+          // partagée entre deux envois du même fichier. Le fichier lui-même
+          // est toujours rangé dans l'espace de l'appelant : une URL ou un
+          // identifiant d'un autre espace, ou d'un fichier supprimé depuis,
+          // n'est jamais renvoyé.
           const cached = await ocrCacheService.get(contentHash);
-          if (cached) {
-            logger.debug(`💾 OCR Cache HIT pour ${filename} — retour immédiat`);
-            return cached;
-          }
-
-          // Convertir en base64 pour Claude Vision
-          const base64Data = fileBuffer.toString("base64");
+          const cachedOcr = cached?.ocr || null;
 
           let rawResult;
           let structuredResult;
           let financialAnalysis;
           let usedFallback = false;
 
-          // Tentative 1: OCR direct via Claude Vision
-          try {
-            logger.debug(`🔍 OCR direct (processFromBase64) pour ${filename}`);
-            rawResult = await claudeVisionOcrService.processFromBase64(
-              base64Data,
-              mimetype,
-              filename,
-              contentHash,
-              { useBatchModel: true },
-            );
-
-            if (!rawResult.success) {
-              throw new Error(
-                rawResult.error || rawResult.message || "OCR échoué",
-              );
-            }
-
-            // Formater les données structurées
-            structuredResult =
-              claudeVisionOcrService.toInvoiceFormat(rawResult);
-            financialAnalysis = {
-              transaction_data: structuredResult.transaction_data,
-              extracted_fields: structuredResult.extracted_fields,
-              document_analysis: structuredResult.document_analysis,
-            };
-          } catch (claudeError) {
-            // Tentative 2: Fallback — upload Cloudflare + OCR hybride (Mistral, etc.)
-            console.warn(`⚠️ Claude Vision échoué: ${claudeError.message}`);
-            logger.debug(
-              `🔄 Fallback: upload Cloudflare + OCR hybride pour ${filename}`,
-            );
-
+          if (cachedOcr) {
+            logger.debug(`💾 OCR Cache HIT pour ${filename}`);
+            ({ rawResult, structuredResult, financialAnalysis } = cachedOcr);
+          } else {
+            // Tentative 1: OCR direct via Claude Vision
             try {
-              // Utiliser organizationId du contexte GraphQL (header x-organization-id)
-              const fallbackOrgId = contextOrgId || null;
-
-              // Upload vers Cloudflare pour obtenir une URL publique
-              const uploadResult = await cloudflareService.uploadImage(
-                fileBuffer,
+              // Convertir en base64 pour Claude Vision
+              const base64Data = fileBuffer.toString("base64");
+              logger.debug(
+                `🔍 OCR direct (processFromBase64) pour ${filename}`,
+              );
+              rawResult = await claudeVisionOcrService.processFromBase64(
+                base64Data,
+                mimetype,
                 filename,
-                user.id,
-                "ocr",
-                fallbackOrgId,
+                contentHash,
+                { useBatchModel: true },
               );
 
-              if (!uploadResult?.url) {
-                throw new Error("Échec upload Cloudflare");
+              if (!rawResult.success) {
+                throw new Error(
+                  rawResult.error || rawResult.message || "OCR échoué",
+                );
               }
 
-              logger.debug(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
+              // Formater les données structurées
+              structuredResult =
+                claudeVisionOcrService.toInvoiceFormat(rawResult);
+              financialAnalysis = {
+                transaction_data: structuredResult.transaction_data,
+                extracted_fields: structuredResult.extracted_fields,
+                document_analysis: structuredResult.document_analysis,
+              };
+            } catch (claudeError) {
+              // Tentative 2: Fallback — upload Cloudflare + OCR hybride (Mistral, etc.)
+              console.warn(`⚠️ Claude Vision échoué: ${claudeError.message}`);
+              logger.debug(
+                `🔄 Fallback: upload Cloudflare + OCR hybride pour ${filename}`,
+              );
 
-              // OCR via service hybride (Mistral, Google, etc.)
-              const hybridResult =
-                await hybridOcrService.processDocumentFromUrl(
-                  uploadResult.url,
+              try {
+                // Espace validé (argument workspaceId), à défaut l'en-tête
+                const fallbackOrgId = workspaceId || contextOrgId || null;
+
+                // Upload vers Cloudflare pour obtenir une URL publique
+                const uploadResult = await cloudflareService.uploadImage(
+                  fileBuffer,
                   filename,
-                  mimetype,
-                  workspaceId,
+                  user.id,
+                  "ocr",
+                  fallbackOrgId,
                 );
 
-              if (!hybridResult.success) {
-                throw new Error(hybridResult.error || "OCR hybride échoué");
-              }
+                if (!uploadResult?.url) {
+                  throw new Error("Échec upload Cloudflare");
+                }
 
-              // Analyse intelligente si le provider n'est pas Claude
-              if (hybridResult.provider === "claude-vision") {
-                financialAnalysis = {
-                  transaction_data: hybridResult.transaction_data,
-                  extracted_fields: hybridResult.extracted_fields,
-                  document_analysis: hybridResult.document_analysis,
-                };
-              } else {
-                logger.debug("🤖 Analyse intelligente Mistral (fallback)...");
-                financialAnalysis =
-                  await mistralIntelligentAnalysisService.analyzeDocument(
-                    hybridResult,
+                logger.debug(`☁️ Upload Cloudflare OK: ${uploadResult.url}`);
+
+                // OCR via service hybride (Mistral, Google, etc.)
+                const hybridResult =
+                  await hybridOcrService.processDocumentFromUrl(
+                    uploadResult.url,
+                    filename,
+                    mimetype,
+                    workspaceId,
                   );
+
+                if (!hybridResult.success) {
+                  throw new Error(hybridResult.error || "OCR hybride échoué");
+                }
+
+                // Analyse intelligente si le provider n'est pas Claude
+                if (hybridResult.provider === "claude-vision") {
+                  financialAnalysis = {
+                    transaction_data: hybridResult.transaction_data,
+                    extracted_fields: hybridResult.extracted_fields,
+                    document_analysis: hybridResult.document_analysis,
+                  };
+                } else {
+                  logger.debug("🤖 Analyse intelligente Mistral (fallback)...");
+                  financialAnalysis =
+                    await mistralIntelligentAnalysisService.analyzeDocument(
+                      hybridResult,
+                    );
+                }
+
+                rawResult = {
+                  success: true,
+                  extractedText:
+                    hybridResult.extractedText || hybridResult.text,
+                  data: hybridResult.data || {},
+                  provider: hybridResult.provider || "hybrid-fallback",
+                  model: hybridResult.model || "fallback",
+                };
+                structuredResult = {
+                  extracted_fields:
+                    financialAnalysis.extracted_fields ||
+                    hybridResult.structuredData ||
+                    {},
+                };
+                usedFallback = true;
+
+                logger.debug(
+                  `✅ Fallback OCR réussi via ${rawResult.provider}`,
+                );
+              } catch (fallbackError) {
+                console.error(
+                  `❌ Fallback OCR échoué: ${fallbackError.message}`,
+                );
+                throw createInternalServerError(
+                  `Erreur OCR (Claude + fallback): Claude: ${claudeError.message} | Fallback: ${fallbackError.message}`,
+                );
               }
-
-              rawResult = {
-                success: true,
-                extractedText: hybridResult.extractedText || hybridResult.text,
-                data: hybridResult.data || {},
-                provider: hybridResult.provider || "hybrid-fallback",
-                model: hybridResult.model || "fallback",
-              };
-              structuredResult = {
-                extracted_fields:
-                  financialAnalysis.extracted_fields ||
-                  hybridResult.structuredData ||
-                  {},
-              };
-              usedFallback = true;
-
-              logger.debug(`✅ Fallback OCR réussi via ${rawResult.provider}`);
-            } catch (fallbackError) {
-              console.error(`❌ Fallback OCR échoué: ${fallbackError.message}`);
-              throw createInternalServerError(
-                `Erreur OCR (Claude + fallback): Claude: ${claudeError.message} | Fallback: ${fallbackError.message}`,
-              );
             }
           }
 
@@ -223,7 +235,7 @@ const ocrResolvers = {
                 filename,
                 user.id,
                 "ocr",
-                contextOrgId,
+                workspaceId || contextOrgId,
               );
               documentUrl = uploadResult.url;
               cloudflareKey = uploadResult.key;
@@ -291,8 +303,12 @@ const ocrResolvers = {
                 `✅ OCR document sauvegardé (background): ${documentId}`,
               );
 
-              // Cache Redis
-              await ocrCacheService.set(contentHash, response);
+              // Cache Redis : l'extraction seulement, sans URL ni identifiant
+              if (!cachedOcr) {
+                await ocrCacheService.set(contentHash, {
+                  ocr: { rawResult, structuredResult, financialAnalysis },
+                });
+              }
             } catch (err) {
               console.error("❌ Erreur background (save/cache):", err.message);
             }
@@ -362,6 +378,22 @@ const ocrResolvers = {
             throw createValidationError(
               `Type de fichier non supporté: ${mimeType}. ` +
                 "Formats supportés: JPG, PNG, GIF, WebP, PDF, TIFF, BMP",
+            );
+          }
+
+          // URL envoyée par le client : seul un fichier OCR ou justificatif
+          // de cet espace est lu (ni le fichier d'un autre espace, ni une
+          // adresse quelconque). Le cache par URL ne sert donc jamais le
+          // résultat d'un autre espace.
+          if (
+            !cloudflareService.resolveWorkspaceFileUrl(
+              cloudflareUrl,
+              String(workspaceId),
+              ["ocr", "receipt"],
+            )
+          ) {
+            throw createValidationError(
+              "Fichier invalide pour cet espace de travail",
             );
           }
 
