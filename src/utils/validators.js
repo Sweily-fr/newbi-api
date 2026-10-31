@@ -83,15 +83,20 @@ const FULL_NAME_REGEX =
   /^(?![\s\S]*[<>])[\p{L}\p{M}\p{N}\p{P}\p{S}\s]{2,100}$/u;
 
 // Regex pour la validation d'URL
+// Temps de test linéaire en la longueur de la valeur : chaque partie de l'URL
+// ne peut être lue que d'une seule façon (pas de quantificateurs imbriqués
+// qui se recouvrent). Une étiquette de domaine est une lettre ou un chiffre,
+// suivi éventuellement de lettres, chiffres et tirets terminés par une lettre
+// ou un chiffre : mêmes valeurs acceptées qu'auparavant.
 const URL_REGEX = new RegExp(
-  "^(https?:\\/\\/)?" + // protocole
-    "((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|" + // nom de domaine
-    "((\\d{1,3}\\.){3}\\d{1,3}))" + // OU adresse IP
-    "(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*" + // port et chemin
-    "(\\?[;&a-z\\d%_.~+=-]*)?" + // paramètres de requête
-    "(\\#[-a-z\\d_]*)?$",
+  "^(?:https?:\\/\\/)?" + // protocole
+    "(?:(?:[a-z\\d](?:[a-z\\d-]*[a-z\\d])?\\.)+[a-z]{2,}|" + // nom de domaine
+    "(?:\\d{1,3}\\.){3}\\d{1,3})" + // OU adresse IP
+    "(?::\\d+)?(?:\\/[-a-z\\d%_.~+]*)*" + // port et chemin
+    "(?:\\?[;&a-z\\d%_.~+=-]*)?" + // paramètres de requête
+    "(?:#[-a-z\\d_]*)?$", // fragment
   "i",
-); // fragment
+);
 
 // Regex pour la validation de mot de passe fort
 // Au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial

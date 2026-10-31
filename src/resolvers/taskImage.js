@@ -72,6 +72,22 @@ const getEnrichFn = async () => {
 };
 
 /**
+ * 🔐 Supprime le fichier R2 d'une image seulement s'il est rangé sous le
+ * préfixe de cette tâche (`${task._id}/…`) : le bucket kanban est commun à
+ * tous les espaces. Sinon seule l'entrée en base est retirée.
+ */
+const deleteOwnTaskImage = async (task, image) => {
+  const key = typeof image?.key === "string" ? image.key : "";
+  if (key && key.startsWith(`${task._id.toString()}/`)) {
+    await cloudflareService.deleteTaskImage(key);
+    return;
+  }
+  logger.warn(
+    `[TaskImage] Fichier R2 conservé : clé hors du dossier de la tâche ${task._id}`,
+  );
+};
+
+/**
  * Resolvers pour la gestion des images de tâches Kanban
  * Structure Cloudflare: kanban/{taskId}/{userId}/description/{uniqueId}.{ext}
  *                   ou: kanban/{taskId}/{userId}/comments/{commentId}/{uniqueId}.{ext}
@@ -285,8 +301,8 @@ const taskImageResolvers = {
 
         const image = task.images[imageIndex];
 
-        // Supprimer de Cloudflare R2
-        await cloudflareService.deleteTaskImage(image.key);
+        // Supprimer de Cloudflare R2 (fichier de cette tâche seulement)
+        await deleteOwnTaskImage(task, image);
 
         // Supprimer de la base de données
         task.images.splice(imageIndex, 1);
@@ -590,8 +606,8 @@ const taskImageResolvers = {
 
         const image = comment.images[imageIndex];
 
-        // Supprimer de Cloudflare R2
-        await cloudflareService.deleteTaskImage(image.key);
+        // Supprimer de Cloudflare R2 (fichier de cette tâche seulement)
+        await deleteOwnTaskImage(task, image);
 
         // Supprimer de la base de données
         comment.images.splice(imageIndex, 1);

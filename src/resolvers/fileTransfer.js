@@ -27,6 +27,10 @@ import {
   SHARED_DOCUMENTS_BUCKET,
 } from "../services/sharedDocumentZipService.js";
 import { loadSharedFolderAccess } from "../services/sharedFolderAccess.js";
+import {
+  normalizeTransferEmailInput,
+  reserveTransferEmail,
+} from "../utils/transferEmailInput.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -329,8 +333,8 @@ const fileTransferResolvers = {
             isPaymentRequired = false,
             paymentAmount = 0,
             paymentCurrency = "EUR",
-            recipientEmail,
           } = input;
+          const { recipientEmail } = normalizeTransferEmailInput(input);
 
           // Vérifier les options de paiement
           if (isPaymentRequired && (!paymentAmount || paymentAmount <= 0)) {
@@ -509,8 +513,8 @@ const fileTransferResolvers = {
             isPaymentRequired = false,
             paymentAmount = 0,
             paymentCurrency = "EUR",
-            recipientEmail,
           } = input;
+          const { recipientEmail } = normalizeTransferEmailInput(input);
 
           // Vérifier les valeurs
           if (expiryDays <= 0) {
@@ -620,6 +624,11 @@ const fileTransferResolvers = {
               "Veuillez sélectionner au moins un document ou dossier",
             );
           }
+
+          // Destinataire unique et message borné ; e-mails plafonnés par jour
+          const { recipientEmail, message } =
+            normalizeTransferEmailInput(input);
+          if (recipientEmail) await reserveTransferEmail(user.id || user._id);
 
           // Dossiers privés : même visibilité que la page (un dossier ou un
           // document inaccessible est ignoré comme s'il n'existait pas, un
@@ -802,8 +811,6 @@ const fileTransferResolvers = {
 
           // 6. Options du transfert (allowPreview toujours false pour les ZIP depuis docs partagés)
           const expiryDays = input?.expiryDays || 7;
-          const recipientEmail = input?.recipientEmail || null;
-          const message = input?.message || null;
           const notifyOnDownload = input?.notifyOnDownload || false;
           const passwordProtected = input?.passwordProtected || false;
           const password = input?.password || null;

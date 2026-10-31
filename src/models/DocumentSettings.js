@@ -1,6 +1,13 @@
 import mongoose from 'mongoose';
 import { isValidFooterNotes } from '../utils/validators.js';
 
+// Lien des CGV par défaut : protocole facultatif, puis une valeur faite de
+// lettres, chiffres, espaces, « / », « . », « - » et « _ » qui commence par un
+// domaine en minuscules suivi d'un point et de deux lettres ou points.
+// Chaque caractère n'est lu qu'une fois (pas de quantificateurs imbriqués).
+const DEFAULT_TERMS_LINK_REGEX =
+  /^(?:https?:\/\/)?(?=[\da-z.-]+\.[a-z.]{2})[/\w .-]*$/;
+
 /**
  * Schéma pour les paramètres globaux des documents (factures et devis)
  */
@@ -59,7 +66,9 @@ const documentSettingsSchema = new mongoose.Schema({
     validate: {
       validator: function(value) {
         if (!value) return true;
-        return /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([/\w .-]*)*\/?$/.test(value);
+        // Mêmes liens acceptés qu'auparavant (domaine en minuscules, point,
+        // deux lettres ou points, puis chemin), testés en temps linéaire
+        return DEFAULT_TERMS_LINK_REGEX.test(value);
       },
       message: 'Veuillez fournir une URL valide pour le lien des conditions générales'
     }
