@@ -59,6 +59,36 @@ import { computeDocumentTotals } from "../utils/documentTotals.js";
 
 const FINALIZED_DN_STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Date de réception saisie : ni dans le futur, ni avant l'émission du bon.
+ * La date vient d'un champ « jour » (minuit UTC) : un jour de marge de
+ * chaque côté pour les fuseaux horaires. Renvoie le message d'erreur, ou null.
+ */
+const invalidReceptionDate = (value, issueDate) => {
+  if (!value) return null;
+  const receivedAt = new Date(value);
+  if (Number.isNaN(receivedAt.getTime())) {
+    return "La date de réception est invalide.";
+  }
+  if (receivedAt.getTime() > Date.now() + DAY_MS) {
+    return "La date de réception ne peut pas être dans le futur.";
+  }
+  const issuedAt = issueDate ? new Date(issueDate) : null;
+  if (issuedAt && !Number.isNaN(issuedAt.getTime())) {
+    const issueDay = Date.UTC(
+      issuedAt.getUTCFullYear(),
+      issuedAt.getUTCMonth(),
+      issuedAt.getUTCDate(),
+    );
+    if (receivedAt.getTime() < issueDay - DAY_MS) {
+      return "La date de réception ne peut pas précéder l'émission du bon de livraison.";
+    }
+  }
+  return null;
+};
+
 // Un BL n'a pas de réglage d'organisation dédié (pas de « séquence continue »
 // comme les BC) : la numérotation est toujours par préfixe.
 const DN_AUTO_NUMBERING = false;
@@ -1061,10 +1091,13 @@ const deliveryNoteResolvers = {
 
           if (!dn) throw createNotFoundError("Bon de livraison");
 
-          if (dn.status === "DELIVERED") {
-            throw createResourceLockedError(
-              "Bon de livraison",
-              "un bon de livraison livré ne peut pas être supprimé",
+          // Comme l'écran : seul un brouillon se supprime. Un bon émis porte
+          // un numéro de la séquence et a pu partir chez le client.
+          if (dn.status !== "DRAFT") {
+            throw new AppError(
+              "Seuls les brouillons peuvent être supprimés : ce bon de livraison est numéroté.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "deliveryNote", reason: "NUMBERED_DOCUMENT" },
             );
           }
 
@@ -1223,12 +1256,32 @@ const deliveryNoteResolvers = {
 
           if (!dn) throw createNotFoundError("Bon de livraison");
 
-          if (!["PENDING", "SHIPPED", "DELIVERED"].includes(dn.status)) {
+          // Un bon livré garde la preuve de sa réception (réceptionnaire,
+          // signature du client, date), comme l'écran qui ne la propose plus
+          if (dn.status === "DELIVERED") {
+            throw new AppError(
+              "Ce bon de livraison est déjà livré : sa réception ne peut plus être modifiée.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "deliveryNote", reason: "ALREADY_DELIVERED" },
+            );
+          }
+
+          if (!["PENDING", "SHIPPED"].includes(dn.status)) {
             throw createStatusTransitionError(
               "Bon de livraison",
               dn.status,
               "DELIVERED",
             );
+          }
+
+          const receptionDateError = invalidReceptionDate(
+            input.receivedAt,
+            dn.issueDate,
+          );
+          if (receptionDateError) {
+            throw createValidationError(receptionDateError, {
+              receivedAt: receptionDateError,
+            });
           }
 
           if (input.receivedBy !== undefined) dn.receivedBy = input.receivedBy;

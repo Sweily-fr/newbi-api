@@ -57,6 +57,10 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import {
+  assertCreationStatusAllowed,
+  normalizeInputPrefix,
+} from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
@@ -734,6 +738,14 @@ const quoteResolvers = {
             );
           }
 
+          // Accepté, refusé : changement de statut (« Accepter, refuser ») ;
+          // importé : réservé à l'import des devis
+          assertCreationStatusAllowed(context, "quotes", input.status, {
+            issuedStatus: "PENDING",
+            reserved: { IMPORTED: "importé" },
+          });
+          normalizeInputPrefix(input);
+
           logger.debug("🔍 [createQuote] Input received:", {
             prefix: input.prefix,
             number: input.number,
@@ -1111,12 +1123,24 @@ const quoteResolvers = {
           );
         }
 
+        // Comme un bon de livraison annulé, et comme l'écran qui ne propose
+        // plus « Éditer » : un devis refusé reste tel qu'il a été refusé
+        if (quote.status === "CANCELED") {
+          throw new AppError(
+            "Un devis refusé ne peut pas être modifié.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "quote", reason: "CANCELED" },
+          );
+        }
+
         if (quote.convertedToInvoice) {
           throw createResourceLockedError(
             "Devis",
             "un devis converti en facture ne peut pas être modifié",
           );
         }
+
+        normalizeInputPrefix(input);
 
         // Devis envoyé en signature : le client signe la version envoyée.
         // Le modifier exige d'annuler d'abord la demande en cours.
@@ -1502,10 +1526,17 @@ const quoteResolvers = {
         // que soit leur statut, y compris une fois acceptés (COMPLETED).
         const isImportedOrigin = !quote.prefix && Boolean(quote.number);
 
-        if (quote.status === "COMPLETED" && !isImportedOrigin) {
-          throw createResourceLockedError(
-            "Devis",
-            "un devis terminé ne peut pas être supprimé",
+        // Comme l'écran : hors import, seul un brouillon se supprime. Un devis
+        // émis porte un numéro de la séquence et a pu partir chez le client.
+        if (
+          quote.status !== "DRAFT" &&
+          quote.status !== "IMPORTED" &&
+          !isImportedOrigin
+        ) {
+          throw new AppError(
+            "Seuls les brouillons peuvent être supprimés : ce devis est numéroté.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "quote", reason: "NUMBERED_DOCUMENT" },
           );
         }
 

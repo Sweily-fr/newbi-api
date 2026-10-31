@@ -55,6 +55,7 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import { assertCreationStatusAllowed } from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
 /**
@@ -491,6 +492,12 @@ const purchaseOrderResolvers = {
             context.workspaceId,
           );
 
+          // Validé, en cours, livré, annulé : changement de statut
+          // (« Changer le statut »), pas une simple création
+          assertCreationStatusAllowed(context, "purchaseOrders", input.status, {
+            issuedStatus: "CONFIRMED",
+          });
+
           if (!workspaceId) {
             throw new AppError(
               "Aucune organisation spécifiée.",
@@ -753,6 +760,16 @@ const purchaseOrderResolvers = {
             throw createResourceLockedError(
               "Bon de commande",
               "un bon de commande livré ne peut pas être modifié",
+            );
+          }
+
+          // Comme un bon de livraison annulé, et comme l'écran qui ne propose
+          // « Modifier » que pour un brouillon ou un bon confirmé
+          if (po.status === "CANCELED") {
+            throw new AppError(
+              "Un bon de commande annulé ne peut pas être modifié.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "purchaseOrder", reason: "CANCELED" },
             );
           }
 
@@ -1035,10 +1052,13 @@ const purchaseOrderResolvers = {
             throw createNotFoundError("Bon de commande");
           }
 
-          if (po.status === "DELIVERED") {
-            throw createResourceLockedError(
-              "Bon de commande",
-              "un bon de commande livré ne peut pas être supprimé",
+          // Comme l'écran : seul un brouillon se supprime. Un bon émis porte
+          // un numéro de la séquence et a pu partir chez le client.
+          if (po.status !== "DRAFT") {
+            throw new AppError(
+              "Seuls les brouillons peuvent être supprimés : ce bon de commande est numéroté.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "purchaseOrder", reason: "NUMBERED_DOCUMENT" },
             );
           }
 
