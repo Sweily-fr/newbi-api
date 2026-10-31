@@ -9,6 +9,7 @@ import Transaction from "../models/Transaction.js";
 import { findTransactionReceiptFile } from "../utils/transactionReceiptFiles.js";
 import cloudflareService from "../services/cloudflareService.js";
 import logger from "../utils/logger.js";
+import { safeFileHeaders } from "../utils/fileSignature.js";
 import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
@@ -63,7 +64,8 @@ const DOC_CONFIG = {
  * directement : la CSP stricte (frame-src) bloque les iframes vers des
  * domaines externes, l'aperçu passe par le proxy same-origin
  * /api/document-preview qui appelle cette route avec le cookie de session.
- * Auth session/JWT + RBAC (membre de l'org). Affichable en iframe.
+ * Auth session/JWT + RBAC (membre de l'org). Affichable en iframe pour les
+ * PDF et les images, téléchargé pour tout autre contenu.
  */
 router.get("/imported/:docType/:id/file", validateJWT, async (req, res) => {
   try {
@@ -133,27 +135,24 @@ router.get("/imported/:docType/:id/file", validateJWT, async (req, res) => {
       throw error;
     }
 
-    const contentType =
-      object.contentType ||
-      file.mimeType ||
-      file.mimetype ||
-      "application/octet-stream";
-    // Nom de fichier libre (saisi par l'utilisateur à l'import) : le header
-    // n'accepte que du Latin-1 → fallback ASCII + variante UTF-8 (RFC 5987).
+    // Nom de fichier libre (saisi par l'utilisateur à l'import)
     const rawName =
       file.originalFileName ||
       file.originalFilename ||
       file.filename ||
       `${docType}-${doc._id}`;
-    const asciiName =
-      rawName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") ||
-      `${docType}-${doc._id}`;
 
-    res.setHeader("Content-Type", contentType);
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName)}`,
-    );
+    // Type établi d'après le contenu, jamais d'après le type R2 (déduit de
+    // l'extension choisie par le client) ni le type enregistré : seuls les
+    // PDF et les images matricielles s'affichent, le reste se télécharge.
+    const headers = safeFileHeaders({
+      buffer: object.buffer,
+      filename: rawName,
+      frameAncestors: `'self' ${frontendUrl}`,
+    });
+    for (const [name, value] of Object.entries(headers)) {
+      res.setHeader(name, value);
+    }
     return res.send(object.buffer);
   } catch (error) {
     logger.error("[imported-document-file] Erreur:", error);
