@@ -708,6 +708,42 @@ describe("Invoice Resolver - Query.nextInvoiceNumber (lecture seule)", () => {
   });
 });
 
+describe("Invoice Resolver - Mutation.updateInvoice (validateurs du modèle)", () => {
+  it("une mise à jour refusée par la base remet en place les validateurs des coordonnées bancaires", async () => {
+    // updateInvoice retire le temps de l'écriture les validateurs (partagés
+    // par tout le processus) des coordonnées bancaires de l'émetteur : un
+    // validateur témoin vérifie qu'ils reviennent même après une erreur.
+    const path = Invoice.schema.path("companyInfo.bankDetails.iban");
+    const temoin = { validator: () => true, message: "témoin", type: "temoin" };
+    path.validators.push(temoin);
+    try {
+      const { insertedId } = await insertInvoice({
+        status: "DRAFT",
+        number: "DRAFT-0009",
+      });
+
+      await expect(
+        invoiceResolvers.Mutation.updateInvoice(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            input: { footerNotes: "Bas de page \u0001 invalide" },
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow();
+
+      expect(
+        Invoice.schema.path("companyInfo.bankDetails.iban").validators,
+      ).toContain(temoin);
+    } finally {
+      const current = Invoice.schema.path("companyInfo.bankDetails.iban");
+      current.validators = current.validators.filter((v) => v !== temoin);
+    }
+  });
+});
+
 describe("Invoice Resolver - Mutation.createInvoice (statut de création)", () => {
   const resolver = invoiceResolvers.Mutation.createInvoice;
   const input = (status) => ({

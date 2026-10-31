@@ -2703,26 +2703,30 @@ const invoiceResolvers = {
               ).validators = [];
             }
 
-            // Mettre à jour la facture
-            const updatedInvoice = await Invoice.findOneAndUpdate(
-              { _id: id, workspaceId: workspaceId },
-              { $set: updateData },
-              { new: true, runValidators: true },
-            ).populate("createdBy");
-
-            // Rétablir les validateurs
-            if (originalValidate) {
-              Invoice.schema.path("companyInfo.bankDetails.iban").validators =
-                originalValidate;
-            }
-            if (originalValidateBic) {
-              Invoice.schema.path("companyInfo.bankDetails.bic").validators =
-                originalValidateBic;
-            }
-            if (originalValidateBankName) {
-              Invoice.schema.path(
-                "companyInfo.bankDetails.bankName",
-              ).validators = originalValidateBankName;
+            // Mettre à jour la facture. Les validateurs, partagés par tout le
+            // processus, sont rétablis même si la mise à jour échoue (sinon
+            // l'IBAN et le BIC ne seraient plus jamais vérifiés ensuite).
+            let updatedInvoice;
+            try {
+              updatedInvoice = await Invoice.findOneAndUpdate(
+                { _id: id, workspaceId: workspaceId },
+                { $set: updateData },
+                { new: true, runValidators: true },
+              ).populate("createdBy");
+            } finally {
+              if (originalValidate) {
+                Invoice.schema.path("companyInfo.bankDetails.iban").validators =
+                  originalValidate;
+              }
+              if (originalValidateBic) {
+                Invoice.schema.path("companyInfo.bankDetails.bic").validators =
+                  originalValidateBic;
+              }
+              if (originalValidateBankName) {
+                Invoice.schema.path(
+                  "companyInfo.bankDetails.bankName",
+                ).validators = originalValidateBankName;
+              }
             }
 
             if (!updatedInvoice) {
