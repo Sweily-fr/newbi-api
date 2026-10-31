@@ -109,6 +109,8 @@ function comparableCustomFields(list) {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
+// Raison du blocage (même limite que le modèle)
+const BLOCKED_REASON_MAX_LENGTH = 500;
 // Activités que le site ajoute lui-même au journal d'un contact
 const MANUAL_ACTIVITY_TYPES = ["reminder_created"];
 
@@ -773,6 +775,13 @@ const clientResolvers = {
           throw new AppError(
             "Ce client est déjà bloqué",
             ERROR_CODES.BAD_REQUEST,
+          );
+        }
+
+        if (reason && reason.trim().length > BLOCKED_REASON_MAX_LENGTH) {
+          throw new AppError(
+            `La raison du blocage ne peut pas dépasser ${BLOCKED_REASON_MAX_LENGTH} caractères.`,
+            ERROR_CODES.VALIDATION_ERROR,
           );
         }
 
