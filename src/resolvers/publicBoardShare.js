@@ -38,6 +38,55 @@ import {
 const TASK_UPDATED = "TASK_UPDATED";
 const PUBLIC_VISITOR_UPDATED = "PUBLIC_VISITOR_UPDATED";
 
+// Images d'un commentaire de visiteur : celles envoyées par
+// uploadExternalCommentImage pour cette tâche et ce visiteur seulement
+const MAX_VISITOR_COMMENT_IMAGES = 10;
+const VISITOR_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
+// Dossier R2 des images envoyées par un visiteur sur une tâche
+const visitorImagePrefix = (task, visitorEmail) =>
+  `${task._id.toString()}/visitor_${visitorEmail.replace("@", "_at_")}/`;
+
+/**
+ * Images jointes à un commentaire de visiteur, reconstruites côté serveur :
+ * la clé doit se trouver dans le dossier de ce visiteur pour cette tâche,
+ * l'adresse publique est recalculée depuis la clé et le type est limité aux
+ * images acceptées à l'envoi.
+ * @returns {{ images: Array<object> }|{ error: string }}
+ */
+function visitorCommentImages(images, task, visitorEmail) {
+  const list = images || [];
+  if (list.length > MAX_VISITOR_COMMENT_IMAGES) {
+    return {
+      error: `${MAX_VISITOR_COMMENT_IMAGES} images au plus par commentaire`,
+    };
+  }
+  const prefix = visitorImagePrefix(task, visitorEmail);
+  const result = [];
+  for (const img of list) {
+    const key = typeof img?.key === "string" ? img.key : "";
+    if (!key.startsWith(prefix) || key.length > 512) {
+      return { error: "Image invalide : ajoutez-la de nouveau au commentaire" };
+    }
+    result.push({
+      key,
+      url: cloudflareService.getTaskImageUrl(key),
+      fileName: String(img.fileName || "image").slice(0, 255),
+      contentType: VISITOR_IMAGE_TYPES.includes(img.contentType)
+        ? img.contentType
+        : "image/jpeg",
+      uploadedBy: `external_${visitorEmail}`,
+      uploadedAt: new Date(),
+    });
+  }
+  return { images: result };
+}
+
 /**
  * 🔐 Subscriptions côté propriétaire (demandes d'accès, présence des
  * visiteurs) : elles exposent e-mails et noms des visiteurs. Réservées aux
@@ -1407,6 +1456,12 @@ const resolvers = {
           };
         }
 
+        // 🔐 Clés d'images vérifiées, adresses recalculées côté serveur
+        const checkedImages = visitorCommentImages(images, task, visitorEmail);
+        if (checkedImages.error) {
+          return { success: false, message: checkedImages.error };
+        }
+
         // Ajouter le commentaire avec le visitorId pour pouvoir récupérer les infos à jour
         // NE PAS stocker userImage ici car elle peut être en base64 et dépasser la limite MongoDB
         // L'image sera récupérée dynamiquement via enrichTaskWithUserInfo
@@ -1417,14 +1472,7 @@ const resolvers = {
           userEmail: visitorEmail,
           content: trimmedContent,
           isExternal: true,
-          images: (images || []).map((img) => ({
-            key: img.key,
-            url: img.url,
-            fileName: img.fileName,
-            contentType: img.contentType || "image/jpeg",
-            uploadedBy: `external_${visitorEmail}`,
-            uploadedAt: new Date(),
-          })),
+          images: checkedImages.images,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
@@ -2238,11 +2286,12 @@ const resolvers = {
           };
         }
 
-        // Upload vers Cloudflare R2
+        // Upload vers Cloudflare R2, dans le dossier de ce visiteur pour
+        // cette tâche (seul dossier accepté ensuite par addExternalComment)
         const uploadResult = await cloudflareService.uploadTaskImage(
           fileBuffer,
           filename,
-          taskId,
+          task._id.toString(),
           `visitor_${visitorEmail.replace("@", "_at_")}`,
           "comment",
         );
