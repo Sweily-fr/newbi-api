@@ -11,6 +11,11 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
 import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  MAX_RECEIPT_FILES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 import { detectFileType, storedFileName } from "../utils/fileSignature.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
@@ -513,22 +518,27 @@ const bankingResolvers = {
             "application/pdf",
           ];
 
-          const uploadedReceiptFiles = [];
-          // Buffers conservés pour l'OCR (création auto de facture d'achat)
-          const receiptBuffersByKey = {};
+          if (filesArray.length > MAX_RECEIPT_FILES) {
+            return {
+              success: false,
+              message: `${MAX_RECEIPT_FILES} justificatifs au plus par envoi.`,
+              receiptFiles: null,
+              transaction: null,
+            };
+          }
 
+          // 1. Tous les fichiers sont lus (10 Mo au plus chacun, lecture
+          // interrompue au-delà) et contrôlés avant d'en envoyer un seul :
+          // un fichier refusé ne laisse aucun objet orphelin sur R2.
+          const validated = [];
           for (const fileInput of filesArray) {
             const { createReadStream, filename, mimetype } = await fileInput;
 
-            const stream = createReadStream();
-            const chunks = [];
-            for await (const chunk of stream) {
-              chunks.push(chunk);
-            }
-            const fileBuffer = Buffer.concat(chunks);
-            const fileSize = fileBuffer.length;
-
-            if (fileSize > 10 * 1024 * 1024) {
+            const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
+              createReadStream,
+              MAX_RECEIPT_FILE_BYTES,
+            );
+            if (tooLarge) {
               return {
                 success: false,
                 message: `Fichier trop volumineux (${filename}). Maximum 10 Mo.`,
@@ -549,25 +559,42 @@ const bankingResolvers = {
                 transaction: null,
               };
             }
+            validated.push({ filename, fileBuffer, detected });
+          }
 
-            const uploadResult = await cloudflareService.uploadImage(
-              fileBuffer,
-              storedFileName(filename, detected.ext),
-              user._id || user.id,
-              "receipt",
-              workspaceId,
-            );
+          // 2. Envoi sur R2 ; en cas d'échec, les fichiers déjà envoyés
+          // sont retirés.
+          const uploadedReceiptFiles = [];
+          // Buffers conservés pour l'OCR (création auto de facture d'achat)
+          const receiptBuffersByKey = {};
+          try {
+            for (const { filename, fileBuffer, detected } of validated) {
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                storedFileName(filename, detected.ext),
+                user._id || user.id,
+                "receipt",
+                workspaceId,
+              );
 
-            uploadedReceiptFiles.push({
-              url: uploadResult.url,
-              key: uploadResult.key,
-              filename,
-              mimetype: detected.mime,
-              size: fileSize,
-              uploadedAt: new Date(),
-              uploadedBy: String(user._id || user.id),
-            });
-            receiptBuffersByKey[uploadResult.key] = fileBuffer;
+              uploadedReceiptFiles.push({
+                url: uploadResult.url,
+                key: uploadResult.key,
+                filename,
+                mimetype: detected.mime,
+                size: fileBuffer.length,
+                uploadedAt: new Date(),
+                uploadedBy: String(user._id || user.id),
+              });
+              receiptBuffersByKey[uploadResult.key] = fileBuffer;
+            }
+          } catch (uploadError) {
+            for (const uploaded of uploadedReceiptFiles) {
+              await cloudflareService
+                .deleteImage(uploaded.key, cloudflareService.receiptsBucketName)
+                .catch(() => {});
+            }
+            throw uploadError;
           }
 
           const updatedTransaction = await Transaction.findOneAndUpdate(

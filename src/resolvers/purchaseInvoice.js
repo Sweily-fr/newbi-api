@@ -53,6 +53,10 @@ import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconci
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
 import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 
 // Champs historiques de TVA, résumé du détail par taux quand il existe
 const VAT_SCALAR_FIELDS = new Set(["amountHT", "amountTVA", "vatRate"]);
@@ -1414,12 +1418,18 @@ const purchaseInvoiceResolvers = {
         } else if (input.file) {
           // Upload file to Cloudflare
           const { createReadStream, filename } = await input.file;
-          const stream = createReadStream();
-          const chunks = [];
-          for await (const chunk of stream) {
-            chunks.push(chunk);
+          // 10 Mo au plus, comme les autres justificatifs : la lecture
+          // s'arrête au-delà.
+          const { buffer, tooLarge } = await readUploadBounded(
+            createReadStream,
+            MAX_RECEIPT_FILE_BYTES,
+          );
+          if (tooLarge) {
+            throw new AppError(
+              `Fichier trop volumineux (${filename}). Maximum 10 Mo.`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
           }
-          const buffer = Buffer.concat(chunks);
 
           // Justificatif : PDF ou image, reconnu d'après son contenu. Le type
           // enregistré et l'extension du fichier stocké en découlent, jamais

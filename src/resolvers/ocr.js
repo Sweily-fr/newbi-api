@@ -18,6 +18,10 @@ import mistralIntelligentAnalysisService from "../services/mistralIntelligentAna
 import OcrDocument from "../models/OcrDocument.js";
 import crypto from "crypto";
 import {
+  MAX_RECEIPT_FILE_BYTES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
+import {
   createValidationError,
   createInternalServerError,
 } from "../utils/errors.js";
@@ -65,19 +69,12 @@ const ocrResolvers = {
             );
           }
 
-          // Lecture du fichier en mémoire
-          const stream = createReadStream();
-          const chunks = [];
-
-          for await (const chunk of stream) {
-            chunks.push(chunk);
-          }
-
-          const fileBuffer = Buffer.concat(chunks);
-
-          // Validation de la taille (max 10MB)
-          const maxSize = 10 * 1024 * 1024; // 10MB
-          if (fileBuffer.length > maxSize) {
+          // Lecture du fichier en mémoire, interrompue au-delà de 10 Mo
+          const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
+            createReadStream,
+            MAX_RECEIPT_FILE_BYTES,
+          );
+          if (tooLarge) {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
