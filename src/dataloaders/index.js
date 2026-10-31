@@ -6,6 +6,7 @@ import Quote from "../models/Quote.js";
 import Client from "../models/Client.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import DeliveryNote from "../models/DeliveryNote.js";
+import CreditNote from "../models/CreditNote.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Transaction from "../models/Transaction.js";
@@ -159,6 +160,8 @@ export function createDataLoaders() {
           Invoice.distinct("client.id", filter),
           Quote.distinct("client.id", filter),
           PurchaseOrder.distinct("client.id", filter),
+          DeliveryNote.distinct("client.id", filter),
+          CreditNote.distinct("client.id", filter),
         ]);
         for (const id of found.flat()) {
           withDocs.add(workspaceKey(workspaceId, id));

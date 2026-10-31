@@ -4,6 +4,9 @@ import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
+import CreditNote from "../models/CreditNote.js";
+import ClientList from "../models/ClientList.js";
 import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -652,10 +655,39 @@ const clientResolvers = {
           throw createResourceInUseError("client", "bons de commande");
         }
 
+        // Bons de livraison et avoirs : même règle que les autres documents
+        const [deliveryNoteCount, creditNoteCount] = await Promise.all([
+          DeliveryNote.countDocuments({
+            "client.id": id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          }),
+          CreditNote.countDocuments({
+            "client.id": id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          }),
+        ]);
+
+        if (deliveryNoteCount > 0) {
+          throw createResourceInUseError("client", "bons de livraison");
+        }
+
+        if (creditNoteCount > 0) {
+          throw createResourceInUseError("client", "avoirs");
+        }
+
         await Client.deleteOne({
           _id: id,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
+
+        // Retiré des listes de l'espace : leur nombre de contacts reste juste
+        await ClientList.updateMany(
+          {
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            clients: client._id,
+          },
+          { $pull: { clients: client._id } },
+        );
         return true;
       },
     ),
@@ -1128,13 +1160,13 @@ const clientResolvers = {
         return loader.load(workspaceKey(workspaceId, clientId));
       }
 
-      const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
-        Invoice.countDocuments({ "client.id": clientId, workspaceId }),
-        Quote.countDocuments({ "client.id": clientId, workspaceId }),
-        PurchaseOrder.countDocuments({ "client.id": clientId, workspaceId }),
-      ]);
+      const counts = await Promise.all(
+        [Invoice, Quote, PurchaseOrder, DeliveryNote, CreditNote].map((Model) =>
+          Model.countDocuments({ "client.id": clientId, workspaceId }),
+        ),
+      );
 
-      return invoiceCount + quoteCount + purchaseOrderCount > 0;
+      return counts.some((count) => count > 0);
     },
   },
 
