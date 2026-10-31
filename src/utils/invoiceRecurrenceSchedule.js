@@ -134,6 +134,16 @@ export function refreshPrefixDate(prefix, day) {
   return prefix;
 }
 
+/**
+ * Vrai si le préfixe se termine par une date (AAAAMM, MMAAAA, AAAA-MM,
+ * MM-AAAA ou AAAA seule), celle que refreshPrefixDate recale. Un préfixe
+ * sans date (ex. « ACOMPTE ») est un choix de l'utilisateur.
+ */
+export function hasDatePart(prefix) {
+  if (!prefix) return false;
+  return refreshPrefixDate(prefix, "1999-01-01") !== prefix;
+}
+
 /** Écart en jours entre deux dates (émission → échéance de paiement). */
 export function paymentDelayDays(issueDate, dueDate) {
   if (!issueDate || !dueDate) return 30;

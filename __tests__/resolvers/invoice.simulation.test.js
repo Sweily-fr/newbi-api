@@ -310,6 +310,25 @@ describe("Simulation numérotation factures — enchaînements réels", () => {
     await invariants("après finalisation du second brouillon");
   });
 
+  it("valider depuis le panneau garde le préfixe personnalisé du brouillon (comme l'éditeur)", async () => {
+    await createFinalized(await proposedNumber());
+    const draft = await create(
+      null,
+      { input: buildInvoiceInput({ prefix: "ACOMPTE", status: "DRAFT" }) },
+      ctx(),
+    );
+
+    const validated = await changeStatus(
+      null,
+      { id: draft._id.toString(), status: "PENDING" },
+      ctx(),
+    );
+
+    expect(validated.prefix).toBe("ACOMPTE");
+    expect(validated.number).toMatch(/^\d{4}$/);
+    await invariants("validation d'un brouillon au préfixe personnalisé");
+  });
+
   it("deux créations concurrentes sur le même numéro : une seule passe", async () => {
     await createFinalized(await proposedNumber());
     const proposed = await proposedNumber();

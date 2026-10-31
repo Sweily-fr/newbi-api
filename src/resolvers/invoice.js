@@ -38,6 +38,7 @@ import {
   documentFieldsForEditedClient,
 } from "../utils/clientDocumentFields.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import { hasDatePart } from "../utils/invoiceRecurrenceSchedule.js";
 import {
   generateInvoiceNumber,
   previewInvoiceDraftNumber,
@@ -3143,8 +3144,14 @@ const invoiceResolvers = {
                 (invoice.issueDate || new Date()).getMonth() + 1,
               ).padStart(2, "0");
 
+              // Préfixe personnalisé du brouillon (sans date, ex. ACOMPTE) :
+              // gardé, comme le fait l'éditeur. Valider depuis le panneau
+              // ou depuis l'éditeur donne la même séquence. Préfixe daté
+              // ou absent : celui de la dernière facture émise.
               let prefix;
-              if (lastInvoice && lastInvoice.prefix) {
+              if (draftPrefix && !hasDatePart(draftPrefix)) {
+                prefix = draftPrefix;
+              } else if (lastInvoice && lastInvoice.prefix) {
                 prefix = lastInvoice.prefix;
               } else {
                 prefix = `F-${month}${year}`;
