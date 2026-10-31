@@ -154,10 +154,32 @@ describe("checkSubscriptionActive — flag OFF (default)", () => {
     expect(_orgFindOne).not.toHaveBeenCalled();
   });
 
-  it("returns silently when orgId is missing (delegated to RBAC)", async () => {
-    await expect(checkSubscriptionActive({})).resolves.toBeUndefined();
+  it("defers the check to RBAC when no workspace is established yet", async () => {
+    const context = {};
+    await expect(checkSubscriptionActive(context)).resolves.toBeUndefined();
     expect(_subFindOne).not.toHaveBeenCalled();
     expect(_orgFindOne).not.toHaveBeenCalled();
+    // Contrôle différé enregistré sur le contexte (repris par withRBAC)
+    expect(Object.getOwnPropertySymbols(context)).toHaveLength(1);
+  });
+
+  it("checks every workspace named by the headers before RBAC", async () => {
+    const OTHER_ORG_ID = "b".repeat(24);
+    _subFindOne.mockImplementation(async ({ referenceId }) =>
+      referenceId === OTHER_ORG_ID
+        ? { status: "unpaid" }
+        : { status: "active" },
+    );
+    await expect(
+      checkSubscriptionActive({
+        req: {
+          headers: {
+            "x-workspace-id": VALID_ORG_ID,
+            "x-organization-id": OTHER_ORG_ID,
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: ERROR_CODES.SUBSCRIPTION_READ_ONLY });
   });
 });
 

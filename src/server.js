@@ -544,10 +544,11 @@ async function startServer() {
           }, Organization: ${organizationId}, Role: ${userRole}`,
         );
 
+        // workspaceId n'est posé qu'une fois l'appartenance vérifiée
+        // (withRBAC, withWorkspace) : checkSubscriptionActive s'y fie
         return {
           req,
           user,
-          workspaceId: user?.workspaceId,
           organizationId,
           userRole,
           db: mongoose.connection.db,
