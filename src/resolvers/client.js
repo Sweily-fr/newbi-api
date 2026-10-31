@@ -30,6 +30,7 @@ import { buildSearchRegex } from "../utils/searchRegex.js";
 import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import { sanitizeRichText } from "../utils/richText.js";
 import { boundedPage } from "../utils/pageBounds.js";
+import { assertCustomFieldValues } from "../utils/customFieldValues.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -252,6 +253,16 @@ const clientResolvers = {
           throw createAlreadyExistsError("client", "email", input.email);
         }
 
+        // Valeurs des champs personnalisés : champs de l'espace, bon format
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ClientCustomField.find({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            }).lean(),
+          );
+        }
+
         // Validation et traitement spécifique selon le type de client
         let clientData = { ...input };
 
@@ -371,6 +382,18 @@ const clientResolvers = {
           if (existingClient) {
             throw createAlreadyExistsError("client", "email", input.email);
           }
+        }
+
+        // Valeurs des champs personnalisés modifiées : champs de l'espace,
+        // bon format (les valeurs déjà enregistrées ne sont pas recontrôlées)
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ClientCustomField.find({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            }).lean(),
+            client.customFields,
+          );
         }
 
         // Validation et traitement spécifique selon le type de client

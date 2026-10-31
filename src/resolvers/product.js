@@ -3,6 +3,8 @@ import Product from "../models/Product.js";
 import cloudflareService from "../services/cloudflareService.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import { boundedPage } from "../utils/pageBounds.js";
+import { assertCustomFieldValues } from "../utils/customFieldValues.js";
+import ProductCustomField from "../models/ProductCustomField.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   isAcceptedProductImage,
@@ -264,6 +266,14 @@ const productResolvers = {
         { workspaceId },
       );
 
+      // Valeurs des champs personnalisés : champs de l'espace, bon format
+      if (input.customFields?.length) {
+        assertCustomFieldValues(
+          input.customFields,
+          await ProductCustomField.find({ workspaceId }).lean(),
+        );
+      }
+
       const product = new Product({
         ...input,
         linkedProducts,
@@ -302,6 +312,18 @@ const productResolvers = {
           if (existingProduct) {
             throw createAlreadyExistsError("produit", "nom", input.name);
           }
+        }
+
+        // Valeurs des champs personnalisés modifiées : champs de l'espace,
+        // bon format
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ProductCustomField.find({
+              workspaceId: contextWorkspaceId,
+            }).lean(),
+            product.customFields,
+          );
         }
 
         if (input.linkedProducts !== undefined) {
