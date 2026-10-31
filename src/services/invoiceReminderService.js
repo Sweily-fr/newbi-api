@@ -1,10 +1,7 @@
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
-import {
-  fullyCreditedInvoiceIds,
-  isInvoiceFullyCredited,
-} from "../utils/invoiceCredit.js";
+import { fullyCreditedInvoiceIds } from "../utils/invoiceCredit.js";
 import Client from "../models/Client.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
