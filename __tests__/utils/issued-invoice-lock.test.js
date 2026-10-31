@@ -3,6 +3,7 @@ import {
   assertInvoiceDeletable,
   assertIssuedInvoiceContentUnchanged,
   creditNoteDeletionRefused,
+  ISSUED_INVOICE_EDITABLE_FIELDS,
   ISSUED_INVOICE_LOCKED_FIELDS,
 } from "../../src/utils/issuedInvoiceLock.js";
 
@@ -54,6 +55,36 @@ describe("assertIssuedInvoiceContentUnchanged", () => {
         },
       ),
     ).not.toThrow();
+  });
+
+  it("refuse IBAN, mentions et date d'émission d'une facture émise", () => {
+    for (const status of ["PENDING", "COMPLETED", "OVERDUE"]) {
+      for (const input of [
+        { bankDetails: { iban: "FR7612739000706541765734534" } },
+        { showBankDetails: true },
+        { issueDate: "2026-01-01" },
+        { operationType: "SERVICES" },
+        { purchaseOrderNumber: "BC-2" },
+        { customFields: [] },
+      ]) {
+        expect(
+          () => assertIssuedInvoiceContentUnchanged({ status }, input),
+          `${Object.keys(input)[0]} sur une facture ${status}`,
+        ).toThrow(/Corrigez-la par un avoir/);
+      }
+    }
+  });
+
+  it("refuse aussi un champ absent de la liste des champs modifiables", () => {
+    expect(() =>
+      assertIssuedInvoiceContentUnchanged(
+        { status: "PENDING" },
+        { champFutur: "valeur" },
+      ),
+    ).toThrow(/Corrigez-la par un avoir/);
+    for (const field of ISSUED_INVOICE_EDITABLE_FIELDS) {
+      expect(ISSUED_INVOICE_LOCKED_FIELDS).not.toContain(field);
+    }
   });
 
   it("liste tous les champs refusés", () => {

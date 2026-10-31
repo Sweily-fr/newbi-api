@@ -27,6 +27,8 @@ import {
   signatureChannel,
 } from "../services/esignaturePubsub.js";
 import { getPubSub } from "../config/redis.js";
+import { normalizeSigners } from "../utils/signatureSigners.js";
+import { quoteContentHash } from "../utils/quoteContentHash.js";
 
 /**
  * Espace d'un document suivi par signatureStatusUpdated : celui de sa
@@ -332,7 +334,7 @@ const esignatureResolvers = {
           documentType,
           documentId,
           signatureType = "SES",
-          signers,
+          signers: rawSigners,
           title,
           signatureMode,
           documentBase64,
@@ -368,6 +370,9 @@ const esignatureResolvers = {
             ERROR_CODES.VALIDATION_ERROR,
           );
         }
+
+        // 1 à 5 signataires, prénom, nom et adresse e-mail valides et distincts
+        const signers = normalizeSigners(rawSigners);
 
         // Signature qualifiée : offre Entreprise seulement
         if (signatureType === "QES_otp") {
@@ -451,6 +456,9 @@ const esignatureResolvers = {
           documentType,
           documentId,
           documentNumber: document.number || null,
+          // Version du devis envoyée : l'acceptation automatique à la
+          // signature exige la même version
+          documentHash: quoteContentHash(document),
           signatureType,
           status: "PENDING",
           signers: signers.map((s) => ({
@@ -591,11 +599,15 @@ const esignatureResolvers = {
               ) ||
               apiSigners[i] ||
               {};
+            // L'URL générale de la demande ne sert qu'à un signataire unique :
+            // chaque signataire ne reçoit que son propre lien
             return {
               email: s.email,
               name: s.name,
               surname: s.surname,
-              url: match.url || signatureRequest.signingUrl,
+              url:
+                match.url ||
+                (signers.length === 1 ? signatureRequest.signingUrl : null),
             };
           });
 

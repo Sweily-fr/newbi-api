@@ -480,7 +480,11 @@ const clientResolvers = {
           throw error;
         }
 
-        // Synchroniser tous les documents non finalisés qui référencent ce client
+        // Synchroniser les BROUILLONS qui référencent ce client. Un document
+        // émis (facture, devis, bon de commande hors brouillon) garde le
+        // client figé à son émission. Mise à jour champ par champ : les
+        // autres données du client figé (champs « sur les documents »…)
+        // restent en place.
         if (changes.length > 0) {
           const clientSnapshot = {
             id: client._id.toString(),
@@ -496,46 +500,31 @@ const clientResolvers = {
             siret: client.siret,
             vatNumber: client.vatNumber,
           };
+          const snapshotUpdate = { $set: {}, $unset: {} };
+          for (const [key, value] of Object.entries(clientSnapshot)) {
+            if (value === undefined)
+              snapshotUpdate.$unset[`client.${key}`] = "";
+            else snapshotUpdate.$set[`client.${key}`] = value;
+          }
+          if (!Object.keys(snapshotUpdate.$unset).length) {
+            delete snapshotUpdate.$unset;
+          }
 
           const wsId = new mongoose.Types.ObjectId(workspaceId);
           const clientId = client._id.toString();
-          const clientFilter = { "client.id": clientId, workspaceId: wsId };
-
-          // Log pour debug
-          const [quotesCount, invoicesCount, poCount] = await Promise.all([
-            Quote.countDocuments(clientFilter),
-            Invoice.countDocuments(clientFilter),
-            PurchaseOrder.countDocuments(clientFilter),
-          ]);
-          logger.debug(
-            `[updateClient] Sync documents pour client ${clientId}: ${quotesCount} devis, ${invoicesCount} factures, ${poCount} BC`,
-          );
+          const draftFilter = {
+            "client.id": clientId,
+            workspaceId: wsId,
+            status: "DRAFT",
+          };
 
           const results = await Promise.all([
-            // Devis : tous sauf ACCEPTED (signé = figé)
-            Quote.updateMany(
-              {
-                ...clientFilter,
-                status: { $nin: ["ACCEPTED", "REFUSED", "EXPIRED"] },
-              },
-              { $set: { client: clientSnapshot } },
-            ),
-            // Factures : tous sauf COMPLETED/PAID (envoyé/payé = figé)
-            Invoice.updateMany(
-              {
-                ...clientFilter,
-                status: { $nin: ["COMPLETED", "PAID", "OVERDUE"] },
-              },
-              { $set: { client: clientSnapshot } },
-            ),
-            // Bons de commande : tous sauf DELIVERED (livré = figé)
-            PurchaseOrder.updateMany(
-              { ...clientFilter, status: { $nin: ["DELIVERED"] } },
-              { $set: { client: clientSnapshot } },
-            ),
+            Quote.updateMany(draftFilter, snapshotUpdate),
+            Invoice.updateMany(draftFilter, snapshotUpdate),
+            PurchaseOrder.updateMany(draftFilter, snapshotUpdate),
           ]);
           logger.debug(
-            `[updateClient] Résultat sync: devis=${results[0].modifiedCount}, factures=${results[1].modifiedCount}, BC=${results[2].modifiedCount}`,
+            `[updateClient] Brouillons synchronisés pour le client ${clientId}: devis=${results[0].modifiedCount}, factures=${results[1].modifiedCount}, BC=${results[2].modifiedCount}`,
           );
         }
 

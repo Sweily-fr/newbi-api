@@ -99,5 +99,8 @@ extend type Mutation {
   updateCrmEmailAutomation(workspaceId: ID!, id: ID!, input: UpdateCrmEmailAutomationInput!): CrmEmailAutomation!
   deleteCrmEmailAutomation(workspaceId: ID!, id: ID!): Boolean!
   toggleCrmEmailAutomation(workspaceId: ID!, id: ID!): CrmEmailAutomation!
-  testCrmEmailAutomation(workspaceId: ID!, id: ID!, testEmail: String!): Boolean!
+  """
+  Envoie un e-mail de test de l'automatisation à l'adresse du compte connecté.
+  """
+  testCrmEmailAutomation(workspaceId: ID!, id: ID!): Boolean!
 }

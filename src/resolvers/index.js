@@ -1,4 +1,5 @@
 import { mergeResolvers } from "@graphql-tools/merge";
+import { clearPendingSubscriptionCheck } from "../middlewares/rbac.js";
 import userResolvers from "./user.js";
 import subscriptionResolvers from "./subscription.js";
 import invoiceResolvers from "./invoice.js";
@@ -6,7 +7,6 @@ import quoteResolvers from "./quote.js";
 import creditNoteResolvers from "./creditNote.js";
 import clientResolvers from "./client.js";
 import productResolvers from "./product.js";
-import contactResolvers from "./contact.js";
 import companySearchResolvers from "./companySearch.js";
 import emailSignatureResolvers from "./emailSignature.js";
 import emailSignatureV2Resolvers from "./emailSignatureV2.js";
@@ -88,7 +88,6 @@ const resolvers = mergeResolvers([
   clientResolvers,
   clientListResolvers,
   productResolvers,
-  contactResolvers,
   companySearchResolvers,
   emailSignatureResolvers,
   emailSignatureV2Resolvers,
@@ -158,5 +157,19 @@ const resolvers = mergeResolvers([
   socialPublishingResolvers,
   appointmentsResolvers,
 ]);
+
+// Contrôle d'abonnement différé (checkSubscriptionActive) : propre à chaque
+// mutation, jamais repris par la suivante d'une même opération
+resolvers.Mutation = Object.fromEntries(
+  Object.entries(resolvers.Mutation || {}).map(([name, fn]) => [
+    name,
+    typeof fn === "function"
+      ? (parent, args, context, info) => {
+          clearPendingSubscriptionCheck(context);
+          return fn(parent, args, context, info);
+        }
+      : fn,
+  ]),
+);
 
 export default resolvers;

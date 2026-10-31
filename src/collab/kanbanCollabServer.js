@@ -28,7 +28,10 @@ import { generateHTML, generateJSON } from "@tiptap/html";
 import StarterKit from "@tiptap/starter-kit";
 import { Task } from "../models/kanban.js";
 import KanbanCollabDoc from "../models/KanbanCollabDoc.js";
-import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
+import {
+  betterAuthJWTMiddleware,
+  clientIpOf,
+} from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
@@ -180,12 +183,18 @@ export const ydocToHtml = (document) => {
   return normalizeHtml(generateHTML(json, collabExtensions));
 };
 
-const authenticate = async ({ token, documentName, connectionConfig }) => {
+const authenticate = async ({
+  token,
+  documentName,
+  connectionConfig,
+  context,
+}) => {
   try {
     return await authenticateOrThrow({
       token,
       documentName,
       connectionConfig,
+      clientIp: context?.clientIp,
     });
   } catch (error) {
     logger.warn(
@@ -199,6 +208,7 @@ const authenticateOrThrow = async ({
   token,
   documentName,
   connectionConfig,
+  clientIp,
 }) => {
   const taskId = taskIdFromDocumentName(documentName);
   if (!taskId) throw new Error("Document inconnu");
@@ -206,7 +216,9 @@ const authenticateOrThrow = async ({
 
   const fakeReq = {
     headers: { authorization: `Bearer ${token}` },
-    ip: "127.0.0.1",
+    // IP du client (requête d'upgrade) : la limite de débit et le blocage du
+    // validateur JWT restent propres à chaque client
+    ip: clientIp || "unknown",
     get: (h) =>
       h.toLowerCase() === "authorization" ? `Bearer ${token}` : null,
   };
@@ -615,7 +627,9 @@ export const handleCollabConnection = (ws, req) => {
       ),
     },
   );
-  const connection = instance.handleConnection(ws, request);
+  const connection = instance.handleConnection(ws, request, {
+    clientIp: clientIpOf(req),
+  });
   ws.on("message", (data) => {
     connection.handleMessage(
       data instanceof Uint8Array ? data : new Uint8Array(data),

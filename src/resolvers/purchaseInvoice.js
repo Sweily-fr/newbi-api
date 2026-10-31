@@ -12,6 +12,7 @@ import cloudflareService from "../services/cloudflareService.js";
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
+import { detectFileType, storedFileName } from "../utils/fileSignature.js";
 import {
   assertPermissionAction,
   requireAction,
@@ -1394,7 +1395,7 @@ const purchaseInvoiceResolvers = {
           };
         } else if (input.file) {
           // Upload file to Cloudflare
-          const { createReadStream, filename, mimetype } = await input.file;
+          const { createReadStream, filename } = await input.file;
           const stream = createReadStream();
           const chunks = [];
           for await (const chunk of stream) {
@@ -1402,12 +1403,23 @@ const purchaseInvoiceResolvers = {
           }
           const buffer = Buffer.concat(chunks);
 
+          // Justificatif : PDF ou image, reconnu d'après son contenu. Le type
+          // enregistré et l'extension du fichier stocké en découlent, jamais
+          // du nom ni du type annoncés par le client.
+          const detected = detectFileType(buffer);
+          if (!detected) {
+            throw new AppError(
+              `Type de fichier non supporté (${filename}). Formats acceptés : PDF, JPG, PNG, WebP.`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
           // Bucket OCR : même destination que les fichiers issus du flux
           // processDocumentOcr (cohérence des justificatifs de factures
           // d'achat)
           const uploadResult = await cloudflareService.uploadImage(
             buffer,
-            filename,
+            storedFileName(filename, detected.ext),
             context.user.id,
             "ocr",
             workspaceId,
@@ -1416,7 +1428,7 @@ const purchaseInvoiceResolvers = {
           fileData = {
             filename: uploadResult.key || filename,
             originalFilename: filename,
-            mimetype,
+            mimetype: detected.mime,
             path: uploadResult.key,
             size: buffer.length,
             url: uploadResult.url,

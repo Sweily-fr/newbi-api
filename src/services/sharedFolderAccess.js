@@ -12,22 +12,49 @@
 import SharedFolder from "../models/SharedFolder.js";
 
 export function getEffectiveVisibility(folder, folderMap) {
-  if (folder.visibility) {
-    return {
-      visibility: folder.visibility,
-      allowedUserIds: (folder.allowedUserIds || []).map((id) => id.toString()),
-      createdBy: folder.createdBy?.toString(),
-    };
-  }
-  if (folder.parentId) {
-    const parent = folderMap.get(folder.parentId.toString());
-    if (parent) return getEffectiveVisibility(parent, folderMap);
+  // Remontée itérative des parents ; un parent déjà visité (cycle en base)
+  // arrête la remontée comme un dossier racine.
+  const visited = new Set();
+  let current = folder;
+  while (current) {
+    if (current.visibility) {
+      return {
+        visibility: current.visibility,
+        allowedUserIds: (current.allowedUserIds || []).map((id) =>
+          id.toString(),
+        ),
+        createdBy: current.createdBy?.toString(),
+      };
+    }
+    visited.add(String(current._id));
+    const parentKey = current.parentId?.toString();
+    if (!parentKey || visited.has(parentKey)) break;
+    current = folderMap.get(parentKey);
   }
   return {
     visibility: "public",
     allowedUserIds: [],
     createdBy: folder.createdBy?.toString(),
   };
+}
+
+/**
+ * Vrai si `candidateParentId` est le dossier `folderId` lui-même ou l'un de
+ * ses descendants : le déplacer dessous créerait un cycle. Remonte les
+ * parents de `candidateParentId` dans la carte des dossiers de l'espace.
+ */
+export function isFolderOrDescendant(folderMap, folderId, candidateParentId) {
+  if (!folderId || !candidateParentId) return false;
+  const target = String(folderId);
+  const visited = new Set();
+  let key = String(candidateParentId);
+  while (key && !visited.has(key)) {
+    if (key === target) return true;
+    visited.add(key);
+    key = folderMap.get(key)?.parentId?.toString();
+  }
+  // Un cycle déjà présent au-dessus du candidat : on refuse aussi
+  return Boolean(key);
 }
 
 export function canAccessFolder(userId, folder, effectiveVis) {
@@ -51,6 +78,9 @@ export function canAccessFolder(userId, folder, effectiveVis) {
  * - `canTarget(folderId)` : dossier cible fourni par le client (dépôt,
  *   déplacement, dossier parent) : la racine, ou un dossier de l'espace
  *   accessible. Un dossier introuvable (d'un autre espace) est refusé ;
+ * - `parentProblem(folderId, parentId)` : "CYCLE" si `parentId` est le
+ *   dossier lui-même ou un de ses sous-dossiers, "TRASHED" s'il est en
+ *   corbeille, null sinon ;
  * - `inaccessibleFolderIds` : ObjectId des dossiers inaccessibles, pour
  *   exclure leurs éléments d'un filtre ($nin).
  */
@@ -80,11 +110,29 @@ export async function loadSharedFolderAccess(workspaceId, userId) {
   const canTarget = (folderId) =>
     !folderId || (folderMap.has(String(folderId)) && canAccess(folderId));
 
+  // Dossier parent proposé pour `folderId` : ni le dossier lui-même, ni un de
+  // ses sous-dossiers, ni un dossier en corbeille.
+  const parentProblem = (folderId, parentId) => {
+    if (!parentId) return null;
+    const parent = folderMap.get(String(parentId));
+    if (parent?.trashedAt) return "TRASHED";
+    if (folderId && isFolderOrDescendant(folderMap, folderId, parentId)) {
+      return "CYCLE";
+    }
+    return null;
+  };
+
   const inaccessibleFolderIds = folders
     .filter((folder) => !canAccess(folder._id))
     .map((folder) => folder._id);
 
-  return { canAccess, canAccessDocument, canTarget, inaccessibleFolderIds };
+  return {
+    canAccess,
+    canAccessDocument,
+    canTarget,
+    parentProblem,
+    inaccessibleFolderIds,
+  };
 }
 
 /**

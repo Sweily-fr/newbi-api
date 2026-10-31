@@ -760,6 +760,16 @@ describe("connexion des comptes", () => {
 });
 
 describe("limite mensuelle de posts X", () => {
+  // Milieu de mois figé : le dernier jour du mois, « maintenant » et
+  // « demain » (date des posts programmés) tombent dans deux mois différents.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-15T10:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const setPlan = (plan) =>
     mongoose.connection.db
       .collection("subscription")

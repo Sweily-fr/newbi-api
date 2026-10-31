@@ -13,6 +13,7 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Transaction from "../models/Transaction.js";
 import cloudflareService from "./cloudflareService.js";
+import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
 import axios from "axios";
 
 // Suivi de progression en mémoire pour les automatisations en cours
@@ -1387,6 +1388,14 @@ const documentAutomationService = {
       );
     }
 
+    // Le type annoncé doit être celui du déclencheur : il choisit la branche
+    // de lecture du fichier ci-dessous.
+    if (documentType !== config.docType) {
+      throw new Error(
+        "Ce type de document ne correspond pas au déclencheur de l'automatisation",
+      );
+    }
+
     // Le document doit appartenir à l'espace de l'automatisation : documentId
     // vient du client. String() couvre Transaction (workspaceId en chaîne) ;
     // Mongoose convertit pour les modèles en ObjectId.
@@ -1395,6 +1404,27 @@ const documentAutomationService = {
       .lean();
     if (!doc) {
       throw new Error("Document non trouvé");
+    }
+
+    // Un PDF transmis par le navigateur n'est accepté que pour un brouillon,
+    // et seulement pour la copie dans les documents partagés : il ne remplace
+    // jamais le PDF en cache (servi par les e-mails et les intégrations). Un
+    // document finalisé est toujours copié depuis son PDF serveur.
+    const acceptsClientPdf =
+      Boolean(pdfBase64) &&
+      doc.status === "DRAFT" &&
+      ["invoice", "quote", "creditNote", "purchaseOrder"].includes(
+        documentType,
+      );
+    let archivedPdf = null;
+    if (!acceptsClientPdf && doc.status !== "DRAFT") {
+      try {
+        archivedPdf = await readArchivedDocumentPdf(documentType, doc);
+      } catch (archiveError) {
+        logger.warn(
+          `[DocumentAutomation] PDF archivé illisible pour ${documentType} ${documentId}: ${archiveError.message}`,
+        );
+      }
     }
 
     // Récupérer le fichier selon le type de document
@@ -1446,14 +1476,17 @@ const documentAutomationService = {
       fileMimeType = firstReceipt?.mimetype || "application/pdf";
       fileExt = firstReceipt?.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
-    } else if (pdfBase64) {
-      // PDF fourni par le client
+    } else if (acceptsClientPdf) {
+      // PDF d'un brouillon fourni par le client : copie seulement, sans cache
       fileBuffer = Buffer.from(pdfBase64, "base64");
+      if (fileBuffer.subarray(0, 5).toString("latin1") !== "%PDF-") {
+        throw new Error("Le fichier transmis n'est pas un PDF");
+      }
       fileSize = fileBuffer.length;
-      // Cacher le PDF pour les automatisations futures (fire-and-forget)
-      cacheDocumentPdf(documentId, documentType, fileBuffer, workspaceId).catch(
-        () => {},
-      );
+    } else if (archivedPdf?.length) {
+      // Document finalisé : PDF archivé (légal), lu côté serveur
+      fileBuffer = archivedPdf;
+      fileSize = fileBuffer.length;
     } else if (doc.cachedPdf?.key) {
       // Copie R2 serveur-à-serveur depuis le cache (instantanée)
       r2CopySource = {

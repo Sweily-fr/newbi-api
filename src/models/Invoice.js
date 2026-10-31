@@ -450,6 +450,13 @@ const invoiceSchema = new mongoose.Schema(
       default: [],
       index: true,
     },
+    // Posé au premier rattachement : vrai si c'est le rapprochement qui a
+    // passé la facture en « payée », faux si elle l'était déjà. Délier la
+    // dernière transaction ne rétablit « en attente » que dans le premier cas.
+    // Absent sur les liens antérieurs (aucune valeur par défaut).
+    paidByReconciliation: {
+      type: Boolean,
+    },
 
     // === PENNYLANE SYNC ===
     pennylaneId: {
