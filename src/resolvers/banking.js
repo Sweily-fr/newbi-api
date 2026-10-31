@@ -10,6 +10,7 @@ import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
+import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 import { detectFileType, storedFileName } from "../utils/fileSignature.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
@@ -791,10 +792,26 @@ const bankingResolvers = {
             }
           }
 
+          const updatedTransaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { receiptFiles: { _id: fileToRemove._id } } },
+            { new: true },
+          );
+
           // Best-effort suppression R2 (bucket résolu depuis l'URL : les
           // justificatifs vivent dans le bucket receipts, pas le bucket par
-          // défaut)
-          if (deleteR2Object && (fileToRemove.url || fileToRemove.key)) {
+          // défaut), une fois le justificatif retiré. Conservé s'il sert
+          // encore à un autre document : facture d'achat déliée qui garde ce
+          // fichier, autre justificatif.
+          if (
+            deleteR2Object &&
+            (fileToRemove.url || fileToRemove.key) &&
+            !(await isStoredFileReferenced({
+              workspaceId,
+              key: fileToRemove.key,
+              url: fileToRemove.url,
+            }))
+          ) {
             try {
               if (fileToRemove.url) {
                 await cloudflareService.deleteImageByUrl(fileToRemove.url);
@@ -811,12 +828,6 @@ const bankingResolvers = {
               );
             }
           }
-
-          const updatedTransaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId },
-            { $pull: { receiptFiles: { _id: fileToRemove._id } } },
-            { new: true },
-          );
 
           return {
             success: true,

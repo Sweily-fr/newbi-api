@@ -52,6 +52,7 @@ import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
 import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
+import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 
 // Champs historiques de TVA, résumé du détail par taux quand il existe
 const VAT_SCALAR_FIELDS = new Set(["amountHT", "amountTVA", "vatRate"]);
@@ -113,23 +114,29 @@ const assertSupplierInWorkspace = async (supplierId, workspaceId) => {
 };
 
 // Supprime de R2 les fichiers d'une facture d'achat (résolution automatique
-// du bucket depuis l'URL, y compris domaines custom), SAUF ceux partagés avec
-// un justificatif de transaction : une facture créée par OCR depuis un reçu
-// référence le même objet R2 que transaction.receiptFiles — le supprimer
-// casserait le justificatif côté transaction.
-const deletePurchaseInvoiceFilesFromR2 = async (files, workspaceId) => {
-  const { default: Transaction } = await import("../models/Transaction.js");
+// du bucket depuis l'URL, y compris domaines custom), SAUF ceux qu'un autre
+// document de l'espace référence encore : justificatif de transaction (facture
+// créée par OCR depuis un reçu), facture importée convertie, autre facture
+// d'achat. Les factures passées en `excludeInvoiceIds` sont celles qu'on
+// supprime ou dont on retire le fichier.
+const deletePurchaseInvoiceFilesFromR2 = async (
+  files,
+  workspaceId,
+  excludeInvoiceIds = [],
+) => {
   for (const file of files || []) {
     try {
       if (!file.url) continue;
       const resolved = cloudflareService.resolveBucketAndKeyFromUrl(file.url);
       if (!resolved) continue;
 
-      const sharedWithReceipt = await Transaction.exists({
-        workspaceId: String(workspaceId),
-        "receiptFiles.key": resolved.key,
+      const stillUsed = await isStoredFileReferenced({
+        workspaceId,
+        key: resolved.key,
+        url: file.url,
+        excludePurchaseInvoiceIds: excludeInvoiceIds,
       });
-      if (sharedWithReceipt) continue;
+      if (stillUsed) continue;
 
       await cloudflareService.deleteImage(resolved.key, resolved.bucket);
     } catch (err) {
@@ -1086,7 +1093,9 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
-        await deletePurchaseInvoiceFilesFromR2(invoice.files, workspaceId);
+        await deletePurchaseInvoiceFilesFromR2(invoice.files, workspaceId, [
+          invoice._id,
+        ]);
 
         // Détacher les transactions rapprochées (sinon elles restent
         // "matched" avec un id orphelin pour toujours)
@@ -1492,12 +1501,12 @@ const purchaseInvoiceResolvers = {
         if (!file)
           throw new AppError("Fichier non trouvé", ERROR_CODES.NOT_FOUND);
 
-        // Delete from Cloudflare (bucket résolu depuis l'URL, fichiers
-        // partagés avec un justificatif de transaction préservés)
-        await deletePurchaseInvoiceFilesFromR2([file], workspaceId);
-
         invoice.files.pull(fileId);
         await invoice.save();
+
+        // Delete from Cloudflare (bucket résolu depuis l'URL), une fois le
+        // fichier retiré : préservé s'il sert encore à un autre document.
+        await deletePurchaseInvoiceFilesFromR2([file], workspaceId);
         return invoice;
       },
     ),
@@ -1630,8 +1639,13 @@ const purchaseInvoiceResolvers = {
         });
 
         // Delete files
+        const deletedIds = invoices.map((inv) => inv._id);
         for (const inv of invoices) {
-          await deletePurchaseInvoiceFilesFromR2(inv.files, workspaceId);
+          await deletePurchaseInvoiceFilesFromR2(
+            inv.files,
+            workspaceId,
+            deletedIds,
+          );
         }
 
         // Détacher les transactions rapprochées des factures supprimées

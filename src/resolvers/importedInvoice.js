@@ -22,6 +22,7 @@ import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 import {
   createValidationError,
   createNotFoundError,
@@ -1740,7 +1741,14 @@ const importedInvoiceResolvers = {
         const cloudflareKey = invoice.file?.cloudflareKey;
         if (
           cloudflareKey &&
-          String(cloudflareKey).startsWith(`${workspaceId}/`)
+          String(cloudflareKey).startsWith(`${workspaceId}/`) &&
+          // Fichier repris par une facture d'achat (conversion) : conservé
+          !(await isStoredFileReferenced({
+            workspaceId,
+            key: cloudflareKey,
+            url: invoice.file?.url,
+            excludeImportedInvoiceIds: [invoice._id],
+          }))
         ) {
           try {
             await cloudflareService.deleteImage(
@@ -1779,10 +1787,17 @@ const importedInvoiceResolvers = {
         // Supprimer les fichiers PDF sur Cloudflare
         for (const invoice of invoices) {
           const cloudflareKey = invoice.file?.cloudflareKey;
-          // 🔐 Ne supprimer que les objets R2 du préfixe du workspace.
+          // 🔐 Ne supprimer que les objets R2 du préfixe du workspace, et
+          // jamais un fichier repris par une facture d'achat (conversion).
           if (
             cloudflareKey &&
-            String(cloudflareKey).startsWith(`${workspaceId}/`)
+            String(cloudflareKey).startsWith(`${workspaceId}/`) &&
+            !(await isStoredFileReferenced({
+              workspaceId,
+              key: cloudflareKey,
+              url: invoice.file?.url,
+              excludeImportedInvoiceIds: invoices.map((inv) => inv._id),
+            }))
           ) {
             try {
               await cloudflareService.deleteImage(
