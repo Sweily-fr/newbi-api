@@ -43,6 +43,7 @@ import {
   PCG,
 } from "../utils/pcg-mapping.js";
 import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 
 // Droits par module (mêmes choix d'espace que withWorkspace : argument
 // workspaceId d'abord). Transactions, justificatifs, paiements et synchro :
@@ -310,7 +311,8 @@ const bankingResolvers = {
     ),
 
     // Table de correspondance PCG
-    pcgMappingTable: () => {
+    // Référentiel servi aux pages connectées (Analytiques) : session exigée.
+    pcgMappingTable: isAuthenticated(() => {
       return getMappingTable().map((entry) => ({
         bridgeCategoryId: entry.bridgeCategoryId,
         bridgeLabel: entry.bridgeLabel,
@@ -326,12 +328,12 @@ const bankingResolvers = {
           })),
         rules: entry.rules,
       }));
-    },
+    }),
 
     // Liste des comptes PCG disponibles
-    pcgAccounts: () => {
+    pcgAccounts: isAuthenticated(() => {
       return getAllPCGAccounts();
-    },
+    }),
 
     // Historique des transactions
     transactionHistory: readBanking(
