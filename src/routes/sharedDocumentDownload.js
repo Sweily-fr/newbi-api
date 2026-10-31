@@ -22,6 +22,10 @@ import {
 } from "../services/sharedDocumentZipService.js";
 import SharedDocument from "../models/SharedDocument.js";
 import logger from "../utils/logger.js";
+import {
+  filePreviewHeaders,
+  SHARED_PREVIEW_EXTRA_TYPES,
+} from "../utils/fileSignature.js";
 
 // Cache mémoire pour les previews HEIC convertis (LRU simple, max 50 entrées, TTL 30 min)
 const previewCache = new Map();
@@ -654,26 +658,29 @@ router.get("/preview-file/:documentId", async (req, res) => {
 
       res.end(jpegBuffer);
     } else {
-      const contentType = document.originalName?.toLowerCase().endsWith(".pdf")
+      const declaredType = document.originalName?.toLowerCase().endsWith(".pdf")
         ? "application/pdf"
-        : document.mimeType || "application/octet-stream";
+        : document.mimeType;
 
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="${encodeURIComponent(document.originalName || document.name)}"`,
-      );
-      res.setHeader("Content-Type", contentType);
+      // Type annoncé à l'envoi : seuls les formats qui ne s'exécutent pas
+      // (PDF, images matricielles, audio, vidéo, texte brut) sont servis en
+      // ligne, sous ce type exact et sans détection par le navigateur. Le
+      // reste (SVG, HTML, XML…) part en téléchargement.
+      const headers = filePreviewHeaders({
+        contentType: declaredType,
+        filename: document.originalName || document.name,
+        frameAncestors: `'self' ${frontendUrl}`,
+        extraInlineTypes: SHARED_PREVIEW_EXTRA_TYPES,
+      });
+      for (const [name, value] of Object.entries(headers)) {
+        res.setHeader(name, value);
+      }
       if (document.fileSize) {
         res.setHeader("Content-Length", document.fileSize);
       }
       res.setHeader("Cache-Control", "public, max-age=3600");
       res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader(
-        "Content-Security-Policy",
-        `frame-ancestors 'self' ${frontendUrl}`,
-      );
       res.removeHeader("X-Frame-Options");
 
       response.Body.pipe(res);

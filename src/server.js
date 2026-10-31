@@ -65,6 +65,7 @@ import { createGracefulShutdown } from "./utils/gracefulShutdown.js";
 import {
   betterAuthJWTMiddleware,
   validateJWT,
+  clientIpOf,
 } from "./middlewares/better-auth-jwt.js";
 import { betterAuthMiddleware } from "./middlewares/better-auth.js";
 import { touchUserActivity } from "./services/userActivityService.js";
@@ -548,10 +549,11 @@ async function startServer() {
           }, Organization: ${organizationId}, Role: ${userRole}`,
         );
 
+        // workspaceId n'est posé qu'une fois l'appartenance vérifiée
+        // (withRBAC, withWorkspace) : checkSubscriptionActive s'y fie
         return {
           req,
           user,
-          workspaceId: user?.workspaceId,
           organizationId,
           userRole,
           db: mongoose.connection.db,
@@ -595,7 +597,7 @@ async function startServer() {
       schema,
       execute,
       subscribe,
-      onConnect: async (connectionParams, webSocket) => {
+      onConnect: async (connectionParams, webSocket, connectionContext) => {
         logger.info("🔌 [WebSocket] Client connecté");
 
         // Récupérer le token d'authentification depuis les paramètres de connexion
@@ -608,7 +610,9 @@ async function startServer() {
               headers: {
                 authorization: `Bearer ${token}`,
               },
-              ip: "127.0.0.1", // IP par défaut pour WebSocket
+              // IP du client (requête d'upgrade) : la limite de débit et le
+              // blocage du validateur JWT restent propres à chaque client
+              ip: clientIpOf(connectionContext?.request),
               get: (header) => {
                 if (header.toLowerCase() === "authorization") {
                   return `Bearer ${token}`;

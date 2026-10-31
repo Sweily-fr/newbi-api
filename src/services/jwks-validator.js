@@ -16,10 +16,10 @@ class JWKSUnavailableError extends Error {
 }
 
 /**
- * Détecte une IP loopback (dev/local). En dev, le backend redémarre souvent
- * (nodemon) → cache de clés vide → toute rafale pendant le cold-start du JWKS
- * échouait et auto-bloquait `::1`. On n'applique pas le blocage au loopback
- * hors production (en prod l'IP réelle vient de x-forwarded-for, pas du loopback).
+ * Détecte une IP loopback. Elle ne désigne jamais un client : en dev, c'est
+ * le poste local (redémarrages nodemon, cache de clés vide) ; en production,
+ * l'IP réelle vient du proxy, et une adresse loopback ou inconnue signale un
+ * appel interne dont on ignore l'origine.
  */
 function isLoopbackIP(ip) {
   if (!ip) return false;
@@ -31,7 +31,13 @@ function isLoopbackIP(ip) {
   );
 }
 
-const SKIP_LOOPBACK_BLOCK = process.env.NODE_ENV !== "production";
+// IP sans client identifiable : jamais comptée, limitée ni bloquée (un
+// blocage toucherait tous les utilisateurs qui la partagent)
+function isUntrackedIP(ip) {
+  return !ip || ip === "unknown" || isLoopbackIP(ip);
+}
+
+const TRACKING_PRUNE_INTERVAL = 60 * 1000;
 
 class JWKSValidator {
   constructor() {
@@ -51,6 +57,36 @@ class JWKSValidator {
     this.maxRequestsPerMinute = 300; // Augmenté pour éviter les blocages
     this.maxFailedAttempts = 10;
     this.blockDuration = 15 * 60 * 1000; // 15 minutes
+    this.lastTrackingPrune = 0;
+  }
+
+  /**
+   * Retire les compteurs d'IP périmés (croissance mémoire sans fin sinon)
+   */
+  pruneTracking(now = Date.now()) {
+    if (now - this.lastTrackingPrune < TRACKING_PRUNE_INTERVAL) return;
+    this.lastTrackingPrune = now;
+    const windowStart = now - 60000;
+    for (const [ip, times] of this.requestCount) {
+      if (!times.some((time) => time > windowStart)) {
+        this.requestCount.delete(ip);
+      }
+    }
+    for (const [ip, attempt] of this.failedAttempts) {
+      if (now - attempt.lastAttempt > this.blockDuration) {
+        this.failedAttempts.delete(ip);
+      }
+    }
+  }
+
+  /**
+   * Clé de ce kid déjà en cache (y compris le cache étendu de 24 h)
+   */
+  hasCachedKey(kid) {
+    const cached = this.keyCache.get(`jwks_${kid}`);
+    return Boolean(
+      cached && Date.now() - cached.timestamp < this.extendedCacheExpiry,
+    );
   }
 
   /**
@@ -251,6 +287,9 @@ class JWKSValidator {
    * Vérifie le rate limiting par IP
    */
   checkRateLimit(clientIP) {
+    if (isUntrackedIP(clientIP)) return true;
+    this.pruneTracking();
+
     const now = Date.now();
     const windowStart = now - 60000; // 1 minute
 
@@ -276,8 +315,7 @@ class JWKSValidator {
    * Vérifie si une IP est bloquée pour tentatives suspectes
    */
   checkIPBlocked(clientIP) {
-    // Ne jamais bloquer le loopback hors production (dev local)
-    if (SKIP_LOOPBACK_BLOCK && isLoopbackIP(clientIP)) return false;
+    if (isUntrackedIP(clientIP)) return false;
 
     const blocked = this.failedAttempts.get(clientIP);
     if (!blocked) return false;
@@ -298,10 +336,10 @@ class JWKSValidator {
    * Enregistre une tentative échouée
    */
   recordFailedAttempt(clientIP, reason) {
-    // Ne pas comptabiliser le loopback hors production (dev local)
-    if (SKIP_LOOPBACK_BLOCK && isLoopbackIP(clientIP)) return;
+    if (isUntrackedIP(clientIP)) return;
 
     const now = Date.now();
+    this.pruneTracking(now);
     const current = this.failedAttempts.get(clientIP) || {
       count: 0,
       lastAttempt: 0,
@@ -331,18 +369,6 @@ class JWKSValidator {
         return null;
       }
 
-      // Vérifier le rate limiting (ne PAS compter comme tentative suspecte)
-      if (!this.checkRateLimit(clientIP)) {
-        logger.warn("Rate limit dépassé pour l'IP");
-        return null;
-      }
-
-      // Vérifier si l'IP est bloquée
-      if (this.checkIPBlocked(clientIP)) {
-        logger.warn("IP bloquée pour tentatives suspectes");
-        return null;
-      }
-
       // Décoder le JWT pour obtenir le header et le payload
       const decoded = jwt.decode(token, { complete: true });
       if (!decoded || !decoded.header || !decoded.payload) {
@@ -363,6 +389,22 @@ class JWKSValidator {
         logger.warn("JWT sans kid (Key ID)");
         this.recordFailedAttempt(clientIP, "JWT sans kid");
         return null;
+      }
+
+      // Limite de débit et blocage par IP : seulement avant une récupération
+      // du JWKS (kid inconnu). Avec une clé en cache, la vérification ne coûte
+      // aucun appel externe : un jeton valide passe toujours, même depuis une
+      // IP limitée ou bloquée (ne PAS compter la limite comme tentative
+      // suspecte).
+      if (!this.hasCachedKey(header.kid)) {
+        if (!this.checkRateLimit(clientIP)) {
+          logger.warn("Rate limit dépassé pour l'IP");
+          return null;
+        }
+        if (this.checkIPBlocked(clientIP)) {
+          logger.warn("IP bloquée pour tentatives suspectes");
+          return null;
+        }
       }
 
       // Récupérer la clé publique par kid.
