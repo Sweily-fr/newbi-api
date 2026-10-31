@@ -109,8 +109,25 @@ function comparableCustomFields(list) {
   return entries.length ? Object.fromEntries(entries) : null;
 }
 
-// Raison du blocage (même limite que le modèle)
+// Raison du blocage (même limite que le modèle) et taille d'une note
 const BLOCKED_REASON_MAX_LENGTH = 500;
+export const NOTE_MAX_LENGTH = 20000;
+
+/** Note en texte riche : nettoyée, et refusée au-delà de NOTE_MAX_LENGTH. */
+function noteContent(raw) {
+  const tooLong = (text) =>
+    typeof text === "string" && text.length > NOTE_MAX_LENGTH;
+  // Texte reçu contrôlé d'abord : un texte énorme n'est pas nettoyé pour rien
+  const content = tooLong(raw) ? raw : sanitizeRichText(raw);
+  if (tooLong(content)) {
+    throw new AppError(
+      "Une note ne peut pas dépasser 20 000 caractères.",
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+  return content;
+}
+
 // Activités que le site ajoute lui-même au journal d'un contact
 const MANUAL_ACTIVITY_TYPES = ["reminder_created"];
 
@@ -892,7 +909,7 @@ const clientResolvers = {
         }
 
         // Note en texte riche : nettoyée avant d'être enregistrée
-        const content = sanitizeRichText(input.content);
+        const content = noteContent(input.content);
         const noteId = new mongoose.Types.ObjectId().toString();
         const newNote = {
           id: noteId,
@@ -937,7 +954,7 @@ const clientResolvers = {
       ) => {
         const { user } = context;
         // Note en texte riche : nettoyée avant d'être enregistrée
-        const content = sanitizeRichText(rawContent);
+        const content = noteContent(rawContent);
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
