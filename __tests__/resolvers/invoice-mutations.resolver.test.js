@@ -192,6 +192,61 @@ describe("Invoice Resolver - Query.invoiceStats", () => {
   });
 });
 
+describe("Invoice Resolver - Query.invoiceBalances (avoirs déduits)", () => {
+  const balances = () =>
+    invoiceResolvers.Query.invoiceBalances(
+      null,
+      { workspaceId: organizationId.toString() },
+      ctx(),
+    );
+  const credit = (invoiceId, ht) =>
+    mongoose.connection.db.collection("creditnotes").insertOne({
+      workspaceId: organizationId,
+      originalInvoice: invoiceId,
+      number: `AV-${Math.random().toString(36).slice(2, 7)}`,
+      finalTotalHT: -ht,
+      finalTotalTTC: -ht * 1.2,
+    });
+  const echue = { dueDate: new Date(Date.now() - 10 * 86_400_000) };
+
+  it("facture échue de 1 000 € HT et avoir de 400 € : 600 € facturés et en retard", async () => {
+    const { insertedId } = await insertInvoice(echue);
+    await credit(insertedId, 400);
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(600, 2);
+    expect(result.overdueAmount).toBeCloseTo(600, 2);
+    expect(result.overdueCount).toBe(1);
+  });
+
+  it("facture échue entièrement créditée : plus en retard", async () => {
+    const { insertedId } = await insertInvoice(echue);
+    await credit(insertedId, 1000);
+    await insertInvoice({ ...echue, number: "0002" });
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(1000, 2);
+    expect(result.overdueAmount).toBeCloseTo(1000, 2);
+    expect(result.overdueCount).toBe(1);
+  });
+
+  it("facture payée créditée en partie : facturé et encaissé nets de l'avoir", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: new Date(),
+    });
+    await credit(insertedId, 250);
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(750, 2);
+    expect(result.totalPaid).toBeCloseTo(750, 2);
+    expect(result.overdueAmount).toBe(0);
+  });
+});
+
 describe("Invoice Resolver - Mutation.deleteInvoice", () => {
   const resolver = invoiceResolvers.Mutation.deleteInvoice;
 

@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import CreditNote from "../models/CreditNote.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import Quote from "../models/Quote.js";
@@ -87,6 +88,52 @@ import {
 } from "../utils/invoiceStatusRules.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
+
+/**
+ * Retire des soldes agrégés des factures (invoiceBalances) le montant HT de
+ * leurs avoirs, plafonné au montant de chaque facture : facturé, encaissé
+ * (facture payée) et en retard (facture échue), et une facture en retard
+ * entièrement créditée sort du compte des retards.
+ * @param {Object} totals - { totalBilled, totalPaid, overdueAmount, overdueCount }, modifié
+ * @param {ObjectId} wid - espace
+ * @param {Date} today - début du jour (même borne que l'agrégation)
+ */
+async function deductCreditNotesFromBalances(totals, wid, today) {
+  const credits = await CreditNote.aggregate([
+    { $match: { workspaceId: wid, originalInvoice: { $ne: null } } },
+    {
+      $group: {
+        _id: "$originalInvoice",
+        ht: { $sum: { $abs: { $ifNull: ["$finalTotalHT", 0] } } },
+      },
+    },
+  ]);
+  if (!credits.length) return;
+  const creditedHT = new Map(credits.map((c) => [String(c._id), c.ht || 0]));
+  const invoices = await Invoice.find(
+    { _id: { $in: credits.map((c) => c._id) }, workspaceId: wid },
+    { status: 1, dueDate: 1, finalTotalHT: 1, totalHT: 1 },
+  ).lean();
+  for (const invoice of invoices) {
+    const amount = invoice.finalTotalHT ?? invoice.totalHT ?? 0;
+    const deduction = Math.min(amount, creditedHT.get(String(invoice._id)));
+    if (!(deduction > 0)) continue;
+    if (!["PENDING", "OVERDUE", "COMPLETED"].includes(invoice.status)) continue;
+    totals.totalBilled -= deduction;
+    if (invoice.status === "COMPLETED") totals.totalPaid -= deduction;
+    const overdue =
+      invoice.status === "OVERDUE" ||
+      (invoice.status === "PENDING" &&
+        invoice.dueDate &&
+        new Date(invoice.dueDate) < today);
+    if (overdue) {
+      totals.overdueAmount -= deduction;
+      if (Math.round(deduction * 100) >= Math.round(amount * 100)) {
+        totals.overdueCount -= 1;
+      }
+    }
+  }
+}
 
 /**
  * Applique le passage d'une facture en "payée" (COMPLETED) et déclenche tous les
@@ -831,6 +878,11 @@ const invoiceResolvers = {
           overdueAmount: 0,
           overdueCount: 0,
         };
+
+        // Montants nets des avoirs : la part créditée (HT) d'une facture
+        // n'est plus facturée, encaissée ni due. Une facture soldée par
+        // avoir ne compte plus parmi les factures en retard.
+        await deductCreditNotesFromBalances(inv, wid, today);
         const imp = importedStats || {
           totalBilled: 0,
           totalPaid: 0,
