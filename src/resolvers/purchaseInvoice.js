@@ -1745,56 +1745,84 @@ const purchaseInvoiceResolvers = {
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
         const Transaction = mongoose.model("Transaction");
 
-        const txObjectId = new mongoose.Types.ObjectId(transactionId);
+        // Rien n'est modifié si les deux documents ne sont pas liés : une
+        // facture payée par ailleurs garde son statut et sa date de paiement,
+        // une transaction ignorée reste ignorée.
+        const transaction = mongoose.isValidObjectId(transactionId)
+          ? await Transaction.findOne({
+              _id: transactionId,
+              workspaceId: wsId,
+            }).select("linkedPurchaseInvoiceIds")
+          : null;
+        const linkedOnTransaction = (
+          transaction?.linkedPurchaseInvoiceIds || []
+        ).some((id) => String(id) === String(invoice._id));
+        const linkedOnInvoice = (invoice.linkedTransactionIds || []).some(
+          (id) => String(id) === String(transactionId),
+        );
+        if (!linkedOnTransaction && !linkedOnInvoice) {
+          throw new AppError(
+            "Cette transaction n'est pas rattachée à cette facture",
+            ERROR_CODES.NOT_FOUND,
+          );
+        }
 
-        // Côté transaction : $pull (lien + origine) + pointeur du justificatif
-        // OCR nettoyé.
-        await Transaction.updateOne(
-          { _id: txObjectId, workspaceId: wsId },
-          {
-            $pull: {
-              linkedPurchaseInvoiceIds: invoice._id,
-              ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+        if (transaction) {
+          const txObjectId = transaction._id;
+          // Côté transaction : $pull (lien + origine) + pointeur du
+          // justificatif OCR nettoyé.
+          await Transaction.updateOne(
+            { _id: txObjectId, workspaceId: wsId },
+            {
+              $pull: {
+                linkedPurchaseInvoiceIds: invoice._id,
+                ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+              },
             },
-          },
-        );
-        await Transaction.updateOne(
-          {
-            _id: txObjectId,
-            workspaceId: wsId,
-            "receiptFiles.purchaseInvoiceId": invoice._id,
-          },
-          { $set: { "receiptFiles.$[elem].purchaseInvoiceId": null } },
-          { arrayFilters: [{ "elem.purchaseInvoiceId": invoice._id }] },
-        );
-        // Plus aucun lien (ni vente ni achat) → la transaction redevient à
-        // rapprocher.
-        await Transaction.updateOne(
-          {
-            _id: txObjectId,
-            workspaceId: wsId,
-            $and: NO_LINKED_DOCUMENTS_CLAUSES,
-          },
-          {
-            $set: {
-              reconciliationStatus: "unmatched",
-              reconciliationDate: null,
+          );
+          await Transaction.updateOne(
+            {
+              _id: txObjectId,
+              workspaceId: wsId,
+              "receiptFiles.purchaseInvoiceId": invoice._id,
             },
-          },
-        );
-
-        // Côté facture.
-        invoice.linkedTransactionIds = (
-          invoice.linkedTransactionIds || []
-        ).filter((id) => String(id) !== String(transactionId));
-        if (invoice.linkedTransactionIds.length === 0) {
-          invoice.isReconciled = false;
-          if (invoice.status === "PAID") {
-            invoice.status = "TO_PAY";
-            invoice.paymentDate = null;
+            { $set: { "receiptFiles.$[elem].purchaseInvoiceId": null } },
+            { arrayFilters: [{ "elem.purchaseInvoiceId": invoice._id }] },
+          );
+          // Lien retiré et plus aucun autre (ni vente ni achat) → la
+          // transaction redevient à rapprocher, sauf si elle est ignorée.
+          if (linkedOnTransaction) {
+            await Transaction.updateOne(
+              {
+                _id: txObjectId,
+                workspaceId: wsId,
+                reconciliationStatus: { $ne: "ignored" },
+                $and: NO_LINKED_DOCUMENTS_CLAUSES,
+              },
+              {
+                $set: {
+                  reconciliationStatus: "unmatched",
+                  reconciliationDate: null,
+                },
+              },
+            );
           }
         }
-        await invoice.save();
+
+        // Côté facture : seulement si elle référençait bien la transaction.
+        if (linkedOnInvoice) {
+          invoice.linkedTransactionIds = (
+            invoice.linkedTransactionIds || []
+          ).filter((id) => String(id) !== String(transactionId));
+          if (invoice.linkedTransactionIds.length === 0) {
+            invoice.isReconciled = false;
+            if (invoice.status === "PAID") {
+              invoice.status = "TO_PAY";
+              invoice.paymentDate = null;
+            }
+          }
+          await invoice.save();
+        }
         return invoice;
       },
     ),
@@ -1803,6 +1831,9 @@ const purchaseInvoiceResolvers = {
       async (_, { purchaseInvoiceId }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        // Une facture sans transaction liée (payée en espèces, par chèque…)
+        // n'a rien à délier : son statut et sa date de paiement restent.
+        const hadLinks = (invoice.linkedTransactionIds || []).length > 0;
 
         // Retire le lien côté transactions ($pull + receiptFiles nettoyés) et
         // repasse "unmatched" celles qui n'ont plus aucun lien. Updates ciblés
@@ -1817,7 +1848,7 @@ const purchaseInvoiceResolvers = {
         // Symétrique du flux factures client (unlink → PENDING) : le lien de
         // paiement vient d'être retiré, la facture n'est plus "payée par la
         // banque". On ne touche pas aux autres statuts (ARCHIVED...).
-        if (invoice.status === "PAID") {
+        if (hadLinks && invoice.status === "PAID") {
           invoice.status = "TO_PAY";
           invoice.paymentDate = null;
         }
