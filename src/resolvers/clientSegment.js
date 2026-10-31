@@ -6,6 +6,7 @@ import {
   requireWrite,
   requireDelete,
   resolveWorkspaceId,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
@@ -181,6 +182,9 @@ export const clientSegmentResolvers = {
         },
         context,
       ) => {
+        // Fiches des contacts renvoyées : « Mes clients : voir » exigé en
+        // plus des segments
+        assertPermissionAction(context, "clients", "view");
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,

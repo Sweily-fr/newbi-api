@@ -7,14 +7,18 @@ import {
   requireRead,
   resolveWorkspaceId,
   checkSubscriptionActive,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 
 // 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
 // requis sur le module « clientLists ») et impose le workspace validé par RBAC à
 // la place de l'ID brut fourni dans les args.
-const scopedQuery = (fn) =>
-  requireRead("clientLists")(async (parent, args, context, info) =>
-    fn(
+const scopedQuery = (fn, { withClients = false } = {}) =>
+  requireRead("clientLists")(async (parent, args, context, info) => {
+    // Lectures qui renvoient les fiches des contacts (e-mail, téléphone,
+    // notes, activité) : « Mes clients : voir » exigé en plus des listes
+    if (withClients) assertPermissionAction(context, "clients", "view");
+    return fn(
       parent,
       {
         ...args,
@@ -22,8 +26,8 @@ const scopedQuery = (fn) =>
       },
       context,
       info,
-    ),
-  );
+    );
+  });
 
 // action : « create » (créer une liste), « edit » (modifier, ajouter/retirer
 // des clients) ou « delete » (supprimer des listes). Le contrôle
@@ -83,37 +87,43 @@ const pushListActivity = async (clientId, type, list, user) => {
 export const clientListResolvers = {
   Query: {
     // Récupère toutes les listes d'un workspace
-    clientLists: scopedQuery(async (_, { workspaceId }, context) => {
-      try {
-        const lists = await ClientList.find({ workspaceId })
-          .populate("clients")
-          .sort({ isDefault: -1, createdAt: -1 });
+    clientLists: scopedQuery(
+      async (_, { workspaceId }, context) => {
+        try {
+          const lists = await ClientList.find({ workspaceId })
+            .populate("clients")
+            .sort({ isDefault: -1, createdAt: -1 });
 
-        return lists;
-      } catch (error) {
-        console.error("Erreur lors de la récupération des listes:", error);
-        throw new Error("Impossible de récupérer les listes de clients");
-      }
-    }),
+          return lists;
+        } catch (error) {
+          console.error("Erreur lors de la récupération des listes:", error);
+          throw new Error("Impossible de récupérer les listes de clients");
+        }
+      },
+      { withClients: true },
+    ),
 
     // Récupère une liste spécifique par ID
-    clientList: scopedQuery(async (_, { workspaceId, id }, context) => {
-      try {
-        const list = await ClientList.findOne({
-          _id: id,
-          workspaceId,
-        }).populate("clients");
+    clientList: scopedQuery(
+      async (_, { workspaceId, id }, context) => {
+        try {
+          const list = await ClientList.findOne({
+            _id: id,
+            workspaceId,
+          }).populate("clients");
 
-        if (!list) {
-          throw new Error("Liste non trouvée");
+          if (!list) {
+            throw new Error("Liste non trouvée");
+          }
+
+          return list;
+        } catch (error) {
+          console.error("Erreur lors de la récupération de la liste:", error);
+          throw error;
         }
-
-        return list;
-      } catch (error) {
-        console.error("Erreur lors de la récupération de la liste:", error);
-        throw error;
-      }
-    }),
+      },
+      { withClients: true },
+    ),
 
     // Récupère les clients d'une liste avec pagination
     clientsInList: scopedQuery(
@@ -169,6 +179,7 @@ export const clientListResolvers = {
           throw error;
         }
       },
+      { withClients: true },
     ),
 
     // Récupère les listes auxquelles appartient un client

@@ -7,6 +7,7 @@ import {
   requireWrite,
   requireRead,
   requireDelete,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 import emailReminderService from "../services/emailReminderService.js";
 import { assertPlanFeature } from "../services/planLimits.js";
@@ -77,7 +78,7 @@ const crmEmailAutomationResolvers = {
 
     crmEmailAutomationLogs: requireRead("automations", {
       preferArgsWorkspace: true,
-    })(async (_, { workspaceId, automationId, limit = 50 }) => {
+    })(async (_, { workspaceId, automationId, limit = 50 }, context) => {
       const query = { workspaceId };
       if (automationId) {
         query.automationId = automationId;
@@ -88,7 +89,19 @@ const crmEmailAutomationResolvers = {
         .sort({ sentAt: -1 })
         .limit(limit);
 
-      return logs;
+      // Fiche du contact seulement avec « Mes clients : voir »
+      let canReadClients = true;
+      try {
+        assertPermissionAction(context, "clients", "view");
+      } catch {
+        canReadClients = false;
+      }
+      if (canReadClients) return logs;
+      return logs.map((log) => ({
+        ...log.toObject(),
+        clientId: null,
+        hideClient: true,
+      }));
     }),
   },
 
@@ -371,7 +384,7 @@ const crmEmailAutomationResolvers = {
   CrmEmailAutomationLog: {
     id: (parent) => parent._id?.toString() || parent.id,
     client: async (parent) => {
-      if (!parent.clientId) return null;
+      if (!parent.clientId || parent.hideClient) return null;
       return await Client.findById(parent.clientId);
     },
   },
