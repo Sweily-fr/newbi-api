@@ -2575,7 +2575,8 @@ const invoiceResolvers = {
 
             // Sauvegarder le numéro original du brouillon avant de le changer
             const originalDraftNumber = invoiceData.number;
-            const tempNumber = `TEMP-${Date.now()}`;
+            // Unique même pour deux finalisations dans la même milliseconde
+            const tempNumber = `TEMP-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-8)}`;
 
             // Changer temporairement le numéro pour éviter les conflits de clé unique
             await Invoice.findByIdAndUpdate(invoiceData._id, {
@@ -2843,6 +2844,18 @@ const invoiceResolvers = {
               "Erreur lors de la mise à jour de la facture:",
               error,
             );
+
+            // Finalisation concurrente : une autre facture vient de recevoir
+            // ce numéro (index unique). Le brouillon est restauré plus haut.
+            if (
+              draftNumberBackup &&
+              (error?.code === 11000 || /E11000/.test(error?.message || ""))
+            ) {
+              throw new AppError(
+                "Une autre facture vient d'être validée avec le même numéro : celle-ci reste en brouillon. Validez-la de nouveau.",
+                ERROR_CODES.ALREADY_EXISTS,
+              );
+            }
 
             // Si c'est une erreur de validation Mongoose
             if (error.name === "ValidationError") {
