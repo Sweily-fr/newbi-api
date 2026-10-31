@@ -16,6 +16,10 @@ import { v4 as uuidv4 } from "uuid";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import {
+  normalizeTransferEmailInput,
+  reserveTransferEmail,
+} from "../utils/transferEmailInput.js";
 
 // 🔐 Envoi des fichiers et création du transfert : même droit que
 // createFileTransfer (« Créer » du module Transferts dans l'espace du
@@ -888,6 +892,11 @@ const chunkUploadR2Resolvers = {
             throw new UserInputError("Aucun ID de fichier fourni");
           }
 
+          // Destinataire unique et message borné ; e-mails plafonnés par jour
+          const { recipientEmail, message } =
+            normalizeTransferEmailInput(input);
+          if (recipientEmail) await reserveTransferEmail(user.id || user._id);
+
           // Récupérer les informations de chaque fichier
           const filesInfo = [];
           let totalSize = 0;
@@ -946,8 +955,6 @@ const chunkUploadR2Resolvers = {
             input?.requirePayment ||
             false;
           const title = input?.title?.trim() || null;
-          const recipientEmail = input?.recipientEmail || null;
-          const message = input?.message || null;
 
           // Nouvelles options
           const notifyOnDownload = input?.notifyOnDownload || false;
