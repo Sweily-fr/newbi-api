@@ -10,6 +10,7 @@ import EmailSettings from "../models/EmailSettings.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import cloudflareService from "./cloudflareService.js";
 import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
 import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
@@ -51,6 +52,13 @@ const DOCUMENT_LABELS = {
 /**
  * Récupère un document par son ID et type
  */
+/** Adresse e-mail : une partie locale, un @, un domaine avec un point. */
+const EMAIL_ADDRESS = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
+
+/** Le contenu commence par la signature d'un PDF (« %PDF- »). */
+const isPdfBuffer = (buffer) =>
+  buffer.length > 5 && buffer.subarray(0, 5).toString("latin1") === "%PDF-";
+
 async function getDocument(documentId, documentType, workspaceId) {
   let document;
 
@@ -803,6 +811,29 @@ async function sendDocumentEmail({
   if (!recipientEmail) {
     throw new Error("Email du destinataire requis");
   }
+  // Adresses : une adresse e-mail valide chacune (destinataire, copies)
+  for (const address of [
+    recipientEmail,
+    ...(ccEmails || []),
+    ...(bccEmails || []),
+  ].filter((email) => email && String(email).trim())) {
+    if (!EMAIL_ADDRESS.test(String(address).trim())) {
+      throw new AppError(
+        `Adresse e-mail invalide : ${String(address).slice(0, 100)}`,
+        ERROR_CODES.VALIDATION_ERROR,
+      );
+    }
+  }
+  // L'objet tient sur une ligne : un retour à la ligne ajouterait un
+  // en-tête à l'e-mail
+  emailSubject = String(emailSubject ?? "").replace(/[\r\n]+/g, " ");
+  // PDF joint par l'éditeur : un vrai PDF seulement
+  if (pdfBase64 && !isPdfBuffer(Buffer.from(pdfBase64, "base64"))) {
+    throw new AppError(
+      "Le document joint n'est pas un PDF valide. L'e-mail n'a pas été envoyé.",
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
 
   // Préparer les variables
   const summary = buildDocumentSummary(document);
@@ -953,9 +984,12 @@ async function sendDocumentEmail({
   let pdfBuffer = null;
   let pdfFromCache = false;
 
-  // 1) Fast-path : PDF généré côté client et transmis dans la requête (transitoire)
+  // 1) Fast-path : PDF généré côté client et transmis dans la requête
+  // (transitoire : jamais mis en cache, la copie durable vient du serveur)
+  let pdfFromClient = false;
   if (pdfBase64) {
     pdfBuffer = Buffer.from(pdfBase64, "base64");
+    pdfFromClient = true;
   }
 
   // 2) Document finalisé : PDF archivé sur R2 (archivedPdfKey), la version
@@ -1010,6 +1044,7 @@ async function sendDocumentEmail({
   // (inutile s'il en provient déjà). Fire-and-forget.
   if (
     !pdfFromCache &&
+    !pdfFromClient &&
     pdfBuffer &&
     (documentType === DOCUMENT_TYPES.INVOICE ||
       documentType === DOCUMENT_TYPES.QUOTE ||
