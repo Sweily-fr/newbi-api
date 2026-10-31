@@ -99,7 +99,6 @@ const OPEN_TO_ANY_MEMBER = {
     "markAllNotificationsAsRead",
     "deleteNotification",
     "requestModuleAccess",
-    "sendContactMessage",
     // Anciennes données de l'utilisateur (User.company, intégration
     // personnelle), sans lien avec l'espace
     "updateCompany",

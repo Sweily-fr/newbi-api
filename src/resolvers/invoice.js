@@ -72,6 +72,14 @@ import {
   assertNotEInvoiceTransmitted,
   isEInvoiceTransmitted,
 } from "../utils/eInvoiceLock.js";
+import {
+  assertInvoiceDeletable,
+  assertIssuedInvoiceContentUnchanged,
+} from "../utils/issuedInvoiceLock.js";
+import {
+  creditedTTCForWorkspace,
+  isCoveredByCredit,
+} from "../utils/invoiceCredit.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -306,7 +314,10 @@ const invoiceResolvers = {
       if (invoice.status !== "PENDING") return null;
       try {
         // Compte Stripe Connect lu une fois par organisation et par requête,
-        // et non pour chaque facture en attente de la liste.
+        // et non pour chaque facture en attente de la liste. On garde la
+        // promesse (exec) : une requête Mongoose attendue une seconde fois
+        // lève « Query was already executed », et toutes les factures après
+        // la première perdaient leur lien de paiement.
         const organizationId = invoice.workspaceId.toString();
         const cache = context
           ? (context._stripeConnectAccountByOrg ??= new Map())
@@ -316,11 +327,27 @@ const invoiceResolvers = {
             organizationId,
             StripeConnectAccount.findOne({ organizationId })
               .select("chargesEnabled")
-              .lean(),
+              .lean()
+              .exec(),
           );
         }
         const account = await cache.get(organizationId);
         if (!account || !account.chargesEnabled) return null;
+        // Facture soldée par avoir : plus payable. Avoirs de l'espace lus une
+        // fois par requête (liste de factures).
+        const creditCache = context
+          ? (context._creditedTTCByOrg ??= new Map())
+          : new Map();
+        if (!creditCache.has(organizationId)) {
+          creditCache.set(
+            organizationId,
+            creditedTTCForWorkspace(invoice.workspaceId),
+          );
+        }
+        const credited = (await creditCache.get(organizationId)).get(
+          invoice._id.toString(),
+        );
+        if (isCoveredByCredit(invoice, credited)) return null;
         const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
         return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
       } catch (error) {
@@ -1966,6 +1993,13 @@ const invoiceResolvers = {
           // et webhooks SuperPDP.)
           assertNotEInvoiceTransmitted(invoiceData, "invoice");
 
+          // Facture émise : ses articles, ses montants, son client, ses
+          // coordonnées bancaires et ses mentions sont figés (elle se corrige
+          // par un avoir) ; seuls notes, conditions, présentation et échéance
+          // restent modifiables. Le brouillon, finalisation comprise, reste
+          // entièrement modifiable.
+          assertIssuedInvoiceContentUnchanged(invoiceData, input);
+
           // Garde-fou de transition : updateInvoice gère l'édition de contenu
           // et la SEULE transition DRAFT → PENDING (finalisation, numérotée plus
           // bas). Tout autre changement de statut (rétrogradation en DRAFT,
@@ -2783,15 +2817,13 @@ const invoiceResolvers = {
           throw createNotFoundError("Facture");
         }
 
-        if (invoice.status === "COMPLETED") {
-          throw createResourceLockedError(
-            "Impossible de supprimer une facture finalisée",
-          );
-        }
-
         // Facture transmise en facturation électronique : on l'annule par un
         // avoir, jamais en la supprimant
         assertNotEInvoiceTransmitted(invoice.toObject(), "invoice", "delete");
+
+        // Seul un brouillon se supprime : une facture émise (en attente,
+        // payée ou annulée) garde sa place dans la numérotation
+        assertInvoiceDeletable(invoice);
 
         // Si la facture est liée à un devis, retirer le lien du devis
 
@@ -3610,15 +3642,9 @@ const invoiceResolvers = {
           }
         }
 
-        // Vérifier que la facture peut être supprimée
-        if (invoice.status === "COMPLETED" || invoice.status === "CANCELED") {
-          throw createResourceLockedError(
-            "Facture liée",
-            `une facture ${
-              invoice.status === "COMPLETED" ? "terminée" : "annulée"
-            } ne peut pas être supprimée`,
-          );
-        }
+        // Seul un brouillon se supprime (même règle que deleteInvoice) : une
+        // facture émise garde sa place dans la numérotation
+        assertInvoiceDeletable(invoice);
 
         // Retirer la facture de la liste des factures liées du devis
 

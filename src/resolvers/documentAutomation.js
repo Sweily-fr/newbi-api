@@ -405,6 +405,14 @@ const documentAutomationResolvers = {
           throw createNotFoundError("Automatisation");
         }
         assertSourceReadable(context, automation.triggerType);
+        const expectedType = documentAutomationService._getTriggerConfig(
+          automation.triggerType,
+        )?.docType;
+        if (documentType !== expectedType) {
+          throw createValidationError(
+            "Ce type de document ne correspond pas au déclencheur de l'automatisation",
+          );
+        }
 
         try {
           const result =

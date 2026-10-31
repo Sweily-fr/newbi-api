@@ -108,6 +108,16 @@ const signatureRequestSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Empreinte du contenu du devis envoyé en signature (quoteContentHash) :
+    // l'acceptation automatique exige que le devis n'ait pas changé depuis.
+    documentHash: {
+      type: String,
+    },
+    // Raison pour laquelle une signature terminée n'a pas accepté le devis
+    // (ex. DOCUMENT_CHANGED : devis modifié après l'envoi en signature)
+    autoAcceptBlockedReason: {
+      type: String,
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
     },

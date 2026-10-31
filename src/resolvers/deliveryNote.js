@@ -53,6 +53,7 @@ import {
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import { DELIVERY_NOTE_STATUS } from "../models/constants/enums.js";
+import { keepHiddenItemPrices } from "../utils/deliveryNoteItemPrices.js";
 
 const FINALIZED_DN_STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"];
 
@@ -842,6 +843,13 @@ const deliveryNoteResolvers = {
           let updateData = { ...input };
           // companyInfo n'est jamais fourni par le client : snapshot serveur
           delete updateData.companyInfo;
+
+          // Lignes renvoyées sans prix (l'éditeur n'en a pas) : garder les
+          // prix cachés repris du devis ou de la facture, sinon la facture
+          // du bon sortait à 0 €
+          if (Array.isArray(input.items)) {
+            updateData.items = keepHiddenItemPrices(input.items, dn.items);
+          }
 
           if (input.deliveryAddress !== undefined) {
             updateData.deliveryAddress = cleanDeliveryAddress(

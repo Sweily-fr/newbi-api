@@ -1,12 +1,14 @@
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import Invoice from "../models/Invoice.js";
+import { fullyCreditedInvoiceIds } from "../utils/invoiceCredit.js";
 import Client from "../models/Client.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
 import EmailSettings from "../models/EmailSettings.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
+import { escapeHtml } from "../utils/trialEmails.js";
 
 /**
  * Vérifie et envoie les relances automatiques pour toutes les factures impayées
@@ -96,8 +98,15 @@ async function processWorkspaceReminders(settings) {
 
   if (overdueInvoices.length === 0) return;
 
+  // Factures soldées par avoir : plus rien à relancer
+  const credited = await fullyCreditedInvoiceIds(overdueInvoices, workspaceId);
+  const dueInvoices = overdueInvoices.filter(
+    (inv) => !credited.has(String(inv._id)),
+  );
+  if (dueInvoices.length === 0) return;
+
   // Batch-load tous les logs de relance pour éviter N+1 queries
-  const invoiceIds = overdueInvoices.map((inv) => inv._id);
+  const invoiceIds = dueInvoices.map((inv) => inv._id);
   const allReminderLogs = await InvoiceReminderLog.find({
     invoiceId: { $in: invoiceIds },
     reminderType: { $in: ["FIRST", "SECOND"] },
@@ -112,7 +121,7 @@ async function processWorkspaceReminders(settings) {
   // Batch-load les EmailSettings pour ce workspace (1 seule query)
   const emailSettings = await EmailSettings.findOne({ workspaceId });
 
-  for (const invoice of overdueInvoices) {
+  for (const invoice of dueInvoices) {
     await processInvoiceReminder(
       invoice,
       settings,
@@ -209,7 +218,7 @@ async function sendReminder(
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Rappel de paiement</h2>
-        <p>${emailBody.replace(/\n/g, "<br>")}</p>
+        <p>${escapeHtml(emailBody).replace(/\n/g, "<br>")}</p>
         <hr>
         <p><strong>Facture:</strong> ${variables.invoiceNumber}</p>
         <p><strong>Montant:</strong> ${variables.totalAmount}</p>

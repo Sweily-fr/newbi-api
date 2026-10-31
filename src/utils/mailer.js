@@ -15,6 +15,20 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Échappe une valeur saisie par un utilisateur avant de l'insérer dans le HTML
+// d'un e-mail (titres de tâche et de tableau, noms, commentaires, noms de
+// fichiers, message d'un transfert).
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+// Texte sur plusieurs lignes : échappé, sauts de ligne conservés
+const escapeMultilineHtml = (value) =>
+  escapeHtml(value).replace(/\r?\n/g, "<br>");
+
 const sendPasswordResetEmail = async (email, resetToken) => {
   const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
@@ -456,6 +470,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
     transferData;
   const transferUrl = `${process.env.FRONTEND_URL}/transfer/${shareLink}?key=${accessKey}`;
   const sender = senderName || "Quelqu'un";
+  const safeSender = escapeHtml(sender);
   const filesCount = files.length;
 
   const todayFormatted = new Date().toLocaleDateString("fr-FR", {
@@ -476,7 +491,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
     .map(
       (file) =>
         `<tr>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; word-break: break-word;">${file.originalName}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; word-break: break-word;">${escapeHtml(file.originalName)}</td>
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280; text-align: right; white-space: nowrap;">${formatFileSize(file.size)}</td>
                 </tr>`,
     )
@@ -535,7 +550,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
 
             <!-- Message -->
             <p style="font-size: 15px; color: #4b5563; margin: 0 0 24px 0; line-height: 1.6;">
-              <strong style="color: #1a1a1a;">${sender}</strong> vous a envoyé ${filesCount} fichier${filesCount > 1 ? "s" : ""} via Newbi. Cliquez sur le bouton ci-dessous pour les télécharger.
+              <strong style="color: #1a1a1a;">${safeSender}</strong> vous a envoyé ${filesCount} fichier${filesCount > 1 ? "s" : ""} via Newbi. Cliquez sur le bouton ci-dessous pour les télécharger.
             </p>
 
             ${
@@ -543,7 +558,7 @@ const sendFileTransferEmail = async (recipientEmail, transferData) => {
                 ? `
             <!-- Message personnalisé -->
             <div style="background-color: #fafafa; border-left: 3px solid #5a50ff; border-radius: 0 8px 8px 0; padding: 16px; margin-bottom: 24px;">
-              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${message}</p>
+              <p style="font-size: 14px; color: #4b5563; margin: 0; line-height: 1.6; font-style: italic;">${escapeMultilineHtml(message)}</p>
             </div>`
                 : ""
             }
@@ -874,7 +889,7 @@ const sendFileTransferPaymentNotification = async (
     .map(
       (file) =>
         `<li style="padding: 8px 0; border-bottom: 1px solid #e5e7eb;">
-      <strong>${file.originalName || file.displayName}</strong> 
+      <strong>${escapeHtml(file.originalName || file.displayName)}</strong> 
       <span style="color: #6b7280; font-size: 14px;">(${formatFileSize(file.size)})</span>
     </li>`,
     )
@@ -1020,7 +1035,7 @@ const sendFileTransferPaymentNotification = async (
             <div class="details">
               <div class="detail-row">
                 <span class="detail-label">Client</span>
-                <span class="detail-value">${buyerEmail}</span>
+                <span class="detail-value">${escapeHtml(buyerEmail)}</span>
               </div>
               <div class="detail-row">
                 <span class="detail-label">Date</span>
@@ -1136,7 +1151,7 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
 
             <!-- Titre -->
             <h1 style="font-size: 26px; font-weight: 500; color: #1a1a1a; margin: 0 0 24px 0; line-height: 1.3;">
-              ${fileName} a été téléchargé
+              ${escapeHtml(fileName)} a été téléchargé
             </h1>
 
             <!-- Message -->
@@ -1157,7 +1172,7 @@ const sendDownloadNotificationEmail = async (ownerEmail, downloadData) => {
                 </tr>
                 <tr style="border-top: 1px solid #e5e7eb;">
                   <td style="padding: 6px 0; font-size: 14px; color: #6b7280;">Transfert</td>
-                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${fileName}</td>
+                  <td style="padding: 6px 0; font-size: 14px; color: #1a1a1a; text-align: right; word-break: break-word;">${escapeHtml(fileName)}</td>
                 </tr>
               </table>
             </div>
@@ -1230,7 +1245,7 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
           
           <div style="padding: 40px 30px; text-align: center;">
             <h1 style="color: #1f2937; font-size: 24px; font-weight: 400; margin: 0 0 30px 0; line-height: 1.4;">
-              ${fileName} expire dans ${daysLeft} jour${daysLeft > 1 ? "s" : ""} !
+              ${escapeHtml(fileName)} expire dans ${daysLeft} jour${daysLeft > 1 ? "s" : ""} !
             </h1>
             
             <p style="color: #4b5563; font-size: 14px; line-height: 1.6; margin: 0 0 30px 0; text-align: left;">
@@ -1255,7 +1270,7 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
           
           <div style="padding: 20px 30px; border-top: 1px solid #e5e7eb;">
             <p style="color: #1f2937; font-size: 14px; margin: 0;">${filesCount} élément${filesCount > 1 ? "s" : ""}</p>
-            <p style="color: #6b7280; font-size: 12px; margin: 8px 0 0 0;">${fileName}</p>
+            <p style="color: #6b7280; font-size: 12px; margin: 8px 0 0 0;">${escapeHtml(fileName)}</p>
           </div>
           
           <div style="text-align: center; padding: 20px 30px; color: #9ca3af; font-size: 11px; border-top: 1px solid #e5e7eb;">
@@ -1278,15 +1293,6 @@ const sendExpiryReminderEmail = async (ownerEmail, reminderData) => {
     return false;
   }
 };
-
-// Échappe une valeur saisie par un utilisateur avant de l'insérer dans le HTML
-// d'un e-mail (titres de tâche et de tableau, noms, commentaires).
-const escapeHtml = (value) =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 
 /**
  * Envoyer une notification d'assignation de tâche Kanban

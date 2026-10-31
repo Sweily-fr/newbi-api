@@ -15,6 +15,33 @@ import {
 export { invalidateUserCache };
 
 /**
+ * IP du client, pour la limite de débit et le blocage du validateur JWT.
+ *
+ * Requêtes HTTP : req.ip, calculé par Express (trust proxy 1) d'après
+ * l'entrée de x-forwarded-for ajoutée par le proxy de l'API, jamais une
+ * valeur choisie par le client. Connexions WebSocket (requête d'upgrade, hors
+ * Express) : même règle, dernière entrée de x-forwarded-for, sinon l'adresse
+ * de la socket. « unknown » si rien ne l'indique (jamais bloquée).
+ */
+export function clientIpOf(req) {
+  if (req?.ip) return req.ip;
+  const forwarded = req?.headers?.["x-forwarded-for"];
+  const forwardedValue = Array.isArray(forwarded)
+    ? forwarded.join(",")
+    : forwarded;
+  if (typeof forwardedValue === "string") {
+    const entries = forwardedValue
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (entries.length) return entries[entries.length - 1];
+  }
+  return (
+    req?.socket?.remoteAddress || req?.connection?.remoteAddress || "unknown"
+  );
+}
+
+/**
  * Middleware d'authentification unifié
  * 1. Essaie le JWT (Authorization: Bearer) si présent — nécessaire pour WebSocket
  * 2. Fallback sur le cookie session (better-auth.session_token) — auth principale
@@ -31,15 +58,8 @@ const betterAuthJWTMiddleware = async (req) => {
 
     logger.debug(`Token JWT extrait: ${token.substring(0, 20)}...`);
 
-    // Récupérer l'IP client pour les protections de sécurité
-    // Prioriser les headers proxy pour obtenir la vraie IP client
-    const clientIP =
-      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-      req.headers["x-real-ip"] ||
-      req.ip ||
-      req.connection?.remoteAddress ||
-      req.socket?.remoteAddress ||
-      "unknown";
+    // IP client pour les protections du validateur (voir clientIpOf)
+    const clientIP = clientIpOf(req);
 
     // Validation JWKS complète avec vérification cryptographique
     let decoded;

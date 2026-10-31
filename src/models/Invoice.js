@@ -37,9 +37,9 @@ const invoiceSchema = new mongoose.Schema(
         validator: function (value) {
           // Un préfixe vide est autorisé : les documents importés conservent
           // leur référence d'origine (dans `number`) sans préfixe.
-          return !value || value.length <= 10;
+          return !value || value.length <= 20;
         },
-        message: "Le préfixe ne doit pas dépasser 10 caractères",
+        message: "Le préfixe ne doit pas dépasser 20 caractères",
       },
     },
     number: {
@@ -449,6 +449,13 @@ const invoiceSchema = new mongoose.Schema(
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
       default: [],
       index: true,
+    },
+    // Posé au premier rattachement : vrai si c'est le rapprochement qui a
+    // passé la facture en « payée », faux si elle l'était déjà. Délier la
+    // dernière transaction ne rétablit « en attente » que dans le premier cas.
+    // Absent sur les liens antérieurs (aucune valeur par défaut).
+    paidByReconciliation: {
+      type: Boolean,
     },
 
     // === PENNYLANE SYNC ===

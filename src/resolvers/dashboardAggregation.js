@@ -9,6 +9,8 @@ import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { aggregateByCategory } from "../utils/bank-categories.js";
+import { createValidationError } from "../utils/errors.js";
+import { MAX_PERIOD_DAYS, validateDayPeriod } from "../utils/periodBounds.js";
 
 /**
  * Fin de journée (UTC) du jour calendaire courant en France.
@@ -32,14 +34,15 @@ function resolvePeriodDates(period) {
   const now = new Date();
 
   if (period.startDate && period.endDate && !period.preset) {
+    // Dates validées (format, jour réel, bornes, durée) avant tout calcul.
     // Date du picker (YYYY-MM-DD) parsée à minuit UTC → étendre à la fin
     // de journée pour que la borne de fin soit inclusive.
-    const endDate = new Date(period.endDate);
+    const { startDate, endDate } = validateDayPeriod(
+      period.startDate,
+      period.endDate,
+    );
     endDate.setUTCHours(23, 59, 59, 999);
-    return {
-      startDate: new Date(period.startDate),
-      endDate,
-    };
+    return { startDate, endDate };
   }
 
   const endDate = endOfCurrentDay(now);
@@ -131,6 +134,39 @@ function getCurrentFiscalYearRange(org, now = new Date()) {
 }
 
 /**
+ * Filtre Mongo d'un compte bancaire choisi par son identifiant Newbi (_id)
+ * ou par celui de la banque (externalId). Une chaîne qui n'est pas un
+ * ObjectId n'est cherchée que dans externalId (sinon erreur de cast).
+ */
+function accountLookup(accountId) {
+  const value = String(accountId);
+  return /^[0-9a-f]{24}$/i.test(value)
+    ? { $or: [{ _id: value }, { externalId: value }] }
+    : { externalId: value };
+}
+
+/**
+ * Valeurs de `fromAccount` des transactions d'un compte. Le sélecteur de
+ * compte de l'accueil envoie l'identifiant Newbi du compte (id), alors que
+ * les transactions portent celui de la banque (externalId) : filtrer sur
+ * l'id seul ne retrouvait aucune transaction (encaissements à 0).
+ */
+async function accountTransactionFilter(workspaceId, accountId) {
+  const account = await AccountBanking.findOne({
+    workspaceId,
+    ...accountLookup(accountId),
+  })
+    .select("_id externalId")
+    .lean();
+  const values = new Set([String(accountId)]);
+  if (account) {
+    values.add(String(account._id));
+    if (account.externalId) values.add(String(account.externalId));
+  }
+  return { $in: [...values] };
+}
+
+/**
  * Récupère le solde total des comptes bancaires (avec filtre optionnel).
  *
  * En vue globale (sans accountId), on ajoute au solde la somme signée des
@@ -143,10 +179,10 @@ async function getAccountsBalance(
   accountId,
   { excludeManual = false } = {},
 ) {
-  const filter = { workspaceId };
-  if (accountId) {
-    filter.$or = [{ _id: accountId }, { externalId: accountId }];
-  }
+  // Un compte déconnecté n'est plus synchronisé : son dernier solde connu
+  // ne compte plus dans la trésorerie.
+  const filter = { workspaceId, status: { $ne: "disconnected" } };
+  if (accountId) Object.assign(filter, accountLookup(accountId));
 
   const accountsPromise = AccountBanking.find(filter).lean();
   // excludeManual : solde strictement Bridge (on n'ajoute pas la somme des
@@ -277,7 +313,12 @@ const dashboardAggregationResolvers = {
     dashboardSummary: readTreasurySummary(
       async (parent, { workspaceId, accountId, excludeManual }) => {
         const matchFilter = { workspaceId, deletedAt: null };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        }
         // Bridge-only : exclut les transactions manuelles (provider "manual")
         // des revenus/dépenses. Le solde suit le même filtre (getAccountsBalance).
         if (excludeManual) matchFilter.provider = { $ne: "manual" };
@@ -360,7 +401,23 @@ const dashboardAggregationResolvers = {
           deletedAt: null,
           date: { $gte: startDate, $lte: endDate },
         };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        } else {
+          // La courbe part du solde des comptes connectés : les transactions
+          // conservées d'un compte déconnecté (hors de ce solde) en sont
+          // écartées.
+          const disconnected = await AccountBanking.distinct("externalId", {
+            workspaceId,
+            status: "disconnected",
+          });
+          if (disconnected.length > 0) {
+            matchFilter.fromAccount = { $nin: disconnected };
+          }
+        }
         // Courbe Bridge-only : on écarte les transactions ajoutées manuellement
         // pour que le graph suive uniquement le solde des comptes connectés.
         if (excludeManual) matchFilter.provider = { $ne: "manual" };
@@ -396,6 +453,11 @@ const dashboardAggregationResolvers = {
         const daysDiff = Math.ceil(
           (endDate - startDate) / (1000 * 60 * 60 * 24),
         );
+        if (!(daysDiff >= 0 && daysDiff <= MAX_PERIOD_DAYS + 1)) {
+          throw createValidationError(
+            "Période trop longue : 20 ans au maximum",
+          );
+        }
         const dataPoints = [];
         for (let i = 0; i <= daysDiff; i++) {
           const d = new Date(startDate);
@@ -556,7 +618,12 @@ const dashboardAggregationResolvers = {
           date: { $gte: startDate, $lte: endDate },
           amount: isIncome ? { $gt: 0 } : { $lt: 0 },
         };
-        if (accountId) matchFilter.fromAccount = accountId;
+        if (accountId) {
+          matchFilter.fromAccount = await accountTransactionFilter(
+            workspaceId,
+            accountId,
+          );
+        }
         // Bridge-only : exclut les transactions manuelles (provider "manual").
         // Le CA injecté depuis les factures émises (plus bas) n'est pas concerné.
         if (excludeManual) matchFilter.provider = { $ne: "manual" };

@@ -6,6 +6,7 @@ import ClientCustomField from "../models/ClientCustomField.js";
 import Client from "../models/Client.js";
 import EmailSettings from "../models/EmailSettings.js";
 import emailReminderService from "./emailReminderService.js";
+import { escapeHtml } from "../utils/trialEmails.js";
 
 /**
  * Traite les automatisations d'email CRM pour tous les workspaces
@@ -247,7 +248,7 @@ async function sendEmailToClient(automation, customField, client, triggerDate) {
     // Générer le HTML de l'email
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        ${emailBody.replace(/\n/g, "<br>")}
+        ${escapeHtml(emailBody).replace(/\n/g, "<br>")}
       </div>
     `;
 

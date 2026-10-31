@@ -7,11 +7,14 @@ const EMAIL_REGEX =
   /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
 // Regex pour la validation de numéro de téléphone (format international ou national)
-// Accepte les formats avec ou sans préfixe international
-// - +33 1 23 45 67 89
+// Au moins 9 chiffres, un « + » éventuel en tête et les séparateurs d'usage
+// (espaces, points, tirets, parenthèses) : le numéro est enregistré tel que saisi.
+// - +33 6 12 34 56 78
+// - 06.12.34.56.78
 // - 01 23 45 67 89
 // - 0123456789
-const PHONE_REGEX = /^(?:\+\d{1,3}\s?)?\d{9,}$/;
+// - +44 20 7946 0958
+const PHONE_REGEX = /^(?=(?:\D*\d){9})\(?\+?[\d\s.()-]+$/;
 
 // Regex pour la validation de numéro de téléphone (format français)
 // Accepte les formats:
@@ -25,11 +28,20 @@ const PHONE_REGEX = /^(?:\+\d{1,3}\s?)?\d{9,}$/;
 const PHONE_FR_REGEX =
   /^(?:(?:\+|00)33[ .-]?|0[ .-]?)([1-9])[ .-]?(\d{2})[ .-]?(\d{2})[ .-]?(\d{2})[ .-]?(\d{2})$/;
 
-// Regex pour la validation des noms et prénoms (lettres, chiffres, espaces, tirets, apostrophes)
-// Exclut explicitement les caractères < et > pour prévenir les risques d'injection XSS
-// Autorise tous les caractères spéciaux courants pour les noms de produits: / \ : ; ! ? @ # $ % * + = [ ] { } | ~ " _
-const NAME_REGEX =
-  /^(?!.*[<>])[A-Za-zÀ-ÖØ-öø-ÿ0-9\s\-'.(),&/\\:;!?@#$%*+=[\]{}|~"_]{2,200}$/;
+// Regex pour la validation des noms (raison sociale, produit, entreprise)
+// Accepte les vrais noms : lettres de tous les alphabets (« œ », « Ł », « ễ »),
+// accents combinés (texte copié depuis un Mac), chiffres, ponctuation
+// (apostrophe typographique « ’ », guillemets, « n° »), symboles (« & », « m² »,
+// « € ») et espaces. Exclut toujours les caractères < et > (balises HTML).
+// Plus large que l'ancienne règle, jamais plus stricte : un document déjà
+// enregistré reste valide quand il est de nouveau sauvegardé.
+const NAME_REGEX = /^(?![\s\S]*[<>])[\p{L}\p{M}\p{N}\p{P}\p{S}\s]{2,200}$/u;
+
+// Regex pour la validation des prénoms et noms de personne
+// Lettres de tous les alphabets (« Lecœur », « Łukasiewicz », « Nguyễn »),
+// espaces, apostrophes droite et typographique, points et tirets.
+// Ni chiffres ni symboles. La longueur est vérifiée par isValidPersonName.
+const PERSON_NAME_REGEX = /^[\p{L}\p{M}a-zA-ZÀ-ÿ\s'’.-]+$/u;
 
 // Regex pour la validation de SIREN (9 chiffres) ou SIRET (14 chiffres)
 const SIRET_REGEX = /^\d{9}$|^\d{14}$/;
@@ -52,25 +64,39 @@ const BIC_REGEX = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 // Regex pour la validation de code postal (France)
 const POSTAL_CODE_FR_REGEX = /^(0[1-9]|[1-8]\d|9[0-8])\d{3}$/;
 
-// Regex pour la validation de rue (adresse)
-const STREET_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s,'\-.]{3,100}$/;
+// Regex pour la validation de rue (adresse) : texte libre de 3 à 100 caractères
+// (« 12/14 rue des Tanneurs », « 5 rue de l’Église, Bât. A n°3 »), sans < ni >
+const STREET_REGEX = /^(?![\s\S]*[<>])[\p{L}\p{M}\p{N}\p{P}\p{S}\s]{3,100}$/u;
 
-// Regex pour la validation de ville
-const CITY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
+// Regex pour la validation de ville : texte libre de 2 à 50 caractères
+// (« Paris Cedex 08 », « L’Haÿ-les-Roses »), sans < ni >
+const CITY_REGEX = /^(?![\s\S]*[<>])[\p{L}\p{M}\p{N}\p{P}\p{S}\s]{2,50}$/u;
 
-// Regex pour la validation de pays
-const COUNTRY_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ\s'\-.]{2,50}$/;
+// Regex pour la validation de pays : lettres de tous les alphabets, espaces,
+// apostrophes, tirets, points, virgules et parenthèses (« Côte d’Ivoire »)
+const COUNTRY_REGEX = /^[\p{L}\p{M}a-zA-ZÀ-ÿ\s'’().,-]{2,50}$/u;
+
+// Regex pour la validation du nom d'une adresse (destinataire d'une livraison) :
+// nom de personne ou d'entreprise (« Entrepôt n° 2 », « Dupont & Fils »),
+// texte libre de 2 à 100 caractères, sans < ni >
+const FULL_NAME_REGEX =
+  /^(?![\s\S]*[<>])[\p{L}\p{M}\p{N}\p{P}\p{S}\s]{2,100}$/u;
 
 // Regex pour la validation d'URL
+// Temps de test linéaire en la longueur de la valeur : chaque partie de l'URL
+// ne peut être lue que d'une seule façon (pas de quantificateurs imbriqués
+// qui se recouvrent). Une étiquette de domaine est une lettre ou un chiffre,
+// suivi éventuellement de lettres, chiffres et tirets terminés par une lettre
+// ou un chiffre : mêmes valeurs acceptées qu'auparavant.
 const URL_REGEX = new RegExp(
-  "^(https?:\\/\\/)?" + // protocole
-    "((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|" + // nom de domaine
-    "((\\d{1,3}\\.){3}\\d{1,3}))" + // OU adresse IP
-    "(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*" + // port et chemin
-    "(\\?[;&a-z\\d%_.~+=-]*)?" + // paramètres de requête
-    "(\\#[-a-z\\d_]*)?$",
+  "^(?:https?:\\/\\/)?" + // protocole
+    "(?:(?:[a-z\\d](?:[a-z\\d-]*[a-z\\d])?\\.)+[a-z]{2,}|" + // nom de domaine
+    "(?:\\d{1,3}\\.){3}\\d{1,3})" + // OU adresse IP
+    "(?::\\d+)?(?:\\/[-a-z\\d%_.~+]*)*" + // port et chemin
+    "(?:\\?[;&a-z\\d%_.~+=-]*)?" + // paramètres de requête
+    "(?:#[-a-z\\d_]*)?$", // fragment
   "i",
-); // fragment
+);
 
 // Regex pour la validation de mot de passe fort
 // Au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial
@@ -84,9 +110,12 @@ const CUSTOM_FIELD_VALUE_REGEX =
   /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s.,;:!?@#$%&*()[\]\-_+='"/\\€£¥₽¢₩₴₦₱₸₺₼₾₿]{1,500}$/;
 
 // Regex pour la validation des descriptions d'articles
-// Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
+// Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne),
+// les accents combinés d'un texte copié depuis un Mac, et les caractères invisibles d'un copier-coller :
+// trait d'union conditionnel de Word, espaces sans chasse, liant des émojis composés
 // Pas de limite de longueur
-const ITEM_DESCRIPTION_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
+const ITEM_DESCRIPTION_REGEX =
+  /^[\p{L}\p{M}\p{N}\p{P}\p{S}\p{Z}\t\n\r\u00AD\u200B-\u200D\u2060\uFEFF]+$/u;
 
 // Regex pour la validation des unités de mesure
 // Accepte les lettres, chiffres, espaces, tirets, slashs, points et exposants (², ³)
@@ -94,9 +123,11 @@ const ITEM_DESCRIPTION_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
 const UNIT_REGEX = /^[A-Za-zÀ-ÖØ-öø-ÿ0-9\s./\-²³()]{1,20}$/;
 
 // Regex pour la validation des notes de pied de page
-// Accepte tous les caractères Unicode (lettres, chiffres, symboles, ponctuations, espaces et sauts de ligne)
+// Mêmes caractères que les descriptions d'articles (accents combinés et
+// caractères invisibles d'un copier-coller compris)
 // Pas de limite de longueur
-const FOOTER_NOTES_REGEX = /^[\p{L}\p{N}\p{P}\p{S}\p{Z}\t\n\r]+$/u;
+const FOOTER_NOTES_REGEX =
+  /^[\p{L}\p{M}\p{N}\p{P}\p{S}\p{Z}\t\n\r\u00AD\u200B-\u200D\u2060\uFEFF]+$/u;
 
 // Regex pour la validation du capital social (montant avec ou sans décimales, jusqu'à 20 chiffres)
 // Exemples: 1000, 10000.50, 1000000
@@ -122,9 +153,24 @@ const isValidPhoneFR = (phone) => {
   return PHONE_FR_REGEX.test(phone);
 };
 
-// Validation des noms et prénoms
+// Validation des noms (raison sociale, produit, entreprise)
 const isValidName = (name) => {
   return NAME_REGEX.test(name);
+};
+
+// Validation d'un prénom ou d'un nom de personne (2 à maxLength caractères)
+const isValidPersonName = (name, maxLength = 50) => {
+  return (
+    typeof name === "string" &&
+    name.length >= 2 &&
+    name.length <= maxLength &&
+    PERSON_NAME_REGEX.test(name)
+  );
+};
+
+// Validation du nom d'une adresse (destinataire)
+const isValidFullName = (fullName) => {
+  return FULL_NAME_REGEX.test(fullName);
 };
 
 // Validation de SIREN (9 chiffres) ou SIRET (14 chiffres)
@@ -350,6 +396,8 @@ export {
   PHONE_REGEX,
   PHONE_FR_REGEX,
   NAME_REGEX,
+  PERSON_NAME_REGEX,
+  FULL_NAME_REGEX,
   SIRET_REGEX,
   VAT_FR_REGEX,
   VAT_EU_REGEX,
@@ -373,6 +421,8 @@ export {
   isValidPhone,
   isValidPhoneFR,
   isValidName,
+  isValidPersonName,
+  isValidFullName,
   isValidSIRET,
   isValidVATNumberFR,
   isValidVATNumberEU,

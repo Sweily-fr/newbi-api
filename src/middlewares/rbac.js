@@ -292,6 +292,18 @@ export const withRBAC = (resolver, options = {}) => {
         },
       };
 
+      // Contrôle d'abonnement demandé par une enveloppe extérieure avant que
+      // l'espace soit connu : refait ici sur l'espace validé
+      const pendingSubscriptionCheck = context[PENDING_SUBSCRIPTION_CHECK];
+      if (pendingSubscriptionCheck) {
+        delete context[PENDING_SUBSCRIPTION_CHECK];
+        delete enrichedContext[PENDING_SUBSCRIPTION_CHECK];
+        await checkSubscriptionActive(
+          enrichedContext,
+          pendingSubscriptionCheck,
+        );
+      }
+
       logger.debug(
         `RBAC: ${context.user?.email || context.user?._id} (${userRole}) accède à ${options.resource || "ressource"} avec ${options.action || options.level || "aucune restriction"}`,
       );
@@ -425,24 +437,59 @@ export function invalidateTrialCache(orgId) {
   }
 }
 
+// Contrôle d'abonnement demandé avant que l'espace soit validé (enveloppes
+// posées autour de toutes les mutations d'un fichier, appelées avant le RBAC
+// du resolver) : withRBAC le refait sur l'espace qu'il a validé, celui que lit
+// le resolver. Remis à zéro au début de chaque mutation (resolvers/index.js).
+const PENDING_SUBSCRIPTION_CHECK = Symbol("pendingSubscriptionCheck");
+
+export function clearPendingSubscriptionCheck(context) {
+  if (context && typeof context === "object") {
+    delete context[PENDING_SUBSCRIPTION_CHECK];
+  }
+}
+
+/**
+ * Vérifie l'abonnement de l'espace sur lequel porte la requête.
+ *
+ * Espace établi côté serveur (context.workspaceId posé par withRBAC ou
+ * withWorkspace après contrôle d'appartenance, context.organization, ou
+ * l'espace passé par une route REST ou un service) : contrôlé directement.
+ *
+ * Sans espace établi (enveloppe extérieure, avant le RBAC du resolver) :
+ * - le contrôle est différé : withRBAC le refait sur l'espace validé, quels
+ *   que soient les en-têtes et l'argument workspaceId envoyés ;
+ * - chaque espace nommé par les en-têtes x-workspace-id et x-organization-id
+ *   est contrôlé dès maintenant (resolvers qui lisent ces en-têtes sans
+ *   passer par le RBAC).
+ */
 export async function checkSubscriptionActive(
   context,
   { failClosed = false } = {},
 ) {
-  // Lire le workspaceId depuis toutes les sources possibles :
-  // 1. context.workspaceId (set par withWorkspace/withRBAC après enrichissement)
-  // 2. context.organization?.id (set par withOrganization)
-  // 3. context.req headers (disponible AVANT withWorkspace — nécessaire pour les bulk wrappers)
-  const orgId =
-    context.workspaceId ||
-    context.organization?.id ||
-    context.req?.headers?.["x-workspace-id"] ||
-    context.req?.headers?.["x-organization-id"];
-  if (!orgId) return; // Pas d'org = pas de check (sera bloqué par RBAC)
+  const orgId = context.workspaceId || context.organization?.id;
+  if (orgId) {
+    return checkWorkspaceSubscription(String(orgId), { failClosed });
+  }
 
-  logger.debug(
-    `[SubCheck] orgId=${orgId} (from=${context.workspaceId ? "ctx" : "header"})`,
+  const pending = context[PENDING_SUBSCRIPTION_CHECK];
+  context[PENDING_SUBSCRIPTION_CHECK] = {
+    failClosed: failClosed || Boolean(pending?.failClosed),
+  };
+
+  const headerOrgIds = new Set(
+    [
+      context.req?.headers?.["x-workspace-id"],
+      context.req?.headers?.["x-organization-id"],
+    ].filter((value) => typeof value === "string" && value),
   );
+  for (const headerOrgId of headerOrgIds) {
+    await checkWorkspaceSubscription(headerOrgId, { failClosed });
+  }
+}
+
+async function checkWorkspaceSubscription(orgId, { failClosed }) {
+  logger.debug(`[SubCheck] orgId=${orgId}`);
 
   // App-managed trial check (feature-flagged). When ENABLE_APP_TRIAL is OFF
   // (default), this block is skipped entirely and the legacy Stripe-based

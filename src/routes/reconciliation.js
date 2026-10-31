@@ -11,6 +11,10 @@ import {
   userBelongsToWorkspace,
   userHasWorkspaceAction,
 } from "../utils/workspace-membership.js";
+import {
+  reconciliationPaymentMarker,
+  unlinkTransactionFromSalesInvoice,
+} from "../utils/salesInvoiceLink.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -229,6 +233,7 @@ router.post(
             status: "COMPLETED",
             // Première date de paiement préservée (liaisons multiples)
             paymentDate: targetInvoice.paymentDate || transaction.date,
+            ...reconciliationPaymentMarker(targetInvoice),
           },
         },
         { new: true },
@@ -297,42 +302,15 @@ router.post(
         });
       }
 
-      const { default: Transaction } = await import("../models/Transaction.js");
-      const { default: Invoice } = await import("../models/Invoice.js");
-
-      // Délier côté transaction ($pull idempotent). Si plus aucun lien
-      // (ni facture de vente, ni facture d'achat) → status unmatched.
-      const transaction = await Transaction.findOneAndUpdate(
-        { _id: transactionId, workspaceId },
-        { $pull: { linkedInvoiceIds: invoiceId } },
-        { new: true },
-      );
-      if (
-        transaction &&
-        (transaction.linkedInvoiceIds || []).length === 0 &&
-        (transaction.linkedPurchaseInvoiceIds || []).length === 0
-      ) {
-        await Transaction.updateOne(
-          { _id: transactionId, workspaceId },
-          {
-            $set: {
-              reconciliationStatus: "unmatched",
-              reconciliationDate: null,
-            },
-          },
-        );
-      }
-
-      // Délier côté facture. Si plus aucune transaction liée → PENDING.
-      const invoice = await Invoice.findOneAndUpdate(
-        { _id: invoiceId, workspaceId },
-        { $pull: { linkedTransactionIds: transactionId } },
-        { new: true },
-      );
-      if (invoice && (invoice.linkedTransactionIds || []).length === 0) {
-        invoice.status = "PENDING";
-        invoice.paymentDate = null;
-        await invoice.save();
+      // Même règle que la mutation GraphQL : refus si les deux documents ne
+      // sont pas liés, seul un statut posé par le rapprochement est rétabli.
+      const result = await unlinkTransactionFromSalesInvoice({
+        transactionId,
+        invoiceId,
+        workspaceId,
+      });
+      if (!result.success) {
+        return res.status(400).json({ error: result.message });
       }
 
       logger.info(
@@ -341,7 +319,7 @@ router.post(
 
       res.json({
         success: true,
-        message: "Déliaison effectuée avec succès",
+        message: result.message,
       });
     } catch (error) {
       logger.error("Erreur déliaison:", error);

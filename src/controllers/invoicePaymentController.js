@@ -4,10 +4,14 @@ import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import stripeConnectService from "../services/stripeConnectService.js";
 import { applyInvoicePaid } from "../resolvers/invoice.js";
 import logger from "../utils/logger.js";
+import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+
+/** Identifiant de facture valide : 24 caractères hexadécimaux. */
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 /**
  * Petite page HTML d'information (erreur / état non payable).
@@ -32,7 +36,11 @@ export const redirectToInvoicePayment = async (req, res) => {
   try {
     const { invoiceId } = req.params;
 
-    const invoice = await Invoice.findById(invoiceId);
+    // Lien abîmé (identifiant qui n'est pas un ObjectId) : introuvable, et
+    // non une erreur serveur (findById lève une CastError)
+    const invoice = OBJECT_ID.test(invoiceId)
+      ? await Invoice.findById(invoiceId)
+      : null;
     if (!invoice) {
       return infoPage(res, 404, "Facture introuvable", "Ce lien de paiement n'est plus valide.");
     }
@@ -49,6 +57,16 @@ export const redirectToInvoicePayment = async (req, res) => {
         409,
         "Facture non payable",
         "Cette facture ne peut pas être réglée en ligne pour le moment.",
+      );
+    }
+
+    // Facture soldée par avoir : plus rien à régler
+    if (await isInvoiceFullyCredited(invoice)) {
+      return infoPage(
+        res,
+        409,
+        "Facture soldée par avoir",
+        "Cette facture a été entièrement annulée par un avoir : il n'y a plus rien à régler.",
       );
     }
 

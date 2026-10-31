@@ -10,6 +10,7 @@ import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
+import { detectFileType, storedFileName } from "../utils/fileSignature.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import {
@@ -20,7 +21,10 @@ import {
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import { syncCategoryFromTransaction } from "../utils/purchaseInvoiceCategorySync.js";
 import { detachPurchaseInvoicesFromTransactions } from "../utils/reconciliation-cleanup.js";
-import { buildPageQuery } from "../utils/transaction-page-query.js";
+import {
+  buildPageQuery,
+  UNCATEGORIZED_PREDICATE,
+} from "../utils/transaction-page-query.js";
 import {
   LINKED_INVOICE_FIELDS,
   LINKED_PURCHASE_INVOICE_FIELDS,
@@ -167,6 +171,24 @@ const bankingResolvers = {
         };
       },
     ),
+
+    // Compteurs « À traiter » de l'accueil : mêmes règles que l'onglet
+    // « Justificatif manquant » de la page Transactions, et transactions sans
+    // catégorie
+    transactionTodoCounts: readBanking(async (parent, { workspaceId }) => {
+      const now = new Date();
+      const [missingReceipt, uncategorized] = await Promise.all([
+        Transaction.countDocuments(
+          buildPageQuery(workspaceId, {}, "MISSING_RECEIPT", now),
+        ),
+        Transaction.countDocuments({
+          workspaceId,
+          deletedAt: null,
+          ...UNCATEGORIZED_PREDICATE,
+        }),
+      ]);
+      return { missingReceipt, uncategorized };
+    }),
 
     transaction: readBanking(async (parent, { id }, { user, workspaceId }) => {
       const transaction = await Transaction.findOne({
@@ -514,7 +536,11 @@ const bankingResolvers = {
               };
             }
 
-            if (!allowedTypes.includes(mimetype)) {
+            // Type annoncé ET contenu réel : un fichier annoncé PDF ou image
+            // doit en être un. Le type enregistré et l'extension du fichier
+            // stocké viennent du contenu, jamais du nom choisi par le client.
+            const detected = detectFileType(fileBuffer);
+            if (!allowedTypes.includes(mimetype) || !detected) {
               return {
                 success: false,
                 message: `Type de fichier non supporté (${filename}).`,
@@ -525,7 +551,7 @@ const bankingResolvers = {
 
             const uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
-              filename,
+              storedFileName(filename, detected.ext),
               user._id || user.id,
               "receipt",
               workspaceId,
@@ -535,7 +561,7 @@ const bankingResolvers = {
               url: uploadResult.url,
               key: uploadResult.key,
               filename,
-              mimetype,
+              mimetype: detected.mime,
               size: fileSize,
               uploadedAt: new Date(),
               uploadedBy: String(user._id || user.id),

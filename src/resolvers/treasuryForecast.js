@@ -1,4 +1,4 @@
-import TreasuryForecast from "../models/TreasuryForecast.js";
+import TreasuryForecast, { MONTH_REGEX } from "../models/TreasuryForecast.js";
 import ManualCashflowEntry from "../models/ManualCashflowEntry.js";
 import DetectedRecurrence from "../models/DetectedRecurrence.js";
 import ForecastScenario from "../models/ForecastScenario.js";
@@ -16,6 +16,7 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { validateMonthPeriod } from "../utils/periodBounds.js";
 import {
   loadScenarioOverlay,
   projectableRecurrenceFilter,
@@ -378,9 +379,11 @@ const treasuryForecastResolvers = {
         const overlay = await loadScenarioOverlay(scenarioId, wId);
         const scenario = overlay.scenario;
 
-        // Parse start/end as YYYY-MM
-        const startMonth = startDate.substring(0, 7);
-        const endMonth = endDate.substring(0, 7);
+        // Mois de début et de fin (YYYY-MM) validés : format, bornes, durée
+        const { startMonth, endMonth } = validateMonthPeriod(
+          startDate,
+          endDate,
+        );
         const monthRange = getMonthRange(startMonth, endMonth);
 
         // Requêtes du calcul : modèles, compte(s) bancaire(s) et bornes de dates
@@ -1356,6 +1359,13 @@ const treasuryForecastResolvers = {
           context.workspaceId,
         );
         const wId = new mongoose.Types.ObjectId(workspaceId);
+        // Nom fait d'espaces : vide une fois rogné, comme le refuse l'écran
+        if (!String(input.name ?? "").trim()) {
+          throw new AppError(
+            "Le nom du scénario est requis",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
         const scenarioExists = await ForecastScenario.exists(
           input.id
             ? { _id: input.id, workspaceId: wId }
@@ -1401,7 +1411,9 @@ const treasuryForecastResolvers = {
               createdBy: new mongoose.Types.ObjectId(context.user.id),
             },
           },
-          { upsert: true, new: true, lean: true },
+          // runValidators : bornes du modèle (multiplicateurs de 0 à 5, nom
+          // de 60 caractères au plus), sinon ignorées par findOneAndUpdate
+          { upsert: true, new: true, lean: true, runValidators: true },
         );
         return result;
       },
@@ -1435,6 +1447,14 @@ const treasuryForecastResolvers = {
           input.workspaceId,
           context.workspaceId,
         );
+        // Mois réel (« 2026-13 » refusé) : le mois sert aussi de filtre à
+        // l'upsert, hors des validateurs du modèle
+        if (!MONTH_REGEX.test(input.month || "")) {
+          throw new AppError(
+            "Le mois doit être au format AAAA-MM (mois de 01 à 12)",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
         const forecastExists = await TreasuryForecast.exists({
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
           month: input.month,
@@ -1465,7 +1485,8 @@ const treasuryForecastResolvers = {
               createdBy: context.user.id,
             },
           },
-          { upsert: true, new: true, lean: true },
+          // runValidators : montant positif, notes de 500 caractères au plus
+          { upsert: true, new: true, lean: true, runValidators: true },
         );
 
         return result;
@@ -1525,10 +1546,13 @@ const treasuryForecastResolvers = {
         };
 
         if (input.id) {
+          // runValidators : mêmes bornes qu'à la création (montant positif,
+          // nom de 120 caractères au plus), sinon ignorées par
+          // findOneAndUpdate
           const updated = await ManualCashflowEntry.findOneAndUpdate(
             { _id: input.id, workspaceId: wObjId },
             { $set: payload },
-            { new: true, lean: true },
+            { new: true, lean: true, runValidators: true },
           );
           if (!updated) {
             throw new AppError(

@@ -8,12 +8,14 @@ extend type Query {
   
   # Get all clients for the current user's company with pagination
   # searchExact : majuscules et accents respectés (sinon « meta » trouve « Méta »)
+  # types : filtre « Type » de la page Contacts, appliqué à toutes les pages
   clients(
     workspaceId: String
     page: Int
     limit: Int
     search: String
     searchExact: Boolean
+    types: [ClientType!]
   ): ClientsResult!
 }
 

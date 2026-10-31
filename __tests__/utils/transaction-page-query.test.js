@@ -149,6 +149,32 @@ describe("buildBaseQuery", () => {
     ]);
   });
 
+  it("méthode de paiement : ce que la liste affiche (sortie sans moyen enregistré = Carte)", async () => {
+    const carteSansMoyen = await createTx({ description: "CB TOTALENERGIES" });
+    const carte = await createTx({ metadata: { paymentMethod: "CARD" } });
+    const prelevement = await createTx({
+      metadata: { paymentMethod: "DIRECT_DEBIT" },
+    });
+    const entree = await createTx({ type: "credit", amount: 450 });
+
+    const ids = async (filters) =>
+      (await Transaction.find(buildBaseQuery(workspaceId, filters)))
+        .map((t) => t.externalId)
+        .sort();
+
+    expect(await ids({ paymentMethod: "CARD" })).toEqual(
+      [carteSansMoyen.externalId, carte.externalId].sort(),
+    );
+    expect(await ids({ paymentMethod: "BANK_TRANSFER" })).toEqual([
+      entree.externalId,
+    ]);
+    expect(await ids({ paymentMethod: "DIRECT_DEBIT" })).toEqual([
+      prelevement.externalId,
+    ]);
+    // Combiné à la catégorie : les deux filtres s'appliquent
+    expect(await ids({ paymentMethod: "CARD", category: "MEALS" })).toEqual([]);
+  });
+
   it("combine recherche et catégorie sans écraser le $or de catégorie", async () => {
     const match = await createTx({
       expenseCategory: "MEALS",

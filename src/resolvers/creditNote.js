@@ -27,6 +27,7 @@ import {
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
 import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
+import { creditNoteDeletionRefused } from "../utils/issuedInvoiceLock.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -649,17 +650,10 @@ const creditNoteResolvers = {
           // Fire-and-forget, ne bloque pas la réponse
           triggerCreditNoteFacturXArchive(creditNote, workspaceId);
 
-          // Créer un événement
-          await Event.create({
-            type: "CREDIT_NOTE_UPDATED",
-            entityType: "CreditNote",
-            entityId: creditNote._id,
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            userId: new mongoose.Types.ObjectId(context.user.id),
-            metadata: {
-              creditNoteNumber: creditNote.number,
-            },
-          });
+          // Pas d'événement de calendrier pour une modification : Event ne
+          // connaît que la création d'un avoir (CREDIT_NOTE_CREATED, avec
+          // titre et dates). L'ancien Event.create échouait à chaque fois et
+          // l'API répondait en erreur alors que l'avoir était enregistré.
 
           return await CreditNote.findById(creditNote._id).populate(
             "originalInvoice",
@@ -685,29 +679,16 @@ const creditNoteResolvers = {
             throw createNotFoundError("Avoir non trouvé");
           }
 
-          // Les avoirs avec statut CREATED peuvent toujours être supprimés,
-          // sauf un avoir transmis en facturation électronique
+          // Avoir transmis en facturation électronique : message dédié
           assertNotEInvoiceTransmitted(
             creditNote.toObject(),
             "creditNote",
             "delete",
           );
 
-          await CreditNote.findOneAndDelete({ _id: id, workspaceId });
-
-          // Créer un événement
-          await Event.create({
-            type: "CREDIT_NOTE_DELETED",
-            entityType: "CreditNote",
-            entityId: creditNote._id,
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            userId: new mongoose.Types.ObjectId(context.user.id),
-            metadata: {
-              creditNoteNumber: creditNote.number,
-            },
-          });
-
-          return true;
+          // Un avoir est émis dès sa création (pas de brouillon) : il ne se
+          // supprime jamais, sa place dans la numérotation des avoirs reste.
+          throw creditNoteDeletionRefused(creditNote);
         } catch (error) {
           console.error("Erreur lors de la suppression de l'avoir:", error);
           throw error;

@@ -5,6 +5,7 @@ import GmailOAuthProvider, { translateGmailError } from './GmailOAuthProvider.js
 import hybridOcrService from '../hybridOcrService.js';
 import cloudflareService from '../cloudflareService.js';
 import logger from '../../utils/logger.js';
+import { detectFileType, storedFileName } from '../../utils/fileSignature.js';
 import { resolveImportedClient } from '../../utils/clientMatching.js';
 
 // Mots-clés pour détecter les emails contenant des factures
@@ -411,10 +412,17 @@ async function processGmailMessage(gmail, messageId, connection) {
         .replace(/_/g, '/');
       const buffer = Buffer.from(base64Data, 'base64');
 
+      // Pièce annoncée PDF par l'expéditeur : seul un vrai PDF est importé,
+      // stocké sous une extension .pdf quel que soit son nom
+      if (detectFileType(buffer)?.mime !== 'application/pdf') {
+        logger.warn(`[Gmail Scan] Pièce jointe ignorée (contenu non PDF) : ${attachment.filename}`);
+        continue;
+      }
+
       // Upload to Cloudflare R2
       const uploadResult = await cloudflareService.uploadImage(
         buffer,
-        attachment.filename,
+        storedFileName(attachment.filename, '.pdf'),
         connection.userId.toString(),
         'importedInvoice',
         connection.workspaceId.toString()

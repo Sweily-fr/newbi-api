@@ -1,6 +1,10 @@
 import logger from "../utils/logger.js";
 import { Queue, Worker } from "bullmq";
 import Invoice from "../models/Invoice.js";
+import {
+  fullyCreditedInvoiceIds,
+  isInvoiceFullyCredited,
+} from "../utils/invoiceCredit.js";
 import InvoiceReminderSettings from "../models/InvoiceReminderSettings.js";
 import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
 import EmailSettings from "../models/EmailSettings.js";
@@ -70,6 +74,15 @@ function startReminderWorker() {
             `⏭️ [Queue] Relance ${reminderType} déjà envoyée pour ${invoice.number}`,
           );
           return { skipped: true, reason: "already_sent" };
+        }
+
+        // État revérifié à l'envoi : le job a pu être mis en file avant un
+        // paiement, une annulation ou un avoir.
+        if (!["PENDING", "OVERDUE"].includes(invoice.status)) {
+          return { skipped: true, reason: "not_due" };
+        }
+        if (await isInvoiceFullyCredited(invoice)) {
+          return { skipped: true, reason: "fully_credited" };
         }
 
         // Récupérer les paramètres de relance
@@ -194,7 +207,12 @@ async function scheduleWorkspaceReminders(workspaceId, settings) {
     );
   }
 
-  const overdueInvoices = await Invoice.find(query);
+  const candidates = await Invoice.find(query);
+  // Factures soldées par avoir : plus rien à relancer
+  const credited = await fullyCreditedInvoiceIds(candidates, workspaceId);
+  const overdueInvoices = candidates.filter(
+    (inv) => !credited.has(String(inv._id)),
+  );
 
   logger.debug(
     `📄 [Queue] ${overdueInvoices.length} facture(s) en retard pour workspace ${workspaceId}`,
