@@ -28,6 +28,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { triggerCreditNoteFacturXArchive } from "../services/creditNoteFacturXArchiveService.js";
 import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
 import { creditNoteDeletionRefused } from "../utils/issuedInvoiceLock.js";
+import { withDocumentLock } from "../utils/documentLock.js";
 import {
   generateCreditNoteNumber,
   validateNumberSequence,
@@ -298,146 +299,163 @@ const creditNoteResolvers = {
             originalInvoice.shipping,
           );
 
-          // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
-          const existingCreditNotes = await CreditNote.find({
-            originalInvoice: originalInvoice._id,
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-          });
+          // Plafond, numéro et enregistrement d'un seul avoir à la fois par
+          // facture : deux avoirs simultanés liraient le même montant restant
+          // et dépasseraient ensemble le montant de la facture.
+          const creditNote = await withDocumentLock(
+            `creditNotes:${originalInvoice._id}`,
+            async () => {
+              // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture
+              const existingCreditNotes = await CreditNote.find({
+                originalInvoice: originalInvoice._id,
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              });
 
-          // Calculer la somme des avoirs existants (valeurs absolues car les avoirs sont négatifs)
-          const existingCreditNotesTotal = existingCreditNotes.reduce(
-            (sum, creditNote) => {
-              return sum + Math.abs(creditNote.finalTotalTTC || 0);
-            },
-            0,
-          );
-
-          // Montant du nouvel avoir (valeur absolue)
-          const newCreditNoteAmount = Math.abs(totals.finalTotalTTC);
-
-          // Montant total de la facture originale
-          const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
-
-          // Vérifier que la somme totale ne dépasse pas le montant de la facture.
-          // Comparaison en centimes arrondis : un avoir dont le montant ÉGALE la
-          // facture doit passer (l'écart d'arrondi flottant ne doit pas bloquer).
-          if (
-            Math.round((existingCreditNotesTotal + newCreditNoteAmount) * 100) >
-            Math.round(invoiceTotalAmount * 100)
-          ) {
-            const remainingAmount =
-              invoiceTotalAmount - existingCreditNotesTotal;
-            throw createValidationError(
-              `Le montant de cet avoir (${newCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
-            );
-          }
-
-          // Préfixe effectif : le même doit servir à la validation ET à la
-          // génération, sinon le périmètre de la séquence diverge. Le préfixe
-          // par défaut est mensuel (AV-AAAAMM) — mêmes règles que la génération
-          // et le modèle. Sans ça, un numéro validé "tous préfixes confondus"
-          // pouvait être rejeté à tort quand le préfixe mensuel change de mois.
-          const now = new Date();
-          const effectivePrefix =
-            input.prefix ||
-            `AV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-
-          // Numéro manuel : valider la continuité de la séquence (max+1
-          // strict, pas de doublon) avant de l'accepter — même verrou que
-          // les factures/devis/BC.
-          let manualNumber = input.number;
-          if (manualNumber) {
-            if (!/^\d{1,6}$/.test(manualNumber)) {
-              throw new AppError(
-                "Le numéro d'avoir doit contenir entre 1 et 6 chiffres",
-                ERROR_CODES.VALIDATION_ERROR,
+              // Calculer la somme des avoirs existants (valeurs absolues car les avoirs sont négatifs)
+              const existingCreditNotesTotal = existingCreditNotes.reduce(
+                (sum, creditNote) => {
+                  return sum + Math.abs(creditNote.finalTotalTTC || 0);
+                },
+                0,
               );
-            }
-            manualNumber = String(parseInt(manualNumber, 10)).padStart(4, "0");
 
-            const sequenceCheck = await validateNumberSequence(
-              "creditNote",
-              manualNumber,
-              effectivePrefix,
-              { workspaceId },
-            );
-            if (!sequenceCheck.isValid) {
-              throw new AppError(
-                sequenceCheck.message,
-                ERROR_CODES.VALIDATION_ERROR,
-              );
-            }
-          }
+              // Montant du nouvel avoir (valeur absolue)
+              const newCreditNoteAmount = Math.abs(totals.finalTotalTTC);
 
-          // Générer le numéro d'avoir
-          const number = await generateCreditNoteNumber(effectivePrefix, {
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            isDraft: false,
-            manualNumber,
-          });
+              // Montant total de la facture originale
+              const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-          // L'avoir corrige la facture d'origine : même émetteur et même
-          // client que la facture, jamais ceux de la saisie. Émetteur :
-          // celui figé sur la facture, sinon l'organisation (pas de brouillon
-          // pour un avoir, il est figé dès sa création).
-          const invoiceClient = plainObject(originalInvoice.client);
-          let creditNoteCompanyInfo = plainObject(originalInvoice.companyInfo);
-          if (!creditNoteCompanyInfo || !creditNoteCompanyInfo.name) {
-            const org = await getOrganizationInfo(workspaceId);
-            creditNoteCompanyInfo = mapOrganizationToCompanyInfo(org);
-          }
+              // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+              // Comparaison en centimes arrondis : un avoir dont le montant ÉGALE la
+              // facture doit passer (l'écart d'arrondi flottant ne doit pas bloquer).
+              if (
+                Math.round(
+                  (existingCreditNotesTotal + newCreditNoteAmount) * 100,
+                ) > Math.round(invoiceTotalAmount * 100)
+              ) {
+                const remainingAmount =
+                  invoiceTotalAmount - existingCreditNotesTotal;
+                throw createValidationError(
+                  `Le montant de cet avoir (${newCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
+                );
+              }
 
-          // Créer l'avoir
-          const creditNote = new CreditNote({
-            ...input,
-            number,
-            // Fixer le préfixe validé/généré (et pas seulement le défaut du
-            // modèle) pour garantir que le numéro et le préfixe stockés
-            // décrivent la même séquence.
-            prefix: effectivePrefix,
-            status: "CREATED",
-            companyInfo: creditNoteCompanyInfo,
-            originalInvoice: originalInvoice._id,
-            originalInvoiceNumber: originalInvoice.number,
-            // Copier l'auto-liquidation depuis la facture originale
-            isReverseCharge: originalInvoice.isReverseCharge || false,
-            client: {
-              ...(invoiceClient?.name ? invoiceClient : input.client),
-              // Pour les avoirs, ne pas copier l'adresse de livraison du client
-              // car on utilise celle de la facture originale dans le champ shipping
-              hasDifferentShippingAddress: false,
-              shippingAddress: undefined,
-              // Mêmes champs personnalisés client que la facture d'origine
-              documentFields: originalInvoice.client?.documentFields?.map(
-                (field) => ({ label: field.label, value: field.value }),
-              ),
-            },
-            // Copier les informations de livraison depuis la facture originale
-            shipping: originalInvoice.shipping
-              ? {
-                  billShipping: originalInvoice.shipping.billShipping,
-                  shippingAddress: originalInvoice.shipping.shippingAddress
-                    ? {
-                        fullName:
-                          originalInvoice.shipping.shippingAddress.fullName,
-                        street: originalInvoice.shipping.shippingAddress.street,
-                        city: originalInvoice.shipping.shippingAddress.city,
-                        postalCode:
-                          originalInvoice.shipping.shippingAddress.postalCode,
-                        country:
-                          originalInvoice.shipping.shippingAddress.country,
-                      }
-                    : undefined,
-                  shippingAmountHT: originalInvoice.shipping.shippingAmountHT,
-                  shippingVatRate: originalInvoice.shipping.shippingVatRate,
+              // Préfixe effectif : le même doit servir à la validation ET à la
+              // génération, sinon le périmètre de la séquence diverge. Le préfixe
+              // par défaut est mensuel (AV-AAAAMM) — mêmes règles que la génération
+              // et le modèle. Sans ça, un numéro validé "tous préfixes confondus"
+              // pouvait être rejeté à tort quand le préfixe mensuel change de mois.
+              const now = new Date();
+              const effectivePrefix =
+                input.prefix ||
+                `AV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+              // Numéro manuel : valider la continuité de la séquence (max+1
+              // strict, pas de doublon) avant de l'accepter — même verrou que
+              // les factures/devis/BC.
+              let manualNumber = input.number;
+              if (manualNumber) {
+                if (!/^\d{1,6}$/.test(manualNumber)) {
+                  throw new AppError(
+                    "Le numéro d'avoir doit contenir entre 1 et 6 chiffres",
+                    ERROR_CODES.VALIDATION_ERROR,
+                  );
                 }
-              : undefined,
-            workspaceId: new mongoose.Types.ObjectId(workspaceId),
-            createdBy: new mongoose.Types.ObjectId(context.user.id),
-            ...totals,
-          });
+                manualNumber = String(parseInt(manualNumber, 10)).padStart(
+                  4,
+                  "0",
+                );
 
-          await creditNote.save();
+                const sequenceCheck = await validateNumberSequence(
+                  "creditNote",
+                  manualNumber,
+                  effectivePrefix,
+                  { workspaceId },
+                );
+                if (!sequenceCheck.isValid) {
+                  throw new AppError(
+                    sequenceCheck.message,
+                    ERROR_CODES.VALIDATION_ERROR,
+                  );
+                }
+              }
+
+              // Générer le numéro d'avoir
+              const number = await generateCreditNoteNumber(effectivePrefix, {
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                isDraft: false,
+                manualNumber,
+              });
+
+              // L'avoir corrige la facture d'origine : même émetteur et même
+              // client que la facture, jamais ceux de la saisie. Émetteur :
+              // celui figé sur la facture, sinon l'organisation (pas de brouillon
+              // pour un avoir, il est figé dès sa création).
+              const invoiceClient = plainObject(originalInvoice.client);
+              let creditNoteCompanyInfo = plainObject(
+                originalInvoice.companyInfo,
+              );
+              if (!creditNoteCompanyInfo || !creditNoteCompanyInfo.name) {
+                const org = await getOrganizationInfo(workspaceId);
+                creditNoteCompanyInfo = mapOrganizationToCompanyInfo(org);
+              }
+
+              // Créer l'avoir
+              const newCreditNote = new CreditNote({
+                ...input,
+                number,
+                // Fixer le préfixe validé/généré (et pas seulement le défaut du
+                // modèle) pour garantir que le numéro et le préfixe stockés
+                // décrivent la même séquence.
+                prefix: effectivePrefix,
+                status: "CREATED",
+                companyInfo: creditNoteCompanyInfo,
+                originalInvoice: originalInvoice._id,
+                originalInvoiceNumber: originalInvoice.number,
+                // Copier l'auto-liquidation depuis la facture originale
+                isReverseCharge: originalInvoice.isReverseCharge || false,
+                client: {
+                  ...(invoiceClient?.name ? invoiceClient : input.client),
+                  // Pour les avoirs, ne pas copier l'adresse de livraison du client
+                  // car on utilise celle de la facture originale dans le champ shipping
+                  hasDifferentShippingAddress: false,
+                  shippingAddress: undefined,
+                  // Mêmes champs personnalisés client que la facture d'origine
+                  documentFields: originalInvoice.client?.documentFields?.map(
+                    (field) => ({ label: field.label, value: field.value }),
+                  ),
+                },
+                // Copier les informations de livraison depuis la facture originale
+                shipping: originalInvoice.shipping
+                  ? {
+                      billShipping: originalInvoice.shipping.billShipping,
+                      shippingAddress: originalInvoice.shipping.shippingAddress
+                        ? {
+                            fullName:
+                              originalInvoice.shipping.shippingAddress.fullName,
+                            street:
+                              originalInvoice.shipping.shippingAddress.street,
+                            city: originalInvoice.shipping.shippingAddress.city,
+                            postalCode:
+                              originalInvoice.shipping.shippingAddress
+                                .postalCode,
+                            country:
+                              originalInvoice.shipping.shippingAddress.country,
+                          }
+                        : undefined,
+                      shippingAmountHT:
+                        originalInvoice.shipping.shippingAmountHT,
+                      shippingVatRate: originalInvoice.shipping.shippingVatRate,
+                    }
+                  : undefined,
+                workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                createdBy: new mongoose.Types.ObjectId(context.user.id),
+                ...totals,
+              });
+              await newCreditNote.save();
+              return newCreditNote;
+            },
+          );
 
           // Archivage R2 du PDF de l'avoir — non bloquant, serveur-à-serveur.
           // Parité avec l'archivage auto des factures : fonctionne pour TOUS les
@@ -581,86 +599,97 @@ const creditNoteResolvers = {
             }
           }
 
-          // Calculer les nouveaux totaux si les articles ou la remise changent
-          let totals = {};
-          if (
-            input.items ||
-            input.discount !== undefined ||
-            input.discountType !== undefined
-          ) {
-            // Facture d'origine : auto-liquidation et frais de port
-            const originalInvoice = await Invoice.findOne({
-              _id: creditNote.originalInvoice,
-              workspaceId: creditNote.workspaceId,
-            });
-            if (!originalInvoice) {
-              throw createNotFoundError("Facture originale non trouvée");
-            }
+          // Plafond vérifié et avoir enregistré seul (même verrou que la
+          // création) : deux modifications simultanées ne dépassent pas la
+          // facture.
+          await withDocumentLock(
+            `creditNotes:${creditNote.originalInvoice}`,
+            async () => {
+              // Calculer les nouveaux totaux si les articles ou la remise changent
+              let totals = {};
+              if (
+                input.items ||
+                input.discount !== undefined ||
+                input.discountType !== undefined
+              ) {
+                // Facture d'origine : auto-liquidation et frais de port
+                const originalInvoice = await Invoice.findOne({
+                  _id: creditNote.originalInvoice,
+                  workspaceId: creditNote.workspaceId,
+                });
+                if (!originalInvoice) {
+                  throw createNotFoundError("Facture originale non trouvée");
+                }
 
-            // Valeur de l'input dès qu'il la porte (une remise remise à 0
-            // reste à 0), sinon celle de l'avoir enregistré
-            totals = calculateCreditNoteTotals(
-              inputOrStored(input, creditNote, "items") || [],
-              inputOrStored(input, creditNote, "discount") ?? 0,
-              inputOrStored(input, creditNote, "discountType") ?? "FIXED",
-              originalInvoice.isReverseCharge || false,
-              originalInvoice.shipping,
-            );
+                // Valeur de l'input dès qu'il la porte (une remise remise à 0
+                // reste à 0), sinon celle de l'avoir enregistré
+                totals = calculateCreditNoteTotals(
+                  inputOrStored(input, creditNote, "items") || [],
+                  inputOrStored(input, creditNote, "discount") ?? 0,
+                  inputOrStored(input, creditNote, "discountType") ?? "FIXED",
+                  originalInvoice.isReverseCharge || false,
+                  originalInvoice.shipping,
+                );
 
-            // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
-            // Récupérer tous les autres avoirs pour cette facture (excluant celui en cours de modification)
-            const otherCreditNotes = await CreditNote.find({
-              originalInvoice: creditNote.originalInvoice,
-              workspaceId: new mongoose.Types.ObjectId(workspaceId),
-              _id: { $ne: id }, // Exclure l'avoir en cours de modification
-            });
+                // Vérifier que la somme des avoirs ne dépasse pas le montant de la facture lors de la modification
+                // Récupérer tous les autres avoirs pour cette facture (excluant celui en cours de modification)
+                const otherCreditNotes = await CreditNote.find({
+                  originalInvoice: creditNote.originalInvoice,
+                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                  _id: { $ne: id }, // Exclure l'avoir en cours de modification
+                });
 
-            // Calculer la somme des autres avoirs existants
-            const otherCreditNotesTotal = otherCreditNotes.reduce((sum, cn) => {
-              return sum + Math.abs(cn.finalTotalTTC || 0);
-            }, 0);
+                // Calculer la somme des autres avoirs existants
+                const otherCreditNotesTotal = otherCreditNotes.reduce(
+                  (sum, cn) => {
+                    return sum + Math.abs(cn.finalTotalTTC || 0);
+                  },
+                  0,
+                );
 
-            // Montant du nouvel avoir modifié
-            const updatedCreditNoteAmount = Math.abs(totals.finalTotalTTC);
+                // Montant du nouvel avoir modifié
+                const updatedCreditNoteAmount = Math.abs(totals.finalTotalTTC);
 
-            // Montant total de la facture originale
-            const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
+                // Montant total de la facture originale
+                const invoiceTotalAmount = originalInvoice.finalTotalTTC || 0;
 
-            // Vérifier que la somme totale ne dépasse pas le montant de la facture.
-            // Comparaison en centimes arrondis (cf. création) : l'égalité passe.
-            if (
-              Math.round(
-                (otherCreditNotesTotal + updatedCreditNoteAmount) * 100,
-              ) > Math.round(invoiceTotalAmount * 100)
-            ) {
-              const remainingAmount =
-                invoiceTotalAmount - otherCreditNotesTotal;
-              throw createValidationError(
-                `Le montant de cet avoir modifié (${updatedCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
-              );
-            }
-          }
+                // Vérifier que la somme totale ne dépasse pas le montant de la facture.
+                // Comparaison en centimes arrondis (cf. création) : l'égalité passe.
+                if (
+                  Math.round(
+                    (otherCreditNotesTotal + updatedCreditNoteAmount) * 100,
+                  ) > Math.round(invoiceTotalAmount * 100)
+                ) {
+                  const remainingAmount =
+                    invoiceTotalAmount - otherCreditNotesTotal;
+                  throw createValidationError(
+                    `Le montant de cet avoir modifié (${updatedCreditNoteAmount.toFixed(2)}€) dépasse le montant restant disponible (${remainingAmount.toFixed(2)}€). La somme des avoirs ne peut pas dépasser le montant de la facture originale (${invoiceTotalAmount.toFixed(2)}€).`,
+                  );
+                }
+              }
 
-          // Mettre à jour l'avoir. Client, émetteur et facture d'origine
-          // restent ceux de la facture : ils ne se changent pas après coup.
-          const editable = { ...input };
-          for (const field of LOCKED_UPDATE_FIELDS) delete editable[field];
-          Object.assign(creditNote, editable, totals);
-          // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
-          // envois sans PDF joint : elle date d'avant la modification.
-          if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
-            creditNote.cachedPdf = undefined;
-          }
-          // Archive PDF de l'avoir (aperçu, bouton PDF, e-mails) : elle date
-          // d'avant la modification. On l'oublie et on la régénère après
-          // l'enregistrement (le web la réécrit aussi de son côté) ; si la
-          // régénération échoue, l'aperçu retombe sur un rendu à jour.
-          if (creditNote.archivedPdfKey) {
-            creditNote.archivedPdfKey = undefined;
-            creditNote.archivedPdfStoredAt = undefined;
-            creditNote.archivedPdfSource = undefined;
-          }
-          await creditNote.save();
+              // Mettre à jour l'avoir. Client, émetteur et facture d'origine
+              // restent ceux de la facture : ils ne se changent pas après coup.
+              const editable = { ...input };
+              for (const field of LOCKED_UPDATE_FIELDS) delete editable[field];
+              Object.assign(creditNote, editable, totals);
+              // Copie PDF des emails (cachedPdf) réutilisée telle quelle par les
+              // envois sans PDF joint : elle date d'avant la modification.
+              if (creditNote.cachedPdf?.key || creditNote.cachedPdf?.url) {
+                creditNote.cachedPdf = undefined;
+              }
+              // Archive PDF de l'avoir (aperçu, bouton PDF, e-mails) : elle date
+              // d'avant la modification. On l'oublie et on la régénère après
+              // l'enregistrement (le web la réécrit aussi de son côté) ; si la
+              // régénération échoue, l'aperçu retombe sur un rendu à jour.
+              if (creditNote.archivedPdfKey) {
+                creditNote.archivedPdfKey = undefined;
+                creditNote.archivedPdfStoredAt = undefined;
+                creditNote.archivedPdfSource = undefined;
+              }
+              await creditNote.save();
+            },
+          );
 
           // Fire-and-forget, ne bloque pas la réponse
           triggerCreditNoteFacturXArchive(creditNote, workspaceId);

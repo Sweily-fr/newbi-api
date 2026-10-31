@@ -428,6 +428,71 @@ describe("CreditNote Resolver — client et émetteur de la facture d'origine", 
   });
 });
 
+describe("CreditNote Resolver — avoirs simultanés", () => {
+  const sumCredited = async (invoiceId) =>
+    (await CreditNote.collection.find({ originalInvoice: invoiceId }).toArray())
+      .map((c) => Math.abs(c.finalTotalTTC))
+      .reduce((a, b) => a + b, 0);
+
+  it("deux avoirs de 100 % créés au même instant : un seul passe, l'autre est refusé", async () => {
+    // Facture de 1 200 € TTC ; chaque avoir vaut 1 200 € TTC
+    const inv = await insertInvoice();
+    const input = buildCreditNoteInput(inv._id, {
+      items: [
+        { description: "Total", quantity: 1, unitPrice: 1000, vatRate: 20 },
+      ],
+    });
+    const create = () =>
+      creditNoteResolvers.Mutation.createCreditNote(null, { input }, ctx());
+
+    const results = await Promise.allSettled([create(), create(), create()]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    for (const r of results.filter((r) => r.status === "rejected")) {
+      expect(r.reason.message).toMatch(/dépasse le montant restant/);
+    }
+    expect(await sumCredited(inv._id)).toBeCloseTo(1200, 2);
+  });
+
+  it("deux avoirs modifiés au même instant ne dépassent pas la facture", async () => {
+    const inv = await insertInvoice();
+    const small = buildCreditNoteInput(inv._id, {
+      items: [
+        { description: "Part", quantity: 1, unitPrice: 100, vatRate: 20 },
+      ],
+    });
+    const a = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: small },
+      ctx(),
+    );
+    const b = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: small },
+      ctx(),
+    );
+    // Chacun passe à 900 € HT (1 080 € TTC) : ensemble 2 160 € > 1 200 €
+    const grow = (cn) =>
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        {
+          id: cn._id.toString(),
+          input: {
+            items: [
+              { description: "Part", quantity: 1, unitPrice: 900, vatRate: 20 },
+            ],
+          },
+        },
+        ctx(),
+      );
+
+    const results = await Promise.allSettled([grow(a), grow(b)]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await sumCredited(inv._id)).toBeLessThanOrEqual(1200);
+  });
+});
+
 describe("CreditNote Resolver — numérotation", () => {
   it("accepte un avoir 0001 sous deux préfixes mensuels distincts la même année (index avec prefix)", async () => {
     // Le bug d'origine : l'index unique (number, workspaceId, issueYear) sans
