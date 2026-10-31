@@ -17,7 +17,7 @@ import {
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
-import UserOcrQuota from "../models/UserOcrQuota.js";
+import UserOcrQuota, { PLAN_QUOTAS } from "../models/UserOcrQuota.js";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
@@ -68,6 +68,10 @@ const MAX_BATCH_IMPORT = 100;
 // Cache mémoire pour les plans utilisateurs (évite une requête MongoDB par import dans un batch)
 const planCache = new Map();
 const PLAN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Paiement Stripe d'imports OCR supplémentaires : metadata attendues sur la
+// session de paiement (ou le PaymentIntent) { purpose, workspaceId, quantity }.
+export const EXTRA_OCR_IMPORTS_PURPOSE = "extra_ocr_imports";
 
 // Mapping des noms de plan Better Auth/Stripe → clés PLAN_QUOTAS
 const PLAN_NAME_MAP = {
@@ -1870,15 +1874,22 @@ const importedInvoiceResolvers = {
           throw createValidationError("Ce paiement a déjà été utilisé.");
         }
 
-        // Confirmer auprès de Stripe que le paiement existe et a réussi.
-        let paymentConfirmed = false;
+        // Confirmer auprès de Stripe que le paiement existe, a réussi et
+        // correspond à cet achat : imports OCR (metadata.purpose), de cet
+        // espace, pour cette quantité, au prix de l'offre. Sans ce lien, le
+        // plus petit paiement réussi de la plateforme (ou celui d'un autre
+        // espace, d'un transfert de fichiers) créditait jusqu'à 1 000 imports.
+        let payment;
+        let paidAmount;
         try {
           if (String(paymentId).startsWith("cs_")) {
-            const session = await stripe.checkout.sessions.retrieve(paymentId);
-            paymentConfirmed = session?.payment_status === "paid";
+            payment = await stripe.checkout.sessions.retrieve(paymentId);
+            if (payment?.payment_status !== "paid") payment = null;
+            paidAmount = payment?.amount_total;
           } else {
-            const intent = await stripe.paymentIntents.retrieve(paymentId);
-            paymentConfirmed = intent?.status === "succeeded";
+            payment = await stripe.paymentIntents.retrieve(paymentId);
+            if (payment?.status !== "succeeded") payment = null;
+            paidAmount = payment?.amount_received ?? payment?.amount;
           }
         } catch (stripeErr) {
           logger.warn(
@@ -1886,11 +1897,29 @@ const importedInvoiceResolvers = {
           );
           throw createValidationError("Paiement introuvable ou invalide.");
         }
-        if (!paymentConfirmed) {
+        if (!payment) {
           throw createValidationError("Paiement non confirmé.");
         }
 
         const plan = await getUserPlan(user.id, workspaceId);
+        const unitPrice = Math.round(
+          (PLAN_QUOTAS[plan] || PLAN_QUOTAS.FREE).extraImportPrice * 100,
+        );
+        const metadata = payment.metadata || {};
+        const matchesPurchase =
+          metadata.purpose === EXTRA_OCR_IMPORTS_PURPOSE &&
+          String(metadata.workspaceId) === String(workspaceId) &&
+          Number(metadata.quantity) === quantity &&
+          String(payment.currency || "").toLowerCase() === "eur" &&
+          Number(paidAmount) >= unitPrice * quantity;
+        if (!matchesPurchase) {
+          logger.warn(
+            `[purchaseExtraOcrImports] Paiement ${paymentId} sans rapport avec l'achat de ${quantity} import(s) pour ${workspaceId}`,
+          );
+          throw createValidationError(
+            "Ce paiement ne correspond pas à cet achat d'imports.",
+          );
+        }
 
         // Enregistrer l'achat
         const result = await UserOcrQuota.addExtraImports(
