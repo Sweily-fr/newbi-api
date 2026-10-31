@@ -289,7 +289,7 @@ function generateEmailHtml(
       <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${titleText}</h1>
 
       <!-- Message -->
-      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${emailBody.replace(/\n/g, "<br>")}</div>
+      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${escapeHtml(emailBody).replace(/\n/g, "<br>")}</div>
 
       <!-- Note PDF joint -->
       <div style="background-color:#fafafa;border-left:3px solid #5a50ff;border-radius:0 8px 8px 0;padding:16px;margin-bottom:24px;">
@@ -407,7 +407,7 @@ function generateReminderEmailHtml(emailBody, variables, reminderType) {
       <h1 style="font-size:26px;font-weight:500;color:#1a1a1a;margin:0 0 24px 0;line-height:1.3;">${titleText}</h1>
 
       <!-- Message -->
-      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${emailBody.replace(/\n/g, "<br>")}</div>
+      <div style="font-size:15px;color:#4b5563;margin:0 0 24px 0;line-height:1.6;">${escapeHtml(emailBody).replace(/\n/g, "<br>")}</div>
 
       ${
         isSecond

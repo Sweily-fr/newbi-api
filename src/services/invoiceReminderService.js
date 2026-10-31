@@ -11,6 +11,7 @@ import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
 import EmailSettings from "../models/EmailSettings.js";
 import emailReminderService from "./emailReminderService.js";
 import axios from "axios";
+import { escapeHtml } from "../utils/trialEmails.js";
 
 /**
  * Vérifie et envoie les relances automatiques pour toutes les factures impayées
@@ -226,7 +227,7 @@ async function sendReminder(
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Rappel de paiement</h2>
-        <p>${emailBody.replace(/\n/g, "<br>")}</p>
+        <p>${escapeHtml(emailBody).replace(/\n/g, "<br>")}</p>
         <hr>
         <p><strong>Facture:</strong> ${variables.invoiceNumber}</p>
         <p><strong>Montant:</strong> ${variables.totalAmount}</p>
