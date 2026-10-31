@@ -27,6 +27,7 @@ import {
   signatureChannel,
 } from "../services/esignaturePubsub.js";
 import { getPubSub } from "../config/redis.js";
+import { quoteContentHash } from "../utils/quoteContentHash.js";
 
 /**
  * Espace d'un document suivi par signatureStatusUpdated : celui de sa
@@ -451,6 +452,9 @@ const esignatureResolvers = {
           documentType,
           documentId,
           documentNumber: document.number || null,
+          // Version du devis envoyée : l'acceptation automatique à la
+          // signature exige la même version
+          documentHash: quoteContentHash(document),
           signatureType,
           status: "PENDING",
           signers: signers.map((s) => ({

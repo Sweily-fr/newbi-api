@@ -122,7 +122,13 @@ router.post("/", express.json(), async (req, res) => {
     // demande : le statut courant est conservé (cf. esignatureStatus.js).
     const previousStatus = signatureRequest.status;
     const mappedStatus = mapExternalStatus(state);
-    const newStatus = mappedStatus || previousStatus;
+    // Une demande annulée le reste : un état reçu ensuite (suppression chez
+    // le prestataire qui aurait échoué) ne la réactive pas et n'accepte pas
+    // le devis.
+    const wasCancelled = previousStatus === "CANCELLED";
+    const newStatus = wasCancelled
+      ? previousStatus
+      : mappedStatus || previousStatus;
 
     if (!mappedStatus) {
       logger.warn(
@@ -170,7 +176,7 @@ router.post("/", express.json(), async (req, res) => {
         );
       }
       try {
-        await acceptQuoteOnSignature(signatureRequest);
+        if (!wasCancelled) await acceptQuoteOnSignature(signatureRequest);
       } catch (acceptError) {
         logger.warn(
           `Impossible d'auto-accepter le devis après signature: ${acceptError.message}`,

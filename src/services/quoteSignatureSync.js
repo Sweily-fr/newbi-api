@@ -7,13 +7,29 @@ import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "./qontoSyncHelper
 import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "./abbySyncHelper.js";
 import esignatureService from "./esignatureService.js";
 import { publishSignatureStatus } from "./esignaturePubsub.js";
+import { quoteContentHash } from "../utils/quoteContentHash.js";
 
-const ACTIVE_SIGNATURE_STATUSES = [
+export const ACTIVE_SIGNATURE_STATUSES = [
   "PENDING",
   "WAIT_VALIDATION",
   "WAIT_SIGN",
   "WAIT_SIGNER",
 ];
+
+/**
+ * Demande de signature CLIENT encore active pour un devis (le cachet
+ * automatique de l'entreprise n'est pas une signature du client).
+ * @param {string|object} quoteId
+ * @returns {Promise<object|null>}
+ */
+export async function findActiveClientQuoteSignature(quoteId) {
+  return SignatureRequest.findOne({
+    documentType: "quote",
+    documentId: quoteId,
+    signatureType: { $ne: "QES_automatic" },
+    status: { $in: ACTIVE_SIGNATURE_STATUSES },
+  }).lean();
+}
 
 /**
  * Annule les demandes de signature encore actives d'un devis.
@@ -90,6 +106,26 @@ export async function acceptQuoteOnSignature(signatureRequest) {
     return false;
   }
 
+  // La version signée doit être celle du devis : un devis modifié depuis
+  // l'envoi en signature n'est pas accepté automatiquement (le document
+  // signé reste conservé comme preuve). Les demandes sans empreinte
+  // (antérieures) gardent le comportement d'avant.
+  if (
+    signatureRequest.documentHash &&
+    signatureRequest.documentHash !== quoteContentHash(quote)
+  ) {
+    logger.warn(
+      `Auto-acceptation devis ${quote._id}: version signée différente du devis actuel, acceptation automatique refusée`,
+    );
+    if (signatureRequest.autoAcceptBlockedReason !== "DOCUMENT_CHANGED") {
+      await SignatureRequest.updateOne(
+        { _id: signatureRequest._id },
+        { $set: { autoAcceptBlockedReason: "DOCUMENT_CHANGED" } },
+      );
+    }
+    return false;
+  }
+
   quote.status = "COMPLETED";
   await quote.save();
   logger.info(
@@ -143,4 +179,8 @@ export async function acceptQuoteOnSignature(signatureRequest) {
   return true;
 }
 
-export default { acceptQuoteOnSignature, cancelActiveQuoteSignatures };
+export default {
+  acceptQuoteOnSignature,
+  cancelActiveQuoteSignatures,
+  findActiveClientQuoteSignature,
+};
