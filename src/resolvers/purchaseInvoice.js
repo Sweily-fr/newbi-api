@@ -1963,14 +1963,21 @@ const purchaseInvoiceResolvers = {
             ERROR_CODES.NOT_FOUND,
           );
 
+        // La fiche cible n'est jamais une source : la fusionner avec
+        // elle-même la supprimerait (IBAN, SIRET) et laisserait ses factures
+        // sans fournisseur.
+        const mergedIds = (sourceIds || []).filter(
+          (id) => String(id) !== String(target._id),
+        );
+
         // Update all purchase invoices to point to target
         await PurchaseInvoice.updateMany(
-          { supplierId: { $in: sourceIds }, workspaceId },
-          { $set: { supplierId: targetId, supplierName: target.name } },
+          { supplierId: { $in: mergedIds }, workspaceId },
+          { $set: { supplierId: target._id, supplierName: target.name } },
         );
 
         // Delete source suppliers
-        await Supplier.deleteMany({ _id: { $in: sourceIds }, workspaceId });
+        await Supplier.deleteMany({ _id: { $in: mergedIds }, workspaceId });
 
         return target;
       },

@@ -431,3 +431,52 @@ describe("createPurchaseInvoice payée : « Marquer comme payée » exigé", () 
   });
 });
 
+describe("mergeSuppliers", () => {
+  const supplier = async (name, org = organizationId) =>
+    (
+      await Supplier.collection.insertOne({
+        name,
+        iban: "FR7630006000011234567890189",
+        workspaceId: org,
+        createdBy: owner,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+    ).insertedId;
+
+  it("la fiche cible n'est jamais supprimée, même citée parmi les sources", async () => {
+    const target = await supplier("Fournisseur Cible");
+    const source = await supplier("Fournisseur Cible SARL");
+    const invoiceTarget = await insertInvoice({ supplierId: target });
+    const invoiceSource = await insertInvoice({ supplierId: source });
+
+    const result = await M.mergeSuppliers(
+      null,
+      { targetId: String(target), sourceIds: [String(target), String(source)] },
+      ctx(editor),
+    );
+
+    expect(String(result._id)).toBe(String(target));
+    expect(await Supplier.collection.findOne({ _id: target })).not.toBeNull();
+    expect(await Supplier.collection.findOne({ _id: source })).toBeNull();
+    expect(String((await rawInvoice(invoiceTarget)).supplierId)).toBe(
+      String(target),
+    );
+    const moved = await rawInvoice(invoiceSource);
+    expect(String(moved.supplierId)).toBe(String(target));
+    expect(moved.supplierName).toBe("Fournisseur Cible");
+  });
+
+  it("une fiche d'un autre espace citée en source n'est pas supprimée", async () => {
+    const target = await supplier("Fournisseur Cible");
+    const foreign = await supplier("Fournisseur Étranger", otherOrganizationId);
+
+    await M.mergeSuppliers(
+      null,
+      { targetId: String(target), sourceIds: [String(foreign)] },
+      ctx(),
+    );
+
+    expect(await Supplier.collection.findOne({ _id: foreign })).not.toBeNull();
+  });
+});
