@@ -1351,11 +1351,13 @@ const invoiceResolvers = {
             }
           }
 
-          // Calculer le total déjà facturé pour cette référence
+          // Calculer le total déjà facturé pour cette référence (une
+          // situation annulée n'est plus facturée : hors du cumul)
           const existingSituationInvoices = await Invoice.find({
             workspaceId: new mongoose.Types.ObjectId(workspaceId),
             invoiceType: "situation",
             purchaseOrderNumber: purchaseOrderNumber,
+            status: { $ne: "CANCELED" },
           });
 
           const alreadyInvoicedTotal = existingSituationInvoices.reduce(
@@ -2273,6 +2275,7 @@ const invoiceResolvers = {
               invoiceType: "situation",
               purchaseOrderNumber: purchaseOrderNumber,
               _id: { $ne: id }, // Exclure la facture actuelle
+              status: { $ne: "CANCELED" }, // Une situation annulée n'est plus facturée
             });
 
             const alreadyInvoicedTotal = existingSituationInvoices.reduce(
@@ -3521,9 +3524,12 @@ const invoiceResolvers = {
         let totalInvoiced = 0;
         let hasDeposit = false;
         if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
+          // Une facture liée annulée n'est plus facturée : ni dans le reste
+          // à facturer, ni comme acompte existant
           const existingInvoices = await Invoice.find({
             _id: { $in: quote.linkedInvoices },
             workspaceId: workspaceId,
+            status: { $ne: "CANCELED" },
           });
           totalInvoiced = existingInvoices.reduce(
             (sum, inv) => sum + (inv.finalTotalTTC || 0),
