@@ -52,6 +52,10 @@ import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
 import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
+import {
+  validatePurchaseInvoiceInput,
+  validateSupplierInput,
+} from "../utils/purchaseInputValidation.js";
 import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 import {
   MAX_RECEIPT_FILE_BYTES,
@@ -761,6 +765,9 @@ const purchaseInvoiceResolvers = {
           context.workspaceId,
         );
 
+        // Valeurs impossibles refusées avant toute écriture (devise, taux,
+        // montants négatifs, TVA au-delà du TTC, longueurs)
+        validatePurchaseInvoiceInput(input);
         const { forceCreate = false, vatBreakdown, ...invoiceInput } = input;
         // Créer une facture déjà payée : case « Marquer comme payée », comme
         // pour la passer payée ensuite (updatePurchaseInvoice).
@@ -881,6 +888,7 @@ const purchaseInvoiceResolvers = {
         if (input?.status === "PAID" && invoice.status !== "PAID") {
           assertPermissionAction(context, "expenses", "markPaid");
         }
+        validatePurchaseInvoiceInput(input, { existing: invoice });
 
         const oldStatus = invoice.status;
         const oldCategory = invoice.category;
@@ -1909,6 +1917,7 @@ const purchaseInvoiceResolvers = {
         input.workspaceId,
         context.workspaceId,
       );
+      validateSupplierInput(input);
 
       // L'adresse est facultative pour un fournisseur. On ne crée le
       // sous-document `address` QUE si au moins un champ est renseigné : sinon
@@ -1956,6 +1965,7 @@ const purchaseInvoiceResolvers = {
         });
         if (!supplier)
           throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+        validateSupplierInput(input);
 
         Object.keys(input).forEach((key) => {
           if (["street", "city", "postalCode", "country"].includes(key)) {

@@ -44,6 +44,7 @@ import {
 } from "../utils/pcg-mapping.js";
 import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { validateTransactionTextInput } from "../utils/purchaseInputValidation.js";
 
 // Droits par module (mêmes choix d'espace que withWorkspace : argument
 // workspaceId d'abord). Transactions, justificatifs, paiements et synchro :
@@ -360,6 +361,7 @@ const bankingResolvers = {
     updateTransaction: writeBanking(
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
+        validateTransactionTextInput(input);
 
         const existing = await Transaction.findOne({
           _id: id,
