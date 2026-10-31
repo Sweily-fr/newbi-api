@@ -1283,10 +1283,13 @@ const invoiceResolvers = {
             }
 
             // Calculer le total déjà facturé pour cette référence
+            // Une situation annulée n'est plus facturée (même règle que
+            // Quote.situationInvoicedTotal)
             const existingSituationInvoices = await Invoice.find({
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
               invoiceType: "situation",
               purchaseOrderNumber: purchaseOrderNumber,
+              status: { $ne: "CANCELED" },
             });
 
             const alreadyInvoicedTotal = existingSituationInvoices.reduce(
@@ -2210,6 +2213,7 @@ const invoiceResolvers = {
               invoiceType: "situation",
               purchaseOrderNumber: purchaseOrderNumber,
               _id: { $ne: id }, // Exclure la facture actuelle
+              status: { $ne: "CANCELED" }, // Une situation annulée n'est plus facturée
             });
 
             const alreadyInvoicedTotal = existingSituationInvoices.reduce(
@@ -3578,15 +3582,36 @@ const invoiceResolvers = {
           }
         }
 
-        // Sauvegarder la facture
-        await invoice.save();
-
-        // Ajouter la facture aux factures liées du devis
-        if (!quote.linkedInvoices) {
-          quote.linkedInvoices = [];
+        // Réservation atomique : les factures liées du devis sont encore
+        // celles lues pour le reste à facturer. Deux demandes simultanées
+        // pour le même reste : la seconde est refusée.
+        const claim = await Quote.updateOne(
+          {
+            _id: quote._id,
+            workspaceId,
+            ...(quote.linkedInvoices?.length
+              ? { linkedInvoices: [...quote.linkedInvoices] }
+              : { "linkedInvoices.0": { $exists: false } }),
+          },
+          { $push: { linkedInvoices: invoice._id } },
+        );
+        if (claim.modifiedCount !== 1) {
+          throw createValidationError(
+            "Ce devis vient d'être facturé par ailleurs : vérifiez le reste à facturer puis réessayez.",
+            { amount: "Reste à facturer modifié entre-temps" },
+          );
         }
-        quote.linkedInvoices.push(invoice._id);
-        await quote.save();
+
+        // Sauvegarder la facture (la réservation est annulée si elle échoue)
+        try {
+          await invoice.save();
+        } catch (error) {
+          await Quote.updateOne(
+            { _id: quote._id, workspaceId },
+            { $pull: { linkedInvoices: invoice._id } },
+          );
+          throw error;
+        }
 
         // Retourner la facture et le devis mis à jour
         const populatedInvoice = await invoice.populate("createdBy");

@@ -271,6 +271,8 @@ const quoteResolvers = {
             workspaceId: quote.workspaceId,
             invoiceType: "situation",
             purchaseOrderNumber: quoteRef,
+            // Une situation annulée n'est plus facturée
+            status: { $ne: "CANCELED" },
           },
         },
         { $limit: 1000 },
@@ -1889,6 +1891,27 @@ const quoteResolvers = {
           );
         }
 
+        // Répartition : chaque part est un pourcentage du devis, strictement
+        // positif et au plus 100 %
+        if (distribution !== undefined && distribution !== null) {
+          const valid =
+            Array.isArray(distribution) &&
+            distribution.length > 0 &&
+            distribution.every(
+              (percent) =>
+                typeof percent === "number" &&
+                Number.isFinite(percent) &&
+                percent > 0 &&
+                percent <= 100,
+            );
+          if (!valid) {
+            throw createValidationError(
+              "Chaque part de la répartition doit être un pourcentage supérieur à 0 et au plus égal à 100 %",
+              { distribution: "Répartition invalide" },
+            );
+          }
+        }
+
         // Montant total du devis
         const quoteAmount = quote.finalTotalTTC;
 
@@ -1968,8 +1991,10 @@ const quoteResolvers = {
         const totalPercentage =
           existingInvoicesPercentage + newInvoicesPercentage;
 
-        // Si skipValidation est true (pour les factures d'acompte), on ignore cette vérification
-        if (!skipValidation && Math.abs(totalPercentage - 100) > 0.01) {
+        // Une répartition ne dépasse jamais 100 % du devis, même avec
+        // skipValidation (factures d'acompte) : celui-ci autorise seulement
+        // une répartition inférieure à 100 %
+        if (Math.abs(totalPercentage - 100) > 0.01) {
           // Tolérance pour les erreurs d'arrondi
           // Ne pas ajuster automatiquement, respecter le choix de l'utilisateur
           // Vérifier simplement que le total ne dépasse pas 100%
@@ -2076,6 +2101,50 @@ const quoteResolvers = {
 
         // Montant restant disponible pour de nouvelles factures: ${remainingAmount.toFixed(2)}€
 
+        // Réservation atomique du devis avant de créer les factures : ses
+        // factures liées sont encore celles lues pour le reste à facturer.
+        // Deux conversions simultanées : la seconde est refusée.
+        const invoiceIds = invoiceDistribution.map(
+          () => new mongoose.Types.ObjectId(),
+        );
+        const previousConvertedToInvoice = quote.convertedToInvoice || null;
+        const claim = await Quote.updateOne(
+          {
+            _id: quote._id,
+            workspaceId: quote.workspaceId,
+            ...(quote.linkedInvoices?.length
+              ? { linkedInvoices: [...quote.linkedInvoices] }
+              : { "linkedInvoices.0": { $exists: false } }),
+          },
+          {
+            $push: { linkedInvoices: { $each: invoiceIds } },
+            $set: { convertedToInvoice: invoiceIds[0] },
+          },
+        );
+        if (claim.modifiedCount !== 1) {
+          throw new AppError(
+            "Ce devis vient d'être facturé par ailleurs : vérifiez son reste à facturer puis réessayez.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "Devis" },
+          );
+        }
+        // Annule la réservation et les factures déjà créées (aucune facture
+        // orpheline liée au devis)
+        const rollback = async () => {
+          await Invoice.deleteMany({
+            _id: { $in: invoiceIds },
+            workspaceId: quote.workspaceId,
+          });
+          await Quote.updateOne(
+            { _id: quote._id, workspaceId: quote.workspaceId },
+            {
+              $pull: { linkedInvoices: { $in: invoiceIds } },
+              $set: { convertedToInvoice: previousConvertedToInvoice },
+            },
+          );
+        };
+
+        try {
         for (let i = 0; i < invoiceCount; i++) {
           // Générer un nouveau numéro de facture avec ce préfixe au moment de la création
           // Cela garantit que le numéro est séquentiel par rapport aux autres factures déjà créées
@@ -2106,6 +2175,7 @@ const quoteResolvers = {
 
           // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
           const invoice = new Invoice({
+            _id: invoiceIds[i],
             number,
             prefix,
             client: quoteObj.client,
@@ -2171,13 +2241,16 @@ const quoteResolvers = {
           }
         }
 
+        } catch (error) {
+          await rollback();
+          throw error;
+        }
+
         // Vérifier que le montant total des nouvelles factures ne dépasse pas le montant restant
         if (newInvoicesTotalAmount > remainingAmount + 0.01) {
           // Tolérance pour les erreurs d'arrondi
           // Supprimer les factures créées car elles dépassent le montant disponible
-          for (const invoice of createdInvoices) {
-            await Invoice.deleteOne({ _id: invoice._id });
-          }
+          await rollback();
 
           throw new AppError(
             `Le montant total des nouvelles factures (${newInvoicesTotalAmount.toFixed(
@@ -2198,19 +2271,7 @@ const quoteResolvers = {
         // Montant total des nouvelles factures: ${newInvoicesTotalAmount.toFixed(2)}€
         // Montant total de toutes les factures: ${(existingInvoicesTotalAmount + newInvoicesTotalAmount).toFixed(2)}€ / ${quoteAmount.toFixed(2)}€
 
-        // Mettre à jour le devis avec la référence à la facture principale créée
-        quote.convertedToInvoice = mainInvoice._id;
-
-        // Ajouter toutes les factures à la liste des factures liées
-        if (!quote.linkedInvoices) {
-          quote.linkedInvoices = [];
-        }
-
-        for (const invoice of createdInvoices) {
-          quote.linkedInvoices.push(invoice._id);
-        }
-
-        await quote.save();
+        // Le devis connaît déjà ses nouvelles factures (réservation ci-dessus)
 
         // Retourner la facture principale
         return await mainInvoice.populate("createdBy");

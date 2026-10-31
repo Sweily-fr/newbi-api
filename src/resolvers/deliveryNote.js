@@ -55,6 +55,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import { DELIVERY_NOTE_STATUS } from "../models/constants/enums.js";
 import { keepHiddenItemPrices } from "../utils/deliveryNoteItemPrices.js";
+import { computeDocumentTotals } from "../utils/documentTotals.js";
 
 const FINALIZED_DN_STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"];
 
@@ -235,32 +236,80 @@ const itemsForInvoice = async (items = [], workspaceId) => {
   });
 };
 
-const calculateInvoiceTotals = (items) => {
-  let totalHT = 0;
-  let totalVAT = 0;
-  items.forEach((item) => {
-    let itemHT = item.quantity * item.unitPrice;
-    if (item.discount) {
-      if (item.discountType === "PERCENTAGE") {
-        itemHT = itemHT * (1 - Math.min(item.discount, 100) / 100);
-      } else {
-        itemHT = Math.max(0, itemHT - item.discount);
-      }
-    }
-    totalHT += itemHT;
-    totalVAT += itemHT * (item.vatRate / 100);
+/**
+ * Totaux de la facture d'un BL, avec les règles communes des documents de
+ * vente (utils/documentTotals.js) et les conditions du devis d'origine :
+ * autoliquidation, remise globale et frais de port.
+ */
+const calculateInvoiceTotals = (items, terms = {}) => {
+  const totals = computeDocumentTotals({
+    items,
+    discount: terms.discount || 0,
+    discountType: terms.discountType || "PERCENTAGE",
+    shipping: terms.shipping || null,
+    isReverseCharge: Boolean(terms.isReverseCharge),
   });
   const round = (n) => parseFloat(n.toFixed(2));
   return {
-    totalHT: round(totalHT),
-    totalVAT: round(totalVAT),
-    totalTTC: round(totalHT + totalVAT),
-    finalTotalHT: round(totalHT),
-    finalTotalVAT: round(totalVAT),
-    finalTotalTTC: round(totalHT + totalVAT),
-    discountAmount: 0,
+    totalHT: round(totals.totalHT),
+    totalVAT: round(totals.totalVAT),
+    totalTTC: round(totals.totalTTC),
+    finalTotalHT: round(totals.finalTotalHT),
+    finalTotalVAT: round(totals.finalTotalVAT),
+    finalTotalTTC: round(totals.finalTotalTTC),
+    discountAmount: round(totals.discountAmount),
   };
 };
+
+const isCompleteAddress = (address) =>
+  Boolean(
+    address?.street?.trim() &&
+      address?.city?.trim() &&
+      address?.postalCode?.trim(),
+  );
+
+/**
+ * Conditions du devis d'origine reprises sur la facture d'un BL : régime de
+ * TVA (autoliquidation, exonération), remise globale et port facturé. Le
+ * port facturé exige une adresse : celle du devis, sinon l'adresse de
+ * livraison du bon, sinon celle du client.
+ */
+const quoteInvoiceTerms = (quote, fallbackAddresses = []) => {
+  if (!quote) return { discount: 0, discountType: "PERCENTAGE" };
+  const shippingAddress = [
+    quote.shipping?.shippingAddress,
+    ...fallbackAddresses,
+  ].find(isCompleteAddress);
+  const shipping = quote.shipping?.billShipping
+    ? {
+        billShipping: true,
+        shippingAddress: shippingAddress
+          ? {
+              fullName: shippingAddress.fullName || "",
+              street: shippingAddress.street,
+              city: shippingAddress.city,
+              postalCode: shippingAddress.postalCode,
+              country: shippingAddress.country || "France",
+            }
+          : undefined,
+        shippingAmountHT: quote.shipping.shippingAmountHT || 0,
+        shippingVatRate: quote.shipping.shippingVatRate ?? 20,
+      }
+    : undefined;
+  return {
+    isReverseCharge: Boolean(quote.isReverseCharge),
+    isVatExempt: Boolean(quote.isVatExempt),
+    discount: quote.discount || 0,
+    discountType: quote.discountType || "PERCENTAGE",
+    ...(shipping ? { shipping } : {}),
+  };
+};
+
+/** Filtre d'une liste de factures liées restée telle qu'elle a été lue. */
+const unchangedLinkedInvoices = (linkedInvoices) =>
+  linkedInvoices && linkedInvoices.length > 0
+    ? { linkedInvoices: [...linkedInvoices] }
+    : { "linkedInvoices.0": { $exists: false } };
 
 const deliveryNoteResolvers = {
   DeliveryNote: {
@@ -1364,6 +1413,48 @@ const deliveryNoteResolvers = {
           }
         }
 
+        // Devis d'origine : ses conditions (TVA, remise, port) passent sur la
+        // facture, et il n'est jamais facturé au-delà de son montant, tous
+        // chemins confondus (conversion directe, factures liées, autres BL).
+        const sourceQuote = dn.sourceQuote
+          ? await Quote.findOne({ _id: dn.sourceQuote, workspaceId })
+          : null;
+        const terms = quoteInvoiceTerms(sourceQuote, [
+          dn.deliveryAddress,
+          dn.client?.address,
+        ]);
+
+        const dnObj = dn.toObject();
+        const items = await itemsForInvoice(dnObj.items, workspaceId);
+        const totals = calculateInvoiceTotals(items, terms);
+
+        if (sourceQuote) {
+          const quoteAmount = sourceQuote.finalTotalTTC || 0;
+          const alreadyInvoiced = sourceQuote.linkedInvoices?.length
+            ? (
+                await Invoice.find({
+                  _id: { $in: sourceQuote.linkedInvoices },
+                  workspaceId,
+                }).select("finalTotalTTC")
+              ).reduce((sum, inv) => sum + (inv.finalTotalTTC || 0), 0)
+            : 0;
+          const remaining =
+            Math.round((quoteAmount - alreadyInvoiced) * 100) / 100;
+          if (
+            quoteAmount > 0 &&
+            Math.round(totals.finalTotalTTC * 100) > Math.round(remaining * 100)
+          ) {
+            const euros = (n) => `${n.toFixed(2).replace(".", ",")} €`;
+            throw new AppError(
+              remaining <= 0
+                ? `Le devis ${sourceQuote.prefix ? `${sourceQuote.prefix}-` : ""}${sourceQuote.number} est déjà entièrement facturé (${euros(alreadyInvoiced)} sur ${euros(quoteAmount)}).`
+                : `Ce bon de livraison dépasse le reste à facturer du devis ${sourceQuote.prefix ? `${sourceQuote.prefix}-` : ""}${sourceQuote.number} (${euros(remaining)} sur ${euros(quoteAmount)}, ${euros(alreadyInvoiced)} déjà facturés).`,
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "Devis", quoteAmount, alreadyInvoiced, remaining },
+            );
+          }
+        }
+
         const organization = await getOrganizationInfo(workspaceId);
 
         const now = new Date();
@@ -1376,11 +1467,61 @@ const deliveryNoteResolvers = {
           userId: user.id,
         });
 
-        const dnObj = dn.toObject();
-        const items = await itemsForInvoice(dnObj.items, workspaceId);
-        const totals = calculateInvoiceTotals(items);
+        // Réservations atomiques avant de créer la facture : le BL (une seule
+        // facture) puis le devis (factures liées telles que lues pour le reste
+        // à facturer). Deux demandes simultanées : la seconde est refusée.
+        const invoiceId = new mongoose.Types.ObjectId();
+        const dnClaim = await DeliveryNote.updateOne(
+          {
+            _id: dn._id,
+            workspaceId,
+            ...unchangedLinkedInvoices(dn.linkedInvoices),
+          },
+          { $set: { linkedInvoices: [invoiceId] } },
+        );
+        if (dnClaim.modifiedCount !== 1) {
+          throw new AppError(
+            "Une facture a déjà été générée depuis ce bon de livraison",
+            ERROR_CODES.RESOURCE_LOCKED,
+          );
+        }
+        const releaseDeliveryNote = () =>
+          DeliveryNote.updateOne(
+            { _id: dn._id, workspaceId },
+            { $pull: { linkedInvoices: invoiceId } },
+          );
+
+        let quoteClaimed = false;
+        if (sourceQuote) {
+          const update = { $push: { linkedInvoices: invoiceId } };
+          // Un devis encore en attente reste acceptable ou refusable : il
+          // n'est marqué « converti » qu'une fois accepté
+          if (
+            !sourceQuote.convertedToInvoice &&
+            sourceQuote.status === "COMPLETED"
+          ) {
+            update.$set = { convertedToInvoice: invoiceId };
+          }
+          const quoteClaim = await Quote.updateOne(
+            {
+              _id: sourceQuote._id,
+              workspaceId,
+              ...unchangedLinkedInvoices(sourceQuote.linkedInvoices),
+            },
+            update,
+          );
+          if (quoteClaim.modifiedCount !== 1) {
+            await releaseDeliveryNote();
+            throw new AppError(
+              "Le devis de ce bon de livraison vient d'être facturé par ailleurs : vérifiez son reste à facturer puis réessayez.",
+              ERROR_CODES.RESOURCE_LOCKED,
+            );
+          }
+          quoteClaimed = true;
+        }
 
         const invoice = new Invoice({
+          _id: invoiceId,
           number: invoiceNumber,
           prefix: invoicePrefix,
           client: dnObj.client,
@@ -1407,9 +1548,8 @@ const deliveryNoteResolvers = {
           // Référence du BL sur la facture (même champ que pour les BC)
           purchaseOrderNumber: `${dn.prefix}-${dn.number}`,
           sourceQuote: dn.sourceQuote || undefined,
-          discount: 0,
-          discountType: "PERCENTAGE",
           customFields: dnObj.customFields,
+          ...terms,
           ...totals,
           workspaceId,
           createdBy: user.id,
@@ -1432,26 +1572,22 @@ const deliveryNoteResolvers = {
           showBankDetails: false,
         });
 
-        await invoice.save();
-
-        if (!dn.linkedInvoices) dn.linkedInvoices = [];
-        dn.linkedInvoices.push(invoice._id);
-        await dn.save();
-
-        // Synchroniser le devis source (anti-doublon de facturation)
-        if (dn.sourceQuote) {
-          const sourceQuote = await Quote.findOne({
-            _id: dn.sourceQuote,
-            workspaceId,
-          });
-          if (sourceQuote) {
-            if (!sourceQuote.linkedInvoices) sourceQuote.linkedInvoices = [];
-            sourceQuote.linkedInvoices.push(invoice._id);
-            if (!sourceQuote.convertedToInvoice) {
-              sourceQuote.convertedToInvoice = invoice._id;
-            }
-            await sourceQuote.save();
+        try {
+          await invoice.save();
+        } catch (error) {
+          await releaseDeliveryNote();
+          if (quoteClaimed) {
+            await Quote.updateOne(
+              { _id: sourceQuote._id, workspaceId },
+              {
+                $pull: { linkedInvoices: invoiceId },
+                ...(sourceQuote.convertedToInvoice
+                  ? {}
+                  : { $unset: { convertedToInvoice: "" } }),
+              },
+            );
           }
+          throw error;
         }
 
         return await invoice.populate("createdBy");

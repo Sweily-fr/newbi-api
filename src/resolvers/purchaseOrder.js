@@ -1399,9 +1399,11 @@ const purchaseOrderResolvers = {
           throw createNotFoundError("Bon de commande");
         }
 
-        if (!["CONFIRMED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
+        // Mêmes statuts qu'à l'écran (« Convertir en facture ») : un bon
+        // validé par le client, en cours ou livré
+        if (!["VALIDATED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
           throw new AppError(
-            "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
+            "Seuls les bons de commande validés, en cours ou livrés peuvent être convertis en facture",
             ERROR_CODES.RESOURCE_LOCKED,
           );
         }
@@ -1435,6 +1437,30 @@ const purchaseOrderResolvers = {
               existingInvoicesTotalAmount = existingInvoices.reduce(
                 (sum, inv) => sum + (inv.finalTotalTTC || 0),
                 0,
+              );
+            }
+
+            const remaining =
+              Math.round((quoteAmount - existingInvoicesTotalAmount) * 100) /
+              100;
+            // La facture reprend tout le bon de commande : elle ne doit pas
+            // dépasser le reste à facturer du devis (acompte, factures liées)
+            if (
+              quoteAmount > 0 &&
+              remaining > 0.01 &&
+              Math.round((po.finalTotalTTC || 0) * 100) >
+                Math.round(remaining * 100)
+            ) {
+              const euros = (n) => `${n.toFixed(2).replace(".", ",")} €`;
+              throw new AppError(
+                `Ce bon de commande (${euros(po.finalTotalTTC || 0)}) dépasse le reste à facturer du devis associé (${euros(remaining)} sur ${euros(quoteAmount)}, ${euros(existingInvoicesTotalAmount)} déjà facturés).`,
+                ERROR_CODES.RESOURCE_LOCKED,
+                {
+                  resource: "Devis",
+                  quoteAmount,
+                  existingInvoicesTotalAmount,
+                  remaining,
+                },
               );
             }
 
