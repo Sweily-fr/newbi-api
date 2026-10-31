@@ -409,7 +409,36 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     );
 
     expect(result.status).toBe("COMPLETED");
+    // Même chemin que « Marquer comme payée » : la date de paiement est posée
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate).toBeInstanceOf(Date);
   });
+
+  for (const target of ["COMPLETED", "CANCELED"]) {
+    it(`refuse de passer un brouillon à ${target} : il reste brouillon, sans numéro légal`, async () => {
+      const { insertedId } = await insertInvoice({
+        status: "DRAFT",
+        number: "DRAFT-0006",
+      });
+
+      await expect(
+        resolver(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            status: target,
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow(/brouillon doit d'abord être validé/);
+
+      const untouched = await Invoice.collection.findOne({ _id: insertedId });
+      expect(untouched.status).toBe("DRAFT");
+      expect(untouched.number).toBe("DRAFT-0006");
+      expect(untouched.paymentDate ?? null).toBeNull();
+    });
+  }
 
   it("transitions PENDING to CANCELED", async () => {
     const { insertedId } = await insertInvoice({ status: "PENDING" });
@@ -460,6 +489,50 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     const untouched = await Invoice.collection.findOne({ _id: insertedId });
     expect(untouched.status).toBe("PENDING");
   });
+});
+
+describe("Invoice Resolver - Mutation.createInvoice (statut de création)", () => {
+  const resolver = invoiceResolvers.Mutation.createInvoice;
+  const input = (status) => ({
+    status,
+    issueDate: new Date().toISOString().slice(0, 10),
+    dueDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+    client: {
+      name: "Acme",
+      email: "client@test.fr",
+      type: "COMPANY",
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+    items: [
+      { description: "Service", quantity: 1, unitPrice: 100, vatRate: 20 },
+    ],
+  });
+
+  for (const status of ["COMPLETED", "CANCELED", "OVERDUE"]) {
+    it(`refuse une facture créée au statut ${status} : rien n'est enregistré`, async () => {
+      await expect(
+        resolver(
+          null,
+          { workspaceId: organizationId.toString(), input: input(status) },
+          ctx(),
+        ),
+      ).rejects.toThrow(/se crée en brouillon ou en attente/);
+
+      expect(
+        await Invoice.countDocuments({ workspaceId: organizationId }),
+      ).toBe(0);
+      const counters = await mongoose.connection.db
+        .collection("documentcounters")
+        .find({ workspaceId: organizationId.toString() })
+        .toArray();
+      expect(counters.every((c) => c.lastNumber === 0)).toBe(true);
+    });
+  }
 });
 
 // Brouillon : entièrement modifiable (articles, remise, client)

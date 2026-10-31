@@ -80,6 +80,10 @@ import {
   creditedTTCForWorkspace,
   isCoveredByCredit,
 } from "../utils/invoiceCredit.js";
+import {
+  assertInvoiceCreationStatus,
+  assertInvoiceStatusChange,
+} from "../utils/invoiceStatusRules.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1157,786 +1161,790 @@ const invoiceResolvers = {
 
   Mutation: {
     createInvoice: requireCompanyInfo(
-      requireAction("invoices", "create")(
-        async (_, { workspaceId: inputWorkspaceId, input }, context) => {
-          const { user } = context;
-          const workspaceId = resolveWorkspaceId(
-            inputWorkspaceId,
-            context.workspaceId,
+      requireAction(
+        "invoices",
+        "create",
+      )(async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
+
+        if (!workspaceId) {
+          throw new AppError(
+            "Aucune organisation spécifiée.",
+            ERROR_CODES.BAD_REQUEST,
           );
+        }
 
-          if (!workspaceId) {
-            throw new AppError(
-              "Aucune organisation spécifiée.",
-              ERROR_CODES.BAD_REQUEST,
+        // Une facture naît brouillon ou émise (en attente de paiement).
+        // « Payée » passe par markInvoiceAsPaid (droit d'encaissement, date
+        // de paiement, déclarations), « annulée » par changeInvoiceStatus
+        // (droit d'annuler) et « en retard » est calculé : créée avec l'un
+        // de ces statuts, elle contournerait ces règles et sortirait de la
+        // séquence de numérotation.
+        assertInvoiceCreationStatus(input.status);
+
+        // ✅ Les permissions sont déjà vérifiées par requireAction (création)
+
+        // Récupérer les informations de l'organisation
+        const organization = await getOrganizationInfo(workspaceId);
+        if (!organization?.companyName) {
+          throw new AppError(
+            "Les informations de votre entreprise doivent être configurées avant de créer une facture",
+            ERROR_CODES.COMPANY_INFO_REQUIRED,
+          );
+        }
+
+        // Utiliser le préfixe fourni, ou celui de la dernière facture, ou générer un préfixe par défaut
+        let prefix = input.prefix;
+
+        // Validation du format du préfixe (optionnel, mais sans espaces ni caractères spéciaux)
+        if (prefix && !/^[A-Za-z0-9-]*$/.test(prefix)) {
+          throw createValidationError(
+            "Le préfixe de facture contient des caractères non autorisés",
+            {
+              prefix:
+                "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            },
+          );
+        }
+
+        // Validation du format de la référence devis si fournie
+        if (
+          input.purchaseOrderNumber &&
+          !/^[A-Za-z0-9-]*$/.test(input.purchaseOrderNumber)
+        ) {
+          throw createValidationError(
+            "La référence devis contient des caractères non autorisés",
+            {
+              purchaseOrderNumber:
+                "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
+            },
+          );
+        }
+
+        // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
+        if (input.invoiceType === "situation" && input.purchaseOrderNumber) {
+          // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
+          let contractTotal = 0;
+          const purchaseOrderNumber = input.purchaseOrderNumber;
+
+          // Chercher le devis associé
+          if (purchaseOrderNumber.includes("-")) {
+            const lastDashIndex = purchaseOrderNumber.lastIndexOf("-");
+            const possiblePrefix = purchaseOrderNumber.substring(
+              0,
+              lastDashIndex,
             );
-          }
-
-          // ✅ Les permissions sont déjà vérifiées par requireAction (création)
-
-          // Récupérer les informations de l'organisation
-          const organization = await getOrganizationInfo(workspaceId);
-          if (!organization?.companyName) {
-            throw new AppError(
-              "Les informations de votre entreprise doivent être configurées avant de créer une facture",
-              ERROR_CODES.COMPANY_INFO_REQUIRED,
+            const possibleNumber = purchaseOrderNumber.substring(
+              lastDashIndex + 1,
             );
-          }
 
-          // Utiliser le préfixe fourni, ou celui de la dernière facture, ou générer un préfixe par défaut
-          let prefix = input.prefix;
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              prefix: possiblePrefix,
+              number: possibleNumber,
+            });
 
-          // Validation du format du préfixe (optionnel, mais sans espaces ni caractères spéciaux)
-          if (prefix && !/^[A-Za-z0-9-]*$/.test(prefix)) {
-            throw createValidationError(
-              "Le préfixe de facture contient des caractères non autorisés",
-              {
-                prefix:
-                  "Le préfixe ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
-              },
-            );
-          }
-
-          // Validation du format de la référence devis si fournie
-          if (
-            input.purchaseOrderNumber &&
-            !/^[A-Za-z0-9-]*$/.test(input.purchaseOrderNumber)
-          ) {
-            throw createValidationError(
-              "La référence devis contient des caractères non autorisés",
-              {
-                purchaseOrderNumber:
-                  "La référence devis ne doit contenir que des lettres, chiffres et tirets (sans espaces ni caractères spéciaux)",
-              },
-            );
-          }
-
-          // Validation pour les factures de situation : vérifier que le total ne dépasse pas le contrat
-          if (input.invoiceType === "situation" && input.purchaseOrderNumber) {
-            // Calculer le montant du contrat (depuis le devis ou la première facture de situation)
-            let contractTotal = 0;
-            const purchaseOrderNumber = input.purchaseOrderNumber;
-
-            // Chercher le devis associé
-            if (purchaseOrderNumber.includes("-")) {
-              const lastDashIndex = purchaseOrderNumber.lastIndexOf("-");
-              const possiblePrefix = purchaseOrderNumber.substring(
-                0,
-                lastDashIndex,
-              );
-              const possibleNumber = purchaseOrderNumber.substring(
-                lastDashIndex + 1,
-              );
-
-              const quote = await Quote.findOne({
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                prefix: possiblePrefix,
-                number: possibleNumber,
-              });
-
-              if (quote) {
-                contractTotal = quote.finalTotalTTC || 0;
-              }
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
             }
+          }
 
-            if (contractTotal === 0) {
-              const quote = await Quote.findOne({
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                number: purchaseOrderNumber,
-              });
+          if (contractTotal === 0) {
+            const quote = await Quote.findOne({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+              number: purchaseOrderNumber,
+            });
 
-              if (quote) {
-                contractTotal = quote.finalTotalTTC || 0;
-              }
+            if (quote) {
+              contractTotal = quote.finalTotalTTC || 0;
             }
+          }
 
-            // Si pas de devis, calculer depuis la première facture de situation
-            if (contractTotal === 0) {
-              const firstSituationInvoice = await Invoice.findOne({
-                workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                invoiceType: "situation",
-                purchaseOrderNumber: purchaseOrderNumber,
-              }).sort({ issueDate: 1, createdAt: 1 });
-
-              if (firstSituationInvoice && firstSituationInvoice.items) {
-                contractTotal = firstSituationInvoice.items.reduce(
-                  (sum, item) => {
-                    const quantity = item.quantity || 1;
-                    const unitPrice = item.unitPrice || 0;
-                    const vatRate = item.vatRate || 0;
-                    const discount = item.discount || 0;
-                    const discountType = item.discountType || "PERCENTAGE";
-
-                    let lineTotal = quantity * unitPrice;
-                    if (discountType === "PERCENTAGE") {
-                      lineTotal = lineTotal * (1 - discount / 100);
-                    } else {
-                      lineTotal = lineTotal - discount;
-                    }
-                    lineTotal = lineTotal * (1 + vatRate / 100);
-
-                    return sum + lineTotal;
-                  },
-                  0,
-                );
-              }
-            }
-
-            // Calculer le total déjà facturé pour cette référence
-            const existingSituationInvoices = await Invoice.find({
+          // Si pas de devis, calculer depuis la première facture de situation
+          if (contractTotal === 0) {
+            const firstSituationInvoice = await Invoice.findOne({
               workspaceId: new mongoose.Types.ObjectId(workspaceId),
               invoiceType: "situation",
               purchaseOrderNumber: purchaseOrderNumber,
-            });
+            }).sort({ issueDate: 1, createdAt: 1 });
 
-            const alreadyInvoicedTotal = existingSituationInvoices.reduce(
-              (sum, inv) => sum + (inv.finalTotalTTC || 0),
-              0,
-            );
+            if (firstSituationInvoice && firstSituationInvoice.items) {
+              contractTotal = firstSituationInvoice.items.reduce(
+                (sum, item) => {
+                  const quantity = item.quantity || 1;
+                  const unitPrice = item.unitPrice || 0;
+                  const vatRate = item.vatRate || 0;
+                  const discount = item.discount || 0;
+                  const discountType = item.discountType || "PERCENTAGE";
 
-            // Calculer le total de la nouvelle facture à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
-            let newInvoiceTotal = 0;
-            if (input.items && input.items.length > 0) {
-              // Appliquer la remise globale si présente
-              const globalDiscount = input.discount || 0;
-              const globalDiscountType = input.discountType || "PERCENTAGE";
-
-              let totalHT = 0;
-              let totalVAT = 0;
-
-              input.items.forEach((item) => {
-                const quantity = parseFloat(item.quantity) || 1;
-                const unitPrice = parseFloat(item.unitPrice) || 0;
-                const vatRate = parseFloat(item.vatRate) || 0;
-                const discount = parseFloat(item.discount) || 0;
-                const discountType = item.discountType || "PERCENTAGE";
-                const progressPercentage =
-                  item.progressPercentage != null
-                    ? parseFloat(item.progressPercentage)
-                    : 100;
-
-                // Calculer le total HT de la ligne avec avancement
-                let lineHT = quantity * unitPrice * (progressPercentage / 100);
-
-                // Appliquer la remise de ligne
-                if (discount > 0) {
+                  let lineTotal = quantity * unitPrice;
                   if (discountType === "PERCENTAGE") {
-                    lineHT = lineHT * (1 - discount / 100);
+                    lineTotal = lineTotal * (1 - discount / 100);
                   } else {
-                    lineHT = Math.max(0, lineHT - discount);
+                    lineTotal = lineTotal - discount;
                   }
-                }
+                  lineTotal = lineTotal * (1 + vatRate / 100);
 
-                totalHT += lineHT;
-                totalVAT += lineHT * (vatRate / 100);
-              });
+                  return sum + lineTotal;
+                },
+                0,
+              );
+            }
+          }
 
-              // Appliquer la remise globale
-              if (globalDiscount > 0) {
-                if (globalDiscountType === "PERCENTAGE") {
-                  const discountMultiplier = 1 - globalDiscount / 100;
-                  totalHT = totalHT * discountMultiplier;
-                  totalVAT = totalVAT * discountMultiplier;
+          // Calculer le total déjà facturé pour cette référence
+          const existingSituationInvoices = await Invoice.find({
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            invoiceType: "situation",
+            purchaseOrderNumber: purchaseOrderNumber,
+          });
+
+          const alreadyInvoicedTotal = existingSituationInvoices.reduce(
+            (sum, inv) => sum + (inv.finalTotalTTC || 0),
+            0,
+          );
+
+          // Calculer le total de la nouvelle facture à partir des items (car finalTotalTTC n'est pas envoyé dans l'input)
+          let newInvoiceTotal = 0;
+          if (input.items && input.items.length > 0) {
+            // Appliquer la remise globale si présente
+            const globalDiscount = input.discount || 0;
+            const globalDiscountType = input.discountType || "PERCENTAGE";
+
+            let totalHT = 0;
+            let totalVAT = 0;
+
+            input.items.forEach((item) => {
+              const quantity = parseFloat(item.quantity) || 1;
+              const unitPrice = parseFloat(item.unitPrice) || 0;
+              const vatRate = parseFloat(item.vatRate) || 0;
+              const discount = parseFloat(item.discount) || 0;
+              const discountType = item.discountType || "PERCENTAGE";
+              const progressPercentage =
+                item.progressPercentage != null
+                  ? parseFloat(item.progressPercentage)
+                  : 100;
+
+              // Calculer le total HT de la ligne avec avancement
+              let lineHT = quantity * unitPrice * (progressPercentage / 100);
+
+              // Appliquer la remise de ligne
+              if (discount > 0) {
+                if (discountType === "PERCENTAGE") {
+                  lineHT = lineHT * (1 - discount / 100);
                 } else {
-                  // Remise fixe : répartir proportionnellement sur HT et TVA
-                  const totalBeforeDiscount = totalHT + totalVAT;
-                  if (totalBeforeDiscount > 0) {
-                    const discountRatio = Math.min(
-                      1,
-                      globalDiscount / totalBeforeDiscount,
-                    );
-                    totalHT = totalHT * (1 - discountRatio);
-                    totalVAT = totalVAT * (1 - discountRatio);
-                  }
+                  lineHT = Math.max(0, lineHT - discount);
                 }
               }
 
-              newInvoiceTotal = totalHT + totalVAT;
+              totalHT += lineHT;
+              totalVAT += lineHT * (vatRate / 100);
+            });
+
+            // Appliquer la remise globale
+            if (globalDiscount > 0) {
+              if (globalDiscountType === "PERCENTAGE") {
+                const discountMultiplier = 1 - globalDiscount / 100;
+                totalHT = totalHT * discountMultiplier;
+                totalVAT = totalVAT * discountMultiplier;
+              } else {
+                // Remise fixe : répartir proportionnellement sur HT et TVA
+                const totalBeforeDiscount = totalHT + totalVAT;
+                if (totalBeforeDiscount > 0) {
+                  const discountRatio = Math.min(
+                    1,
+                    globalDiscount / totalBeforeDiscount,
+                  );
+                  totalHT = totalHT * (1 - discountRatio);
+                  totalVAT = totalVAT * (1 - discountRatio);
+                }
+              }
             }
 
-            // Vérifier si le total dépasserait le contrat
-            if (
-              contractTotal > 0 &&
-              alreadyInvoicedTotal + newInvoiceTotal > contractTotal
-            ) {
-              const remaining = contractTotal - alreadyInvoicedTotal;
+            newInvoiceTotal = totalHT + totalVAT;
+          }
+
+          // Vérifier si le total dépasserait le contrat
+          if (
+            contractTotal > 0 &&
+            alreadyInvoicedTotal + newInvoiceTotal > contractTotal
+          ) {
+            const remaining = contractTotal - alreadyInvoicedTotal;
+            throw createValidationError(
+              "Le montant total des factures de situation dépasserait le montant du contrat",
+              {
+                situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`,
+              },
+            );
+          }
+        }
+
+        if (!prefix) {
+          // Chercher la dernière facture créée pour récupérer son préfixe
+          const lastInvoice = await Invoice.findOne({ workspaceId })
+            .sort({ createdAt: -1 })
+            .select("prefix")
+            .lean();
+
+          if (lastInvoice && lastInvoice.prefix) {
+            prefix = lastInvoice.prefix;
+          } else {
+            // Aucune facture existante, générer le préfixe par défaut
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            prefix = `F-${month}${year}`;
+          }
+        }
+
+        // Fonction pour gérer les conflits de brouillons
+        const handleDraftConflicts = async (newNumber) => {
+          // Vérifier s'il existe une facture en DRAFT avec le même numéro
+          const conflictingDrafts = await Invoice.find({
+            prefix,
+            number: newNumber,
+            status: "DRAFT",
+            workspaceId,
+          });
+
+          // S'il y a des factures en conflit, mettre à jour leur numéro avec le format DRAFT-numéro-timestamp
+          for (const draft of conflictingDrafts) {
+            const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+            // Extraire le numéro de base sans le préfixe DRAFT- s'il existe
+            const baseNumber = newNumber.startsWith("DRAFT-")
+              ? newNumber.replace("DRAFT-", "")
+              : newNumber;
+            const finalDraftNumber = `DRAFT-${baseNumber}-${timestamp}`;
+
+            // Mettre à jour la facture en brouillon avec le nouveau numéro
+            await Invoice.findByIdAndUpdate(draft._id, {
+              number: finalDraftNumber,
+            });
+          }
+
+          return newNumber;
+        };
+
+        // Lire le flag "séquence continue" de l'organisation (numérotation globale)
+        const invoiceOrg = await getOrganizationInfo(workspaceId);
+        const autoNumbering = invoiceOrg?.invoiceAutoNumbering === true;
+
+        // Logique de génération des numéros
+        let number;
+
+        if (input.status === "DRAFT") {
+          // Pour les brouillons : gérer les conflits AVANT de générer le numéro
+          if (input.number) {
+            // Si un numéro manuel est fourni, gérer les conflits d'abord
+            await handleDraftConflicts(`DRAFT-${input.number}`);
+          }
+
+          // Puis utiliser generateInvoiceNumber avec isDraft: true
+          const currentUser = await mongoose
+            .model("User")
+            .findById(context.user._id);
+          const customPrefix =
+            input.prefix || currentUser?.settings?.invoiceNumberPrefix;
+          number = await generateInvoiceNumber(customPrefix, {
+            workspaceId,
+            isDraft: true,
+            userId: context.user._id,
+            manualNumber: input.number, // Passer le numéro manuel s'il est fourni
+          });
+        } else {
+          // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
+          if (input.number) {
+            // Gérer les conflits avec les brouillons avant d'assigner le numéro
+            await handleDraftConflicts(input.number);
+
+            // Vérifier si le numéro fourni existe déjà parmi les factures finalisées
+            const existingInvoice = await Invoice.findOne({
+              prefix,
+              number: input.number,
+              status: { $ne: "DRAFT" },
+              workspaceId: workspaceId,
+            });
+
+            if (existingInvoice) {
+              throw new AppError(
+                `Le numéro de facture ${prefix}${input.number} existe déjà`,
+                ERROR_CODES.DUPLICATE_ERROR,
+              );
+            }
+
+            // Vérifier la continuité de la séquence (pas de trou, pas de recul).
+            // Par préfixe en mode normal, tous préfixes confondus en séquence continue.
+            const sequenceCheck = await validateNumberSequence(
+              "invoice",
+              input.number,
+              prefix,
+              { workspaceId, autoNumbering },
+            );
+            if (!sequenceCheck.isValid) {
+              throw new AppError(
+                sequenceCheck.message,
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+
+            number = input.number;
+          } else {
+            // Générer le prochain numéro séquentiel (strict, sans écart)
+            const sequentialNumber = await generateInvoiceNumber(prefix, {
+              workspaceId: workspaceId,
+              autoNumbering,
+              // Plus de numéro manuel pour les factures non-brouillons - numérotation strictement séquentielle
+            });
+
+            // Gérer les conflits avec les brouillons
+            await handleDraftConflicts(sequentialNumber);
+
+            number = sequentialNumber;
+          }
+        }
+
+        // Valider la date d'émission pour les factures non-brouillons
+        if (input.status !== "DRAFT") {
+          await validateInvoiceIssueDate(input.issueDate, workspaceId);
+        }
+
+        // Calculer les totaux avec la remise et la livraison
+        const totals = calculateInvoiceTotals(
+          input.items,
+          input.discount,
+          input.discountType,
+          input.shipping,
+          input.isReverseCharge,
+        );
+
+        try {
+          // Vérifier si le client a une adresse de livraison différente
+          const clientData = input.client;
+
+          // Si le client a un ID, c'est un client existant - pas besoin de vérifier l'unicité de l'email
+          // Seuls les nouveaux clients (sans ID) doivent être vérifiés pour éviter les doublons
+          if (!clientData.id) {
+            // Vérifier si un client avec cet email existe déjà dans les devis ou factures
+            const existingQuote = await Quote.findOne({
+              "client.email": clientData.email.toLowerCase(),
+              workspaceId,
+            });
+
+            const existingInvoice = await Invoice.findOne({
+              "client.email": clientData.email.toLowerCase(),
+              workspaceId,
+            });
+
+            if (existingQuote || existingInvoice) {
               throw createValidationError(
-                "Le montant total des factures de situation dépasserait le montant du contrat",
+                `Un client avec l'adresse email "${clientData.email}" existe déjà. Veuillez sélectionner le client existant ou utiliser une adresse email différente.`,
                 {
-                  situationTotal: `Montant du contrat: ${contractTotal.toFixed(2)}€. Déjà facturé: ${alreadyInvoicedTotal.toFixed(2)}€. Reste disponible: ${remaining.toFixed(2)}€. Montant de cette facture: ${newInvoiceTotal.toFixed(2)}€.`,
+                  "client.email":
+                    "Cette adresse email est déjà utilisée par un autre client",
                 },
               );
             }
           }
 
-          if (!prefix) {
-            // Chercher la dernière facture créée pour récupérer son préfixe
-            const lastInvoice = await Invoice.findOne({ workspaceId })
-              .sort({ createdAt: -1 })
-              .select("prefix")
-              .lean();
-
-            if (lastInvoice && lastInvoice.prefix) {
-              prefix = lastInvoice.prefix;
-            } else {
-              // Aucune facture existante, générer le préfixe par défaut
-              const now = new Date();
-              const year = now.getFullYear();
-              const month = String(now.getMonth() + 1).padStart(2, "0");
-              prefix = `F-${month}${year}`;
-            }
+          // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
+          if (
+            clientData.hasDifferentShippingAddress === true &&
+            !clientData.shippingAddress
+          ) {
+            throw createValidationError(
+              "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
+              {
+                "client.shippingAddress": "L'adresse de livraison est requise",
+              },
+            );
           }
 
-          // Fonction pour gérer les conflits de brouillons
-          const handleDraftConflicts = async (newNumber) => {
-            // Vérifier s'il existe une facture en DRAFT avec le même numéro
-            const conflictingDrafts = await Invoice.find({
-              prefix,
-              number: newNumber,
-              status: "DRAFT",
-              workspaceId,
+          // Log pour vérifier les champs de situation
+          if (input.invoiceType === "situation") {
+            logger.debug("📝 Création facture de situation:", {
+              invoiceType: input.invoiceType,
+              situationReference: input.situationReference,
+              contractTotal: input.contractTotal,
+              purchaseOrderNumber: input.purchaseOrderNumber,
             });
+          }
 
-            // S'il y a des factures en conflit, mettre à jour leur numéro avec le format DRAFT-numéro-timestamp
-            for (const draft of conflictingDrafts) {
-              const timestamp = Date.now() + Math.floor(Math.random() * 1000);
-              // Extraire le numéro de base sans le préfixe DRAFT- s'il existe
-              const baseNumber = newNumber.startsWith("DRAFT-")
-                ? newNumber.replace("DRAFT-", "")
-                : newNumber;
-              const finalDraftNumber = `DRAFT-${baseNumber}-${timestamp}`;
+          // Extraire les champs source qui n'existent pas dans le modèle Mongoose
+          const { sourcePurchaseOrderId, sourceQuoteId, ...invoiceInput } =
+            input;
 
-              // Mettre à jour la facture en brouillon avec le nouveau numéro
-              await Invoice.findByIdAndUpdate(draft._id, {
-                number: finalDraftNumber,
-              });
-            }
+          // Créer la facture - companyInfo uniquement pour les documents non-DRAFT
+          const isDraft = !input.status || input.status === "DRAFT";
+          const invoice = new Invoice({
+            ...invoiceInput,
+            number,
+            prefix,
+            companyInfo: isDraft
+              ? undefined
+              : mapOrganizationToCompanyInfo(organization),
+            client: {
+              ...input.client,
+              shippingAddress: input.client.hasDifferentShippingAddress
+                ? {
+                    fullName: input.client.shippingAddress?.fullName || "",
+                    street: input.client.shippingAddress?.street || "",
+                    city: input.client.shippingAddress?.city || "",
+                    postalCode: input.client.shippingAddress?.postalCode || "",
+                    country: input.client.shippingAddress?.country || "",
+                  }
+                : undefined,
+              // Champs personnalisés figés dès la création d'un document non brouillon
+              documentFields: isDraft
+                ? undefined
+                : await buildDocumentFieldsForClientId(
+                    input.client.id,
+                    workspaceId,
+                    context,
+                  ),
+            },
+            // Lier la facture au devis source si applicable
+            ...(sourceQuoteId ? { sourceQuote: sourceQuoteId } : {}),
+            workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
+            createdBy: user._id, // ✅ Conservé pour audit trail
+            ...totals, // Ajouter tous les totaux calculés
+          });
 
-            return newNumber;
-          };
-
-          // Lire le flag "séquence continue" de l'organisation (numérotation globale)
-          const invoiceOrg = await getOrganizationInfo(workspaceId);
-          const autoNumbering = invoiceOrg?.invoiceAutoNumbering === true;
-
-          // Logique de génération des numéros
-          let number;
-
-          if (input.status === "DRAFT") {
-            // Pour les brouillons : gérer les conflits AVANT de générer le numéro
-            if (input.number) {
-              // Si un numéro manuel est fourni, gérer les conflits d'abord
-              await handleDraftConflicts(`DRAFT-${input.number}`);
-            }
-
-            // Puis utiliser generateInvoiceNumber avec isDraft: true
-            const currentUser = await mongoose
-              .model("User")
-              .findById(context.user._id);
-            const customPrefix =
-              input.prefix || currentUser?.settings?.invoiceNumberPrefix;
-            number = await generateInvoiceNumber(customPrefix, {
-              workspaceId,
-              isDraft: true,
-              userId: context.user._id,
-              manualNumber: input.number, // Passer le numéro manuel s'il est fourni
-            });
-          } else {
-            // Pour les factures finalisées (PENDING/COMPLETED) : numéro séquentiel
-            if (input.number) {
-              // Gérer les conflits avec les brouillons avant d'assigner le numéro
-              await handleDraftConflicts(input.number);
-
-              // Vérifier si le numéro fourni existe déjà parmi les factures finalisées
-              const existingInvoice = await Invoice.findOne({
-                prefix,
-                number: input.number,
-                status: { $ne: "DRAFT" },
-                workspaceId: workspaceId,
-              });
-
-              if (existingInvoice) {
+          // Retry sur E11000 autour du save initial : régénère le numéro via le
+          // compteur atomique en cas de conflit (race condition, index legacy).
+          // Un numéro fourni manuellement échoue immédiatement (pas de retry).
+          const wasManualInvoiceNumber = Boolean(input.number);
+          const MAX_SAVE_RETRIES = 5;
+          for (let attempt = 1; ; attempt++) {
+            try {
+              await invoice.save();
+              break;
+            } catch (saveError) {
+              const isDup =
+                saveError.code === 11000 || saveError.code === 11001;
+              if (!isDup) throw saveError;
+              if (wasManualInvoiceNumber) {
                 throw new AppError(
-                  `Le numéro de facture ${prefix}${input.number} existe déjà`,
+                  `Le numéro de facture "${invoice.number}" est déjà utilisé`,
                   ERROR_CODES.DUPLICATE_ERROR,
                 );
               }
-
-              // Vérifier la continuité de la séquence (pas de trou, pas de recul).
-              // Par préfixe en mode normal, tous préfixes confondus en séquence continue.
-              const sequenceCheck = await validateNumberSequence(
-                "invoice",
-                input.number,
-                prefix,
-                { workspaceId, autoNumbering },
-              );
-              if (!sequenceCheck.isValid) {
-                throw new AppError(
-                  sequenceCheck.message,
-                  ERROR_CODES.VALIDATION_ERROR,
-                );
-              }
-
-              number = input.number;
-            } else {
-              // Générer le prochain numéro séquentiel (strict, sans écart)
-              const sequentialNumber = await generateInvoiceNumber(prefix, {
-                workspaceId: workspaceId,
-                autoNumbering,
-                // Plus de numéro manuel pour les factures non-brouillons - numérotation strictement séquentielle
-              });
-
-              // Gérer les conflits avec les brouillons
-              await handleDraftConflicts(sequentialNumber);
-
-              number = sequentialNumber;
-            }
-          }
-
-          // Valider la date d'émission pour les factures non-brouillons
-          if (input.status !== "DRAFT") {
-            await validateInvoiceIssueDate(input.issueDate, workspaceId);
-          }
-
-          // Calculer les totaux avec la remise et la livraison
-          const totals = calculateInvoiceTotals(
-            input.items,
-            input.discount,
-            input.discountType,
-            input.shipping,
-            input.isReverseCharge,
-          );
-
-          try {
-            // Vérifier si le client a une adresse de livraison différente
-            const clientData = input.client;
-
-            // Si le client a un ID, c'est un client existant - pas besoin de vérifier l'unicité de l'email
-            // Seuls les nouveaux clients (sans ID) doivent être vérifiés pour éviter les doublons
-            if (!clientData.id) {
-              // Vérifier si un client avec cet email existe déjà dans les devis ou factures
-              const existingQuote = await Quote.findOne({
-                "client.email": clientData.email.toLowerCase(),
-                workspaceId,
-              });
-
-              const existingInvoice = await Invoice.findOne({
-                "client.email": clientData.email.toLowerCase(),
-                workspaceId,
-              });
-
-              if (existingQuote || existingInvoice) {
-                throw createValidationError(
-                  `Un client avec l'adresse email "${clientData.email}" existe déjà. Veuillez sélectionner le client existant ou utiliser une adresse email différente.`,
-                  {
-                    "client.email":
-                      "Cette adresse email est déjà utilisée par un autre client",
-                  },
-                );
-              }
-            }
-
-            // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
-            if (
-              clientData.hasDifferentShippingAddress === true &&
-              !clientData.shippingAddress
-            ) {
-              throw createValidationError(
-                "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
-                {
-                  "client.shippingAddress":
-                    "L'adresse de livraison est requise",
-                },
-              );
-            }
-
-            // Log pour vérifier les champs de situation
-            if (input.invoiceType === "situation") {
-              logger.debug("📝 Création facture de situation:", {
-                invoiceType: input.invoiceType,
-                situationReference: input.situationReference,
-                contractTotal: input.contractTotal,
-                purchaseOrderNumber: input.purchaseOrderNumber,
-              });
-            }
-
-            // Extraire les champs source qui n'existent pas dans le modèle Mongoose
-            const { sourcePurchaseOrderId, sourceQuoteId, ...invoiceInput } =
-              input;
-
-            // Créer la facture - companyInfo uniquement pour les documents non-DRAFT
-            const isDraft = !input.status || input.status === "DRAFT";
-            const invoice = new Invoice({
-              ...invoiceInput,
-              number,
-              prefix,
-              companyInfo: isDraft
-                ? undefined
-                : mapOrganizationToCompanyInfo(organization),
-              client: {
-                ...input.client,
-                shippingAddress: input.client.hasDifferentShippingAddress
-                  ? {
-                      fullName: input.client.shippingAddress?.fullName || "",
-                      street: input.client.shippingAddress?.street || "",
-                      city: input.client.shippingAddress?.city || "",
-                      postalCode:
-                        input.client.shippingAddress?.postalCode || "",
-                      country: input.client.shippingAddress?.country || "",
-                    }
-                  : undefined,
-                // Champs personnalisés figés dès la création d'un document non brouillon
-                documentFields: isDraft
-                  ? undefined
-                  : await buildDocumentFieldsForClientId(
-                      input.client.id,
-                      workspaceId,
-                      context,
-                    ),
-              },
-              // Lier la facture au devis source si applicable
-              ...(sourceQuoteId ? { sourceQuote: sourceQuoteId } : {}),
-              workspaceId: workspaceId, // ✅ Ajout automatique du workspaceId
-              createdBy: user._id, // ✅ Conservé pour audit trail
-              ...totals, // Ajouter tous les totaux calculés
-            });
-
-            // Retry sur E11000 autour du save initial : régénère le numéro via le
-            // compteur atomique en cas de conflit (race condition, index legacy).
-            // Un numéro fourni manuellement échoue immédiatement (pas de retry).
-            const wasManualInvoiceNumber = Boolean(input.number);
-            const MAX_SAVE_RETRIES = 5;
-            for (let attempt = 1; ; attempt++) {
-              try {
-                await invoice.save();
-                break;
-              } catch (saveError) {
-                const isDup =
-                  saveError.code === 11000 || saveError.code === 11001;
-                if (!isDup) throw saveError;
-                if (wasManualInvoiceNumber) {
-                  throw new AppError(
-                    `Le numéro de facture "${invoice.number}" est déjà utilisé`,
-                    ERROR_CODES.DUPLICATE_ERROR,
-                  );
-                }
-                if (attempt >= MAX_SAVE_RETRIES) {
-                  console.error(
-                    "[createInvoice] Échec après retries E11000:",
-                    saveError.keyValue,
-                  );
-                  throw new AppError(
-                    "Impossible de générer un numéro de facture unique. Veuillez réessayer.",
-                    ERROR_CODES.INTERNAL_ERROR,
-                  );
-                }
-                console.warn(
-                  `[createInvoice] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+              if (attempt >= MAX_SAVE_RETRIES) {
+                console.error(
+                  "[createInvoice] Échec après retries E11000:",
                   saveError.keyValue,
                 );
-                const regenerated = await generateInvoiceNumber(prefix, {
-                  workspaceId,
-                  isDraft: input.status === "DRAFT",
-                  userId: context.user._id,
-                  autoNumbering,
-                });
-                await handleDraftConflicts(regenerated);
-                invoice.number = regenerated;
-                number = regenerated;
-              }
-            }
-
-            logger.debug(
-              `✅ Facture sauvegardée avec succès: ${prefix}${number}`,
-            );
-
-            // Log pour les factures de situation
-            if (invoice.invoiceType === "situation") {
-              logger.debug("📊 Facture de situation sauvegardée:", {
-                id: invoice._id,
-                situationReference: invoice.situationReference,
-                contractTotal: invoice.contractTotal,
-                purchaseOrderNumber: invoice.purchaseOrderNumber,
-              });
-            }
-
-            // === ROUTAGE E-INVOICING / E-REPORTING ===
-            // Évaluer et router la facture si elle n'est pas un brouillon
-            if (invoice.status !== "DRAFT") {
-              let routingResult = null;
-              try {
-                routingResult = await evaluateAndRouteInvoice(
-                  invoice,
-                  workspaceId,
-                );
-              } catch (eInvoicingError) {
-                logger.error("Erreur routing e-invoicing:", eInvoicingError);
-                invoice.eInvoiceStatus = "ERROR";
-                invoice.eInvoiceError = eInvoicingError.message;
-                // Traiter comme un échec d'envoi e-invoicing : ne pas finaliser
-                routingResult = {
-                  flowType: "E_INVOICING",
-                  sendFailed: true,
-                  error: eInvoicingError.message,
-                };
-              }
-
-              // VERROU e-invoicing : si la transmission SuperPDP échoue (flux
-              // E_INVOICING), la facture ne doit pas rester finalisée → on la
-              // repasse en brouillon et on remonte l'erreur à l'utilisateur.
-              if (
-                routingResult?.flowType === "E_INVOICING" &&
-                routingResult.sendFailed
-              ) {
-                invoice.status = "DRAFT";
-                try {
-                  await invoice.save();
-                } catch (revertError) {
-                  logger.error(
-                    "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP (création):",
-                    revertError,
-                  );
-                }
                 throw new AppError(
-                  `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
-                  ERROR_CODES.VALIDATION_ERROR,
+                  "Impossible de générer un numéro de facture unique. Veuillez réessayer.",
+                  ERROR_CODES.INTERNAL_ERROR,
                 );
               }
-
-              if (routingResult) {
-                await invoice.save();
-                logger.info(
-                  `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
-                );
-              }
+              console.warn(
+                `[createInvoice] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+                saveError.keyValue,
+              );
+              const regenerated = await generateInvoiceNumber(prefix, {
+                workspaceId,
+                isDraft: input.status === "DRAFT",
+                userId: context.user._id,
+                autoNumbering,
+              });
+              await handleDraftConflicts(regenerated);
+              invoice.number = regenerated;
+              number = regenerated;
             }
-            // === FIN ENVOI SUPERPDP ===
+          }
 
-            // Enregistrer l'activité dans le client si c'est un client existant
-            if (clientData.id) {
+          logger.debug(
+            `✅ Facture sauvegardée avec succès: ${prefix}${number}`,
+          );
+
+          // Log pour les factures de situation
+          if (invoice.invoiceType === "situation") {
+            logger.debug("📊 Facture de situation sauvegardée:", {
+              id: invoice._id,
+              situationReference: invoice.situationReference,
+              contractTotal: invoice.contractTotal,
+              purchaseOrderNumber: invoice.purchaseOrderNumber,
+            });
+          }
+
+          // === ROUTAGE E-INVOICING / E-REPORTING ===
+          // Évaluer et router la facture si elle n'est pas un brouillon
+          if (invoice.status !== "DRAFT") {
+            let routingResult = null;
+            try {
+              routingResult = await evaluateAndRouteInvoice(
+                invoice,
+                workspaceId,
+              );
+            } catch (eInvoicingError) {
+              logger.error("Erreur routing e-invoicing:", eInvoicingError);
+              invoice.eInvoiceStatus = "ERROR";
+              invoice.eInvoiceError = eInvoicingError.message;
+              // Traiter comme un échec d'envoi e-invoicing : ne pas finaliser
+              routingResult = {
+                flowType: "E_INVOICING",
+                sendFailed: true,
+                error: eInvoicingError.message,
+              };
+            }
+
+            // VERROU e-invoicing : si la transmission SuperPDP échoue (flux
+            // E_INVOICING), la facture ne doit pas rester finalisée → on la
+            // repasse en brouillon et on remonte l'erreur à l'utilisateur.
+            if (
+              routingResult?.flowType === "E_INVOICING" &&
+              routingResult.sendFailed
+            ) {
+              invoice.status = "DRAFT";
               try {
-                await Client.findOneAndUpdate(
-                  { _id: clientData.id, workspaceId: invoice.workspaceId },
-                  {
-                    $push: {
-                      activity: {
-                        id: new mongoose.Types.ObjectId().toString(),
-                        type: "invoice_created",
-                        description: `a créé la facture ${prefix}${number}`,
-                        userId: user._id,
-                        userName: user.name || user.email,
-                        userImage: user.image || null,
-                        metadata: {
-                          documentType: "invoice",
-                          documentId: invoice._id.toString(),
-                          documentNumber: `${prefix}-${number}`,
-                          status: invoice.status,
-                        },
-                        createdAt: new Date(),
+                await invoice.save();
+              } catch (revertError) {
+                logger.error(
+                  "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP (création):",
+                  revertError,
+                );
+              }
+              throw new AppError(
+                `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
+
+            if (routingResult) {
+              await invoice.save();
+              logger.info(
+                `[E-INVOICE-ROUTING] Facture ${prefix}${number}: ${routingResult.flowType} - ${routingResult.reason}`,
+              );
+            }
+          }
+          // === FIN ENVOI SUPERPDP ===
+
+          // Enregistrer l'activité dans le client si c'est un client existant
+          if (clientData.id) {
+            try {
+              await Client.findOneAndUpdate(
+                { _id: clientData.id, workspaceId: invoice.workspaceId },
+                {
+                  $push: {
+                    activity: {
+                      id: new mongoose.Types.ObjectId().toString(),
+                      type: "invoice_created",
+                      description: `a créé la facture ${prefix}${number}`,
+                      userId: user._id,
+                      userName: user.name || user.email,
+                      userImage: user.image || null,
+                      metadata: {
+                        documentType: "invoice",
+                        documentId: invoice._id.toString(),
+                        documentNumber: `${prefix}-${number}`,
+                        status: invoice.status,
                       },
+                      createdAt: new Date(),
                     },
                   },
-                );
-              } catch (activityError) {
-                console.error(
-                  "Erreur lors de l'enregistrement de l'activité:",
-                  activityError,
-                );
-                // Ne pas faire échouer la création de facture si l'activité échoue
-              }
-            }
-
-            // Créer automatiquement un événement de calendrier pour l'échéance de la facture
-            if (invoice.dueDate) {
-              try {
-                const dueEvent = await Event.createInvoiceDueEvent(
-                  invoice,
-                  user._id,
-                  workspaceId,
-                );
-                // Pousser l'événement vers les calendriers externes connectés (autoSync)
-                if (dueEvent?._id) {
-                  autoPushEventToConnections(dueEvent._id, user._id).catch(
-                    (err) =>
-                      console.error(
-                        "Erreur auto-push échéance facture vers calendriers externes:",
-                        err,
-                      ),
-                  );
-                }
-              } catch (eventError) {
-                console.error(
-                  "Erreur lors de la création de l'événement de calendrier:",
-                  eventError,
-                );
-                // Ne pas faire échouer la création de facture si l'événement échoue
-              }
-            }
-
-            // Vérifier si le numéro de bon de commande correspond à un devis existant
-            if (input.purchaseOrderNumber) {
-              // Rechercher tous les devis du workspace
-              const quotes = await Quote.find({ workspaceId });
-
-              // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
-              const matchingQuote = quotes.find((quote) => {
-                // Construire l'identifiant complet du devis (préfixe-numéro)
-                const quoteFullId = `${quote.prefix}-${quote.number}`;
-                const inputLower = input.purchaseOrderNumber.toLowerCase();
-
-                // Comparer avec le numéro de bon de commande (supporte ancien format sans tiret et nouveau avec tiret)
-                return (
-                  quoteFullId.toLowerCase() === inputLower ||
-                  `${quote.prefix}${quote.number}`.toLowerCase() === inputLower
-                );
-              });
-
-              if (matchingQuote) {
-                // Ajouter cette facture aux factures liées du devis
-                if (!matchingQuote.linkedInvoices) {
-                  matchingQuote.linkedInvoices = [];
-                }
-
-                // Vérifier que la facture n'est pas déjà liée
-                const alreadyLinked = matchingQuote.linkedInvoices.some(
-                  (linkedInvoice) =>
-                    linkedInvoice.toString() === invoice._id.toString(),
-                );
-
-                if (!alreadyLinked) {
-                  matchingQuote.linkedInvoices.push(invoice._id);
-                  await matchingQuote.save();
-                }
-              }
-            }
-
-            // Lier la facture au bon de commande source
-            if (sourcePurchaseOrderId) {
-              try {
-                await PurchaseOrder.findOneAndUpdate(
-                  {
-                    _id: sourcePurchaseOrderId,
-                    workspaceId: invoice.workspaceId,
-                  },
-                  {
-                    $addToSet: { linkedInvoices: invoice._id },
-                  },
-                );
-              } catch (err) {
-                console.error("Erreur lien BC→Facture:", err);
-              }
-            }
-
-            // Lier la facture au devis source (si pas déjà lié par purchaseOrderNumber)
-            if (sourceQuoteId) {
-              try {
-                const sourceQuote = await Quote.findOne({
-                  _id: sourceQuoteId,
-                  workspaceId: invoice.workspaceId,
-                });
-                if (sourceQuote) {
-                  const alreadyLinked = sourceQuote.linkedInvoices?.some(
-                    (id) => id.toString() === invoice._id.toString(),
-                  );
-                  if (!alreadyLinked) {
-                    await Quote.findOneAndUpdate(
-                      { _id: sourceQuoteId, workspaceId: invoice.workspaceId },
-                      {
-                        $addToSet: { linkedInvoices: invoice._id },
-                      },
-                    );
-                  }
-                }
-              } catch (err) {
-                console.error("Erreur lien Devis→Facture:", err);
-              }
-            }
-
-            // Automatisations documents partagés pour les brouillons (fire-and-forget)
-            if (invoice.status === "DRAFT") {
-              documentAutomationService
-                .executeAutomations(
-                  "INVOICE_DRAFT",
-                  workspaceId,
-                  {
-                    documentId: invoice._id.toString(),
-                    documentType: "invoice",
-                    documentNumber: invoice.number,
-                    prefix: invoice.prefix || "",
-                    clientName: invoice.client?.name || "",
-                    issueDate: invoice.issueDate || invoice.createdAt,
-                    clientId: invoice.client?._id || invoice.clientId || null,
-                  },
-                  user._id.toString(),
-                )
-                .catch((err) =>
-                  console.error(
-                    "Erreur automatisation documents (draft):",
-                    err,
-                  ),
-                );
-            }
-
-            // Archivage Factur-X sur R2 si la facture est créée directement
-            // finalisée (non brouillon). Fire-and-forget, ne bloque pas la réponse.
-            if (invoice.status !== "DRAFT") {
-              triggerInvoiceFacturXArchive(invoice, workspaceId);
-            }
-
-            // Sync Pennylane / Qonto (fire-and-forget) — facture créée
-            // directement envoyée depuis l'éditeur (status PENDING), sans
-            // passer par changeInvoiceStatus où ces hooks sont aussi posés.
-            if (invoice.status !== "DRAFT") {
-              syncInvoiceIfNeeded(
-                invoice,
-                context.organizationId || workspaceId,
-              ).catch((err) =>
-                console.error("Erreur sync Pennylane (création):", err),
+                },
               );
-              syncInvoiceToQontoIfNeeded(
-                invoice,
-                context.organizationId || workspaceId,
-              ).catch((err) =>
-                console.error("Erreur sync Qonto (création):", err),
-              );
-              syncInvoiceToAbbyIfNeeded(
-                invoice,
-                context.organizationId || workspaceId,
-              ).catch((err) =>
-                console.error("Erreur sync Abby (création):", err),
-              );
-            }
-
-            return await invoice.populate("createdBy");
-          } catch (error) {
-            // Intercepter les erreurs de validation Mongoose
-            console.error("Erreur lors de la création de la facture:", error);
-
-            // Si c'est une erreur de validation Mongoose
-            if (error.name === "ValidationError") {
-              const validationErrors = {};
-
-              // Transformer les erreurs Mongoose en format plus lisible
-              Object.keys(error.errors).forEach((key) => {
-                validationErrors[key] = error.errors[key].message;
-              });
-
+            } catch (activityError) {
               console.error(
-                "⚠️ Détails de validation Mongoose:",
-                JSON.stringify(validationErrors, null, 2),
+                "Erreur lors de l'enregistrement de l'activité:",
+                activityError,
               );
-
-              throw createValidationError(
-                "La facture contient des erreurs de validation",
-                validationErrors,
-              );
+              // Ne pas faire échouer la création de facture si l'activité échoue
             }
-
-            // Si c'est une autre erreur, la propager
-            throw error;
           }
-        },
-      ),
+
+          // Créer automatiquement un événement de calendrier pour l'échéance de la facture
+          if (invoice.dueDate) {
+            try {
+              const dueEvent = await Event.createInvoiceDueEvent(
+                invoice,
+                user._id,
+                workspaceId,
+              );
+              // Pousser l'événement vers les calendriers externes connectés (autoSync)
+              if (dueEvent?._id) {
+                autoPushEventToConnections(dueEvent._id, user._id).catch(
+                  (err) =>
+                    console.error(
+                      "Erreur auto-push échéance facture vers calendriers externes:",
+                      err,
+                    ),
+                );
+              }
+            } catch (eventError) {
+              console.error(
+                "Erreur lors de la création de l'événement de calendrier:",
+                eventError,
+              );
+              // Ne pas faire échouer la création de facture si l'événement échoue
+            }
+          }
+
+          // Vérifier si le numéro de bon de commande correspond à un devis existant
+          if (input.purchaseOrderNumber) {
+            // Rechercher tous les devis du workspace
+            const quotes = await Quote.find({ workspaceId });
+
+            // Trouver un devis dont le préfixe+numéro correspond au numéro de bon de commande
+            const matchingQuote = quotes.find((quote) => {
+              // Construire l'identifiant complet du devis (préfixe-numéro)
+              const quoteFullId = `${quote.prefix}-${quote.number}`;
+              const inputLower = input.purchaseOrderNumber.toLowerCase();
+
+              // Comparer avec le numéro de bon de commande (supporte ancien format sans tiret et nouveau avec tiret)
+              return (
+                quoteFullId.toLowerCase() === inputLower ||
+                `${quote.prefix}${quote.number}`.toLowerCase() === inputLower
+              );
+            });
+
+            if (matchingQuote) {
+              // Ajouter cette facture aux factures liées du devis
+              if (!matchingQuote.linkedInvoices) {
+                matchingQuote.linkedInvoices = [];
+              }
+
+              // Vérifier que la facture n'est pas déjà liée
+              const alreadyLinked = matchingQuote.linkedInvoices.some(
+                (linkedInvoice) =>
+                  linkedInvoice.toString() === invoice._id.toString(),
+              );
+
+              if (!alreadyLinked) {
+                matchingQuote.linkedInvoices.push(invoice._id);
+                await matchingQuote.save();
+              }
+            }
+          }
+
+          // Lier la facture au bon de commande source
+          if (sourcePurchaseOrderId) {
+            try {
+              await PurchaseOrder.findOneAndUpdate(
+                {
+                  _id: sourcePurchaseOrderId,
+                  workspaceId: invoice.workspaceId,
+                },
+                {
+                  $addToSet: { linkedInvoices: invoice._id },
+                },
+              );
+            } catch (err) {
+              console.error("Erreur lien BC→Facture:", err);
+            }
+          }
+
+          // Lier la facture au devis source (si pas déjà lié par purchaseOrderNumber)
+          if (sourceQuoteId) {
+            try {
+              const sourceQuote = await Quote.findOne({
+                _id: sourceQuoteId,
+                workspaceId: invoice.workspaceId,
+              });
+              if (sourceQuote) {
+                const alreadyLinked = sourceQuote.linkedInvoices?.some(
+                  (id) => id.toString() === invoice._id.toString(),
+                );
+                if (!alreadyLinked) {
+                  await Quote.findOneAndUpdate(
+                    { _id: sourceQuoteId, workspaceId: invoice.workspaceId },
+                    {
+                      $addToSet: { linkedInvoices: invoice._id },
+                    },
+                  );
+                }
+              }
+            } catch (err) {
+              console.error("Erreur lien Devis→Facture:", err);
+            }
+          }
+
+          // Automatisations documents partagés pour les brouillons (fire-and-forget)
+          if (invoice.status === "DRAFT") {
+            documentAutomationService
+              .executeAutomations(
+                "INVOICE_DRAFT",
+                workspaceId,
+                {
+                  documentId: invoice._id.toString(),
+                  documentType: "invoice",
+                  documentNumber: invoice.number,
+                  prefix: invoice.prefix || "",
+                  clientName: invoice.client?.name || "",
+                  issueDate: invoice.issueDate || invoice.createdAt,
+                  clientId: invoice.client?._id || invoice.clientId || null,
+                },
+                user._id.toString(),
+              )
+              .catch((err) =>
+                console.error("Erreur automatisation documents (draft):", err),
+              );
+          }
+
+          // Archivage Factur-X sur R2 si la facture est créée directement
+          // finalisée (non brouillon). Fire-and-forget, ne bloque pas la réponse.
+          if (invoice.status !== "DRAFT") {
+            triggerInvoiceFacturXArchive(invoice, workspaceId);
+          }
+
+          // Sync Pennylane / Qonto (fire-and-forget) — facture créée
+          // directement envoyée depuis l'éditeur (status PENDING), sans
+          // passer par changeInvoiceStatus où ces hooks sont aussi posés.
+          if (invoice.status !== "DRAFT") {
+            syncInvoiceIfNeeded(
+              invoice,
+              context.organizationId || workspaceId,
+            ).catch((err) =>
+              console.error("Erreur sync Pennylane (création):", err),
+            );
+            syncInvoiceToQontoIfNeeded(
+              invoice,
+              context.organizationId || workspaceId,
+            ).catch((err) =>
+              console.error("Erreur sync Qonto (création):", err),
+            );
+            syncInvoiceToAbbyIfNeeded(
+              invoice,
+              context.organizationId || workspaceId,
+            ).catch((err) =>
+              console.error("Erreur sync Abby (création):", err),
+            );
+          }
+
+          return await invoice.populate("createdBy");
+        } catch (error) {
+          // Intercepter les erreurs de validation Mongoose
+          console.error("Erreur lors de la création de la facture:", error);
+
+          // Si c'est une erreur de validation Mongoose
+          if (error.name === "ValidationError") {
+            const validationErrors = {};
+
+            // Transformer les erreurs Mongoose en format plus lisible
+            Object.keys(error.errors).forEach((key) => {
+              validationErrors[key] = error.errors[key].message;
+            });
+
+            console.error(
+              "⚠️ Détails de validation Mongoose:",
+              JSON.stringify(validationErrors, null, 2),
+            );
+
+            throw createValidationError(
+              "La facture contient des erreurs de validation",
+              validationErrors,
+            );
+          }
+
+          // Si c'est une autre erreur, la propager
+          throw error;
+        }
+      }),
     ),
 
     updateInvoice: requireCompanyInfo(
@@ -2892,371 +2900,390 @@ const invoiceResolvers = {
     // Action exigée selon le statut visé (assertStatusChangeAllowed) :
     // valider le brouillon = créer ou modifier, payée = « markPaid »,
     // annuler = « status »
-    changeInvoiceStatus: requireAction("invoices", STATUS_CHANGE_ACTIONS)(
-      async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
-        assertStatusChangeAllowed(context, "invoices", status, "PENDING");
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
+    changeInvoiceStatus: requireAction(
+      "invoices",
+      STATUS_CHANGE_ACTIONS,
+    )(async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+      assertStatusChangeAllowed(context, "invoices", status, "PENDING");
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
+
+      const invoice = await Invoice.findOne({
+        _id: id,
+        workspaceId: workspaceId,
+      }).populate("createdBy");
+
+      if (!invoice) {
+        throw createNotFoundError("Facture");
+      }
+
+      // ✅ Vérifications de permissions
+      const { userRole } = context;
+      if (
+        userRole === "viewer" &&
+        invoice.createdBy._id.toString() !== user._id.toString()
+      ) {
+        throw new AppError(
+          "Vous ne pouvez modifier que vos propres factures",
+          ERROR_CODES.FORBIDDEN,
         );
+      }
 
-        const invoice = await Invoice.findOne({
-          _id: id,
-          workspaceId: workspaceId,
-        }).populate("createdBy");
+      // ✅ Les permissions sont déjà vérifiées par requireAction et
+      // assertPermissionAction ci-dessus
 
-        if (!invoice) {
-          throw createNotFoundError("Facture");
+      // Vérifier si le changement de statut est autorisé
+      if (invoice.status === status) {
+        return invoice; // Aucun changement nécessaire
+      }
+
+      // OVERDUE est un état DÉRIVÉ (calculé à partir de dueDate), jamais
+      // stocké : le poser manuellement sortirait la facture du périmètre
+      // « finalisé » de la séquence (son numéro deviendrait réattribuable →
+      // doublon). On l'interdit explicitement comme cible.
+      if (status === "OVERDUE") {
+        throw createValidationError(
+          "Le statut « en retard » est calculé automatiquement et ne peut pas être défini manuellement.",
+          { status: "OVERDUE n'est pas un statut assignable." },
+        );
+      }
+
+      // Vérifier les transitions de statut autorisées
+      if (
+        invoice.status === "COMPLETED" ||
+        invoice.status === "CANCELED" ||
+        (invoice.status === "PENDING" && status === "DRAFT") ||
+        (status === "DRAFT" && invoice.status !== "DRAFT")
+      ) {
+        throw createStatusTransitionError("Facture", invoice.status, status);
+      }
+
+      // Brouillon : seulement validé (ni payé ni annulé)
+      assertInvoiceStatusChange(invoice, status);
+
+      // Émise → payée : même chemin que « Marquer comme payée » (date
+      // de paiement du jour, déclaration d'encaissement, automatisations).
+      // Sans lui, la facture passait payée sans date de paiement.
+      if (
+        ["PENDING", "OVERDUE"].includes(invoice.status) &&
+        status === "COMPLETED"
+      ) {
+        await applyInvoicePaid(invoice, {
+          paymentDate: new Date(),
+          userId: user._id,
+          workspaceId,
+          organizationId: context.organizationId,
+        });
+        return await invoice.populate("createdBy");
+      }
+
+      // Vérifier que la date d'émission n'est pas antérieure à celle de la dernière facture existante
+      if (invoice.status === "DRAFT" && status === "PENDING") {
+        // Recaler les dates d'un brouillon repris plus tard : l'émission est
+        // ramenée à aujourd'hui et l'échéance décalée d'autant (délai
+        // d'origine conservé). Les vues affichent déjà ces dates recalées
+        // (getDraftEffectiveDates côté front) : sans ce recalage, la
+        // finalisation en un clic persisterait les dates d'origine.
+        const refreshedDates = refreshDraftDates(
+          invoice.issueDate,
+          invoice.dueDate,
+        );
+        if (refreshedDates.changed) {
+          invoice.issueDate = refreshedDates.issueDate;
+          invoice.dueDate = refreshedDates.secondDate;
+        }
+        await validateInvoiceIssueDate(
+          invoice.issueDate,
+          workspaceId,
+          invoice._id,
+        );
+      }
+
+      const oldStatus = invoice.status;
+
+      // Numéro/préfixe du brouillon — conservés pour rollback si la
+      // transmission e-invoicing (SuperPDP) échoue lors de la validation.
+      const draftNumber = invoice.number;
+      const draftPrefix = invoice.prefix;
+
+      // Si la facture passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
+      if (invoice.status === "DRAFT" && status === "PENDING") {
+        // Snapshot companyInfo à la finalisation
+        if (!invoice.companyInfo || !invoice.companyInfo.name) {
+          const org = await getOrganizationInfo(workspaceId);
+          invoice.companyInfo = mapOrganizationToCompanyInfo(org);
         }
 
-        // ✅ Vérifications de permissions
-        const { userRole } = context;
-        if (
-          userRole === "viewer" &&
-          invoice.createdBy._id.toString() !== user._id.toString()
-        ) {
-          throw new AppError(
-            "Vous ne pouvez modifier que vos propres factures",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-
-        // ✅ Les permissions sont déjà vérifiées par requireAction et
-        // assertPermissionAction ci-dessus
-
-        // Vérifier si le changement de statut est autorisé
-        if (invoice.status === status) {
-          return invoice; // Aucun changement nécessaire
-        }
-
-        // OVERDUE est un état DÉRIVÉ (calculé à partir de dueDate), jamais
-        // stocké : le poser manuellement sortirait la facture du périmètre
-        // « finalisé » de la séquence (son numéro deviendrait réattribuable →
-        // doublon). On l'interdit explicitement comme cible.
-        if (status === "OVERDUE") {
-          throw createValidationError(
-            "Le statut « en retard » est calculé automatiquement et ne peut pas être défini manuellement.",
-            { status: "OVERDUE n'est pas un statut assignable." },
-          );
-        }
-
-        // Vérifier les transitions de statut autorisées
-        if (
-          invoice.status === "COMPLETED" ||
-          invoice.status === "CANCELED" ||
-          (invoice.status === "PENDING" && status === "DRAFT") ||
-          (status === "DRAFT" && invoice.status !== "DRAFT")
-        ) {
-          throw createStatusTransitionError("Facture", invoice.status, status);
-        }
-
-        // Vérifier que la date d'émission n'est pas antérieure à celle de la dernière facture existante
-        if (invoice.status === "DRAFT" && status === "PENDING") {
-          // Recaler les dates d'un brouillon repris plus tard : l'émission est
-          // ramenée à aujourd'hui et l'échéance décalée d'autant (délai
-          // d'origine conservé). Les vues affichent déjà ces dates recalées
-          // (getDraftEffectiveDates côté front) : sans ce recalage, la
-          // finalisation en un clic persisterait les dates d'origine.
-          const refreshedDates = refreshDraftDates(
-            invoice.issueDate,
-            invoice.dueDate,
-          );
-          if (refreshedDates.changed) {
-            invoice.issueDate = refreshedDates.issueDate;
-            invoice.dueDate = refreshedDates.secondDate;
-          }
-          await validateInvoiceIssueDate(
-            invoice.issueDate,
-            workspaceId,
-            invoice._id,
-          );
-        }
-
-        const oldStatus = invoice.status;
-
-        // Numéro/préfixe du brouillon — conservés pour rollback si la
-        // transmission e-invoicing (SuperPDP) échoue lors de la validation.
-        const draftNumber = invoice.number;
-        const draftPrefix = invoice.prefix;
-
-        // Si la facture passe de DRAFT à PENDING, snapshot companyInfo + client et générer un nouveau numéro séquentiel
-        if (invoice.status === "DRAFT" && status === "PENDING") {
-          // Snapshot companyInfo à la finalisation
-          if (!invoice.companyInfo || !invoice.companyInfo.name) {
-            const org = await getOrganizationInfo(workspaceId);
-            invoice.companyInfo = mapOrganizationToCompanyInfo(org);
-          }
-
-          // Snapshot client à la finalisation (données à jour depuis la collection Client)
-          if (invoice.client?.id) {
-            try {
-              const freshClient = await Client.findOne({
-                _id: invoice.client.id,
-                workspaceId: invoice.workspaceId,
-              });
-              if (freshClient) {
-                invoice.client = {
-                  id: freshClient._id.toString(),
-                  type: freshClient.type,
-                  name: freshClient.name,
-                  firstName: freshClient.firstName,
-                  lastName: freshClient.lastName,
-                  email: freshClient.email,
-                  address: freshClient.address,
-                  hasDifferentShippingAddress:
-                    freshClient.hasDifferentShippingAddress,
-                  shippingAddress: freshClient.shippingAddress,
-                  isInternational: freshClient.isInternational,
-                  documentFields: await buildClientDocumentFields(
-                    freshClient,
-                    context,
-                  ),
-                  siret: freshClient.siret,
-                  vatNumber: freshClient.vatNumber,
-                };
-              }
-            } catch (error) {
-              console.error(
-                "[changeInvoiceStatus] Erreur snapshot client:",
-                error.message,
-              );
+        // Snapshot client à la finalisation (données à jour depuis la collection Client)
+        if (invoice.client?.id) {
+          try {
+            const freshClient = await Client.findOne({
+              _id: invoice.client.id,
+              workspaceId: invoice.workspaceId,
+            });
+            if (freshClient) {
+              invoice.client = {
+                id: freshClient._id.toString(),
+                type: freshClient.type,
+                name: freshClient.name,
+                firstName: freshClient.firstName,
+                lastName: freshClient.lastName,
+                email: freshClient.email,
+                address: freshClient.address,
+                hasDifferentShippingAddress:
+                  freshClient.hasDifferentShippingAddress,
+                shippingAddress: freshClient.shippingAddress,
+                isInternational: freshClient.isInternational,
+                documentFields: await buildClientDocumentFields(
+                  freshClient,
+                  context,
+                ),
+                siret: freshClient.siret,
+                vatNumber: freshClient.vatNumber,
+              };
             }
+          } catch (error) {
+            console.error(
+              "[changeInvoiceStatus] Erreur snapshot client:",
+              error.message,
+            );
           }
+        }
 
-          // Transaction atomique pour éviter les numéros TEMP orphelins
-          const MAX_RETRIES = 3;
-          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-            const session = await mongoose.startSession();
-            try {
-              await session.withTransaction(async () => {
-                // Sauvegarder le numéro original du brouillon
-                const originalDraftNumber = invoice.number;
+        // Transaction atomique pour éviter les numéros TEMP orphelins
+        const MAX_RETRIES = 3;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          const session = await mongoose.startSession();
+          try {
+            await session.withTransaction(async () => {
+              // Sauvegarder le numéro original du brouillon
+              const originalDraftNumber = invoice.number;
 
-                // D'abord changer temporairement le numéro pour éviter les conflits
-                invoice.number = `TEMP-${Date.now()}`;
-                await invoice.save({ session });
+              // D'abord changer temporairement le numéro pour éviter les conflits
+              invoice.number = `TEMP-${Date.now()}`;
+              await invoice.save({ session });
 
-                // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
-                const lastInvoice = await Invoice.findOne(
-                  {
-                    workspaceId: workspaceId,
-                    status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-                  },
-                  null,
-                  { session },
-                )
-                  .sort({ createdAt: -1 })
-                  .select("prefix")
-                  .lean();
-
-                // Utiliser l'année de issueDate du document, pas la date serveur
-                const year = (invoice.issueDate || new Date()).getFullYear();
-                const month = String(
-                  (invoice.issueDate || new Date()).getMonth() + 1,
-                ).padStart(2, "0");
-
-                let prefix;
-                if (lastInvoice && lastInvoice.prefix) {
-                  prefix = lastInvoice.prefix;
-                } else {
-                  prefix = `F-${month}${year}`;
-                }
-
-                logger.debug(
-                  "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
-                  prefix,
-                );
-
-                const statusOrg = await getOrganizationInfo(workspaceId);
-                const autoNumbering = statusOrg?.invoiceAutoNumbering === true;
-
-                const newNumber = await generateInvoiceNumber(prefix, {
-                  isValidatingDraft: true,
-                  currentDraftNumber: invoice.number,
-                  originalDraftNumber: originalDraftNumber,
+              // Récupérer le préfixe de la dernière facture créée (non-DRAFT)
+              const lastInvoice = await Invoice.findOne(
+                {
                   workspaceId: workspaceId,
-                  currentInvoiceId: invoice._id,
-                  session,
-                  autoNumbering,
-                });
+                  status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
+                },
+                null,
+                { session },
+              )
+                .sort({ createdAt: -1 })
+                .select("prefix")
+                .lean();
 
-                invoice.number = newNumber;
-                invoice.prefix = prefix;
-                invoice.status = status;
-                await invoice.save({ session });
-              });
-              session.endSession();
-              break; // Succès, sortir de la boucle de retry
-            } catch (err) {
-              session.endSession();
-              if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                // Duplicate key error, réessayer
-                logger.debug(
-                  `⚠️ [changeInvoiceStatus] E11000 retry attempt ${attempt + 1}`,
-                );
-                continue;
+              // Utiliser l'année de issueDate du document, pas la date serveur
+              const year = (invoice.issueDate || new Date()).getFullYear();
+              const month = String(
+                (invoice.issueDate || new Date()).getMonth() + 1,
+              ).padStart(2, "0");
+
+              let prefix;
+              if (lastInvoice && lastInvoice.prefix) {
+                prefix = lastInvoice.prefix;
+              } else {
+                prefix = `F-${month}${year}`;
               }
-              throw err;
-            }
-          }
-        } else {
-          // Pour les autres transitions (pas DRAFT→PENDING)
-          invoice.status = status;
-          await invoice.save();
-        }
 
-        // === ROUTAGE E-INVOICING (DRAFT → PENDING) ===
-        // Les factures passant de DRAFT à PENDING n'ont pas été routées à la création
-        if (oldStatus === "DRAFT" && status === "PENDING") {
-          let routingResult = null;
-          try {
-            routingResult = await evaluateAndRouteInvoice(invoice, workspaceId);
-          } catch (eInvoicingError) {
-            logger.error(
-              "Erreur routing e-invoicing (DRAFT→PENDING):",
-              eInvoicingError,
-            );
-            invoice.eInvoiceStatus = "ERROR";
-            invoice.eInvoiceError = eInvoicingError.message;
-            routingResult = {
-              flowType: "E_INVOICING",
-              sendFailed: true,
-              error: eInvoicingError.message,
-            };
-          }
-
-          // VERROU e-invoicing : on ne valide pas une facture qui n'a pas été
-          // correctement transmise à SuperPDP (flux E_INVOICING). On annule la
-          // validation (retour brouillon, numéro non consommé) et on remonte
-          // l'erreur pour que l'utilisateur corrige et réessaie.
-          if (
-            routingResult?.flowType === "E_INVOICING" &&
-            routingResult.sendFailed
-          ) {
-            invoice.status = "DRAFT";
-            invoice.number = draftNumber;
-            invoice.prefix = draftPrefix;
-            try {
-              await invoice.save();
-            } catch (revertError) {
-              logger.error(
-                "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP:",
-                revertError,
+              logger.debug(
+                "🔍 [changeInvoiceStatus] DRAFT → PENDING, prefix:",
+                prefix,
               );
-            }
-            logger.warn(
-              `[E-INVOICE] Validation annulée (SuperPDP KO) ${draftPrefix || ""}${draftNumber}: ${routingResult.error}`,
-            );
-            throw new AppError(
-              `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
 
-          if (routingResult) {
-            await invoice.save();
-            logger.info(
-              `[E-INVOICE-ROUTING] DRAFT→PENDING ${invoice.prefix}${invoice.number}: ${routingResult.flowType} - ${routingResult.reason}`,
-            );
+              const statusOrg = await getOrganizationInfo(workspaceId);
+              const autoNumbering = statusOrg?.invoiceAutoNumbering === true;
+
+              const newNumber = await generateInvoiceNumber(prefix, {
+                isValidatingDraft: true,
+                currentDraftNumber: invoice.number,
+                originalDraftNumber: originalDraftNumber,
+                workspaceId: workspaceId,
+                currentInvoiceId: invoice._id,
+                session,
+                autoNumbering,
+              });
+
+              invoice.number = newNumber;
+              invoice.prefix = prefix;
+              invoice.status = status;
+              await invoice.save({ session });
+            });
+            session.endSession();
+            break; // Succès, sortir de la boucle de retry
+          } catch (err) {
+            session.endSession();
+            if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+              // Duplicate key error, réessayer
+              logger.debug(
+                `⚠️ [changeInvoiceStatus] E11000 retry attempt ${attempt + 1}`,
+              );
+              continue;
+            }
+            throw err;
           }
         }
+      } else {
+        // Pour les autres transitions (pas DRAFT→PENDING)
+        invoice.status = status;
+        await invoice.save();
+      }
 
-        // Enregistrer l'activité dans le client si c'est un client existant
-        if (invoice.client && invoice.client.id) {
+      // === ROUTAGE E-INVOICING (DRAFT → PENDING) ===
+      // Les factures passant de DRAFT à PENDING n'ont pas été routées à la création
+      if (oldStatus === "DRAFT" && status === "PENDING") {
+        let routingResult = null;
+        try {
+          routingResult = await evaluateAndRouteInvoice(invoice, workspaceId);
+        } catch (eInvoicingError) {
+          logger.error(
+            "Erreur routing e-invoicing (DRAFT→PENDING):",
+            eInvoicingError,
+          );
+          invoice.eInvoiceStatus = "ERROR";
+          invoice.eInvoiceError = eInvoicingError.message;
+          routingResult = {
+            flowType: "E_INVOICING",
+            sendFailed: true,
+            error: eInvoicingError.message,
+          };
+        }
+
+        // VERROU e-invoicing : on ne valide pas une facture qui n'a pas été
+        // correctement transmise à SuperPDP (flux E_INVOICING). On annule la
+        // validation (retour brouillon, numéro non consommé) et on remonte
+        // l'erreur pour que l'utilisateur corrige et réessaie.
+        if (
+          routingResult?.flowType === "E_INVOICING" &&
+          routingResult.sendFailed
+        ) {
+          invoice.status = "DRAFT";
+          invoice.number = draftNumber;
+          invoice.prefix = draftPrefix;
           try {
-            const statusLabels = {
-              DRAFT: "Brouillon",
-              PENDING: "En attente",
-              COMPLETED: "Payée",
-              CANCELED: "Annulée",
-            };
+            await invoice.save();
+          } catch (revertError) {
+            logger.error(
+              "[E-INVOICE] Échec rollback DRAFT après erreur SuperPDP:",
+              revertError,
+            );
+          }
+          logger.warn(
+            `[E-INVOICE] Validation annulée (SuperPDP KO) ${draftPrefix || ""}${draftNumber}: ${routingResult.error}`,
+          );
+          throw new AppError(
+            `La facture n'a pas pu être transmise à SuperPDP et n'a donc pas été validée : ${routingResult.error || "erreur inconnue"}`,
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
 
-            await Client.findOneAndUpdate(
-              { _id: invoice.client.id, workspaceId: invoice.workspaceId },
-              {
-                $push: {
-                  activity: {
-                    id: new mongoose.Types.ObjectId().toString(),
-                    type: "invoice_status_changed",
-                    description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
-                    userId: user._id,
-                    userName: user.name || user.email,
-                    userImage: user.image || null,
-                    metadata: {
-                      documentType: "invoice",
-                      documentId: invoice._id.toString(),
-                      documentNumber: `${invoice.prefix}-${invoice.number}`,
-                      status: status,
-                    },
-                    createdAt: new Date(),
+        if (routingResult) {
+          await invoice.save();
+          logger.info(
+            `[E-INVOICE-ROUTING] DRAFT→PENDING ${invoice.prefix}${invoice.number}: ${routingResult.flowType} - ${routingResult.reason}`,
+          );
+        }
+      }
+
+      // Enregistrer l'activité dans le client si c'est un client existant
+      if (invoice.client && invoice.client.id) {
+        try {
+          const statusLabels = {
+            DRAFT: "Brouillon",
+            PENDING: "En attente",
+            COMPLETED: "Payée",
+            CANCELED: "Annulée",
+          };
+
+          await Client.findOneAndUpdate(
+            { _id: invoice.client.id, workspaceId: invoice.workspaceId },
+            {
+              $push: {
+                activity: {
+                  id: new mongoose.Types.ObjectId().toString(),
+                  type: "invoice_status_changed",
+                  description: `a changé le statut de la facture ${invoice.prefix}${invoice.number} de "${statusLabels[oldStatus]}" à "${statusLabels[status]}"`,
+                  userId: user._id,
+                  userName: user.name || user.email,
+                  userImage: user.image || null,
+                  metadata: {
+                    documentType: "invoice",
+                    documentId: invoice._id.toString(),
+                    documentNumber: `${invoice.prefix}-${invoice.number}`,
+                    status: status,
                   },
+                  createdAt: new Date(),
                 },
               },
-            );
-          } catch (activityError) {
-            console.error(
-              "Erreur lors de l'enregistrement de l'activité:",
-              activityError,
-            );
-            // Ne pas faire échouer le changement de statut si l'activité échoue
-          }
+            },
+          );
+        } catch (activityError) {
+          console.error(
+            "Erreur lors de l'enregistrement de l'activité:",
+            activityError,
+          );
+          // Ne pas faire échouer le changement de statut si l'activité échoue
         }
+      }
 
-        // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
-        const triggerMap = {
-          PENDING: "INVOICE_SENT",
-          CANCELED: "INVOICE_CANCELED",
-        };
-        const trigger = triggerMap[status];
-        if (trigger) {
-          documentAutomationService
-            .executeAutomations(
-              trigger,
-              workspaceId,
-              {
-                documentId: invoice._id.toString(),
-                documentType: "invoice",
-                documentNumber: invoice.number,
-                prefix: invoice.prefix || "",
-                clientName: invoice.client?.name || "",
-                issueDate: invoice.issueDate || invoice.createdAt,
-                clientId: invoice.client?._id || invoice.clientId || null,
-              },
-              user._id.toString(),
-            )
-            .catch((err) =>
-              console.error("Erreur automatisation documents:", err),
-            );
-        }
+      // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
+      const triggerMap = {
+        PENDING: "INVOICE_SENT",
+        CANCELED: "INVOICE_CANCELED",
+      };
+      const trigger = triggerMap[status];
+      if (trigger) {
+        documentAutomationService
+          .executeAutomations(
+            trigger,
+            workspaceId,
+            {
+              documentId: invoice._id.toString(),
+              documentType: "invoice",
+              documentNumber: invoice.number,
+              prefix: invoice.prefix || "",
+              clientName: invoice.client?.name || "",
+              issueDate: invoice.issueDate || invoice.createdAt,
+              clientId: invoice.client?._id || invoice.clientId || null,
+            },
+            user._id.toString(),
+          )
+          .catch((err) =>
+            console.error("Erreur automatisation documents:", err),
+          );
+      }
 
-        // Sync Pennylane (fire-and-forget) — utiliser organizationId du header pour matcher PennylaneAccount
-        syncInvoiceIfNeeded(
-          invoice,
-          context.organizationId || workspaceId,
-        ).catch((err) => console.error("Erreur sync Pennylane:", err));
+      // Sync Pennylane (fire-and-forget) — utiliser organizationId du header pour matcher PennylaneAccount
+      syncInvoiceIfNeeded(invoice, context.organizationId || workspaceId).catch(
+        (err) => console.error("Erreur sync Pennylane:", err),
+      );
 
-        // Sync Qonto (fire-and-forget)
-        syncInvoiceToQontoIfNeeded(
-          invoice,
-          context.organizationId || workspaceId,
-        ).catch((err) => console.error("Erreur sync Qonto:", err));
+      // Sync Qonto (fire-and-forget)
+      syncInvoiceToQontoIfNeeded(
+        invoice,
+        context.organizationId || workspaceId,
+      ).catch((err) => console.error("Erreur sync Qonto:", err));
 
-        // Sync Abby (fire-and-forget)
-        syncInvoiceToAbbyIfNeeded(
-          invoice,
-          context.organizationId || workspaceId,
-        ).catch((err) => console.error("Erreur sync Abby:", err));
+      // Sync Abby (fire-and-forget)
+      syncInvoiceToAbbyIfNeeded(
+        invoice,
+        context.organizationId || workspaceId,
+      ).catch((err) => console.error("Erreur sync Abby:", err));
 
-        // Archivage Factur-X sur R2 à la finalisation (DRAFT → PENDING).
-        // Fire-and-forget, ne bloque pas la réponse.
-        if (oldStatus === "DRAFT" && status === "PENDING") {
-          triggerInvoiceFacturXArchive(invoice, workspaceId);
-        }
+      // Archivage Factur-X sur R2 à la finalisation (DRAFT → PENDING).
+      // Fire-and-forget, ne bloque pas la réponse.
+      if (oldStatus === "DRAFT" && status === "PENDING") {
+        triggerInvoiceFacturXArchive(invoice, workspaceId);
+      }
 
-        return await invoice.populate("createdBy");
-      },
-    ),
+      return await invoice.populate("createdBy");
+    }),
 
     // Permission dédiée "mark-paid" (owner/admin/accountant) au lieu de
     // requireWrite qui, via write=create|edit, laissait passer un member sans
@@ -3343,27 +3370,28 @@ const invoiceResolvers = {
       },
     ),
 
-    sendInvoice: requireAction("invoices", "send")(
-      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user } = context;
-        const workspaceId = resolveWorkspaceId(
-          inputWorkspaceId,
-          context.workspaceId,
-        );
+    sendInvoice: requireAction(
+      "invoices",
+      "send",
+    )(async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+      const { user } = context;
+      const workspaceId = resolveWorkspaceId(
+        inputWorkspaceId,
+        context.workspaceId,
+      );
 
-        const invoice = await Invoice.findOne({ _id: id, workspaceId });
+      const invoice = await Invoice.findOne({ _id: id, workspaceId });
 
-        if (!invoice) {
-          throw createNotFoundError("Facture");
-        }
+      if (!invoice) {
+        throw createNotFoundError("Facture");
+      }
 
-        // Ici, vous pourriez implémenter la logique d'envoi d'email
-        // Pour l'instant, nous simulons un succès
-        // TODO: Implémenter l'envoi réel de la facture par email
+      // Ici, vous pourriez implémenter la logique d'envoi d'email
+      // Pour l'instant, nous simulons un succès
+      // TODO: Implémenter l'envoi réel de la facture par email
 
-        return true;
-      },
-    ),
+      return true;
+    }),
 
     // Facture liée (acompte, partielle) depuis un devis : transformation du
     // devis, « Transformer » sur les devis ET « Créer » sur les factures
