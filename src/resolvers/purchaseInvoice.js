@@ -747,6 +747,11 @@ const purchaseInvoiceResolvers = {
         );
 
         const { forceCreate = false, vatBreakdown, ...invoiceInput } = input;
+        // Créer une facture déjà payée : case « Marquer comme payée », comme
+        // pour la passer payée ensuite (updatePurchaseInvoice).
+        if (invoiceInput.status === "PAID") {
+          assertPermissionAction(context, "expenses", "markPaid");
+        }
         await assertSupplierInWorkspace(invoiceInput.supplierId, workspaceId);
 
         // Filet anti-doublon côté serveur (mêmes règles que l'avertissement

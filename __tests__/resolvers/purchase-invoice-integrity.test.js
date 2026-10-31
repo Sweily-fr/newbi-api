@@ -370,3 +370,64 @@ describe("bulkUpdatePurchaseInvoiceStatus vers « payée »", () => {
   });
 });
 
+describe("createPurchaseInvoice payée : « Marquer comme payée » exigé", () => {
+  const input = (fields = {}) => ({
+    supplierName: "Fournisseur Paiement",
+    invoiceNumber: `PAY-${new ObjectId().toString().slice(-6)}`,
+    issueDate: "2026-10-01",
+    amountHT: 100,
+    amountTVA: 20,
+    amountTTC: 120,
+    forceCreate: true,
+    ...fields,
+  });
+
+  it("rôle sans « Marquer comme payée » : refusé, rien en base", async () => {
+    await expect(
+      M.createPurchaseInvoice(
+        null,
+        { input: input({ status: "PAID", paymentDate: "2026-10-01" }) },
+        ctx(noMarkPaid),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await PurchaseInvoice.countDocuments({})).toBe(0);
+  });
+
+  it("même rôle : une facture à payer est créée", async () => {
+    const created = await M.createPurchaseInvoice(
+      null,
+      { input: input({ status: "TO_PAY" }) },
+      ctx(noMarkPaid),
+    );
+    expect(created.status).toBe("TO_PAY");
+  });
+
+  it("même rôle : passer payée ensuite, seul ou en groupe, reste refusé", async () => {
+    const id = await insertInvoice({ status: "TO_PAY" });
+    await expect(
+      M.updatePurchaseInvoice(
+        null,
+        { id: String(id), input: { status: "PAID" } },
+        ctx(noMarkPaid),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      M.bulkUpdatePurchaseInvoiceStatus(
+        null,
+        { ids: [String(id)], status: "PAID" },
+        ctx(noMarkPaid),
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await rawInvoice(id)).status).toBe("TO_PAY");
+  });
+
+  it("Éditeur : une facture payée est créée avec sa date", async () => {
+    const created = await M.createPurchaseInvoice(
+      null,
+      { input: input({ status: "PAID", paymentDate: "2026-10-01" }) },
+      ctx(editor),
+    );
+    expect(created.status).toBe("PAID");
+  });
+});
+
