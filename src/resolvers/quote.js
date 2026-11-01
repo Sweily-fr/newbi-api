@@ -1066,7 +1066,6 @@ const quoteResolvers = {
 
     updateQuote: requireCompanyInfo(
       requireWrite("quotes")(async (_, { id, input }, context) => {
-        assertDocumentAppearance(input?.appearance);
         const { user, workspaceId } = context;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy pour permettre aux membres de l'org de voir/modifier
         const quote = await Quote.findOne({
@@ -1077,6 +1076,7 @@ const quoteResolvers = {
         if (!quote) {
           throw createNotFoundError("Devis");
         }
+        assertDocumentAppearance(input?.appearance, quote.appearance);
 
         if (quote.status === "COMPLETED") {
           throw createResourceLockedError(

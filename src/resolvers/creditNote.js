@@ -521,7 +521,6 @@ const creditNoteResolvers = {
 
     updateCreditNote: requireCompanyInfo(
       requireWrite("creditNotes")(async (parent, { id, input }, context) => {
-        assertDocumentAppearance(input?.appearance);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
@@ -533,6 +532,7 @@ const creditNoteResolvers = {
           if (!creditNote) {
             throw createNotFoundError("Avoir non trouvé");
           }
+          assertDocumentAppearance(input?.appearance, creditNote.appearance);
 
           // Les avoirs avec statut CREATED peuvent toujours être modifiés,
           // sauf un avoir transmis en facturation électronique (toObject :

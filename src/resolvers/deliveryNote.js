@@ -781,11 +781,11 @@ const deliveryNoteResolvers = {
     updateDeliveryNote: requireCompanyInfo(
       requireWrite("deliveryNotes")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
-          assertDocumentAppearance(input?.appearance);
           const { user, workspaceId } = context;
           const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
 
           if (!dn) throw createNotFoundError("Bon de livraison");
+          assertDocumentAppearance(input?.appearance, dn.appearance);
 
           if (dn.status === "DELIVERED" || dn.status === "CANCELED") {
             throw createResourceLockedError(

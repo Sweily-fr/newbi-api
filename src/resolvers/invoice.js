@@ -1944,7 +1944,6 @@ const invoiceResolvers = {
     updateInvoice: requireCompanyInfo(
       requireWrite("invoices")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
-          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -1960,6 +1959,7 @@ const invoiceResolvers = {
           if (!invoiceData) {
             throw createNotFoundError("Facture");
           }
+          assertDocumentAppearance(input?.appearance, invoiceData.appearance);
 
           // ✅ Vérifications de permissions granulaires
           const { userRole } = context;

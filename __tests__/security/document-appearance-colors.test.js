@@ -202,43 +202,105 @@ describe("création et modification des documents", () => {
     ]);
   });
 
+  // Document existant de chaque type, avec une couleur ancienne hors format
+  const LEGACY_COLOR = "couleur-ancienne";
+  const MODELS = {
+    Invoice: "Invoice",
+    Quote: "Quote",
+    CreditNote: "CreditNote",
+    PurchaseOrder: "PurchaseOrder",
+    DeliveryNote: "DeliveryNote",
+  };
+  const modelOf = (name) =>
+    mongoose.model(Object.keys(MODELS).find((model) => name.endsWith(model)));
+  const existing = {};
+
+  const callWithAppearance = async ({ name, arg, field }, appearance) => {
+    const ctx = buildContext({
+      userId,
+      organizationId: String(organizationId),
+    });
+    const args = {
+      id: existing[name] || new mongoose.Types.ObjectId().toString(),
+      workspaceId: String(organizationId),
+      [arg]: { [field]: appearance },
+    };
+    try {
+      await resolvers.Mutation[name](null, args, ctx, { fieldName: name });
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const isColorRefusal = (error) =>
+    (error?.extensions?.code || error?.code) === "VALIDATION_ERROR" &&
+    /Couleur du document/.test(error?.message || "");
+
   it("chacune refuse une couleur qui n'est pas une couleur, sans rien écrire", async () => {
-    const accepted = [];
-    for (const { name, arg, field } of appearanceMutations()) {
-      const ctx = buildContext({
-        userId,
-        organizationId: String(organizationId),
-      });
-      const args = {
-        id: new mongoose.Types.ObjectId().toString(),
-        workspaceId: String(organizationId),
-        [arg]: {
-          [field]: {
-            textColor: "#000000",
-            headerTextColor: "#ffffff",
-            headerBgColor: INVALID[0],
-          },
+    for (const { name } of appearanceMutations()) {
+      if (!name.startsWith("update")) continue;
+      const _id = new mongoose.Types.ObjectId();
+      await modelOf(name).collection.insertOne({
+        _id,
+        workspaceId: organizationId,
+        createdBy: userId,
+        status: "DRAFT",
+        appearance: {
+          textColor: LEGACY_COLOR,
+          headerTextColor: "#ffffff",
+          headerBgColor: "#1d1d1b",
         },
-      };
-      let code = null;
-      try {
-        await resolvers.Mutation[name](null, args, ctx, { fieldName: name });
-      } catch (error) {
-        code = error?.extensions?.code || error?.code;
+      });
+      existing[name] = String(_id);
+    }
+
+    const accepted = [];
+    for (const mutation of appearanceMutations()) {
+      const error = await callWithAppearance(mutation, {
+        textColor: "#000000",
+        headerTextColor: "#ffffff",
+        headerBgColor: INVALID[0],
+      });
+      if (!isColorRefusal(error)) {
+        accepted.push(`${mutation.name} (${error?.code || error?.message})`);
       }
-      if (code !== "VALIDATION_ERROR") accepted.push(`${name} (${code})`);
     }
     expect(accepted).toEqual([]);
 
-    const db = mongoose.connection.db;
-    for (const collection of [
-      "invoices",
-      "quotes",
-      "creditnotes",
-      "purchaseorders",
-      "deliverynotes",
-    ]) {
-      expect(await db.collection(collection).countDocuments()).toBe(0);
+    // Aucune création, documents existants inchangés
+    for (const model of Object.keys(MODELS)) {
+      const docs = await mongoose.model(model).collection.find({}).toArray();
+      expect(docs.length).toBeLessThanOrEqual(1);
+      for (const doc of docs) {
+        expect(doc.appearance.headerBgColor).toBe("#1d1d1b");
+      }
     }
+  }, 60000);
+
+  it("une couleur enregistrée renvoyée sans changement n'est pas refusée", async () => {
+    const refused = [];
+    for (const mutation of appearanceMutations()) {
+      if (!mutation.name.startsWith("update")) continue;
+      const error = await callWithAppearance(mutation, {
+        textColor: LEGACY_COLOR,
+        headerTextColor: "#ffffff",
+        headerBgColor: "#1d1d1b",
+      });
+      if (isColorRefusal(error)) refused.push(mutation.name);
+    }
+    expect(refused).toEqual([]);
+  }, 60000);
+
+  it("à la création, la même valeur hors format est refusée", async () => {
+    const accepted = [];
+    for (const mutation of appearanceMutations()) {
+      if (!mutation.name.startsWith("create")) continue;
+      const error = await callWithAppearance(mutation, {
+        textColor: LEGACY_COLOR,
+      });
+      if (!isColorRefusal(error)) accepted.push(mutation.name);
+    }
+    expect(accepted).toEqual([]);
   }, 60000);
 });

@@ -74,9 +74,11 @@ export function isSafeDocumentColor(value) {
 
 /**
  * Refuse une apparence dont une couleur n'est pas une valeur de couleur.
- * Sans apparence envoyée, rien n'est contrôlé.
+ * Sans apparence envoyée, rien n'est contrôlé. À la modification, `current`
+ * est l'apparence enregistrée : une couleur renvoyée sans changement n'est
+ * pas contrôlée (seule une valeur nouvelle l'est).
  */
-export function assertDocumentAppearance(appearance) {
+export function assertDocumentAppearance(appearance, current = null) {
   if (appearance === undefined || appearance === null) return;
   if (typeof appearance !== "object" || Array.isArray(appearance)) {
     throw new AppError(
@@ -85,6 +87,7 @@ export function assertDocumentAppearance(appearance) {
     );
   }
   for (const field of APPEARANCE_COLOR_FIELDS) {
+    if (current && appearance[field] === current[field]) continue;
     if (!isSafeDocumentColor(appearance[field])) {
       throw new AppError(
         "Couleur du document invalide : utilisez un code couleur hexadécimal (par exemple #1D1D1B).",

@@ -736,13 +736,13 @@ const purchaseOrderResolvers = {
     updatePurchaseOrder: requireCompanyInfo(
       requireWrite("purchaseOrders")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
-          assertDocumentAppearance(input?.appearance);
           const { user, workspaceId } = context;
           const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
           if (!po) {
             throw createNotFoundError("Bon de commande");
           }
+          assertDocumentAppearance(input?.appearance, po.appearance);
 
           if (po.status === "DELIVERED") {
             throw createResourceLockedError(
