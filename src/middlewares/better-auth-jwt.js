@@ -4,6 +4,7 @@ import User from "../models/User.js";
 import { getJWKSValidator } from "../services/jwks-validator.js";
 import { betterAuthMiddleware } from "./better-auth.js";
 import { getActiveOrganizationCached } from "./org-cache.js";
+import { isJwtSessionActive } from "./jwt-session.js";
 
 // Cache LRU user partagé avec le chemin cookie (voir user-cache.js) :
 // une invalidation couvre les deux chemins d'authentification.
@@ -84,6 +85,13 @@ const betterAuthJWTMiddleware = async (req) => {
     }
 
     if (!decoded || !decoded.sub) {
+      return null;
+    }
+
+    // Session d'origine fermée (déconnexion, appareil révoqué, compte
+    // désactivé) : le jeton n'authentifie plus, même avant son expiration.
+    if (!(await isJwtSessionActive(decoded))) {
+      logger.debug("JWT valide mais session fermée");
       return null;
     }
 
