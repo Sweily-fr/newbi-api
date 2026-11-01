@@ -3,6 +3,44 @@ import CommunitySuggestion from "../models/CommunitySuggestion.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { validateSuggestionInput } from "../utils/suggestionValidation.js";
 
+// Espace fictif des suggestions : la communauté est commune à tous les clients
+const COMMUNITY_WORKSPACE_ID = "000000000000000000000000";
+
+/**
+ * Auteur d'une suggestion tel que vu par l'utilisateur connecté : son nom
+ * (si la suggestion n'est pas anonyme), jamais l'adresse e-mail ni l'espace
+ * d'un autre client. L'auteur retrouve les siens.
+ */
+function authorFields(suggestion, user) {
+  const author = suggestion.createdBy;
+  const authorId = author?._id ? author._id.toString() : String(author || "");
+  const isOwn = Boolean(user?.id) && authorId === user.id.toString();
+
+  let createdByUser = null;
+  if (!suggestion.isAnonymous && author?._id) {
+    const firstName = author.profile?.firstName || "";
+    const lastName = author.profile?.lastName || "";
+    const fullName =
+      `${firstName} ${lastName}`.trim() ||
+      String(author.email || "").split("@")[0];
+    createdByUser = {
+      id: authorId,
+      name: fullName,
+      email: isOwn ? author.email : "",
+    };
+  }
+
+  return {
+    // Suggestion anonyme d'un autre : son auteur n'est pas désigné
+    createdBy:
+      suggestion.isAnonymous && !isOwn ? COMMUNITY_WORKSPACE_ID : authorId,
+    createdByUser,
+    workspaceId: isOwn
+      ? String(suggestion.workspaceId || COMMUNITY_WORKSPACE_ID)
+      : COMMUNITY_WORKSPACE_ID,
+  };
+}
+
 const communitySuggestionResolvers = {
   Query: {
     getCommunitySuggestions: isAuthenticated(
@@ -49,26 +87,10 @@ const communitySuggestionResolvers = {
 
             const suggestionObj = suggestion.toObject();
 
-            // Ajouter les informations de l'utilisateur si non anonyme
-            let createdByUser = null;
-            if (!suggestion.isAnonymous && suggestion.createdBy) {
-              const firstName = suggestion.createdBy.profile?.firstName || "";
-              const lastName = suggestion.createdBy.profile?.lastName || "";
-              const fullName =
-                `${firstName} ${lastName}`.trim() ||
-                suggestion.createdBy.email.split("@")[0];
-
-              createdByUser = {
-                id: suggestion.createdBy._id.toString(),
-                name: fullName,
-                email: suggestion.createdBy.email,
-              };
-            }
-
             return {
               ...suggestionObj,
+              ...authorFields(suggestion, user),
               id: suggestionObj._id.toString(),
-              createdByUser,
               netScore: suggestion.getNetScore(),
               userVote: userVote ? userVote.voteType : null,
               userHasValidated,
@@ -102,26 +124,10 @@ const communitySuggestionResolvers = {
 
         const suggestionObj = suggestion.toObject();
 
-        // Ajouter les informations de l'utilisateur si non anonyme
-        let createdByUser = null;
-        if (!suggestion.isAnonymous && suggestion.createdBy) {
-          const firstName = suggestion.createdBy.profile?.firstName || "";
-          const lastName = suggestion.createdBy.profile?.lastName || "";
-          const fullName =
-            `${firstName} ${lastName}`.trim() ||
-            suggestion.createdBy.email.split("@")[0];
-
-          createdByUser = {
-            id: suggestion.createdBy._id.toString(),
-            name: fullName,
-            email: suggestion.createdBy.email,
-          };
-        }
-
         return {
           ...suggestionObj,
+          ...authorFields(suggestion, user),
           id: suggestionObj._id.toString(),
-          createdByUser,
           netScore: suggestion.getNetScore(),
           userVote: userVote ? userVote.voteType : null,
           userHasValidated,
