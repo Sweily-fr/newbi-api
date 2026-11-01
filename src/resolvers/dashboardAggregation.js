@@ -84,6 +84,17 @@ function resolvePeriodDates(period) {
   }
 }
 
+/** Jour « YYYY-MM-DD » réel (2025-02-30 refusé), sinon null. */
+function parseFiscalDay(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const d = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(value)
+    ? d
+    : null;
+}
+
 /**
  * Borne [début, fin] de l'exercice comptable EN COURS d'une organisation.
  *
@@ -100,12 +111,19 @@ function resolvePeriodDates(period) {
  * exclure les transactions datées dans le futur, comme resolvePeriodDates.
  */
 function getCurrentFiscalYearRange(org, now = new Date()) {
-  const startStr = org?.fiscalYearStartDate;
-  const endStr = org?.fiscalYearEndDate;
+  // Une date mal formée (« 2025-13-01 », « 31/12/2025 ») est ignorée : un
+  // début illisible bornait les encaissements à 1970 (tout l'historique).
+  const startStr = parseFiscalDay(org?.fiscalYearStartDate)
+    ? org.fiscalYearStartDate
+    : null;
+  const endStr =
+    startStr && parseFiscalDay(org?.fiscalYearEndDate)
+      ? org.fiscalYearEndDate
+      : null;
   const todayEnd = endOfCurrentDay(now);
   const cap = (endDate) => (endDate < todayEnd ? endDate : todayEnd);
 
-  // Aucun exercice configuré → année civile en cours
+  // Aucun exercice configuré (ou lisible) → année civile en cours
   if (!startStr) {
     const y = now.getUTCFullYear();
     return {
