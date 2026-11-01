@@ -5,6 +5,20 @@ const USER_CACHE_TTL = 30_000; // 30 secondes
 const USER_CACHE_MAX = 500;
 const _userCache = new Map();
 
+// Un compte est refusé s'il est désactivé par l'un des deux mécanismes :
+// - isDisabled : champ historique du modèle User ;
+// - isActive === false : posé par le site lors de la désactivation du compte
+//   (collection Better Auth « user »). Ce champ n'est pas déclaré dans le
+//   schéma Mongoose (strict), d'où la lecture via get() qui renvoie aussi les
+//   champs hors schéma. Un compte sans ce champ (undefined) reste accepté.
+export function isUserAccessDenied(user) {
+  if (!user) return true;
+  if (user.isDisabled) return true;
+  const isActive =
+    typeof user.get === "function" ? user.get("isActive") : user.isActive;
+  return isActive === false;
+}
+
 export function getCachedUser(userId) {
   const entry = _userCache.get(userId);
   if (!entry) return null;
@@ -38,7 +52,7 @@ export function loadCachedUser(userId, load) {
     pending = Promise.resolve()
       .then(load)
       .then((user) => {
-        if (user && !user.isDisabled) setCachedUser(userId, user);
+        if (!isUserAccessDenied(user)) setCachedUser(userId, user);
         return user;
       })
       .finally(() => _inFlight.delete(userId));
