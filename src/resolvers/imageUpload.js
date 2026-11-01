@@ -16,6 +16,24 @@ import {
   createInternalServerError,
 } from "../utils/errors.js";
 
+/**
+ * Clé d'une image du dossier de l'utilisateur : commence par son identifiant
+ * et ne remonte jamais d'un dossier (« .. »), sans segment vide ni « \\ ».
+ */
+function isOwnImageKey(key, user) {
+  if (typeof key !== "string" || !user?.id) return false;
+  if (!key.startsWith(`${user.id}/`)) return false;
+  const segments = key.split("/");
+  return !segments.some(
+    (segment) =>
+      segment === "" ||
+      segment === "." ||
+      segment === ".." ||
+      segment.includes("\\") ||
+      /%2e|%2f|%5c/i.test(segment),
+  );
+}
+
 const imageUploadResolvers = {
   Upload: GraphQLUpload,
 
@@ -30,7 +48,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -145,7 +163,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -176,7 +194,7 @@ const imageUploadResolvers = {
           }
 
           // Vérifier que l'image appartient à l'utilisateur (sécurité)
-          if (!String(key).startsWith(`${user.id}/`)) {
+          if (!isOwnImageKey(key, user)) {
             throw createValidationError("Accès non autorisé à cette image");
           }
 
