@@ -1,4 +1,4 @@
-import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { AppError, ERROR_CODES, publicErrorMessage } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { isAuthenticated } from "./better-auth-jwt.js";
@@ -342,8 +342,10 @@ export const withRBAC = (resolver, options = {}) => {
         `Erreur RBAC dans ${resolver.name || "resolver"}: ${error.message}`,
       );
       logger.error(`Stack trace: ${error.stack}`);
+      // Message d'une erreur technique (base, identifiant mal formé, bug)
+      // gardé dans le journal ci-dessus, jamais renvoyé au client
       throw new AppError(
-        `Erreur lors de la vérification des permissions: ${error.message}`,
+        `Erreur lors de la vérification des permissions: ${publicErrorMessage(error)}`,
         ERROR_CODES.INTERNAL_ERROR,
       );
     }

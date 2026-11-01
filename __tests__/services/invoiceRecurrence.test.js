@@ -542,3 +542,37 @@ describe("programmation d'une récurrence (GraphQL)", () => {
     ).rejects.toThrow(/dans le passé/);
   });
 });
+
+describe("récurrence cantonnée à son espace", () => {
+  it("une facture modèle d'un autre espace n'est jamais reprise", async () => {
+    const source = await createSource();
+    const otherWorkspace = buildOrganizationId();
+    const recurrence = await addRecurrence(source, {
+      workspaceId: otherWorkspace,
+    });
+
+    const result = await run(recurrence._id, "2030-01-15");
+
+    expect(result.status).toBe("ended");
+    expect(await generated(recurrence._id)).toHaveLength(0);
+    expect(await Invoice.countDocuments({ workspaceId: otherWorkspace })).toBe(
+      0,
+    );
+    expect(sendDocumentEmail).not.toHaveBeenCalled();
+  });
+
+  it("un utilisateur retiré de l'espace ne facture plus en son nom", async () => {
+    const source = await createSource();
+    const recurrence = await addRecurrence(source);
+    await mongoose.connection.db
+      .collection("member")
+      .deleteMany({ userId: new mongoose.Types.ObjectId(String(userId)) });
+    invalidateOrgCache();
+
+    const result = await run(recurrence._id, "2030-01-15");
+
+    expect(result.status).toBe("failed");
+    expect(await generated(recurrence._id)).toHaveLength(0);
+    expect(sendDocumentEmail).not.toHaveBeenCalled();
+  });
+});

@@ -71,6 +71,7 @@ import {
   cancelActiveQuoteSignatures,
   findActiveClientQuoteSignature,
 } from "../services/quoteSignatureSync.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 // (règles communes aux documents de vente : voir utils/documentTotals.js,
@@ -732,6 +733,7 @@ const quoteResolvers = {
     createQuote: requireCompanyInfo(
       requireAction("quotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -1118,6 +1120,7 @@ const quoteResolvers = {
         if (!quote) {
           throw createNotFoundError("Devis");
         }
+        assertDocumentAppearance(input?.appearance, quote.appearance);
 
         if (quote.status === "COMPLETED") {
           throw createResourceLockedError(

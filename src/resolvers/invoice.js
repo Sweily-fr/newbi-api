@@ -88,6 +88,7 @@ import {
   assertInvoiceCreationStatus,
   assertInvoiceStatusChange,
 } from "../utils/invoiceStatusRules.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1222,6 +1223,7 @@ const invoiceResolvers = {
         "invoices",
         "create",
       )(async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+        assertDocumentAppearance(input?.appearance);
         const { user } = context;
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
@@ -2027,6 +2029,7 @@ const invoiceResolvers = {
           if (!invoiceData) {
             throw createNotFoundError("Facture");
           }
+          assertDocumentAppearance(input?.appearance, invoiceData.appearance);
 
           // ✅ Vérifications de permissions granulaires
           const { userRole } = context;

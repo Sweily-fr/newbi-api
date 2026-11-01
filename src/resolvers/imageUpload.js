@@ -6,7 +6,10 @@ import logger from "../utils/logger.js";
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { requireWorkspaceAction } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import cloudflareService from "../services/cloudflareService.js";
 import User from "../models/User.js";
 import {
@@ -36,6 +39,24 @@ export function ownProfileImageKey(userId, { key, url } = {}) {
   return String(candidate);
 }
 
+/**
+ * Clé d'une image du dossier de l'utilisateur : commence par son identifiant
+ * et ne remonte jamais d'un dossier (« .. »), sans segment vide ni « \\ ».
+ */
+function isOwnImageKey(key, user) {
+  if (typeof key !== "string" || !user?.id) return false;
+  if (!key.startsWith(`${user.id}/`)) return false;
+  const segments = key.split("/");
+  return !segments.some(
+    (segment) =>
+      segment === "" ||
+      segment === "." ||
+      segment === ".." ||
+      segment.includes("\\") ||
+      /%2e|%2f|%5c/i.test(segment),
+  );
+}
+
 const imageUploadResolvers = {
   Upload: GraphQLUpload,
 
@@ -50,7 +71,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -165,7 +186,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -196,7 +217,7 @@ const imageUploadResolvers = {
           }
 
           // Vérifier que l'image appartient à l'utilisateur (sécurité)
-          if (!String(key).startsWith(`${user.id}/`)) {
+          if (!isOwnImageKey(key, user)) {
             throw createValidationError("Accès non autorisé à cette image");
           }
 
@@ -480,13 +501,25 @@ const SIGNATURE_IMAGE_ACTIONS = {
   uploadSocialLogo: ["create", "edit"],
   deleteSignatureImage: ["create", "edit", "delete"],
 };
+// Envoi d'une image : abonnement actif exigé, comme pour enregistrer la
+// signature (contrôle sur l'espace validé par le RBAC)
+const SIGNATURE_IMAGE_UPLOADS = new Set([
+  "uploadSignatureImage",
+  "uploadSocialLogo",
+]);
 Object.entries(SIGNATURE_IMAGE_ACTIONS).forEach(([name, actions]) => {
   const original = imageUploadResolvers.Mutation[name];
   if (original) {
+    const resolver = SIGNATURE_IMAGE_UPLOADS.has(name)
+      ? async (parent, args, context, info) => {
+          await checkSubscriptionActive(context);
+          return original(parent, args, context, info);
+        }
+      : original;
     imageUploadResolvers.Mutation[name] = requireWorkspaceAction(
       "signatures",
       actions,
-    )(original);
+    )(resolver);
   }
 });
 

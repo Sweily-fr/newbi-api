@@ -57,6 +57,7 @@ import { refreshDraftDates } from "../utils/draftDates.js";
 import { DELIVERY_NOTE_STATUS } from "../models/constants/enums.js";
 import { keepHiddenItemPrices } from "../utils/deliveryNoteItemPrices.js";
 import { computeDocumentTotals } from "../utils/documentTotals.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 const FINALIZED_DN_STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"];
 
@@ -654,6 +655,7 @@ const deliveryNoteResolvers = {
     createDeliveryNote: requireCompanyInfo(
       requireAction("deliveryNotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -879,6 +881,7 @@ const deliveryNoteResolvers = {
           const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
 
           if (!dn) throw createNotFoundError("Bon de livraison");
+          assertDocumentAppearance(input?.appearance, dn.appearance);
 
           if (dn.status === "DELIVERED" || dn.status === "CANCELED") {
             throw createResourceLockedError(

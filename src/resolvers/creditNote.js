@@ -43,6 +43,7 @@ import {
   ERROR_CODES,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 // Lectures : requireWorkspaceLevel("creditNotes", "read") remplace withWorkspace
 // (même choix d'espace, appartenance vérifiée, rôle contrôlé)
 
@@ -290,6 +291,7 @@ const creditNoteResolvers = {
         "creditNotes",
         "create",
       )(async (parent, { input }, context) => {
+        assertDocumentAppearance(input?.appearance);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
@@ -593,6 +595,7 @@ const creditNoteResolvers = {
           if (!creditNote) {
             throw createNotFoundError("Avoir non trouvé");
           }
+          assertDocumentAppearance(input?.appearance, creditNote.appearance);
 
           // Les avoirs avec statut CREATED peuvent toujours être modifiés,
           // sauf un avoir transmis en facturation électronique (toObject :

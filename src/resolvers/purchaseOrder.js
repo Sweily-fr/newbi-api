@@ -58,6 +58,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import { assertCreationStatusAllowed } from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 /**
  * Libère un numéro définitif occupé par un brouillon (même mécanique que
@@ -492,6 +493,7 @@ const purchaseOrderResolvers = {
     createPurchaseOrder: requireCompanyInfo(
       requireAction("purchaseOrders", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -764,6 +766,7 @@ const purchaseOrderResolvers = {
           if (!po) {
             throw createNotFoundError("Bon de commande");
           }
+          assertDocumentAppearance(input?.appearance, po.appearance);
 
           if (po.status === "DELIVERED") {
             throw createResourceLockedError(

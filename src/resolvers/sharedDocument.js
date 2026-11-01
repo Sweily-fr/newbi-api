@@ -28,6 +28,7 @@ import {
   getEffectiveVisibility,
   sharedFolderAccessFor,
 } from "../services/sharedFolderAccess.js";
+import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -2304,12 +2305,15 @@ const sharedDocumentResolvers = {
     // automatisation côté serveur). Le canal encode le workspaceId, comme kanban.
     sharedDocumentsChanged: {
       subscribe: subscribeSharedDocuments(
-        (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           const pubsub = getPubSub();
-          return pubsub.asyncIterableIterator([
-            `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
-          ]);
+          return endWhenMemberRemoved(
+            pubsub.asyncIterableIterator([
+              `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
+            ]),
+            { user, workspaceId: finalWorkspaceId },
+          );
         },
       ),
       resolve: (
