@@ -564,6 +564,37 @@ export async function requestModuleAccess(
   }).lean();
   if (recent) return { ownerName, alreadyRequested: true };
 
+  // Réservation atomique de l'envoi : des demandes simultanées (double-clic,
+  // plusieurs onglets) passaient toutes la recherche ci-dessus avant que la
+  // première notification soit créée. Un document par demande (super admin,
+  // espace, membre, page, action) : mis à jour s'il a plus de 10 minutes,
+  // sinon l'upsert heurte l'_id existant (E11000) et la demande est
+  // considérée comme déjà envoyée.
+  const now = new Date();
+  try {
+    await db()
+      .collection("access_request_throttle")
+      .updateOne(
+        {
+          _id: [
+            String(ownerMember.userId),
+            String(orgId),
+            requesterId,
+            moduleKey,
+            action,
+          ].join(":"),
+          sentAt: {
+            $lt: new Date(now.getTime() - ACCESS_REQUEST_COOLDOWN_MS),
+          },
+        },
+        { $set: { sentAt: now } },
+        { upsert: true },
+      );
+  } catch (error) {
+    if (error?.code === 11000) return { ownerName, alreadyRequested: true };
+    throw error;
+  }
+
   const rolesUrl = `${process.env.FRONTEND_URL || ""}/dashboard?parametres=roles`;
   const notification = await Notification.createAccessRequestedNotification({
     userId: ownerMember.userId,

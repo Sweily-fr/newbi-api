@@ -164,6 +164,42 @@ const getRevenueHistory = async (partnerId, months = 6) => {
   }));
 };
 
+/**
+ * Verrou applicatif d'une demande de retrait, par partenaire.
+ *
+ * Le solde et le retrait en cours sont lus puis le retrait est enregistré :
+ * sans verrou, deux demandes simultanées passaient toutes deux les
+ * contrôles et créaient deux retraits. Le verrou est un document de la
+ * collection partner_withdrawal_lock dont l'_id est l'id du partenaire
+ * (unicité native de _id, aucun index à créer ni donnée existante
+ * touchée). Un verrou plus vieux que WITHDRAWAL_LOCK_TTL_MS (processus
+ * interrompu) est repris.
+ */
+const WITHDRAWAL_LOCK_TTL_MS = 60_000;
+const withdrawalLocks = () =>
+  mongoose.connection.db.collection("partner_withdrawal_lock");
+
+const acquireWithdrawalLock = async (partnerId) => {
+  const now = new Date();
+  try {
+    await withdrawalLocks().insertOne({ _id: partnerId, lockedAt: now });
+    return true;
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+  }
+  const stale = await withdrawalLocks().findOneAndUpdate(
+    {
+      _id: partnerId,
+      lockedAt: { $lt: new Date(now.getTime() - WITHDRAWAL_LOCK_TTL_MS) },
+    },
+    { $set: { lockedAt: now } },
+  );
+  return Boolean(stale);
+};
+
+const releaseWithdrawalLock = (partnerId) =>
+  withdrawalLocks().deleteOne({ _id: partnerId });
+
 const partnerResolvers = {
   Query: {
     /**
@@ -343,29 +379,28 @@ const partnerResolvers = {
     },
 
     /**
-     * Récupère les coordonnées bancaires de l'organisation
-     * IDOR fix: vérifie que l'utilisateur est membre de l'organisation
+     * Récupère les coordonnées bancaires de l'organisation : droit « Voir »
+     * des informations de l'entreprise (rôles ajustés et personnalisés
+     * compris), sur l'espace actif. L'appartenance seule ne suffit plus :
+     * un rôle sans ce droit lisait l'IBAN.
      */
-    getOrganizationBankDetails: async (_, { organizationId }, { user }) => {
-      if (!user) {
-        throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+    getOrganizationBankDetails: requireAction(
+      "orgSettings",
+      "view",
+    )(async (_, { organizationId }, context) => {
+      // Le droit est vérifié sur l'espace actif (en-tête, à défaut
+      // l'argument) : l'espace lu doit être celui-là
+      if (String(organizationId) !== String(context.workspaceId)) {
+        throw new AppError(
+          "Vous n'avez pas la permission d'effectuer cette action.",
+          ERROR_CODES.FORBIDDEN,
+        );
       }
 
       try {
-        const db = mongoose.connection.db;
-
-        // Vérifier que l'utilisateur est membre de cette organisation
-        const member = await db.collection("member").findOne({
-          userId: new mongoose.Types.ObjectId(user._id || user.id),
-          organizationId: new mongoose.Types.ObjectId(organizationId),
-        });
-        if (!member) {
-          throw new AppError("Accès refusé", ERROR_CODES.FORBIDDEN);
-        }
-
-        const organization = await db.collection("organization").findOne({
-          _id: new mongoose.Types.ObjectId(organizationId),
-        });
+        const organization = await mongoose.connection.db
+          .collection("organization")
+          .findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
 
         if (!organization) {
           return null;
@@ -377,14 +412,13 @@ const partnerResolvers = {
           bankBic: organization.bankBic || null,
         };
       } catch (error) {
-        if (error instanceof AppError) throw error;
         logger.error(
           "Erreur lors de la récupération des coordonnées bancaires:",
           error,
         );
         return null;
       }
-    },
+    }),
 
     /**
      * ADMIN: Récupère tous les retraits (avec filtre optionnel par statut)
@@ -616,6 +650,15 @@ const partnerResolvers = {
       }
 
       try {
+        // Saisie normalisée avant validation : espaces retirés, majuscules
+        // (un IBAN est souvent copié par groupes de quatre caractères)
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, "")
+            .toUpperCase();
+        bankIban = normalize(bankIban);
+        bankBic = normalize(bankBic);
+
         // Validation de l'IBAN (format international, pas uniquement FR)
         // Format: 2 lettres pays + 2 chiffres clé + jusqu'à 30 caractères alphanumériques
         const ibanRegex = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/;
@@ -652,8 +695,8 @@ const partnerResolvers = {
           {
             $set: {
               bankName: bankName.trim(),
-              bankIban: bankIban.toUpperCase(),
-              bankBic: bankBic.toUpperCase(),
+              bankIban,
+              bankBic,
             },
           },
         );
@@ -714,61 +757,77 @@ const partnerResolvers = {
           );
         }
 
-        // Calculer le solde disponible
-        const confirmedCommissions = await PartnerCommission.find({
-          partnerId: user._id,
-          status: { $in: ["confirmed", "paid"] },
-        });
-
-        const totalEarnings = confirmedCommissions.reduce(
-          (sum, comm) => sum + comm.commissionAmount,
-          0,
-        );
-
-        // Déduire tous les retraits (complétés et en cours)
-        const allWithdrawals = await Withdrawal.find({
-          partnerId: user._id,
-          status: { $in: ["completed", "pending", "processing"] },
-        });
-
-        const totalWithdrawn = allWithdrawals.reduce(
-          (sum, w) => sum + w.amount,
-          0,
-        );
-
-        const availableBalance = totalEarnings - totalWithdrawn;
-
-        // Vérifier que le solde est suffisant
-        if (amount > availableBalance) {
-          throw new AppError(
-            `Solde insuffisant. Disponible: ${availableBalance.toFixed(2)}€`,
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        // Vérifier qu'il n'y a pas déjà un retrait en attente
-        const pendingWithdrawal = await Withdrawal.findOne({
-          partnerId: user._id,
-          status: { $in: ["pending", "processing"] },
-        });
-
-        if (pendingWithdrawal) {
+        // Une seule demande à la fois par partenaire (voir
+        // acquireWithdrawalLock) : contrôles et création sous verrou
+        const partnerId = new mongoose.Types.ObjectId(String(user._id));
+        if (!(await acquireWithdrawalLock(partnerId))) {
           throw new AppError(
             "Vous avez déjà une demande de retrait en cours",
             ERROR_CODES.VALIDATION_ERROR,
           );
         }
+        let withdrawal;
+        try {
+          // Calculer le solde disponible
+          const confirmedCommissions = await PartnerCommission.find({
+            partnerId: user._id,
+            status: { $in: ["confirmed", "paid"] },
+          });
 
-        // Créer la demande de retrait
-        const withdrawal = new Withdrawal({
-          partnerId: user._id,
-          amount,
-          method,
-          status: "pending",
-          hasInvoice: hasInvoice || false,
-        });
+          const totalEarnings = confirmedCommissions.reduce(
+            (sum, comm) => sum + comm.commissionAmount,
+            0,
+          );
 
-        await withdrawal.save();
+          // Déduire tous les retraits (complétés et en cours)
+          const allWithdrawals = await Withdrawal.find({
+            partnerId: user._id,
+            status: { $in: ["completed", "pending", "processing"] },
+          });
+
+          const totalWithdrawn = allWithdrawals.reduce(
+            (sum, w) => sum + w.amount,
+            0,
+          );
+
+          const availableBalance = totalEarnings - totalWithdrawn;
+
+          // Vérifier que le solde est suffisant
+          if (amount > availableBalance) {
+            throw new AppError(
+              `Solde insuffisant. Disponible: ${availableBalance.toFixed(2)}€`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
+          // Vérifier qu'il n'y a pas déjà un retrait en attente
+          const pendingWithdrawal = await Withdrawal.findOne({
+            partnerId: user._id,
+            status: { $in: ["pending", "processing"] },
+          });
+
+          if (pendingWithdrawal) {
+            throw new AppError(
+              "Vous avez déjà une demande de retrait en cours",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+
+          // Créer la demande de retrait
+          withdrawal = new Withdrawal({
+            partnerId: user._id,
+            amount,
+            method,
+            status: "pending",
+            hasInvoice: hasInvoice || false,
+          });
+
+          await withdrawal.save();
+        } finally {
+          await releaseWithdrawalLock(partnerId).catch((lockError) =>
+            logger.error("Libération du verrou de retrait:", lockError),
+          );
+        }
 
         logger.info(
           `Demande de retrait créée: ${withdrawal._id} - ${amount}€ pour ${user.email}`,
