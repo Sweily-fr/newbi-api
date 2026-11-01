@@ -4,6 +4,9 @@ import ClientCustomField from "../models/ClientCustomField.js";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
+import DeliveryNote from "../models/DeliveryNote.js";
+import CreditNote from "../models/CreditNote.js";
+import ClientList from "../models/ClientList.js";
 import User from "../models/User.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -26,6 +29,8 @@ import { isInternationalEntity } from "../utils/validators.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { toObjectIdOrNull } from "../utils/objectIdString.js";
 import { sanitizeRichText } from "../utils/richText.js";
+import { boundedPage } from "../utils/pageBounds.js";
+import { assertCustomFieldValues } from "../utils/customFieldValues.js";
 import { automationService } from "./clientAutomation.js";
 
 // Auteur (nom, avatar) des notes et de l'activité client, mis en cache pour la
@@ -61,6 +66,75 @@ function completeAddress(address) {
     country: address?.country || "",
   };
 }
+
+// Clés techniques d'un sous-document, absentes des entrées GraphQL
+const TECHNICAL_KEYS = new Set(["_id", "createdAt", "updatedAt"]);
+
+const isEmptyValue = (value) =>
+  value === null ||
+  value === undefined ||
+  value === "" ||
+  value === false ||
+  (Array.isArray(value) && value.length === 0);
+
+/**
+ * Forme comparable d'une valeur de la fiche client, enregistrée (document
+ * Mongoose : sous-document d'adresse avec son _id, ObjectId, dates) ou reçue
+ * (entrée GraphQL) : identifiants en texte, clés techniques retirées, clés
+ * triées, valeurs vides (null, "", false, tableau vide) confondues.
+ */
+export function comparableValue(value) {
+  if (value && typeof value.toObject === "function") {
+    value = value.toObject({ depopulate: true });
+  }
+  if (value instanceof mongoose.Types.ObjectId) return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) {
+    const items = value.map(comparableValue);
+    return items.length ? items : null;
+  }
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort()) {
+      if (TECHNICAL_KEYS.has(key)) continue;
+      const item = comparableValue(value[key]);
+      if (!isEmptyValue(item)) result[key] = item;
+    }
+    return Object.keys(result).length ? result : null;
+  }
+  return isEmptyValue(value) ? null : value;
+}
+
+/** Valeurs des champs personnalisés par champ, sans les valeurs vides. */
+function comparableCustomFields(list) {
+  const entries = (list || [])
+    .map((cf) => [cf?.fieldId?.toString(), comparableValue(cf?.value)])
+    .filter(([fieldId, value]) => fieldId && value !== null)
+    .sort(([a], [b]) => a.localeCompare(b));
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+// Raison du blocage (même limite que le modèle) et taille d'une note
+const BLOCKED_REASON_MAX_LENGTH = 500;
+export const NOTE_MAX_LENGTH = 20000;
+
+/** Note en texte riche : nettoyée, et refusée au-delà de NOTE_MAX_LENGTH. */
+function noteContent(raw) {
+  const tooLong = (text) =>
+    typeof text === "string" && text.length > NOTE_MAX_LENGTH;
+  // Texte reçu contrôlé d'abord : un texte énorme n'est pas nettoyé pour rien
+  const content = tooLong(raw) ? raw : sanitizeRichText(raw);
+  if (tooLong(content)) {
+    throw new AppError(
+      "Une note ne peut pas dépasser 20 000 caractères.",
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+  return content;
+}
+
+// Activités que le site ajoute lui-même au journal d'un contact
+const MANUAL_ACTIVITY_TYPES = ["reminder_created"];
 
 // Actions précises de la page « Mes clients » (éditeur de rôles)
 // L'import de clients crée les fiches une à une : « Importer » suffit aussi
@@ -98,6 +172,7 @@ const clientResolvers = {
           search,
           searchExact = false,
           types,
+          blocked,
           workspaceId: inputWorkspaceId,
         },
         context,
@@ -134,17 +209,22 @@ const clientResolvers = {
           query.type = { $in: types };
         }
 
-        // Convertir en nombres pour éviter les problèmes de type
-        const currentPage = parseInt(page, 10);
-        const itemsPerPage = parseInt(limit, 10);
+        // Contacts bloqués (ou non bloqués) de tout l'espace, pas seulement
+        // d'une première page filtrée dans le navigateur
+        if (blocked === true) query.isBlocked = true;
+        else if (blocked === false) query.isBlocked = { $ne: true };
+
+        // Page et taille bornées (page 0, taille 0 ou démesurée)
+        const {
+          page: currentPage,
+          limit: itemsPerPage,
+          skip,
+        } = boundedPage(page, limit);
 
         // Nombre total de clients et page demandée, lus en parallèle
         const [totalItems, items] = await Promise.all([
           Client.countDocuments(query),
-          Client.find(query)
-            .sort({ name: 1 })
-            .skip((currentPage - 1) * itemsPerPage)
-            .limit(itemsPerPage),
+          Client.find(query).sort({ name: 1 }).skip(skip).limit(itemsPerPage),
         ]);
 
         // Calculer le nombre total de pages
@@ -177,6 +257,16 @@ const clientResolvers = {
 
         if (existingClient) {
           throw createAlreadyExistsError("client", "email", input.email);
+        }
+
+        // Valeurs des champs personnalisés : champs de l'espace, bon format
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ClientCustomField.find({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            }).lean(),
+          );
         }
 
         // Validation et traitement spécifique selon le type de client
@@ -300,6 +390,18 @@ const clientResolvers = {
           }
         }
 
+        // Valeurs des champs personnalisés modifiées : champs de l'espace,
+        // bon format (les valeurs déjà enregistrées ne sont pas recontrôlées)
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ClientCustomField.find({
+              workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            }).lean(),
+            client.customFields,
+          );
+        }
+
         // Validation et traitement spécifique selon le type de client
         let updateData = { ...input };
 
@@ -342,19 +444,12 @@ const clientResolvers = {
           }
         }
 
-        // Fonction pour comparer deux valeurs en profondeur
-        const hasChanged = (oldVal, newVal) => {
-          // Si les deux sont null/undefined, pas de changement
-          if (oldVal == null && newVal == null) return false;
-          // Si l'un est null/undefined et pas l'autre, changement
-          if ((oldVal == null) !== (newVal == null)) return true;
-          // Pour les objets, comparer en JSON (trié pour éviter les faux positifs)
-          if (typeof oldVal === "object" && typeof newVal === "object") {
-            return JSON.stringify(oldVal) !== JSON.stringify(newVal);
-          }
-          // Pour les valeurs primitives, comparaison directe
-          return oldVal !== newVal;
-        };
+        // Valeur enregistrée et valeur reçue comparées sous une même forme
+        // (voir comparableValue) : enregistrer une fiche sans rien changer
+        // n'écrit ni activité ni brouillons
+        const hasChanged = (oldVal, newVal) =>
+          JSON.stringify(comparableValue(oldVal)) !==
+          JSON.stringify(comparableValue(newVal));
 
         // Tracker les changements
         const changes = [];
@@ -384,8 +479,16 @@ const clientResolvers = {
             const newValue =
               key === "email" ? updateData[key].toLowerCase() : updateData[key];
 
-            // Vérifier si la valeur a réellement changé
-            if (hasChanged(oldValue, newValue)) {
+            // Vérifier si la valeur a réellement changé (champs personnalisés :
+            // valeurs par champ, quel que soit l'ordre reçu)
+            const changed =
+              key === "customFields"
+                ? hasChanged(
+                    comparableCustomFields(oldValue),
+                    comparableCustomFields(newValue),
+                  )
+                : hasChanged(oldValue, newValue);
+            if (changed) {
               if (key === "customFields") {
                 // Identifier quels champs personnalisés ont changé
                 // .toString() pour uniformiser ObjectId vs string
@@ -408,7 +511,10 @@ const clientResolvers = {
                 ]);
                 const changedFieldNames = [];
                 for (const fieldId of allFieldIds) {
-                  if (oldFields.get(fieldId) !== newFields.get(fieldId)) {
+                  // Choix multiples : tableaux comparés par leur contenu
+                  if (
+                    hasChanged(oldFields.get(fieldId), newFields.get(fieldId))
+                  ) {
                     const name = customFieldNamesMap[fieldId];
                     if (name) {
                       changedFieldNames.push(`le champ "${name}"`);
@@ -579,10 +685,39 @@ const clientResolvers = {
           throw createResourceInUseError("client", "bons de commande");
         }
 
+        // Bons de livraison et avoirs : même règle que les autres documents
+        const [deliveryNoteCount, creditNoteCount] = await Promise.all([
+          DeliveryNote.countDocuments({
+            "client.id": id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          }),
+          CreditNote.countDocuments({
+            "client.id": id,
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+          }),
+        ]);
+
+        if (deliveryNoteCount > 0) {
+          throw createResourceInUseError("client", "bons de livraison");
+        }
+
+        if (creditNoteCount > 0) {
+          throw createResourceInUseError("client", "avoirs");
+        }
+
         await Client.deleteOne({
           _id: id,
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
+
+        // Retiré des listes de l'espace : leur nombre de contacts reste juste
+        await ClientList.updateMany(
+          {
+            workspaceId: new mongoose.Types.ObjectId(workspaceId),
+            clients: client._id,
+          },
+          { $pull: { clients: client._id } },
+        );
         return true;
       },
     ),
@@ -722,6 +857,13 @@ const clientResolvers = {
           );
         }
 
+        if (reason && reason.trim().length > BLOCKED_REASON_MAX_LENGTH) {
+          throw new AppError(
+            `La raison du blocage ne peut pas dépasser ${BLOCKED_REASON_MAX_LENGTH} caractères.`,
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
         client.isBlocked = true;
         client.blockedAt = new Date();
         client.blockedReason = reason || null;
@@ -829,7 +971,7 @@ const clientResolvers = {
         }
 
         // Note en texte riche : nettoyée avant d'être enregistrée
-        const content = sanitizeRichText(input.content);
+        const content = noteContent(input.content);
         const noteId = new mongoose.Types.ObjectId().toString();
         const newNote = {
           id: noteId,
@@ -874,7 +1016,7 @@ const clientResolvers = {
       ) => {
         const { user } = context;
         // Note en texte riche : nettoyée avant d'être enregistrée
-        const content = sanitizeRichText(rawContent);
+        const content = noteContent(rawContent);
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
@@ -986,6 +1128,16 @@ const clientResolvers = {
           workspaceId: new mongoose.Types.ObjectId(workspaceId),
         });
 
+        // Seul le rappel est écrit par le site : les autres événements du
+        // journal (facture créée, e-mail envoyé, blocage…) sont posés par
+        // l'API elle-même et ne doivent pas pouvoir être inventés
+        if (!MANUAL_ACTIVITY_TYPES.includes(input.type)) {
+          throw new AppError(
+            "Ce type d'activité ne peut pas être ajouté manuellement.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+
         if (!client) {
           throw createNotFoundError("Client");
         }
@@ -1038,13 +1190,13 @@ const clientResolvers = {
         return loader.load(workspaceKey(workspaceId, clientId));
       }
 
-      const [invoiceCount, quoteCount, purchaseOrderCount] = await Promise.all([
-        Invoice.countDocuments({ "client.id": clientId, workspaceId }),
-        Quote.countDocuments({ "client.id": clientId, workspaceId }),
-        PurchaseOrder.countDocuments({ "client.id": clientId, workspaceId }),
-      ]);
+      const counts = await Promise.all(
+        [Invoice, Quote, PurchaseOrder, DeliveryNote, CreditNote].map((Model) =>
+          Model.countDocuments({ "client.id": clientId, workspaceId }),
+        ),
+      );
 
-      return invoiceCount + quoteCount + purchaseOrderCount > 0;
+      return counts.some((count) => count > 0);
     },
   },
 

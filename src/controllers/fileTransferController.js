@@ -13,9 +13,9 @@ import {
   toPublicTransferFiles,
 } from "../utils/transferAccess.js";
 import { createTransferAccessToken } from "../utils/transferAccessToken.js";
+import logger from "../utils/logger.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-const logger = console; // Utilisation de console comme logger de base
 
 // Paramètre public de la requête : seule une chaîne est retenue. Un objet
 // (`?link[$ne]=x`, que l'analyseur d'Express reconstruit) deviendrait un
@@ -33,9 +33,9 @@ const handleStripeWebhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  // 🔍 DEBUG: Logs pour diagnostiquer le problème
+  // Ni en-têtes ni contenu de l'événement dans les journaux (adresse et nom
+  // de l'acheteur) : seulement de quoi diagnostiquer la signature
   logger.debug("🔔 Webhook reçu");
-  logger.debug("📝 Headers:", JSON.stringify(req.headers, null, 2));
   logger.debug("🔑 Signature présente:", !!sig);
   logger.debug(
     "🔐 Secret configuré:",
@@ -58,10 +58,7 @@ const handleStripeWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  logger.debug(
-    "Données de l'événement:",
-    JSON.stringify(event.data.object, null, 2),
-  );
+  logger.debug(`Événement Stripe ${event.type} (${event.id || "sans id"})`);
 
   let result = {
     status: "ignored",

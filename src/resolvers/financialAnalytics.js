@@ -33,8 +33,13 @@ const aggregateTimeByClient = async (
   // Find boards that have a clientId assigned
   const boardQuery = { workspaceId, clientId: { $ne: null } };
   if (clientIds && clientIds.length > 0) {
+    // Seul un identifiant Newbi désigne le client d'un tableau : un UUID
+    // (client importé de Qonto) ou une chaîne quelconque faisait échouer
+    // toute la requête (BSONError) au lieu de ne compter aucun temps.
+    const newbiIds = clientIds.filter((id) => OBJECT_ID_RE.test(String(id)));
+    if (newbiIds.length === 0) return new Map();
     boardQuery.clientId = {
-      $in: clientIds.map((id) => new mongoose.Types.ObjectId(id)),
+      $in: newbiIds.map((id) => new mongoose.Types.ObjectId(id)),
     };
   }
   const boards = await Board.find(boardQuery).select("clientId").lean();
@@ -3012,14 +3017,24 @@ const financialAnalyticsResolvers = {
         // Generate alerts
         const alerts = generateAlerts(kpi);
 
+        // Détail document par document, client par client ou produit par
+        // produit : seulement les pages que le rôle voit (comme le détail
+        // d'un mois de la Prévision). Les indicateurs agrégés restent
+        // lisibles avec la seule Vue d'ensemble ou les seules Analytiques.
+        const canSee = (moduleKey) =>
+          Boolean(context.permissions?.canRead?.(moduleKey));
+        const seesClients = canSee("clients");
+
         // ==============================
         // RETURN
         // ==============================
         return {
           kpi,
           previousPeriod,
-          revenueByClient,
-          revenueByProduct: mergeRevenueByProduct(invResult.revenueByProduct),
+          revenueByClient: seesClients ? revenueByClient : [],
+          revenueByProduct: canSee("products")
+            ? mergeRevenueByProduct(invResult.revenueByProduct)
+            : [],
           monthlyRevenue,
           paymentMethodStats: invResult.paymentMethodStats.map((s) => ({
             method: s._id || "OTHER",
@@ -3031,12 +3046,12 @@ const financialAnalyticsResolvers = {
             count: s.count,
             totalTTC: Math.round(s.totalTTC * 100) / 100,
           })),
-          topClients,
+          topClients: seesClients ? topClients : [],
           expenseByCategory,
-          revenueByClientMonthly,
+          revenueByClientMonthly: seesClients ? revenueByClientMonthly : [],
           expenseByCategoryMonthly,
           collection: {
-            overdueInvoices,
+            overdueInvoices: canSee("invoices") ? overdueInvoices : [],
             agingBuckets,
             monthlyCollection,
           },

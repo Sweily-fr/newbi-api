@@ -9,6 +9,22 @@ import { mapExternalStatus } from "../services/esignatureStatus.js";
 
 const router = express.Router();
 
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
+
+/**
+ * Identifiant reçu dans le message : une chaîne seulement (un objet serait
+ * un opérateur MongoDB dans le filtre), sinon null.
+ */
+const externalIdOf = (value) => {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value !== "string") return null;
+  const id = value.trim();
+  return id && id.length <= 200 ? id : null;
+};
+
+const internalIdOf = (value) =>
+  typeof value === "string" && OBJECT_ID_RE.test(value) ? value : null;
+
 /**
  * Vérifier le header secret du webhook eSignature
  * On utilise un header custom X-Webhook-Secret envoyé dans le callback
@@ -74,11 +90,18 @@ router.post("/", express.json(), async (req, res) => {
     // lire `payload.state` seul faisait arriver l'état à `undefined`.
     const body =
       payload?.data && typeof payload.data === "object" ? payload.data : {};
-    const externalSignatureId =
-      payload.id || payload._id || body.id || body._id;
+    // Identifiants typés : jamais un objet (opérateur MongoDB) dans un filtre
+    const externalSignatureId = externalIdOf(
+      payload.id || payload._id || body.id || body._id,
+    );
     const state = payload.state ?? body.state;
-    const custom = payload.custom || body.custom || {};
-    const signatureRequestId = custom.signatureRequestId;
+    const custom =
+      (payload.custom && typeof payload.custom === "object"
+        ? payload.custom
+        : null) ||
+      (body.custom && typeof body.custom === "object" ? body.custom : null) ||
+      {};
+    const signatureRequestId = internalIdOf(custom.signatureRequestId);
 
     // Clés seulement, jamais les valeurs (le payload porte les coordonnées des
     // signataires) : de quoi identifier la forme réelle du callback en cas de
@@ -97,11 +120,26 @@ router.post("/", express.json(), async (req, res) => {
     // Trouver la SignatureRequest correspondante
     let signatureRequest;
 
+    let mismatch = false;
     if (signatureRequestId) {
       signatureRequest = await SignatureRequest.findById(signatureRequestId);
+      // La demande désignée doit être celle du prestataire : un identifiant
+      // interne accompagné de l'identifiant d'une autre demande est ignoré
+      if (
+        signatureRequest &&
+        externalSignatureId &&
+        signatureRequest.externalSignatureId &&
+        signatureRequest.externalSignatureId !== externalSignatureId
+      ) {
+        logger.warn(
+          `Webhook eSignature: identifiants incohérents pour ${signatureRequest._id}, message ignoré`,
+        );
+        signatureRequest = null;
+        mismatch = true;
+      }
     }
 
-    if (!signatureRequest && externalSignatureId) {
+    if (!signatureRequest && externalSignatureId && !mismatch) {
       signatureRequest = await SignatureRequest.findOne({
         externalSignatureId,
       });

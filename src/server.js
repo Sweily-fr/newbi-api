@@ -30,7 +30,12 @@ import express from "express";
 import { ApolloServer } from "apollo-server-express";
 import { ApolloServerPluginCacheControlDisabled } from "apollo-server-core";
 import { createServer } from "http";
-import { execute, subscribe } from "graphql";
+import {
+  execute,
+  subscribe,
+  specifiedRules,
+  NoSchemaIntrospectionCustomRule,
+} from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
 import { WebSocketServer } from "ws";
 import {
@@ -40,6 +45,13 @@ import {
 } from "./collab/kanbanCollabServer.js";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
+import {
+  rootFieldLimitRule,
+  withoutSchemaSuggestions,
+  isGraphqlIntrospectionOpen,
+} from "./utils/graphqlOperationLimits.js";
+import { createOriginChecker } from "./utils/corsOrigins.js";
+import { isTechnicalError, INTERNAL_ERROR_MESSAGE } from "./utils/errors.js";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
 import { graphqlUploadMiddleware } from "./middlewares/graphql-upload.js";
@@ -252,40 +264,13 @@ async function startServer() {
     }),
   );
 
-  // Configuration CORS
-  const allowedOrigins = [
-    "http://localhost:3000",
-    "http://localhost:3001", // Espace partenaire
-    "http://localhost:4000",
-    "https://studio.apollographql.com",
-    "https://www.newbi.fr",
-    "https://newbi.fr",
-    "https://api.newbi.fr",
-    "https://newbi-v2.vercel.app",
-    "https://newbi-v2-git-develop-sofianemtimet6-2653s-projects.vercel.app",
-    "https://staging-api.newbi.fr",
-    process.env.FRONTEND_URL,
-    process.env.PARTNER_FRONTEND_URL,
-  ].filter(Boolean);
-
-  // Dev: autoriser ngrok et cloudflare tunnels
-  if (process.env.NODE_ENV !== "production") {
-    app.use((req, res, next) => {
-      const origin = req.headers.origin;
-      if (
-        origin &&
-        (origin.includes("ngrok") || origin.includes("trycloudflare.com"))
-      ) {
-        allowedOrigins.push(origin);
-      }
-      next();
-    });
-  }
+  // Configuration CORS (origines autorisées : utils/corsOrigins.js)
+  const isAllowedOrigin = createOriginChecker();
 
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isAllowedOrigin(origin)) {
           callback(null, true);
         } else {
           // Pas d'Error ici : elle deviendrait un 500 renvoyé au client.
@@ -507,6 +492,9 @@ async function startServer() {
     resolvers,
   });
 
+  // Introspection désactivée partout sauf dev local (HTTP et WebSocket)
+  const graphqlIntrospection = isGraphqlIntrospectionOpen();
+
   // Configuration Apollo Server
   const server = new ApolloServer({
     schema,
@@ -514,11 +502,10 @@ async function startServer() {
     // publiquement le schéma complet (surface d'attaque). Le staging étant
     // accessible sur Internet, on n'autorise que NODE_ENV=development, avec
     // une porte de sortie explicite via ENABLE_GRAPHQL_INTROSPECTION=true.
-    introspection:
-      process.env.NODE_ENV === "development" ||
-      process.env.ENABLE_GRAPHQL_INTROSPECTION === "true",
-    // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
-    validationRules: [depthLimit(10)],
+    introspection: graphqlIntrospection,
+    // Limiter la profondeur des queries à 10 niveaux pour protéger le backend,
+    // et le nombre de champs racine (alias compris) d'une opération
+    validationRules: [depthLimit(10), rootFieldLimitRule()],
     // Une opération par requête HTTP : ni le site ni l'application mobile
     // n'envoient de lots, et chaque opération reste ainsi comptée par la
     // limite de débit globale.
@@ -597,6 +584,14 @@ async function startServer() {
       schema,
       execute,
       subscribe,
+      // Mêmes règles de validation qu'en HTTP (profondeur, champs racine,
+      // introspection)
+      validationRules: [
+        ...specifiedRules,
+        depthLimit(10),
+        rootFieldLimitRule(),
+        ...(graphqlIntrospection ? [] : [NoSchemaIntrospectionCustomRule]),
+      ],
       onConnect: async (connectionParams, webSocket, connectionContext) => {
         logger.info("🔌 [WebSocket] Client connecté");
 
@@ -928,6 +923,20 @@ function formatError(error) {
     console.error("Extensions:", error.extensions);
   }
 
+  // Requête refusée à la validation : sans introspection, pas de noms du
+  // schéma suggérés dans le message
+  if (
+    clientErrorCodes.includes(error.extensions?.code) &&
+    !isGraphqlIntrospectionOpen()
+  ) {
+    return {
+      message: withoutSchemaSuggestions(error.message),
+      extensions: { code: error.extensions.code },
+      locations: error.locations,
+      path: error.path,
+    };
+  }
+
   // Cas 1: originalError est une AppError directe
   if (originalError?.name === "AppError") {
     return {
@@ -983,6 +992,16 @@ function formatError(error) {
         code: "VALIDATION_ERROR",
         details: error.extensions.exception?.validationErrors,
       },
+      path: error.path,
+    };
+  }
+
+  // Erreur technique (base, identifiant mal formé, bug) : message gardé
+  // dans le journal ci-dessus, jamais renvoyé au client
+  if (isTechnicalError(originalError)) {
+    return {
+      message: INTERNAL_ERROR_MESSAGE,
+      extensions: { code: "INTERNAL_ERROR" },
       path: error.path,
     };
   }

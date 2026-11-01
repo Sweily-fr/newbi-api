@@ -1,5 +1,6 @@
 import InvoiceTemplate from "../models/invoiceTemplate.js";
 import QuoteTemplate from "../models/quoteTemplate.js";
+import AccountBanking from "../models/AccountBanking.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getWorkspacePlan } from "./esignatureQuota.js";
 
@@ -20,6 +21,8 @@ export const PLAN_LIMITS = {
     documentTemplates: 10,
     // Signature simple seulement ; « qes » = signature qualifiée et cachet
     esignature: "ses",
+    // Banques connectées (connexions bancaires distinctes)
+    bankAccounts: 1,
   },
   pme: {
     customFields: -1,
@@ -28,6 +31,7 @@ export const PLAN_LIMITS = {
     crmEmailAutomations: true,
     documentTemplates: -1,
     esignature: "ses",
+    bankAccounts: 3,
   },
   entreprise: {
     customFields: -1,
@@ -36,6 +40,7 @@ export const PLAN_LIMITS = {
     crmEmailAutomations: true,
     documentTemplates: -1,
     esignature: "qes",
+    bankAccounts: 5,
   },
 };
 
@@ -120,6 +125,47 @@ export async function assertQualifiedSignatureAllowed(workspaceId) {
   if (limits.esignature !== "qes") {
     throw new AppError(
       "La signature qualifiée et le cachet de l'entreprise sont réservés à l'offre Entreprise.",
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Banques connectées de l'espace, comptées comme le site les affiche
+ * (Paramètres > Comptes bancaires) : comptes actifs regroupés par banque
+ * (provider_id, sinon item_id de la connexion, sinon le compte lui-même).
+ * Un compte déconnecté ne compte plus.
+ */
+export async function countConnectedBanks(workspaceId) {
+  const accounts = await AccountBanking.find({
+    workspaceId: String(workspaceId),
+    status: { $in: ["active", "ACTIVE"] },
+  })
+    .select("_id raw.provider_id raw.item_id")
+    .lean();
+  const banks = new Set(
+    accounts.map((a) => String(a.raw?.provider_id || a.raw?.item_id || a._id)),
+  );
+  return banks.size;
+}
+
+/**
+ * Refuse une nouvelle connexion bancaire au-delà du nombre de banques que
+ * l'offre autorise (le site grise « Connecter une banque », l'API et
+ * l'application mobile doivent aussi s'y tenir).
+ */
+export async function assertBankConnectionCapacity(workspaceId) {
+  const { plan, limits } = await getWorkspacePlanLimits(workspaceId);
+  const max = limits.bankAccounts;
+  if (typeof max !== "number" || max < 0) return;
+  const count = await countConnectedBanks(workspaceId);
+  if (count >= max) {
+    const allowed =
+      max === 1
+        ? "Votre offre n'autorise qu'une banque connectée."
+        : `Votre offre n'autorise pas plus de ${max} banques connectées.`;
+    throw new AppError(
+      `${allowed}${upgradeHint(plan, "en connecter davantage")}`,
       ERROR_CODES.FORBIDDEN,
     );
   }

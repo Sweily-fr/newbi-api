@@ -326,6 +326,47 @@ describe("réservation", () => {
     expect(await Booking.countDocuments({ status: "CONFIRMED" })).toBe(1);
   });
 
+  it("sans Redis, deux réservations simultanées qui se chevauchent (débuts différents) : une seule passe", async () => {
+    // Séance d'une heure à X, rendez-vous de 30 min à X + 30 min
+    const long = (
+      await AppointmentType.create({
+        workspaceId,
+        bookingPageId: page._id,
+        userId: hostId,
+        slug: "seance-longue",
+        name: "Séance longue",
+        durationMinutes: 60,
+        location: { kind: "GOOGLE_MEET" },
+        minNoticeMinutes: 0,
+      })
+    ).toObject();
+    const slots = await availableSlots({
+      page,
+      type: long,
+      from: addDays(today(), 1),
+      to: addDays(today(), 15),
+    });
+    const start = new Date(slots[0].start);
+    const overlapping = new Date(start.getTime() + 30 * 60_000).toISOString();
+
+    const results = await Promise.allSettled([
+      createBooking({
+        context,
+        type: long,
+        start: slots[0].start,
+        guest: guest(),
+        timezone: "Europe/Paris",
+      }),
+      book(overlapping, { email: "autre@exemple.fr", firstName: "Paul" }),
+    ]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((r) => r.status === "rejected").reason.status).toBe(
+      409,
+    );
+    expect(await Booking.countDocuments({ status: "CONFIRMED" })).toBe(1);
+  });
+
   it("deux réservations simultanées avec le verrou Redis : la seconde voit le créneau pris", async () => {
     const store = new Map();
     redis.client = {
@@ -391,6 +432,39 @@ describe("réservation", () => {
     expect(activityBefore).toHaveLength(0);
     expect(activityAfter).toHaveLength(1);
     expect(activityAfter[0].type).toBe("reminder_created");
+  });
+
+  it("le client créé garde le nom saisi (apostrophe typographique, « œ », point)", async () => {
+    const [slot] = await nextSlots();
+    const { booking, emails } = await book(slot.start, {
+      email: "anais.darcy@exemple.fr",
+      firstName: "Anaïs",
+      lastName: "D’Arcy-Lecœur Jr.",
+    });
+    await emails;
+
+    const client = await Client.findById(booking.clientId).lean();
+    expect(client).toMatchObject({
+      type: "INDIVIDUAL",
+      name: "Anaïs D’Arcy-Lecœur Jr.",
+      firstName: "Anaïs",
+      lastName: "D’Arcy-Lecœur Jr.",
+    });
+  });
+
+  it("caractères refusés par la fiche client remplacés, nom inutilisable : repli sur l'adresse", async () => {
+    const [slot] = await nextSlots();
+    const { booking, emails } = await book(slot.start, {
+      email: "zoe.piege@exemple.fr",
+      firstName: "<b>",
+      lastName: "42",
+    });
+    await emails;
+
+    const client = await Client.findById(booking.clientId).lean();
+    expect(client.name).toBe("zoe.piege");
+    expect(client.firstName ?? null).toBeNull();
+    expect(client.lastName ?? null).toBeNull();
   });
 
   it("refuse un client bloqué, sans rien enregistrer", async () => {

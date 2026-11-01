@@ -54,6 +54,7 @@ vi.mock("../../src/config/redis.js", () => ({
   getCacheClient: () => null,
 }));
 
+import express from "express";
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
@@ -66,6 +67,7 @@ import SharedFolder from "../../src/models/SharedFolder.js";
 import DocumentAutomation from "../../src/models/DocumentAutomation.js";
 import documentAutomationService from "../../src/services/documentAutomationService.js";
 import documentAutomationResolvers from "../../src/resolvers/documentAutomation.js";
+import emailTrackingRoutes from "../../src/routes/emailTracking.js";
 
 const { Mutation } = documentAutomationResolvers;
 const { ObjectId } = mongoose.Types;
@@ -301,5 +303,84 @@ describe("processAutomationDocument : rôles sans droit d'envoi des factures", (
       }),
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     expect(await cacheOf(Invoice, invoiceId)).toMatchObject(ORIGINAL_CACHE);
+  });
+});
+
+describe("bouton « Voir le document » des e-mails après le passage d'un Comptable", () => {
+  const TOKEN = "f".repeat(64);
+  let server;
+  let baseUrl;
+
+  beforeAll(async () => {
+    const app = express();
+    app.use("/tracking", emailTrackingRoutes);
+    await new Promise((resolve) => {
+      server = app.listen(0, "127.0.0.1", resolve);
+    });
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+  });
+  afterAll(async () => {
+    if (server) await new Promise((resolve) => server.close(resolve));
+  });
+
+  const comptable = (args) =>
+    Mutation.processAutomationDocument(
+      null,
+      { workspaceId: ws(), ...args },
+      buildContext({ userId: accountant, organizationId: ws() }),
+      { fieldName: "processAutomationDocument" },
+    );
+
+  const tracking = {
+    emailTracking: {
+      trackingToken: TOKEN,
+      emailSentAt: new Date(),
+      emailOpenCount: 0,
+      emailClickCount: 0,
+    },
+  };
+
+  it("facture archivée : le lien sert l'archive légale, jamais le PDF transmis", async () => {
+    const automationId = await seedAutomation("INVOICE_SENT");
+    const invoiceId = await seedInvoice({
+      archivedPdfKey: "archive-f1",
+      ...tracking,
+    });
+    await comptable({
+      automationId,
+      documentId: invoiceId,
+      documentType: "invoice",
+      pdfBase64: clientPdf,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${baseUrl}/tracking/click/${TOKEN}`, {
+      redirect: "manual",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/pdf");
+    const body = Buffer.from(await res.arrayBuffer()).toString();
+    expect(body).toBe("%PDF-1.7 archive legale");
+    expect(body).not.toContain(clientPdfText);
+  });
+
+  it("facture sans archive : le lien mène toujours au PDF en cache d'origine", async () => {
+    const automationId = await seedAutomation("INVOICE_SENT");
+    const invoiceId = await seedInvoice({ ...tracking });
+    await comptable({
+      automationId,
+      documentId: invoiceId,
+      documentType: "invoice",
+      pdfBase64: clientPdf,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const res = await fetch(`${baseUrl}/tracking/click/${TOKEN}`, {
+      redirect: "manual",
+    });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(ORIGINAL_CACHE.url);
   });
 });

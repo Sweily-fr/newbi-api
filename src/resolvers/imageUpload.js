@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import logger from "../utils/logger.js";
 /**
  * Resolvers GraphQL pour l'upload d'images vers Cloudflare
@@ -5,13 +6,56 @@ import logger from "../utils/logger.js";
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { requireWorkspaceAction } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import cloudflareService from "../services/cloudflareService.js";
 import User from "../models/User.js";
 import {
   createValidationError,
   createInternalServerError,
 } from "../utils/errors.js";
+
+/**
+ * Clé R2 d'une photo de profil de cet utilisateur (« <userId>/image/<fichier> »,
+ * bucket des photos de profil), lue dans la clé enregistrée ou à défaut dans
+ * l'URL. null pour toute autre clé : l'avatar est modifiable par le client et
+ * pouvait désigner le fichier d'un autre compte, ou une image hébergée
+ * ailleurs (photo Google).
+ */
+export function ownProfileImageKey(userId, { key, url } = {}) {
+  let candidate = key;
+  if (!candidate && typeof url === "string") {
+    candidate = url.split("?")[0].split("/").slice(-3).join("/");
+  }
+  if (!candidate || !userId) return null;
+  const prefix = `${userId}/image/`;
+  if (!String(candidate).startsWith(prefix)) return null;
+  const fileName = String(candidate).slice(prefix.length);
+  if (!fileName || fileName.includes("/") || fileName.includes("..")) {
+    return null;
+  }
+  return String(candidate);
+}
+
+/**
+ * Clé d'une image du dossier de l'utilisateur : commence par son identifiant
+ * et ne remonte jamais d'un dossier (« .. »), sans segment vide ni « \\ ».
+ */
+function isOwnImageKey(key, user) {
+  if (typeof key !== "string" || !user?.id) return false;
+  if (!key.startsWith(`${user.id}/`)) return false;
+  const segments = key.split("/");
+  return !segments.some(
+    (segment) =>
+      segment === "" ||
+      segment === "." ||
+      segment === ".." ||
+      segment.includes("\\") ||
+      /%2e|%2f|%5c/i.test(segment),
+  );
+}
 
 const imageUploadResolvers = {
   Upload: GraphQLUpload,
@@ -27,7 +71,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -142,7 +186,7 @@ const imageUploadResolvers = {
         }
 
         // Vérifier que l'image appartient à l'utilisateur (sécurité)
-        if (!String(key).startsWith(`${user.id}/`)) {
+        if (!isOwnImageKey(key, user)) {
           throw createValidationError("Accès non autorisé à cette image");
         }
 
@@ -173,7 +217,7 @@ const imageUploadResolvers = {
           }
 
           // Vérifier que l'image appartient à l'utilisateur (sécurité)
-          if (!String(key).startsWith(`${user.id}/`)) {
+          if (!isOwnImageKey(key, user)) {
             throw createValidationError("Accès non autorisé à cette image");
           }
 
@@ -230,10 +274,21 @@ const imageUploadResolvers = {
           throw createValidationError("L'image est trop volumineuse (max 5MB)");
         }
 
-        // Supprimer l'ancienne image si elle existe
-        if (user.profilePictureKey) {
+        // Supprimer l'ancienne image si elle existe (la sienne seulement,
+        // dans le bucket des photos de profil où elle a été envoyée)
+        const previous = await User.collection.findOne({
+          _id: new mongoose.Types.ObjectId(String(user.id)),
+        });
+        const previousKey = ownProfileImageKey(user.id, {
+          key: previous?.profilePictureKey || previous?.profile?.profilePictureKey,
+          url: previous?.avatar || previous?.profilePictureUrl,
+        });
+        if (previousKey) {
           try {
-            await cloudflareService.deleteImage(user.profilePictureKey);
+            await cloudflareService.deleteImage(
+              previousKey,
+              cloudflareService.profileBucketName,
+            );
           } catch (error) {
             console.warn(
               "Impossible de supprimer l'ancienne image:",
@@ -287,7 +342,10 @@ const imageUploadResolvers = {
 
       try {
         // Récupérer l'utilisateur complet depuis la base de données
-        const userDoc = await User.findById(user.id);
+        // Lecture brute : avatar est écrit par Better Auth hors du schéma
+        const userDoc = await User.collection.findOne({
+          _id: new mongoose.Types.ObjectId(String(user.id)),
+        });
         if (!userDoc) {
           throw createValidationError("Utilisateur non trouvé");
         }
@@ -305,20 +363,31 @@ const imageUploadResolvers = {
           };
         }
 
-        // Extraire la clé depuis l'URL
-        // URL format: https://pub-012a0ee1541743df9b78b220e9efac5e.r2.dev/68cad81bb22506f4c701424d/image/034e23b0-7d87-4a8a-8e4f-dfdf87204131.webp
-        const urlParts = imageUrl.split("/");
-        const key = urlParts.slice(-3).join("/"); // userId/image/uniqueId.extension
+        // Clé « <userId>/image/<fichier> » de cet utilisateur seulement,
+        // supprimée dans le bucket des photos de profil (celui de l'envoi).
+        // Une image hébergée ailleurs ou appartenant à un autre compte n'est
+        // pas touchée : seul le lien est retiré du profil.
+        const key = ownProfileImageKey(user.id, {
+          key: userDoc.profilePictureKey || userDoc.profile?.profilePictureKey,
+          url: imageUrl,
+        });
         logger.debug(`🔑 [DELETE_PROFILE_IMAGE] Clé extraite: ${key}`);
 
-        const success = await cloudflareService.deleteImage(key);
+        const success = key
+          ? await cloudflareService.deleteImage(
+              key,
+              cloudflareService.profileBucketName,
+            )
+          : true;
         logger.debug(
           `☁️ [DELETE_PROFILE_IMAGE] Suppression Cloudflare: ${success}`,
         );
 
         if (success) {
           // Mettre à jour l'utilisateur pour supprimer le champ avatar
-          await User.findByIdAndUpdate(user.id, {
+          // (écriture brute : avatar, écrit par Better Auth, est hors du
+          // schéma et Mongoose retirait ce champ de la mise à jour)
+          await User.collection.updateOne({ _id: userDoc._id }, {
             $unset: {
               avatar: 1,
               profilePictureUrl: 1,
@@ -432,13 +501,25 @@ const SIGNATURE_IMAGE_ACTIONS = {
   uploadSocialLogo: ["create", "edit"],
   deleteSignatureImage: ["create", "edit", "delete"],
 };
+// Envoi d'une image : abonnement actif exigé, comme pour enregistrer la
+// signature (contrôle sur l'espace validé par le RBAC)
+const SIGNATURE_IMAGE_UPLOADS = new Set([
+  "uploadSignatureImage",
+  "uploadSocialLogo",
+]);
 Object.entries(SIGNATURE_IMAGE_ACTIONS).forEach(([name, actions]) => {
   const original = imageUploadResolvers.Mutation[name];
   if (original) {
+    const resolver = SIGNATURE_IMAGE_UPLOADS.has(name)
+      ? async (parent, args, context, info) => {
+          await checkSubscriptionActive(context);
+          return original(parent, args, context, info);
+        }
+      : original;
     imageUploadResolvers.Mutation[name] = requireWorkspaceAction(
       "signatures",
       actions,
-    )(original);
+    )(resolver);
   }
 });
 

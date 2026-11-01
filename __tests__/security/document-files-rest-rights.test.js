@@ -142,3 +142,18 @@ describe("Routes REST des PDF et fichiers de documents", () => {
     });
   }
 });
+
+describe("Routes REST des PDF : identifiant malformé", () => {
+  for (const path of [
+    "/invoices/abc/document-pdf",
+    "/documents/creditNote/abc/document-pdf",
+    "/documents/quote/pas-un-identifiant/document-pdf",
+  ]) {
+    it(`${path} : 404 « introuvable », pas une erreur serveur`, async () => {
+      auth.user = viewer;
+      const res = await fetch(`${baseUrl}${path}`);
+      expect(res.status).toBe(404);
+      expect((await res.json()).error).toMatch(/introuvable/i);
+    });
+  }
+});

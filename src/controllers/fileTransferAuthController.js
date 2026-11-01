@@ -85,9 +85,11 @@ export const authorizeDownload = async (req, res) => {
 
     logger.debug("🔍 Recherche du transfert avec ID:", transferId);
 
-    // Vérifier que le transfert existe
-    const fileTransfer =
-      await FileTransfer.findById(transferId).populate("files");
+    // Vérifier que le transfert existe (identifiant mal formé : introuvable,
+    // findById levait une CastError → 500)
+    const fileTransfer = mongoose.isValidObjectId(transferId)
+      ? await FileTransfer.findById(transferId).populate("files")
+      : null;
     logger.debug("🔍 Transfert trouvé:", fileTransfer ? "OUI" : "NON");
     if (!fileTransfer) {
       return res.status(404).json({
@@ -325,7 +327,9 @@ export const markDownloadCompleted = async (req, res) => {
     const { downloadEventId } = req.params;
     const { duration, isLastFile } = req.body;
 
-    const downloadEvent = await DownloadEvent.findById(downloadEventId);
+    const downloadEvent = mongoose.isValidObjectId(downloadEventId)
+      ? await DownloadEvent.findById(downloadEventId)
+      : null;
     if (!downloadEvent) {
       return res.status(404).json({
         success: false,

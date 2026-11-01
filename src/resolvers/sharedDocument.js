@@ -28,6 +28,7 @@ import {
   getEffectiveVisibility,
   sharedFolderAccessFor,
 } from "../services/sharedFolderAccess.js";
+import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
 
 const { ObjectId } = mongoose.Types;
 
@@ -974,6 +975,14 @@ const sharedDocumentResolvers = {
             };
           }
 
+          if ("name" in input && !String(input.name ?? "").trim()) {
+            return {
+              success: false,
+              message: "Le nom du document ne peut pas être vide",
+              document: null,
+            };
+          }
+
           const document = await SharedDocument.findOneAndUpdate(
             { _id: id, workspaceId },
             { $set: input },
@@ -1492,6 +1501,13 @@ const sharedDocumentResolvers = {
             createdBy: user.id,
             order: (maxOrder?.order || 0) + 1,
           });
+          // Sous-dossier sans visibilité choisie : il hérite de son parent
+          // (getEffectiveVisibility). Le défaut « public » du modèle rendait
+          // visible à tous un sous-dossier créé dans un dossier privé.
+          if (input.parentId && input.visibility == null) {
+            folder.visibility = null;
+            folder.allowedUserIds = [];
+          }
 
           await folder.save();
 
@@ -1580,6 +1596,34 @@ const sharedDocumentResolvers = {
               return {
                 success: false,
                 message: "Ce dossier système ne peut pas être modifié",
+                folder: null,
+              };
+            }
+          }
+
+          // Nom vide ou déjà pris dans le dossier de destination : refusé
+          // comme à la création
+          if ("name" in input) {
+            const name = String(input.name ?? "").trim();
+            if (!name) {
+              return {
+                success: false,
+                message: "Le nom du dossier ne peut pas être vide",
+                folder: null,
+              };
+            }
+            const targetParent =
+              "parentId" in input ? input.parentId || null : folder.parentId;
+            const duplicate = await SharedFolder.findOne({
+              workspaceId,
+              name: input.name,
+              parentId: targetParent,
+              _id: { $ne: folder._id },
+            });
+            if (duplicate) {
+              return {
+                success: false,
+                message: "Un dossier avec ce nom existe déjà",
                 folder: null,
               };
             }
@@ -1996,7 +2040,10 @@ const sharedDocumentResolvers = {
           // Supprimer les fichiers de Cloudflare R2
           for (const doc of trashedDocs) {
             try {
-              await cloudflareService.deleteImage(doc.fileKey);
+              await cloudflareService.deleteImage(
+                doc.fileKey,
+                cloudflareService.sharedDocumentsBucketName,
+              );
             } catch (cloudflareError) {
               console.warn(
                 "⚠️ Erreur suppression Cloudflare:",
@@ -2055,7 +2102,10 @@ const sharedDocumentResolvers = {
           // Supprimer de Cloudflare R2
           for (const doc of documents) {
             try {
-              await cloudflareService.deleteImage(doc.fileKey);
+              await cloudflareService.deleteImage(
+                doc.fileKey,
+                cloudflareService.sharedDocumentsBucketName,
+              );
             } catch (cloudflareError) {
               console.warn(
                 "⚠️ Erreur suppression Cloudflare:",
@@ -2115,7 +2165,10 @@ const sharedDocumentResolvers = {
 
           for (const doc of docsInFolders) {
             try {
-              await cloudflareService.deleteImage(doc.fileKey);
+              await cloudflareService.deleteImage(
+                doc.fileKey,
+                cloudflareService.sharedDocumentsBucketName,
+              );
             } catch (cloudflareError) {
               console.warn(
                 "⚠️ Erreur suppression Cloudflare:",
@@ -2252,12 +2305,15 @@ const sharedDocumentResolvers = {
     // automatisation côté serveur). Le canal encode le workspaceId, comme kanban.
     sharedDocumentsChanged: {
       subscribe: subscribeSharedDocuments(
-        (_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+        (_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           const pubsub = getPubSub();
-          return pubsub.asyncIterableIterator([
-            `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
-          ]);
+          return endWhenMemberRemoved(
+            pubsub.asyncIterableIterator([
+              `${SHARED_DOCUMENTS_CHANGED}_${finalWorkspaceId}`,
+            ]),
+            { user, workspaceId: finalWorkspaceId },
+          );
         },
       ),
       resolve: (

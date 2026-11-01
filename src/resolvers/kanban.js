@@ -57,6 +57,7 @@ import {
   cancelSocialPostsBeforeTaskDeletion,
   rescheduleSocialPostForTask,
 } from "../services/social/socialPublishingService.js";
+import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -5312,14 +5313,17 @@ const resolvers = {
       subscribe: requireWorkspaceLevel(
         "kanban",
         "read",
-      )((_, { workspaceId }, { workspaceId: contextWorkspaceId }) => {
+      )((_, { workspaceId }, { user, workspaceId: contextWorkspaceId }) => {
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         try {
           const pubsub = getPubSub();
           // Utiliser un canal spécifique au workspace pour optimiser les performances
-          return pubsub.asyncIterableIterator([
-            `${BOARD_UPDATED}_${finalWorkspaceId}`,
-          ]);
+          return endWhenMemberRemoved(
+            pubsub.asyncIterableIterator([
+              `${BOARD_UPDATED}_${finalWorkspaceId}`,
+            ]),
+            { user, workspaceId: finalWorkspaceId },
+          );
         } catch (error) {
           logger.error("❌ [Kanban] Erreur subscription boardUpdated:", error);
           throw new Error("Subscription failed");
@@ -5343,19 +5347,28 @@ const resolvers = {
       subscribe: requireWorkspaceLevel(
         "kanban",
         "read",
-      )((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        try {
-          const pubsub = getPubSub();
-          // Utiliser un canal spécifique au workspace et board pour optimiser
-          return pubsub.asyncIterableIterator([
-            `${TASK_UPDATED}_${finalWorkspaceId}_${boardId}`,
-          ]);
-        } catch (error) {
-          logger.error("❌ [Kanban] Erreur subscription taskUpdated:", error);
-          throw new Error("Subscription failed");
-        }
-      }),
+      )(
+        (
+          _,
+          { boardId, workspaceId },
+          { user, workspaceId: contextWorkspaceId },
+        ) => {
+          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+          try {
+            const pubsub = getPubSub();
+            // Utiliser un canal spécifique au workspace et board pour optimiser
+            return endWhenMemberRemoved(
+              pubsub.asyncIterableIterator([
+                `${TASK_UPDATED}_${finalWorkspaceId}_${boardId}`,
+              ]),
+              { user, workspaceId: finalWorkspaceId },
+            );
+          } catch (error) {
+            logger.error("❌ [Kanban] Erreur subscription taskUpdated:", error);
+            throw new Error("Subscription failed");
+          }
+        },
+      ),
       resolve: (payload) => {
         // Pour les événements VISITOR_PROFILE_UPDATED, retourner le payload avec visitor
         if (payload.type === "VISITOR_PROFILE_UPDATED" && payload.visitor) {
@@ -5382,19 +5395,31 @@ const resolvers = {
       subscribe: requireWorkspaceLevel(
         "kanban",
         "read",
-      )((_, { boardId, workspaceId }, { workspaceId: contextWorkspaceId }) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
-        try {
-          const pubsub = getPubSub();
-          // Utiliser un canal spécifique au workspace et board pour optimiser
-          return pubsub.asyncIterableIterator([
-            `${COLUMN_UPDATED}_${finalWorkspaceId}_${boardId}`,
-          ]);
-        } catch (error) {
-          logger.error("❌ [Kanban] Erreur subscription columnUpdated:", error);
-          throw new Error("Subscription failed");
-        }
-      }),
+      )(
+        (
+          _,
+          { boardId, workspaceId },
+          { user, workspaceId: contextWorkspaceId },
+        ) => {
+          const finalWorkspaceId = workspaceId || contextWorkspaceId;
+          try {
+            const pubsub = getPubSub();
+            // Utiliser un canal spécifique au workspace et board pour optimiser
+            return endWhenMemberRemoved(
+              pubsub.asyncIterableIterator([
+                `${COLUMN_UPDATED}_${finalWorkspaceId}_${boardId}`,
+              ]),
+              { user, workspaceId: finalWorkspaceId },
+            );
+          } catch (error) {
+            logger.error(
+              "❌ [Kanban] Erreur subscription columnUpdated:",
+              error,
+            );
+            throw new Error("Subscription failed");
+          }
+        },
+      ),
       resolve: (payload) => {
         // Le filtrage est déjà fait au niveau du subscribe via le canal spécifique
         // Toujours retourner le payload car il vient du bon canal
@@ -5455,7 +5480,10 @@ const resolvers = {
                 ? originalReturn(...args)
                 : { value: undefined, done: true };
             };
-            return iterator;
+            return endWhenMemberRemoved(iterator, {
+              user,
+              workspaceId: finalWorkspaceId,
+            });
           } catch (error) {
             logger.error(
               "❌ [Kanban] Erreur subscription taskPresence:",

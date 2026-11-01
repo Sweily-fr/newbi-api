@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import mongoose from "mongoose";
 import stripeConnectService from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
@@ -501,13 +502,36 @@ const stripeConnectResolvers = {
           };
         }
 
+        // Clé d'accès exigée : le jeton de retour placé dans les URL de
+        // Stripe ramène au transfert (lien et clé), il ne doit être remis
+        // qu'à qui détient déjà le lien complet. Transfert absent, identifiant
+        // mal formé ou mauvaise clé : même réponse, pour ne rien révéler.
+        const invalidCredentials = {
+          success: false,
+          message: "Invalid credentials",
+        };
+        if (!accessKey || typeof accessKey !== "string") {
+          return invalidCredentials;
+        }
+        if (!mongoose.isValidObjectId(transferId)) {
+          return invalidCredentials;
+        }
+
         // Récupérer le transfert de fichiers
         const fileTransfer = await FileTransfer.findById(transferId);
-        if (!fileTransfer) {
-          return {
-            success: false,
-            message: "Transfert de fichiers non trouvé",
-          };
+        if (!fileTransfer || !fileTransfer.accessKey) {
+          return invalidCredentials;
+        }
+
+        // Comparaison à temps constant
+        const provided = Buffer.from(accessKey);
+        const expected = Buffer.from(fileTransfer.accessKey);
+        if (
+          provided.length !== expected.length ||
+          !crypto.timingSafeEqual(provided, expected)
+        ) {
+          logger.warn("accessKey mismatch", { transferId });
+          return invalidCredentials;
         }
 
         // Reject expired transfers
@@ -516,38 +540,6 @@ const stripeConnectResolvers = {
             success: false,
             message: "Transfer expired",
           };
-        }
-
-        // Verify accessKey if provided (timing-safe comparison)
-        if (accessKey) {
-          if (!fileTransfer.accessKey) {
-            logger.warn("accessKey provided but transfer has none", {
-              transferId,
-            });
-            return {
-              success: false,
-              message: "Invalid credentials",
-            };
-          }
-
-          const provided = Buffer.from(accessKey);
-          const expected = Buffer.from(fileTransfer.accessKey);
-
-          if (
-            provided.length !== expected.length ||
-            !crypto.timingSafeEqual(provided, expected)
-          ) {
-            logger.warn("accessKey mismatch", { transferId });
-            return {
-              success: false,
-              message: "Invalid credentials",
-            };
-          }
-        } else {
-          // accessKey absent: log to prepare required-mode rollout
-          logger.info("paymentSession called without accessKey", {
-            transferId,
-          });
         }
 
         if (!fileTransfer.isPaymentRequired || fileTransfer.isPaid) {

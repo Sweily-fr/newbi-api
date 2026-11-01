@@ -165,3 +165,114 @@ describe("GET /tracking/open/:token (pixel)", () => {
     expect(quote.emailTracking.emailOpenCount).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("GET /tracking/sign : index du signataire et jetons", () => {
+  const NEWBI = () => process.env.FRONTEND_URL || "https://www.newbi.fr";
+  const URL_A = "https://sign.provider.test/session/signataire-a";
+  const URL_B = "https://sign.provider.test/session/signataire-b";
+
+  // Devis suivi par son propre jeton, avec ou sans demande de signature
+  async function quoteWithToken(token, signature = null) {
+    const quote = await seedQuote({ withTracking: false });
+    await Quote.updateOne(
+      { _id: quote._id },
+      {
+        $set: {
+          emailTracking: {
+            trackingToken: token,
+            emailSentAt: new Date(),
+            emailOpenCount: 0,
+            emailClickCount: 0,
+          },
+        },
+      },
+    );
+    if (signature) {
+      await SignatureRequest.create({
+        organizationId: quote.workspaceId.toString(),
+        workspaceId: quote.workspaceId,
+        documentType: "quote",
+        documentId: quote._id,
+        documentNumber: quote.number,
+        signatureType: "SES",
+        status: "WAIT_SIGNER",
+        ...signature,
+      });
+    }
+    return quote;
+  }
+
+  const location = async (path) => {
+    const res = await fetch(`${baseUrl}${path}`, { redirect: "manual" });
+    expect(res.status).toBe(302);
+    return res.headers.get("location");
+  };
+
+  const twoSigners = {
+    signers: [
+      { name: "Ana", surname: "Un", email: "a@test.fr", signingUrl: URL_A },
+      { name: "Bob", surname: "Deux", email: "b@test.fr", signingUrl: URL_B },
+    ],
+    // URL générale de la demande : celle du premier signataire
+    signingUrl: URL_A,
+  };
+
+  it("chaque index mène au lien de son signataire", async () => {
+    const token = "b".repeat(64);
+    await quoteWithToken(token, twoSigners);
+
+    expect(await location(`/tracking/sign/${token}/0`)).toBe(URL_A);
+    expect(await location(`/tracking/sign/${token}/1`)).toBe(URL_B);
+  });
+
+  it("un index hors des signataires ne mène pas au lien d'un autre signataire", async () => {
+    const token = "c".repeat(64);
+    await quoteWithToken(token, twoSigners);
+
+    const target = await location(`/tracking/sign/${token}/7`);
+    expect(target).not.toBe(URL_A);
+    expect(target).not.toBe(URL_B);
+    expect(target).toBe(NEWBI());
+  });
+
+  it("un signataire sans lien propre ne reçoit pas celui de la demande quand ils sont plusieurs", async () => {
+    const token = "d".repeat(64);
+    await quoteWithToken(token, {
+      ...twoSigners,
+      signers: [
+        twoSigners.signers[0],
+        { ...twoSigners.signers[1], signingUrl: null },
+      ],
+    });
+
+    expect(await location(`/tracking/sign/${token}/1`)).toBe(NEWBI());
+  });
+
+  it("un signataire unique sans lien propre reçoit l'URL de la demande", async () => {
+    const token = "e".repeat(64);
+    await quoteWithToken(token, {
+      signers: [{ name: "Ana", surname: "Un", email: "a@test.fr" }],
+      signingUrl: URL_A,
+    });
+
+    expect(await location(`/tracking/sign/${token}/0`)).toBe(URL_A);
+  });
+
+  it("devis sans demande de signature : site Newbi", async () => {
+    const token = "1".repeat(64);
+    await quoteWithToken(token);
+
+    expect(await location(`/tracking/sign/${token}/0`)).toBe(NEWBI());
+  });
+
+  it("demande annulée : site Newbi", async () => {
+    const token = "2".repeat(64);
+    await quoteWithToken(token, { ...twoSigners, status: "CANCELLED" });
+
+    expect(await location(`/tracking/sign/${token}/0`)).toBe(NEWBI());
+  });
+
+  it("jeton inconnu : site Newbi", async () => {
+    expect(await location(`/tracking/sign/${"3".repeat(64)}/1`)).toBe(NEWBI());
+  });
+});

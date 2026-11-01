@@ -29,7 +29,10 @@ vi.mock("../../src/utils/logger.js", () => ({
 import eInvoiceRoutingService from "../../src/services/eInvoiceRoutingService.js";
 import EInvoicingSettingsService from "../../src/services/eInvoicingSettingsService.js";
 import superPdpService from "../../src/services/superPdpService.js";
-import { evaluateAndRouteInvoice } from "../../src/utils/eInvoiceRoutingHelper.js";
+import {
+  evaluateAndRouteInvoice,
+  reportPaymentIfNeeded,
+} from "../../src/utils/eInvoiceRoutingHelper.js";
 
 const WORKSPACE_ID = "ws-1";
 
@@ -135,5 +138,38 @@ describe("evaluateAndRouteInvoice — verrou e-invoicing", () => {
     expect(result.flowType).toBe("E_REPORTING_TRANSACTION");
     expect(result.sendFailed).toBeFalsy();
     expect(superPdpService.sendInvoice).not.toHaveBeenCalled();
+  });
+});
+
+describe("reportPaymentIfNeeded — une seule déclaration d'encaissement", () => {
+  const b2c = (fields = {}) => ({
+    prefix: "F-202710",
+    number: "0002",
+    eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+    companyInfo: { vatPaymentCondition: "ENCAISSEMENTS" },
+    ...fields,
+  });
+
+  it("déclare l'encaissement d'une facture B2C en TVA sur les encaissements", async () => {
+    superPdpService.submitB2cPayment.mockResolvedValue({
+      success: true,
+      id: 7,
+    });
+    const invoice = b2c({ eReportingPaymentStatus: "PENDING_REPORT" });
+
+    expect(await reportPaymentIfNeeded(invoice, WORKSPACE_ID, new Date())).toBe(
+      true,
+    );
+    expect(superPdpService.submitB2cPayment).toHaveBeenCalledTimes(1);
+    expect(invoice.eReportingPaymentStatus).toBe("REPORTED");
+  });
+
+  it("encaissement déjà déclaré : aucune seconde déclaration", async () => {
+    const invoice = b2c({ eReportingPaymentStatus: "REPORTED" });
+
+    expect(await reportPaymentIfNeeded(invoice, WORKSPACE_ID, new Date())).toBe(
+      false,
+    );
+    expect(superPdpService.submitB2cPayment).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,11 @@ import eInvoiceRoutingService from "../services/eInvoiceRoutingService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { assertInvoiceResendable } from "../utils/eInvoiceLock.js";
+import {
+  assertArchiveReplaceable,
+  readUploadedPdf,
+} from "../utils/archivePdfGuard.js";
 import logger from "../utils/logger.js";
 
 // Réglages de la facturation électronique (Paramètres > Facturation
@@ -396,6 +401,12 @@ const eInvoicingResolvers = {
           );
         }
 
+        // Renvoi réservé à une facture émise jamais déposée (ou dont le
+        // dépôt a échoué) qui relève de la facturation électronique : une
+        // facture annulée, déclarée en e-reporting ou déjà déposée ne se
+        // redépose pas (doublon sur la plateforme).
+        assertInvoiceResendable(invoice);
+
         // Envoyer à SuperPDP
         const result = await superPdpService.sendInvoice(workspaceId, invoice);
 
@@ -434,6 +445,7 @@ const eInvoicingResolvers = {
           };
         }
       } catch (error) {
+        if (error instanceof AppError) throw error;
         logger.error("Erreur renvoi facture SuperPDP:", error);
         throw new AppError(
           error.message || "Erreur lors du renvoi de la facture",
@@ -547,25 +559,12 @@ const eInvoicingResolvers = {
         );
       }
 
-      // Lire le fichier uploadé (pattern graphql-upload)
-      const { createReadStream, mimetype } = await file;
-      if (mimetype && mimetype !== "application/pdf") {
-        throw new AppError(
-          "Le document à archiver doit être un PDF",
-          ERROR_CODES.VALIDATION_ERROR,
-        );
-      }
+      // Archive d'une facture payée, annulée ou transmise : figée
+      assertArchiveReplaceable(invoice, "invoice");
 
-      const chunks = [];
-      for await (const chunk of createReadStream()) {
-        chunks.push(chunk);
-      }
-      const pdfBuffer = Buffer.concat(chunks);
-
-      // Garde-fou taille (PDF facture : 20 Mo max)
-      if (pdfBuffer.length > 20 * 1024 * 1024) {
-        throw new AppError("PDF trop volumineux", ERROR_CODES.VALIDATION_ERROR);
-      }
+      // Lire le fichier uploadé (pattern graphql-upload) : un vrai PDF
+      // (type et contenu), 20 Mo au plus
+      const pdfBuffer = await readUploadedPdf(file);
 
       const fileName = `facture_${invoice.prefix || ""}${invoice.number || invoiceId}.pdf`;
 

@@ -342,6 +342,9 @@ const transactionSchema = new mongoose.Schema(
             // la proposition est conservée pour qu'il puisse créer la facture
             // plus tard, mais ne réclame plus d'action.
             dismissedAt: { type: Date, default: null },
+            // Confirmation en cours (création ou rattachement) : une seconde
+            // demande simultanée est refusée au lieu de créer un doublon.
+            confirmingAt: { type: Date, default: null },
           },
           default: null,
         },

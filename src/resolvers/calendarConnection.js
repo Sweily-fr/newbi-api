@@ -13,6 +13,11 @@ import {
   registerWebhookForConnection,
 } from "../services/calendar/CalendarWebhookService.js";
 import logger from "../utils/logger.js";
+import { accessibleEventFilter } from "../utils/eventAccess.js";
+import {
+  CALDAV_URL_REFUSED,
+  isAllowedCalDavUrl,
+} from "../services/calendar/providers/AppleCalendarProvider.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -102,6 +107,15 @@ const calendarConnectionResolvers = {
     connectAppleCalendar: async (_, { input }, { user }) => {
       if (!user) {
         return { success: false, message: "Non authentifié", connection: null };
+      }
+
+      // Adresse CalDAV : iCloud seulement, refusée avant toute requête
+      if (!isAllowedCalDavUrl(input.calDavUrl)) {
+        return {
+          success: false,
+          message: CALDAV_URL_REFUSED,
+          connection: null,
+        };
       }
 
       try {
@@ -451,7 +465,11 @@ const calendarConnectionResolvers = {
       }
     },
 
-    pushEventToCalendar: async (_, { input }, { user, workspaceId }) => {
+    pushEventToCalendar: async (
+      _,
+      { input },
+      { user, workspaceId, permissions },
+    ) => {
       if (!user) {
         return { success: false, message: "Non authentifié", connection: null };
       }
@@ -472,11 +490,17 @@ const calendarConnectionResolvers = {
         }
 
         // L'événement doit appartenir à l'espace actif (l'envoi modifie ses
-        // liens vers les calendriers externes)
-        const eventInWorkspace = await Event.exists({
-          _id: input.eventId,
-          workspaceId: workspaceId,
-        });
+        // liens vers les calendriers externes), et être visible de ce membre :
+        // ni l'événement privé d'un autre (rendez-vous et coordonnées de
+        // l'invité compris), ni une échéance cachée par son rôle
+        const eventInWorkspace = await Event.exists(
+          accessibleEventFilter({
+            id: input.eventId,
+            workspaceId,
+            userId: user.id || user._id,
+            permissions,
+          }),
+        );
         if (!eventInWorkspace) {
           return {
             success: false,

@@ -17,6 +17,7 @@ const router = express.Router();
  */
 router.post('/google', async (req, res) => {
   const channelId = req.headers['x-goog-channel-id'];
+  const resourceId = req.headers['x-goog-resource-id'];
   const resourceState = req.headers['x-goog-resource-state'];
 
   // Always respond 200 immediately to acknowledge receipt
@@ -44,6 +45,14 @@ router.post('/google', async (req, res) => {
       return;
     }
 
+    // Google envoie toujours l'identifiant de la ressource surveillée, reçu à
+    // l'ouverture du canal : sans lui (ou avec un autre), la notification ne
+    // vient pas de Google et ne lance aucune synchronisation
+    if (!resourceId || resourceId !== connection.webhookResourceId) {
+      logger.warn(`[CalendarWebhook/Google] Resource ID mismatch for channel ${channelId}, notification ignored`);
+      return;
+    }
+
     logger.info(`[CalendarWebhook/Google] Change notification for connection ${connection._id} (${connection.provider}, user: ${connection.userId})`);
 
     // Sync and publish (fire-and-forget, already responded 200)
@@ -68,7 +77,11 @@ router.post('/microsoft', async (req, res) => {
   const validationToken = req.query.validationToken;
   if (validationToken) {
     logger.debug(`[CalendarWebhook/Microsoft] Validation request, echoing token`);
-    res.status(200).contentType('text/plain').send(validationToken);
+    res
+      .status(200)
+      .set('X-Content-Type-Options', 'nosniff')
+      .contentType('text/plain')
+      .send(String(validationToken));
     return;
   }
 
@@ -93,6 +106,13 @@ router.post('/microsoft', async (req, res) => {
 
       if (!connection) {
         logger.warn(`[CalendarWebhook/Microsoft] No connection found for subscription ${subscriptionId}`);
+        continue;
+      }
+
+      // clientState posé à l'abonnement (CalendarWebhookService) : Microsoft
+      // le renvoie dans chaque notification, une autre valeur est ignorée
+      if (notification.clientState !== connection._id.toString()) {
+        logger.warn(`[CalendarWebhook/Microsoft] clientState mismatch for subscription ${subscriptionId}, notification ignored`);
         continue;
       }
 

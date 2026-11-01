@@ -411,7 +411,11 @@ describe("DeliveryNote Resolver — génération croisée", () => {
     // Prix conservé en base pour la facturation, jamais exposé par le schéma
     expect(dn.items[0].unitPrice).toBe(500);
 
-    const linked = await deliveryNoteResolvers.DeliveryNote.sourceQuote(dn);
+    const linked = await deliveryNoteResolvers.DeliveryNote.sourceQuote(
+      dn,
+      {},
+      ctx(),
+    );
     expect(linked._id.toString()).toBe(quoteId.toString());
   });
 

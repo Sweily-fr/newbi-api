@@ -72,20 +72,12 @@ import { invalidateOrganizationRoles } from "../../src/services/organizationRole
 const OPEN_TO_ANY_MEMBER = {
   // Compte et préférences de l'utilisateur
   account: [
-    "login",
-    "register",
-    "verifyEmail",
-    "resendVerificationEmail",
-    "requestPasswordReset",
-    "resetPassword",
     "updatePassword",
     "updateProfile",
     "uploadProfilePicture",
     "deleteProfilePicture",
     "uploadUserProfileImage",
     "deleteUserProfileImage",
-    "disableAccount",
-    "reactivateAccount",
     "requestAccountDeletion",
     "cancelAccountDeletion",
     "confirmAccountDeletion",
@@ -105,7 +97,6 @@ const OPEN_TO_ANY_MEMBER = {
     "updateCompany",
     "uploadCompanyLogo",
     "deleteCompanyLogo",
-    "setStripeCustomerId",
     "connectStripe",
     // Lier son propre compte à l'invité de la même adresse (refus sinon)
     "linkInvitedUserToNewbi",

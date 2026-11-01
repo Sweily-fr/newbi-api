@@ -1,4 +1,6 @@
 import ClientCustomField from "../models/ClientCustomField.js";
+import CrmEmailAutomation from "../models/CrmEmailAutomation.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { buildDocumentFieldsForClientId } from "../utils/clientDocumentFields.js";
 import { assertPlanCapacity } from "../services/planLimits.js";
 import {
@@ -53,6 +55,24 @@ const makeScopedMutation = (action) => (fn) =>
 const scopedCreateMutation = makeScopedMutation("create");
 const scopedMutation = makeScopedMutation("edit");
 const scopedDeleteMutation = makeScopedMutation("delete");
+
+/**
+ * Champ date sur lequel s'appuie une automatisation d'e-mails : il ne peut
+ * être ni supprimé ni changé de type tant qu'elle existe (elle n'enverrait
+ * plus rien, sans que personne ne le sache).
+ */
+async function assertNotUsedByEmailAutomation(workspaceId, fieldId) {
+  const automation = await CrmEmailAutomation.findOne(
+    { workspaceId, customFieldId: fieldId },
+    "name",
+  ).lean();
+  if (automation) {
+    throw new AppError(
+      `Ce champ est utilisé par l'automatisation d'e-mails « ${automation.name} » : supprimez-la ou choisissez un autre champ date avant de le supprimer ou de changer son type.`,
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+}
 
 export const clientCustomFieldResolvers = {
   Query: {
@@ -180,6 +200,17 @@ export const clientCustomFieldResolvers = {
             }
           }
 
+          // Champ date d'une automatisation d'e-mails : type conservé
+          if (input.fieldType && input.fieldType !== "DATE") {
+            const current = await ClientCustomField.findOne(
+              { _id: id, workspaceId },
+              "fieldType",
+            ).lean();
+            if (current?.fieldType === "DATE") {
+              await assertNotUsedByEmailAutomation(workspaceId, id);
+            }
+          }
+
           const field = await ClientCustomField.findOneAndUpdate(
             { _id: id, workspaceId },
             { $set: input },
@@ -205,6 +236,7 @@ export const clientCustomFieldResolvers = {
     deleteClientCustomField: scopedDeleteMutation(
       async (_, { workspaceId, id }, context) => {
         try {
+          await assertNotUsedByEmailAutomation(workspaceId, id);
           const result = await ClientCustomField.findOneAndDelete({
             _id: id,
             workspaceId,

@@ -2,19 +2,25 @@ import mongoose from "mongoose";
 import ClientList from "../models/ClientList.js";
 import Client from "../models/Client.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { boundedPage } from "../utils/pageBounds.js";
 import {
   requireAction,
   requireRead,
   resolveWorkspaceId,
   checkSubscriptionActive,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 
 // 🔐 Ferme l'IDOR : valide l'appartenance à l'organisation (et le niveau
 // requis sur le module « clientLists ») et impose le workspace validé par RBAC à
 // la place de l'ID brut fourni dans les args.
-const scopedQuery = (fn) =>
-  requireRead("clientLists")(async (parent, args, context, info) =>
-    fn(
+const scopedQuery = (fn, { withClients = false } = {}) =>
+  requireRead("clientLists")(async (parent, args, context, info) => {
+    // Lectures qui renvoient les fiches des contacts (e-mail, téléphone,
+    // notes, activité) : « Mes clients : voir » exigé en plus des listes
+    if (withClients) assertPermissionAction(context, "clients", "view");
+    return fn(
       parent,
       {
         ...args,
@@ -22,8 +28,8 @@ const scopedQuery = (fn) =>
       },
       context,
       info,
-    ),
-  );
+    );
+  });
 
 // action : « create » (créer une liste), « edit » (modifier, ajouter/retirer
 // des clients) ou « delete » (supprimer des listes). Le contrôle
@@ -47,6 +53,29 @@ const makeScopedMutation = (action) => (fn) =>
 const scopedCreateMutation = makeScopedMutation("create");
 const scopedMutation = makeScopedMutation("edit");
 const scopedDeleteMutation = makeScopedMutation("delete");
+
+const listNameTaken = () =>
+  new AppError("Une liste porte déjà ce nom.", ERROR_CODES.ALREADY_EXISTS);
+
+/** Nom de liste déjà pris dans l'espace : message clair. */
+async function assertListNameFree(workspaceId, name, exceptId = null) {
+  const existing = await ClientList.findOne({
+    workspaceId,
+    name: typeof name === "string" ? name.trim() : name,
+    ...(exceptId ? { _id: { $ne: exceptId } } : {}),
+  });
+  if (existing) throw listNameTaken();
+}
+
+/** Enregistre une liste ; création simultanée sous le même nom : message clair. */
+async function saveList(list) {
+  try {
+    await list.save();
+  } catch (error) {
+    if (error?.code === 11000) throw listNameTaken();
+    throw error;
+  }
+}
 
 const buildActivityActor = (user) => ({
   userId: user?.id || user?._id,
@@ -83,37 +112,43 @@ const pushListActivity = async (clientId, type, list, user) => {
 export const clientListResolvers = {
   Query: {
     // Récupère toutes les listes d'un workspace
-    clientLists: scopedQuery(async (_, { workspaceId }, context) => {
-      try {
-        const lists = await ClientList.find({ workspaceId })
-          .populate("clients")
-          .sort({ isDefault: -1, createdAt: -1 });
+    clientLists: scopedQuery(
+      async (_, { workspaceId }, context) => {
+        try {
+          const lists = await ClientList.find({ workspaceId })
+            .populate("clients")
+            .sort({ isDefault: -1, createdAt: -1 });
 
-        return lists;
-      } catch (error) {
-        console.error("Erreur lors de la récupération des listes:", error);
-        throw new Error("Impossible de récupérer les listes de clients");
-      }
-    }),
+          return lists;
+        } catch (error) {
+          console.error("Erreur lors de la récupération des listes:", error);
+          throw new Error("Impossible de récupérer les listes de clients");
+        }
+      },
+      { withClients: true },
+    ),
 
     // Récupère une liste spécifique par ID
-    clientList: scopedQuery(async (_, { workspaceId, id }, context) => {
-      try {
-        const list = await ClientList.findOne({
-          _id: id,
-          workspaceId,
-        }).populate("clients");
+    clientList: scopedQuery(
+      async (_, { workspaceId, id }, context) => {
+        try {
+          const list = await ClientList.findOne({
+            _id: id,
+            workspaceId,
+          }).populate("clients");
 
-        if (!list) {
-          throw new Error("Liste non trouvée");
+          if (!list) {
+            throw new Error("Liste non trouvée");
+          }
+
+          return list;
+        } catch (error) {
+          console.error("Erreur lors de la récupération de la liste:", error);
+          throw error;
         }
-
-        return list;
-      } catch (error) {
-        console.error("Erreur lors de la récupération de la liste:", error);
-        throw error;
-      }
-    }),
+      },
+      { withClients: true },
+    ),
 
     // Récupère les clients d'une liste avec pagination
     clientsInList: scopedQuery(
@@ -148,18 +183,19 @@ export const clientListResolvers = {
           }
 
           const totalItems = await Client.countDocuments(query);
-          const skip = (page - 1) * limit;
+          // Page et taille bornées (page 0, taille 0 ou démesurée)
+          const bounds = boundedPage(page, limit);
 
           const items = await Client.find(query)
-            .skip(skip)
-            .limit(limit)
+            .skip(bounds.skip)
+            .limit(bounds.limit)
             .sort({ createdAt: -1 });
 
           return {
             items,
             totalItems,
-            currentPage: page,
-            totalPages: Math.ceil(totalItems / limit),
+            currentPage: bounds.page,
+            totalPages: Math.ceil(totalItems / bounds.limit),
           };
         } catch (error) {
           console.error(
@@ -169,6 +205,7 @@ export const clientListResolvers = {
           throw error;
         }
       },
+      { withClients: true },
     ),
 
     // Récupère les listes auxquelles appartient un client
@@ -197,6 +234,7 @@ export const clientListResolvers = {
     createClientList: scopedCreateMutation(
       async (_, { workspaceId, input }, context) => {
         try {
+          await assertListNameFree(workspaceId, input.name);
           const newList = new ClientList({
             name: input.name,
             description: input.description || "",
@@ -207,7 +245,7 @@ export const clientListResolvers = {
             clients: [],
           });
 
-          await newList.save();
+          await saveList(newList);
           return newList;
         } catch (error) {
           console.error("Erreur lors de la création de la liste:", error);
@@ -232,13 +270,16 @@ export const clientListResolvers = {
             );
           }
 
+          if (input.name && input.name !== list.name) {
+            await assertListNameFree(workspaceId, input.name, list._id);
+          }
           if (input.name) list.name = input.name;
           if (input.description !== undefined)
             list.description = input.description;
           if (input.color) list.color = input.color;
           if (input.icon) list.icon = input.icon;
 
-          await list.save();
+          await saveList(list);
           return list.populate("clients");
         } catch (error) {
           console.error("Erreur lors de la mise à jour de la liste:", error);

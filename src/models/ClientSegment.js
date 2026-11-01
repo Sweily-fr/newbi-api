@@ -20,6 +20,7 @@ const segmentRuleSchema = new mongoose.Schema(
         "isInternational",
         "createdAt",
         "updatedAt",
+        "assignedMembers",
       ],
     },
     operator: {
@@ -41,6 +42,8 @@ const segmentRuleSchema = new mongoose.Schema(
         "before",
         "after",
         "in_last_days",
+        "assigned_to",
+        "not_assigned_to",
       ],
     },
     value: {
@@ -48,7 +51,7 @@ const segmentRuleSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const clientSegmentSchema = new mongoose.Schema(
@@ -102,7 +105,7 @@ const clientSegmentSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 clientSegmentSchema.index({ workspaceId: 1 });

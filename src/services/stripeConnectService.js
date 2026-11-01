@@ -244,7 +244,8 @@ const stripeConnectService = {
       }
 
       // Calculer la commission de la plateforme (10% par exemple)
-      const amount = fileTransfer.paymentAmount * 100; // Convertir en centimes
+      // Centimes entiers : 19,99 * 100 donne 1998,9999… en virgule flottante
+      const amount = Math.round(fileTransfer.paymentAmount * 100);
       const applicationFee = Math.round(amount * 0.1); // 10% de commission
 
       // Créer une session de paiement Stripe Checkout
@@ -256,7 +257,7 @@ const stripeConnectService = {
               currency: fileTransfer.paymentCurrency.toLowerCase(),
               product_data: {
                 name: `Téléchargement de fichiers - ${fileTransfer.files.length} fichier(s)`,
-                description: `Accès aux fichiers partagés par ${fileTransfer.userId}`,
+                description: "Accès aux fichiers partagés",
               },
               unit_amount: amount,
             },

@@ -1,10 +1,13 @@
 import express from "express";
-import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import { hasInternalSecret } from "../middlewares/internal-secret.js";
 import cloudflareService from "../services/cloudflareService.js";
-import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
-import { ANNEX_KEY_RE, buildAnnexKey } from "../utils/documentAnnex.js";
+import {
+  ANNEX_DOCUMENT_RESOURCES,
+  ANNEX_KEY_RE,
+  buildAnnexKey,
+} from "../utils/documentAnnex.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -27,7 +30,8 @@ function authenticate(req, res, next) {
  *
  * Streame une annexe PDF (bucket R2 privé). fileId = "{uuid}.pdf" ; la clé
  * est reconstruite ici, jamais reçue telle quelle. Accès : secret interne, ou
- * session d'un membre de l'organisation.
+ * session d'un membre de l'organisation qui voit factures, devis ou bons de
+ * commande.
  */
 router.get("/:workspaceId/:fileId", authenticate, async (req, res) => {
   try {
@@ -43,12 +47,15 @@ router.get("/:workspaceId/:fileId", authenticate, async (req, res) => {
     if (!req.internalCall) {
       const userId = req.user;
       if (!userId) return res.status(401).json({ error: "Non authentifié" });
-      const member =
-        await EInvoicingSettingsService.getMemberCollection().findOne({
-          userId: new mongoose.Types.ObjectId(userId),
-          organizationId: new mongoose.Types.ObjectId(workspaceId),
-        });
-      if (!member) {
+      // Membre de l'espace avec « Voir » sur une page de documents qui
+      // porte des annexes (factures, devis, bons de commande)
+      const canView = await userHasWorkspaceLevel(
+        userId,
+        workspaceId,
+        Object.values(ANNEX_DOCUMENT_RESOURCES),
+        "read",
+      );
+      if (!canView) {
         return res.status(403).json({ error: "Accès refusé" });
       }
     }
