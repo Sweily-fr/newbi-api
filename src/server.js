@@ -30,7 +30,12 @@ import express from "express";
 import { ApolloServer } from "apollo-server-express";
 import { ApolloServerPluginCacheControlDisabled } from "apollo-server-core";
 import { createServer } from "http";
-import { execute, subscribe } from "graphql";
+import {
+  execute,
+  subscribe,
+  specifiedRules,
+  NoSchemaIntrospectionCustomRule,
+} from "graphql";
 import { SubscriptionServer } from "subscriptions-transport-ws";
 import { WebSocketServer } from "ws";
 import {
@@ -40,6 +45,7 @@ import {
 } from "./collab/kanbanCollabServer.js";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
+import { rootFieldLimitRule } from "./utils/graphqlOperationLimits.js";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
 import { graphqlUploadMiddleware } from "./middlewares/graphql-upload.js";
@@ -507,6 +513,11 @@ async function startServer() {
     resolvers,
   });
 
+  // Introspection désactivée partout sauf dev local (HTTP et WebSocket)
+  const graphqlIntrospection =
+    process.env.NODE_ENV === "development" ||
+    process.env.ENABLE_GRAPHQL_INTROSPECTION === "true";
+
   // Configuration Apollo Server
   const server = new ApolloServer({
     schema,
@@ -514,11 +525,10 @@ async function startServer() {
     // publiquement le schéma complet (surface d'attaque). Le staging étant
     // accessible sur Internet, on n'autorise que NODE_ENV=development, avec
     // une porte de sortie explicite via ENABLE_GRAPHQL_INTROSPECTION=true.
-    introspection:
-      process.env.NODE_ENV === "development" ||
-      process.env.ENABLE_GRAPHQL_INTROSPECTION === "true",
-    // Limiter la profondeur des queries à 10 niveaux pour protéger le backend
-    validationRules: [depthLimit(10)],
+    introspection: graphqlIntrospection,
+    // Limiter la profondeur des queries à 10 niveaux pour protéger le backend,
+    // et le nombre de champs racine (alias compris) d'une opération
+    validationRules: [depthLimit(10), rootFieldLimitRule()],
     // Une opération par requête HTTP : ni le site ni l'application mobile
     // n'envoient de lots, et chaque opération reste ainsi comptée par la
     // limite de débit globale.
@@ -597,6 +607,14 @@ async function startServer() {
       schema,
       execute,
       subscribe,
+      // Mêmes règles de validation qu'en HTTP (profondeur, champs racine,
+      // introspection)
+      validationRules: [
+        ...specifiedRules,
+        depthLimit(10),
+        rootFieldLimitRule(),
+        ...(graphqlIntrospection ? [] : [NoSchemaIntrospectionCustomRule]),
+      ],
       onConnect: async (connectionParams, webSocket, connectionContext) => {
         logger.info("🔌 [WebSocket] Client connecté");
 
