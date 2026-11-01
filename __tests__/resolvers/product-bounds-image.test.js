@@ -99,26 +99,42 @@ describe("Image d'un produit", () => {
 
 describe("Bornes d'un produit", () => {
   it.each([
-    [{ unitPrice: 1e15 }, "Le prix unitaire ne peut pas dépasser"],
-    [{ unit: "u".repeat(10000) }, "L'unité ne peut pas dépasser 50 caractères"],
     [
+      "prix unitaire",
+      { unitPrice: 1e15 },
+      "Le prix unitaire ne peut pas dépasser",
+    ],
+    [
+      "unité",
+      { unit: "u".repeat(10000) },
+      "L'unité ne peut pas dépasser 50 caractères",
+    ],
+    [
+      "référence",
       { reference: "r".repeat(10000) },
       "La référence ne peut pas dépasser 100 caractères",
     ],
     [
+      "catégorie",
       { category: "c".repeat(10000) },
       "La catégorie ne peut pas dépasser 100 caractères",
     ],
     [
+      "description",
       { description: "d".repeat(2 * 1024 * 1024) },
       "La description ne peut pas dépasser 10 000 caractères",
     ],
-  ])("%j : refusé avec un message, rien en base", async (extra, message) => {
-    const key = Object.keys(extra)[0];
-    await expect(create(extra)).rejects.toThrow(message);
-    expect(await Product.countDocuments()).toBe(0);
-    expect(key).toBeTruthy();
-  });
+    // Le nom du test cite le champ, pas sa valeur : une valeur de 2 Mo dans le
+    // nom était écrite à chaque ligne du rapport et figeait la sortie de la CI.
+  ])(
+    "%s hors bornes : refusé avec un message, rien en base",
+    async (_, extra, message) => {
+      const key = Object.keys(extra)[0];
+      await expect(create(extra)).rejects.toThrow(message);
+      expect(await Product.countDocuments()).toBe(0);
+      expect(key).toBeTruthy();
+    },
+  );
 
   it("prix de 0,0001 € et TVA de 7,77 % : acceptés", async () => {
     const product = await create({ unitPrice: 0.0001, vatRate: 7.77 });
