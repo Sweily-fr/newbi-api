@@ -63,6 +63,7 @@ jobs:
         if: ${{ !cancelled() && steps.installation.outcome == 'success' }}
         run: |
           cp .env.example .env
+          (while true; do echo "=== MEM $(date +%T) $(free -m | awk '/Mem/{print "used="$3" avail="$7}') $(free -m | awk '/Swap/{print "swap="$3}') load=$(cut -d' ' -f1 /proc/loadavg)"; ps -eo rss,comm --sort=-rss | head -6 | tr '\n' ' '; echo; sleep 15; done) &
           npm run test:run -- --coverage
         env:
           NODE_ENV: test
