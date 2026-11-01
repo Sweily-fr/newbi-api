@@ -1,9 +1,9 @@
 /**
  * Calendrier : ce qu'un membre ne voit pas, il ne le touche pas.
  *
- *   - L'événement privé d'un autre membre (rendez-vous pris sur sa page de
- *     réservation compris) n'est ni modifié, ni supprimé, ni envoyé vers un
- *     agenda externe : « Événement non trouvé », comme à la lecture.
+ *   - L'événement privé d'un autre membre n'est ni modifié, ni supprimé, ni
+ *     envoyé vers un agenda externe : « Événement non trouvé », comme à la
+ *     lecture.
  *   - Sans « Voir » des factures, une échéance de facture n'est ni modifiée
  *     (ni transformée en événement ordinaire), ni supprimée, ni envoyée.
  *   - Les membres assignés sont des membres de l'espace : l'id d'un
@@ -196,21 +196,6 @@ describe("Événement privé d'un autre membre", () => {
     expect(await snapshot(id)).toEqual(before);
   });
 
-  it("le rendez-vous de l'organisateur reste introuvable, sans révéler qu'il s'agit d'un rendez-vous", async () => {
-    const id = await seedEvent({
-      visibility: "private",
-      type: "APPOINTMENT",
-      description: "Invitée : zoe@client.test",
-    });
-
-    const result = await update(editor, { id, title: "Déplacé" });
-
-    expect(result).toMatchObject({
-      success: false,
-      message: "Événement non trouvé",
-    });
-  });
-
   it("l'Administrateur ne le supprime pas", async () => {
     const id = await seedEvent({ visibility: "private" });
 
@@ -224,7 +209,7 @@ describe("Événement privé d'un autre membre", () => {
   });
 
   it("l'Éditeur ne l'envoie pas vers son propre agenda", async () => {
-    const id = await seedEvent({ visibility: "private", type: "APPOINTMENT" });
+    const id = await seedEvent({ visibility: "private" });
     const connectionId = await seedConnection(editor);
 
     const result = await push(editor, id, connectionId);

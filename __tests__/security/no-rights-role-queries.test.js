@@ -70,7 +70,6 @@ const READABLE_WITHOUT_RIGHTS = {
     "getNotificationPreferences",
     "getNotifications",
     "getUnreadNotificationsCount",
-    "calendarWeeklyDigest",
     "getCalendarConnections",
     "getAvailableCalendars",
     "testEmailReminder",
