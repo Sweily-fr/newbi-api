@@ -55,7 +55,6 @@ import { startReplicaSet } from "../helpers/numberingSimulation.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import User from "../../src/models/User.js";
-import Notification from "../../src/models/Notification.js";
 import { deleteUserAccount } from "../../src/services/rgpd.js";
 
 const leaver = buildUserId();
@@ -69,7 +68,32 @@ let replSet;
 
 beforeAll(async () => {
   replSet = await startReplicaSet("rgpd_attendu");
-  await Promise.all([User.init(), Notification.init()]);
+  // Collections et index créés avant la transaction de deleteUserAccount :
+  // une collection créée pendant la transaction provoque, sous charge, un
+  // LockTimeout qui ferait échouer le test pour une autre raison
+  await Promise.all(
+    mongoose.modelNames().map(async (name) => {
+      const Model = mongoose.model(name);
+      await Model.createCollection().catch(() => {});
+      await Model.init();
+    }),
+  );
+  for (const name of [
+    "session",
+    "account",
+    "member",
+    "organization",
+    "invitation",
+    "subscription",
+    "kanbanprojects",
+    "kanbantasks",
+    "calendar_feed_tokens",
+    "calendar_digest_log",
+  ]) {
+    await db()
+      .createCollection(name)
+      .catch(() => {});
+  }
 }, 180000);
 
 afterAll(async () => {
