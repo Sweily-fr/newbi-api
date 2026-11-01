@@ -3,11 +3,14 @@ import {
   DOCUMENT_TYPES,
 } from "../services/documentEmailService.js";
 import mongoose from "mongoose";
+import { withFilter } from "graphql-subscriptions";
 import {
+  hasPermission,
   requireAction,
   requireRead,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
+import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import DocumentEmailLog from "../models/DocumentEmailLog.js";
@@ -38,6 +41,24 @@ const DOCUMENT_RESOURCES = {
   purchaseOrder: "purchaseOrders",
   deliveryNote: "deliveryNotes",
 };
+
+/** Le membre abonné voit-il le type de document de cette mise à jour ? */
+async function canViewTrackedDocument(payload, workspaceId, context) {
+  try {
+    const resource =
+      DOCUMENT_RESOURCES[payload?.emailTrackingUpdated?.documentType];
+    if (!resource || !context?.user) return false;
+    const org = await getActiveOrganization(
+      context.user._id.toString(),
+      workspaceId,
+    );
+    if (!org) return false;
+    const levels = await getEffectiveLevelsFor(org.id, org.memberRole);
+    return hasPermission(org.memberRole, resource, "view", levels);
+  } catch {
+    return false;
+  }
+}
 
 const toIso = (date) => (date ? new Date(date).toISOString() : null);
 
@@ -120,25 +141,32 @@ const documentEmailResolvers = {
     emailTrackingUpdated: {
       // 🔐 Authentification + appartenance : sans ce contrôle, un client WebSocket
       // anonyme pouvait souscrire au flux de suivi email de n'importe quelle org.
-      subscribe: async (_, { workspaceId }, context) => {
-        if (!context?.user) {
-          throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
-        }
-        const org = await getActiveOrganization(
-          context.user._id.toString(),
-          workspaceId,
-        );
-        if (!org) {
-          throw new AppError(
-            "Vous n'êtes pas membre de cette organisation.",
-            ERROR_CODES.FORBIDDEN,
+      // Chaque mise à jour ne part ensuite qu'aux membres qui voient ce type
+      // de document (même règle que documentEmailLog), droits relus à chaque
+      // envoi (rôle changé ou membre retiré pendant la connexion).
+      subscribe: withFilter(
+        async (_, { workspaceId }, context) => {
+          if (!context?.user) {
+            throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+          }
+          const org = await getActiveOrganization(
+            context.user._id.toString(),
+            workspaceId,
           );
-        }
-        const pubsub = getPubSub();
-        return pubsub.asyncIterableIterator([
-          `${EMAIL_TRACKING_UPDATED}_${workspaceId}`,
-        ]);
-      },
+          if (!org) {
+            throw new AppError(
+              "Vous n'êtes pas membre de cette organisation.",
+              ERROR_CODES.FORBIDDEN,
+            );
+          }
+          const pubsub = getPubSub();
+          return pubsub.asyncIterableIterator([
+            `${EMAIL_TRACKING_UPDATED}_${workspaceId}`,
+          ]);
+        },
+        (payload, { workspaceId }, context) =>
+          canViewTrackedDocument(payload, workspaceId, context),
+      ),
     },
   },
   Mutation: {
