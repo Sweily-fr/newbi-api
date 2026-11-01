@@ -393,6 +393,39 @@ describe("réservation", () => {
     expect(activityAfter[0].type).toBe("reminder_created");
   });
 
+  it("le client créé garde le nom saisi (apostrophe typographique, « œ », point)", async () => {
+    const [slot] = await nextSlots();
+    const { booking, emails } = await book(slot.start, {
+      email: "anais.darcy@exemple.fr",
+      firstName: "Anaïs",
+      lastName: "D’Arcy-Lecœur Jr.",
+    });
+    await emails;
+
+    const client = await Client.findById(booking.clientId).lean();
+    expect(client).toMatchObject({
+      type: "INDIVIDUAL",
+      name: "Anaïs D’Arcy-Lecœur Jr.",
+      firstName: "Anaïs",
+      lastName: "D’Arcy-Lecœur Jr.",
+    });
+  });
+
+  it("caractères refusés par la fiche client remplacés, nom inutilisable : repli sur l'adresse", async () => {
+    const [slot] = await nextSlots();
+    const { booking, emails } = await book(slot.start, {
+      email: "zoe.piege@exemple.fr",
+      firstName: "<b>",
+      lastName: "42",
+    });
+    await emails;
+
+    const client = await Client.findById(booking.clientId).lean();
+    expect(client.name).toBe("zoe.piege");
+    expect(client.firstName ?? null).toBeNull();
+    expect(client.lastName ?? null).toBeNull();
+  });
+
   it("refuse un client bloqué, sans rien enregistrer", async () => {
     await Client.collection.insertOne({
       workspaceId,

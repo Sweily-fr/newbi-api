@@ -11,6 +11,7 @@ import Booking, {
 import BookingPage from "../../models/BookingPage.js";
 import CalendarConnection from "../../models/CalendarConnection.js";
 import Client from "../../models/Client.js";
+import { isValidPersonName } from "../../utils/validators.js";
 import Event from "../../models/Event.js";
 import { getCacheClient } from "../../config/redis.js";
 import {
@@ -331,16 +332,22 @@ async function findClientByEmail(workspaceId, email) {
     .lean();
 }
 
-// Lettres, espaces, apostrophes et tirets : format exigé par la fiche client
-const clientNamePart = (value) =>
+// Format de la fiche client (isValidPersonName) : lettres de tous les
+// alphabets (« Lecœur »), espaces, apostrophes droite et typographique,
+// points et tirets ; le reste devient une espace
+const clientNamePart = (value, maxLength = 50) =>
   String(value || "")
-    .replace(/[^a-zA-ZÀ-ÿ\s'-]/g, " ")
+    .replace(/[^\p{L}\p{M}\s'’.-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 50)
+    .slice(0, maxLength)
     .trim();
 
-const validNamePart = (value) => /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(value);
+const validNamePart = (value, maxLength = 50) =>
+  isValidPersonName(value, maxLength);
+
+// « Prénom Nom » d'un particulier : chaque partie peut faire 50 caractères
+const FULL_NAME_MAX = 101;
 
 /** Téléphone au format de la fiche client, sinon null (gardé sur la réservation). */
 function clientPhone(phone) {
@@ -396,11 +403,11 @@ async function attachClient({ booking, page, host }) {
 
   const firstName = clientNamePart(booking.guest.firstName);
   const lastName = clientNamePart(booking.guest.lastName);
-  const fullName = clientNamePart(`${firstName} ${lastName}`);
-  const name = validNamePart(fullName)
+  const fullName = clientNamePart(`${firstName} ${lastName}`, FULL_NAME_MAX);
+  const name = validNamePart(fullName, FULL_NAME_MAX)
     ? fullName
     : clientNamePart(booking.guest.email.split("@")[0]);
-  if (!validNamePart(name)) {
+  if (!validNamePart(name, FULL_NAME_MAX)) {
     logger.warn(
       `[rendez-vous] client non créé pour la réservation ${booking._id} : nom inutilisable`,
     );
