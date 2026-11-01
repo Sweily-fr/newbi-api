@@ -46,6 +46,7 @@ import {
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
 import { rootFieldLimitRule } from "./utils/graphqlOperationLimits.js";
+import { createOriginChecker } from "./utils/corsOrigins.js";
 import { isTechnicalError, INTERNAL_ERROR_MESSAGE } from "./utils/errors.js";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
@@ -259,40 +260,13 @@ async function startServer() {
     }),
   );
 
-  // Configuration CORS
-  const allowedOrigins = [
-    "http://localhost:3000",
-    "http://localhost:3001", // Espace partenaire
-    "http://localhost:4000",
-    "https://studio.apollographql.com",
-    "https://www.newbi.fr",
-    "https://newbi.fr",
-    "https://api.newbi.fr",
-    "https://newbi-v2.vercel.app",
-    "https://newbi-v2-git-develop-sofianemtimet6-2653s-projects.vercel.app",
-    "https://staging-api.newbi.fr",
-    process.env.FRONTEND_URL,
-    process.env.PARTNER_FRONTEND_URL,
-  ].filter(Boolean);
-
-  // Dev: autoriser ngrok et cloudflare tunnels
-  if (process.env.NODE_ENV !== "production") {
-    app.use((req, res, next) => {
-      const origin = req.headers.origin;
-      if (
-        origin &&
-        (origin.includes("ngrok") || origin.includes("trycloudflare.com"))
-      ) {
-        allowedOrigins.push(origin);
-      }
-      next();
-    });
-  }
+  // Configuration CORS (origines autorisées : utils/corsOrigins.js)
+  const isAllowedOrigin = createOriginChecker();
 
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isAllowedOrigin(origin)) {
           callback(null, true);
         } else {
           // Pas d'Error ici : elle deviendrait un 500 renvoyé au client.
