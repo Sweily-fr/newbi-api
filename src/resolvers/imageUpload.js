@@ -5,7 +5,10 @@ import logger from "../utils/logger.js";
 
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
-import { requireWorkspaceAction } from "../middlewares/rbac.js";
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+} from "../middlewares/rbac.js";
 import cloudflareService from "../services/cloudflareService.js";
 import User from "../models/User.js";
 import {
@@ -432,13 +435,25 @@ const SIGNATURE_IMAGE_ACTIONS = {
   uploadSocialLogo: ["create", "edit"],
   deleteSignatureImage: ["create", "edit", "delete"],
 };
+// Envoi d'une image : abonnement actif exigé, comme pour enregistrer la
+// signature (contrôle sur l'espace validé par le RBAC)
+const SIGNATURE_IMAGE_UPLOADS = new Set([
+  "uploadSignatureImage",
+  "uploadSocialLogo",
+]);
 Object.entries(SIGNATURE_IMAGE_ACTIONS).forEach(([name, actions]) => {
   const original = imageUploadResolvers.Mutation[name];
   if (original) {
+    const resolver = SIGNATURE_IMAGE_UPLOADS.has(name)
+      ? async (parent, args, context, info) => {
+          await checkSubscriptionActive(context);
+          return original(parent, args, context, info);
+        }
+      : original;
     imageUploadResolvers.Mutation[name] = requireWorkspaceAction(
       "signatures",
       actions,
-    )(original);
+    )(resolver);
   }
 });
 
