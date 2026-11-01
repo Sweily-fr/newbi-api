@@ -15,6 +15,12 @@ import {
   reconciliationPaymentMarker,
   unlinkTransactionFromSalesInvoice,
 } from "../utils/salesInvoiceLink.js";
+import {
+  DEBIT_ON_SALES_INVOICE_MESSAGE,
+  IGNORE_LINKED_TRANSACTION_MESSAGE,
+  isBankDebitTransaction,
+  transactionHasLinkedDocuments,
+} from "../utils/reconciliationDirection.js";
 // import { evaluatePaymentReporting } from "../utils/eInvoiceRoutingHelper.js"; // TODO E-REPORTING
 
 const router = express.Router();
@@ -207,6 +213,10 @@ router.post(
           error: `Impossible de rapprocher une facture au statut ${targetInvoice.status}`,
         });
       }
+      // Une facture de vente est payée par une entrée d'argent.
+      if (await isBankDebitTransaction(transactionId, workspaceId)) {
+        return res.status(400).json({ error: DEBIT_ON_SALES_INVOICE_MESSAGE });
+      }
 
       // N↔N : $addToSet idempotent des deux côtés. Compensation si la
       // 2e op échoue.
@@ -345,6 +355,13 @@ router.post(
 
       if (!transactionId) {
         return res.status(400).json({ error: "transactionId requis" });
+      }
+
+      // Une transaction rattachée resterait liée tout en étant ignorée.
+      if (await transactionHasLinkedDocuments(transactionId, workspaceId)) {
+        return res
+          .status(400)
+          .json({ error: IGNORE_LINKED_TRANSACTION_MESSAGE });
       }
 
       const transaction = await setReconciliationIgnored(

@@ -1211,6 +1211,10 @@ async function processReceiptsForTransaction({
  *  - HT et TVA connus sans TTC → TTC = HT + TVA.
  * Le taux explicite est gardé, sinon dérivé de TVA / HT.
  */
+// Durée au-delà de laquelle une confirmation interrompue ne bloque plus la
+// proposition (cf. confirmReceiptInvoiceProposal).
+const PROPOSAL_CLAIM_TTL_MS = 2 * 60 * 1000;
+
 /**
  * Applique la décision de l'utilisateur sur une facture d'achat proposée.
  *
@@ -1274,137 +1278,183 @@ async function confirmReceiptInvoiceProposal({
     return { action, invoice: null };
   }
 
-  if (action === "ATTACH") {
-    const targetId = purchaseInvoiceId || proposal.duplicateInvoiceId;
-    if (!targetId) {
-      throw new Error("Aucune facture d'achat à laquelle rattacher");
-    }
-    const invoice = await PurchaseInvoice.findOne({
-      _id: targetId,
-      workspaceId: new mongoose.Types.ObjectId(workspaceId),
-    });
-    if (!invoice) {
-      throw new Error("Facture d'achat introuvable");
-    }
-    // Une facture choisie à la main est rattachée pour de bon ; seule la
-    // facture proposée peut porter l'avertissement « déjà couverte ».
-    const linkTransaction = purchaseInvoiceId
-      ? await purchaseInvoiceCanAbsorbTransaction(invoice, transaction)
-      : proposal.duplicateLinkTransaction !== false;
+  // Une seule confirmation à la fois (double clic, deux onglets, app
+  // mobile) : la proposition est réservée avant de créer ou de rattacher,
+  // sinon deux demandes simultanées créaient deux factures d'achat. Une
+  // réservation abandonnée (arrêt du serveur) se reprend après deux minutes.
+  const claimed = await Transaction.updateOne(
+    {
+      _id: transaction._id,
+      workspaceId,
+      receiptFiles: {
+        $elemMatch: {
+          _id: receiptFile._id,
+          ocrProposal: { $ne: null },
+          $or: [
+            { "ocrProposal.confirmingAt": null },
+            {
+              "ocrProposal.confirmingAt": {
+                $lt: new Date(Date.now() - PROPOSAL_CLAIM_TTL_MS),
+              },
+            },
+          ],
+        },
+      },
+    },
+    { $set: { "receiptFiles.$.ocrProposal.confirmingAt": new Date() } },
+  );
+  if (!claimed.modifiedCount) {
+    throw new Error(
+      "Cette facture d'achat est déjà en cours d'enregistrement.",
+    );
+  }
 
-    const updated = await attachReceiptToExistingPurchaseInvoice({
-      invoice,
+  try {
+    if (action === "ATTACH") {
+      const targetId = purchaseInvoiceId || proposal.duplicateInvoiceId;
+      if (!targetId) {
+        throw new Error("Aucune facture d'achat à laquelle rattacher");
+      }
+      const invoice = await PurchaseInvoice.findOne({
+        _id: targetId,
+        workspaceId: new mongoose.Types.ObjectId(workspaceId),
+      });
+      if (!invoice) {
+        throw new Error("Facture d'achat introuvable");
+      }
+      // Une facture choisie à la main est rattachée pour de bon ; seule la
+      // facture proposée peut porter l'avertissement « déjà couverte ».
+      const linkTransaction = purchaseInvoiceId
+        ? await purchaseInvoiceCanAbsorbTransaction(invoice, transaction)
+        : proposal.duplicateLinkTransaction !== false;
+
+      const updated = await attachReceiptToExistingPurchaseInvoice({
+        invoice,
+        transaction,
+        receiptFile,
+        financial: proposal.meta?.ocrData || null,
+        ocrSucceeded: Boolean(proposal.meta?.ocrSucceeded),
+        workspaceId,
+        linkTransaction,
+      });
+      await finalizeReceiptInvoiceLink({
+        transaction,
+        receiptFile,
+        invoice: updated,
+        linkTransaction,
+        workspaceId,
+        userId,
+      });
+      logger.info(
+        `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat ${updated._id}${linkTransaction ? "" : " (transaction non liée : facture déjà couverte)"} (transaction ${transaction._id})`,
+      );
+      return { action, invoice: updated };
+    }
+
+    // CREATE : les valeurs confirmées par l'utilisateur priment sur celles lues.
+    const confirmed = {
+      ...proposal.values,
+      ...Object.fromEntries(
+        Object.entries(values || {}).filter(([, v]) => v !== undefined),
+      ),
+    };
+    // TVA corrigée à un seul taux sans détail : le détail lu ne correspond plus
+    if (
+      (values?.vatBreakdown === undefined || values?.vatBreakdown === null) &&
+      scalarVatEditBreaksBreakdown(proposal.values || {}, values || {})
+    ) {
+      confirmed.vatBreakdown = [];
+    }
+    // Catégorie changée à la main : sous-catégorie fine → catégorie large
+    // dérivée, comme à l'enregistrement d'une facture d'achat.
+    if (values?.subcategory !== undefined || values?.category !== undefined) {
+      const resolved = resolvePurchaseInvoiceCategoryInput({
+        subcategory: values.subcategory,
+        category: values.category,
+      });
+      confirmed.category = resolved.category;
+      confirmed.subcategory = resolved.subcategory;
+    }
+
+    // La facture ressemblante n'a été cherchée qu'à l'analyse, parmi les
+    // factures déjà enregistrées. Deux copies du même document déposées
+    // ensemble (photo + PDF), ou sur deux transactions, n'y voyaient rien :
+    // confirmer les deux créait deux factures. On recherche donc à nouveau
+    // avec les valeurs confirmées ; si une facture que l'utilisateur n'a pas
+    // vue ressemble à celle-ci, on lui redonne le choix au lieu de créer.
+    const similar = await findSimilarPurchaseInvoice({
       transaction,
-      receiptFile,
-      financial: proposal.meta?.ocrData || null,
       ocrSucceeded: Boolean(proposal.meta?.ocrSucceeded),
       workspaceId,
-      linkTransaction,
+      supplierName: confirmed.supplierName,
+      invoiceNumber: confirmed.invoiceNumber,
+      amountTTC: confirmed.amountTTC,
+      issueDate: confirmed.issueDate || transaction.date || null,
+    });
+    const acknowledged =
+      acknowledgedDuplicateId === undefined
+        ? proposal.duplicateInvoiceId
+        : acknowledgedDuplicateId;
+    if (similar && String(similar.invoice._id) !== String(acknowledged || "")) {
+      await Transaction.updateOne(
+        { _id: transaction._id, workspaceId },
+        {
+          $set: {
+            "receiptFiles.$[elem].ocrProposal.duplicateInvoiceId":
+              similar.invoice._id,
+            "receiptFiles.$[elem].ocrProposal.duplicateReason": similar.reason,
+            "receiptFiles.$[elem].ocrProposal.duplicateLinkTransaction":
+              similar.linkTransaction,
+          },
+        },
+        { arrayFilters: [{ "elem._id": receiptFile._id }] },
+      );
+      logger.info(
+        `ℹ️ [RECEIPT OCR] Création suspendue pour ${receiptFile.filename} : la facture ${similar.invoice._id} lui ressemble (motif ${similar.reason}), choix redonné à l'utilisateur (transaction ${transaction._id})`,
+      );
+      return { action, invoice: null, duplicate: similar };
+    }
+
+    const invoice = await createPurchaseInvoiceFromProposal({
+      transaction,
+      receiptFile,
+      proposal: { values: confirmed, meta: proposal.meta },
+      workspaceId,
+      userId,
+      // Le dialogue renvoie toujours le nom : seul un nom changé est une
+      // correction de l'utilisateur.
+      supplierNameIsExplicit: Boolean(
+        values?.supplierName &&
+        values.supplierName.trim() !==
+          String(proposal.values?.supplierName || "").trim(),
+      ),
     });
     await finalizeReceiptInvoiceLink({
       transaction,
       receiptFile,
-      invoice: updated,
-      linkTransaction,
+      invoice,
+      linkTransaction: true,
       workspaceId,
       userId,
     });
     logger.info(
-      `ℹ️ [RECEIPT OCR] Justificatif ${receiptFile.filename} rattaché à la facture d'achat ${updated._id}${linkTransaction ? "" : " (transaction non liée : facture déjà couverte)"} (transaction ${transaction._id})`,
+      `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée après confirmation depuis ${receiptFile.filename} (transaction ${transaction._id})`,
     );
-    return { action, invoice: updated };
-  }
-
-  // CREATE : les valeurs confirmées par l'utilisateur priment sur celles lues.
-  const confirmed = {
-    ...proposal.values,
-    ...Object.fromEntries(
-      Object.entries(values || {}).filter(([, v]) => v !== undefined),
-    ),
-  };
-  // TVA corrigée à un seul taux sans détail : le détail lu ne correspond plus
-  if (
-    (values?.vatBreakdown === undefined || values?.vatBreakdown === null) &&
-    scalarVatEditBreaksBreakdown(proposal.values || {}, values || {})
-  ) {
-    confirmed.vatBreakdown = [];
-  }
-  // Catégorie changée à la main : sous-catégorie fine → catégorie large
-  // dérivée, comme à l'enregistrement d'une facture d'achat.
-  if (values?.subcategory !== undefined || values?.category !== undefined) {
-    const resolved = resolvePurchaseInvoiceCategoryInput({
-      subcategory: values.subcategory,
-      category: values.category,
-    });
-    confirmed.category = resolved.category;
-    confirmed.subcategory = resolved.subcategory;
-  }
-
-  // La facture ressemblante n'a été cherchée qu'à l'analyse, parmi les
-  // factures déjà enregistrées. Deux copies du même document déposées
-  // ensemble (photo + PDF), ou sur deux transactions, n'y voyaient rien :
-  // confirmer les deux créait deux factures. On recherche donc à nouveau
-  // avec les valeurs confirmées ; si une facture que l'utilisateur n'a pas
-  // vue ressemble à celle-ci, on lui redonne le choix au lieu de créer.
-  const similar = await findSimilarPurchaseInvoice({
-    transaction,
-    ocrSucceeded: Boolean(proposal.meta?.ocrSucceeded),
-    workspaceId,
-    supplierName: confirmed.supplierName,
-    invoiceNumber: confirmed.invoiceNumber,
-    amountTTC: confirmed.amountTTC,
-    issueDate: confirmed.issueDate || transaction.date || null,
-  });
-  const acknowledged =
-    acknowledgedDuplicateId === undefined
-      ? proposal.duplicateInvoiceId
-      : acknowledgedDuplicateId;
-  if (similar && String(similar.invoice._id) !== String(acknowledged || "")) {
+    return { action, invoice };
+  } finally {
+    // Proposition encore là (facture ressemblante, erreur) : de nouveau
+    // confirmable. Après une création, elle a été retirée : rien à faire.
     await Transaction.updateOne(
-      { _id: transaction._id, workspaceId },
       {
-        $set: {
-          "receiptFiles.$[elem].ocrProposal.duplicateInvoiceId":
-            similar.invoice._id,
-          "receiptFiles.$[elem].ocrProposal.duplicateReason": similar.reason,
-          "receiptFiles.$[elem].ocrProposal.duplicateLinkTransaction":
-            similar.linkTransaction,
+        _id: transaction._id,
+        workspaceId,
+        receiptFiles: {
+          $elemMatch: { _id: receiptFile._id, ocrProposal: { $ne: null } },
         },
       },
-      { arrayFilters: [{ "elem._id": receiptFile._id }] },
+      { $set: { "receiptFiles.$.ocrProposal.confirmingAt": null } },
     );
-    logger.info(
-      `ℹ️ [RECEIPT OCR] Création suspendue pour ${receiptFile.filename} : la facture ${similar.invoice._id} lui ressemble (motif ${similar.reason}), choix redonné à l'utilisateur (transaction ${transaction._id})`,
-    );
-    return { action, invoice: null, duplicate: similar };
   }
-
-  const invoice = await createPurchaseInvoiceFromProposal({
-    transaction,
-    receiptFile,
-    proposal: { values: confirmed, meta: proposal.meta },
-    workspaceId,
-    userId,
-    // Le dialogue renvoie toujours le nom : seul un nom changé est une
-    // correction de l'utilisateur.
-    supplierNameIsExplicit: Boolean(
-      values?.supplierName &&
-      values.supplierName.trim() !==
-        String(proposal.values?.supplierName || "").trim(),
-    ),
-  });
-  await finalizeReceiptInvoiceLink({
-    transaction,
-    receiptFile,
-    invoice,
-    linkTransaction: true,
-    workspaceId,
-    userId,
-  });
-  logger.info(
-    `✅ [RECEIPT OCR] Facture d'achat ${invoice._id} créée après confirmation depuis ${receiptFile.filename} (transaction ${transaction._id})`,
-  );
-  return { action, invoice };
 }
 
 function reconcileAmounts({ amountHT, amountTVA, amountTTC, vatRate }) {

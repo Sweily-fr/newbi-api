@@ -42,12 +42,25 @@ import {
   findPurchaseInvoicesForTransaction,
 } from "../utils/reconciliationMatching.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
+import {
+  CREDIT_ON_PURCHASE_INVOICE_MESSAGE,
+  hasBankCredit,
+} from "../utils/reconciliationDirection.js";
 import { NO_LINKED_DOCUMENTS_CLAUSES } from "../utils/transactionLinks.js";
 import { linkPurchaseInvoiceToTransactions } from "../services/purchaseInvoiceLinkService.js";
 import { reconciliationLinkPull } from "../utils/reconciliationLinkOrigin.js";
 import { findAutoReconcileTransactionForPurchaseInvoice } from "../utils/reconciliationMatching.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
 import { checkUserOcrQuota, recordOcrUsage } from "./importedInvoice.js";
+import {
+  validatePurchaseInvoiceInput,
+  validateSupplierInput,
+} from "../utils/purchaseInputValidation.js";
+import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 
 // Champs historiques de TVA, résumé du détail par taux quand il existe
 const VAT_SCALAR_FIELDS = new Set(["amountHT", "amountTVA", "vatRate"]);
@@ -109,23 +122,29 @@ const assertSupplierInWorkspace = async (supplierId, workspaceId) => {
 };
 
 // Supprime de R2 les fichiers d'une facture d'achat (résolution automatique
-// du bucket depuis l'URL, y compris domaines custom), SAUF ceux partagés avec
-// un justificatif de transaction : une facture créée par OCR depuis un reçu
-// référence le même objet R2 que transaction.receiptFiles — le supprimer
-// casserait le justificatif côté transaction.
-const deletePurchaseInvoiceFilesFromR2 = async (files, workspaceId) => {
-  const { default: Transaction } = await import("../models/Transaction.js");
+// du bucket depuis l'URL, y compris domaines custom), SAUF ceux qu'un autre
+// document de l'espace référence encore : justificatif de transaction (facture
+// créée par OCR depuis un reçu), facture importée convertie, autre facture
+// d'achat. Les factures passées en `excludeInvoiceIds` sont celles qu'on
+// supprime ou dont on retire le fichier.
+const deletePurchaseInvoiceFilesFromR2 = async (
+  files,
+  workspaceId,
+  excludeInvoiceIds = [],
+) => {
   for (const file of files || []) {
     try {
       if (!file.url) continue;
       const resolved = cloudflareService.resolveBucketAndKeyFromUrl(file.url);
       if (!resolved) continue;
 
-      const sharedWithReceipt = await Transaction.exists({
-        workspaceId: String(workspaceId),
-        "receiptFiles.key": resolved.key,
+      const stillUsed = await isStoredFileReferenced({
+        workspaceId,
+        key: resolved.key,
+        url: file.url,
+        excludePurchaseInvoiceIds: excludeInvoiceIds,
       });
-      if (sharedWithReceipt) continue;
+      if (stillUsed) continue;
 
       await cloudflareService.deleteImage(resolved.key, resolved.bucket);
     } catch (err) {
@@ -133,6 +152,15 @@ const deletePurchaseInvoiceFilesFromR2 = async (files, workspaceId) => {
     }
   }
 };
+
+// Pagination des listes : page à partir de 1, 1 à 1 000 éléments par page
+// (le site demande au plus 1 000 factures pour l'export). Une page ou une
+// taille hors bornes ne fait plus échouer la requête.
+const MAX_PAGE_SIZE = 1000;
+const boundedPage = (page, limit) => ({
+  page: Math.max(1, Math.floor(Number(page)) || 1),
+  limit: Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(Number(limit)) || 1)),
+});
 
 // Actions précises de la page « Factures d'achat » (éditeur de rôles)
 const requireCreatePurchases = requireAction("expenses", "create");
@@ -240,7 +268,8 @@ const purchaseInvoiceResolvers = {
       const sort = {};
       sort[sortField] = sortOrder === "ASC" ? 1 : -1;
 
-      const skip = (page - 1) * limit;
+      const { page: safePage, limit: safeLimit } = boundedPage(page, limit);
+      const skip = (safePage - 1) * safeLimit;
       const [items, totalCount] = await Promise.all([
         // Données OCR brutes et XML e-invoicing exclus de la liste : lourds et
         // demandés seulement par la fiche (purchaseInvoice), ni par la liste du
@@ -248,7 +277,7 @@ const purchaseInvoiceResolvers = {
         PurchaseInvoice.find(query)
           .sort(sort)
           .skip(skip)
-          .limit(limit)
+          .limit(safeLimit)
           .select("-ocrData -rawExtractedText -eInvoiceRawData -files.ocrData")
           .lean(),
         PurchaseInvoice.countDocuments(query),
@@ -257,9 +286,9 @@ const purchaseInvoiceResolvers = {
       return {
         items,
         totalCount,
-        currentPage: page,
-        totalPages: Math.ceil(totalCount / limit) || 1,
-        hasNextPage: page * limit < totalCount,
+        currentPage: safePage,
+        totalPages: Math.ceil(totalCount / safeLimit) || 1,
+        hasNextPage: safePage * safeLimit < totalCount,
       };
     }),
 
@@ -722,17 +751,22 @@ const purchaseInvoiceResolvers = {
           query.name = { $regex: escapeRegex(search), $options: "i" };
         }
 
-        const skip = (page - 1) * limit;
+        const { page: safePage, limit: safeLimit } = boundedPage(page, limit);
+        const skip = (safePage - 1) * safeLimit;
         const [items, totalCount] = await Promise.all([
-          Supplier.find(query).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+          Supplier.find(query)
+            .sort({ name: 1 })
+            .skip(skip)
+            .limit(safeLimit)
+            .lean(),
           Supplier.countDocuments(query),
         ]);
 
         return {
           items,
           totalCount,
-          currentPage: page,
-          totalPages: Math.ceil(totalCount / limit) || 1,
+          currentPage: safePage,
+          totalPages: Math.ceil(totalCount / safeLimit) || 1,
         };
       },
     ),
@@ -746,7 +780,15 @@ const purchaseInvoiceResolvers = {
           context.workspaceId,
         );
 
+        // Valeurs impossibles refusées avant toute écriture (devise, taux,
+        // montants négatifs, TVA au-delà du TTC, longueurs)
+        validatePurchaseInvoiceInput(input);
         const { forceCreate = false, vatBreakdown, ...invoiceInput } = input;
+        // Créer une facture déjà payée : case « Marquer comme payée », comme
+        // pour la passer payée ensuite (updatePurchaseInvoice).
+        if (invoiceInput.status === "PAID") {
+          assertPermissionAction(context, "expenses", "markPaid");
+        }
         await assertSupplierInWorkspace(invoiceInput.supplierId, workspaceId);
 
         // Filet anti-doublon côté serveur (mêmes règles que l'avertissement
@@ -861,6 +903,7 @@ const purchaseInvoiceResolvers = {
         if (input?.status === "PAID" && invoice.status !== "PAID") {
           assertPermissionAction(context, "expenses", "markPaid");
         }
+        validatePurchaseInvoiceInput(input, { existing: invoice });
 
         const oldStatus = invoice.status;
         const oldCategory = invoice.category;
@@ -1077,7 +1120,9 @@ const purchaseInvoiceResolvers = {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(id, workspaceId);
 
-        await deletePurchaseInvoiceFilesFromR2(invoice.files, workspaceId);
+        await deletePurchaseInvoiceFilesFromR2(invoice.files, workspaceId, [
+          invoice._id,
+        ]);
 
         // Détacher les transactions rapprochées (sinon elles restent
         // "matched" avec un id orphelin pour toujours)
@@ -1396,12 +1441,18 @@ const purchaseInvoiceResolvers = {
         } else if (input.file) {
           // Upload file to Cloudflare
           const { createReadStream, filename } = await input.file;
-          const stream = createReadStream();
-          const chunks = [];
-          for await (const chunk of stream) {
-            chunks.push(chunk);
+          // 10 Mo au plus, comme les autres justificatifs : la lecture
+          // s'arrête au-delà.
+          const { buffer, tooLarge } = await readUploadBounded(
+            createReadStream,
+            MAX_RECEIPT_FILE_BYTES,
+          );
+          if (tooLarge) {
+            throw new AppError(
+              `Fichier trop volumineux (${filename}). Maximum 10 Mo.`,
+              ERROR_CODES.VALIDATION_ERROR,
+            );
           }
-          const buffer = Buffer.concat(chunks);
 
           // Justificatif : PDF ou image, reconnu d'après son contenu. Le type
           // enregistré et l'extension du fichier stocké en découlent, jamais
@@ -1483,12 +1534,12 @@ const purchaseInvoiceResolvers = {
         if (!file)
           throw new AppError("Fichier non trouvé", ERROR_CODES.NOT_FOUND);
 
-        // Delete from Cloudflare (bucket résolu depuis l'URL, fichiers
-        // partagés avec un justificatif de transaction préservés)
-        await deletePurchaseInvoiceFilesFromR2([file], workspaceId);
-
         invoice.files.pull(fileId);
         await invoice.save();
+
+        // Delete from Cloudflare (bucket résolu depuis l'URL), une fois le
+        // fichier retiré : préservé s'il sert encore à un autre document.
+        await deletePurchaseInvoiceFilesFromR2([file], workspaceId);
         return invoice;
       },
     ),
@@ -1569,20 +1620,26 @@ const purchaseInvoiceResolvers = {
         context.workspaceId || context.organizationId,
       );
       const updateData = { status };
+      let filter = { _id: { $in: ids }, workspaceId };
       if (status === "PAID") {
         updateData.paymentDate = new Date();
+        // Une facture déjà payée garde sa date de paiement (reprise du débit
+        // bancaire, saisie à la main) : seules les autres passent payées.
+        const toPay = await PurchaseInvoice.find({
+          ...filter,
+          status: { $ne: "PAID" },
+        }).select("_id");
+        filter = { _id: { $in: toPay.map((inv) => inv._id) }, workspaceId };
       }
 
-      const result = await PurchaseInvoice.updateMany(
-        { _id: { $in: ids }, workspaceId },
-        { $set: updateData },
-      );
+      const result = await PurchaseInvoice.updateMany(filter, {
+        $set: updateData,
+      });
 
       // Signaler le paiement à SuperPDP pour les e-factures reçues (best-effort)
       if (status === "PAID") {
         const superPdpInvoices = await PurchaseInvoice.find({
-          _id: { $in: ids },
-          workspaceId,
+          ...filter,
           source: "SUPERPDP",
           superPdpInvoiceId: { $exists: true, $ne: null },
         });
@@ -1615,8 +1672,13 @@ const purchaseInvoiceResolvers = {
         });
 
         // Delete files
+        const deletedIds = invoices.map((inv) => inv._id);
         for (const inv of invoices) {
-          await deletePurchaseInvoiceFilesFromR2(inv.files, workspaceId);
+          await deletePurchaseInvoiceFilesFromR2(
+            inv.files,
+            workspaceId,
+            deletedIds,
+          );
         }
 
         // Détacher les transactions rapprochées des factures supprimées
@@ -1708,6 +1770,13 @@ const purchaseInvoiceResolvers = {
             ERROR_CODES.NOT_FOUND,
           );
         }
+        // Une facture d'achat est payée par une sortie d'argent.
+        if (await hasBankCredit(transactionIds, workspaceId)) {
+          throw new AppError(
+            CREDIT_ON_PURCHASE_INVOICE_MESSAGE,
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
 
         // Sémantique additive (N↔N) : les transactions passées s'ajoutent aux
         // liens existants, elles ne les remplacent pas. Une facture d'achat
@@ -1745,56 +1814,84 @@ const purchaseInvoiceResolvers = {
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
         const Transaction = mongoose.model("Transaction");
 
-        const txObjectId = new mongoose.Types.ObjectId(transactionId);
+        // Rien n'est modifié si les deux documents ne sont pas liés : une
+        // facture payée par ailleurs garde son statut et sa date de paiement,
+        // une transaction ignorée reste ignorée.
+        const transaction = mongoose.isValidObjectId(transactionId)
+          ? await Transaction.findOne({
+              _id: transactionId,
+              workspaceId: wsId,
+            }).select("linkedPurchaseInvoiceIds")
+          : null;
+        const linkedOnTransaction = (
+          transaction?.linkedPurchaseInvoiceIds || []
+        ).some((id) => String(id) === String(invoice._id));
+        const linkedOnInvoice = (invoice.linkedTransactionIds || []).some(
+          (id) => String(id) === String(transactionId),
+        );
+        if (!linkedOnTransaction && !linkedOnInvoice) {
+          throw new AppError(
+            "Cette transaction n'est pas rattachée à cette facture",
+            ERROR_CODES.NOT_FOUND,
+          );
+        }
 
-        // Côté transaction : $pull (lien + origine) + pointeur du justificatif
-        // OCR nettoyé.
-        await Transaction.updateOne(
-          { _id: txObjectId, workspaceId: wsId },
-          {
-            $pull: {
-              linkedPurchaseInvoiceIds: invoice._id,
-              ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+        if (transaction) {
+          const txObjectId = transaction._id;
+          // Côté transaction : $pull (lien + origine) + pointeur du
+          // justificatif OCR nettoyé.
+          await Transaction.updateOne(
+            { _id: txObjectId, workspaceId: wsId },
+            {
+              $pull: {
+                linkedPurchaseInvoiceIds: invoice._id,
+                ...reconciliationLinkPull("PURCHASE_INVOICE", [invoice._id]),
+              },
             },
-          },
-        );
-        await Transaction.updateOne(
-          {
-            _id: txObjectId,
-            workspaceId: wsId,
-            "receiptFiles.purchaseInvoiceId": invoice._id,
-          },
-          { $set: { "receiptFiles.$[elem].purchaseInvoiceId": null } },
-          { arrayFilters: [{ "elem.purchaseInvoiceId": invoice._id }] },
-        );
-        // Plus aucun lien (ni vente ni achat) → la transaction redevient à
-        // rapprocher.
-        await Transaction.updateOne(
-          {
-            _id: txObjectId,
-            workspaceId: wsId,
-            $and: NO_LINKED_DOCUMENTS_CLAUSES,
-          },
-          {
-            $set: {
-              reconciliationStatus: "unmatched",
-              reconciliationDate: null,
+          );
+          await Transaction.updateOne(
+            {
+              _id: txObjectId,
+              workspaceId: wsId,
+              "receiptFiles.purchaseInvoiceId": invoice._id,
             },
-          },
-        );
-
-        // Côté facture.
-        invoice.linkedTransactionIds = (
-          invoice.linkedTransactionIds || []
-        ).filter((id) => String(id) !== String(transactionId));
-        if (invoice.linkedTransactionIds.length === 0) {
-          invoice.isReconciled = false;
-          if (invoice.status === "PAID") {
-            invoice.status = "TO_PAY";
-            invoice.paymentDate = null;
+            { $set: { "receiptFiles.$[elem].purchaseInvoiceId": null } },
+            { arrayFilters: [{ "elem.purchaseInvoiceId": invoice._id }] },
+          );
+          // Lien retiré et plus aucun autre (ni vente ni achat) → la
+          // transaction redevient à rapprocher, sauf si elle est ignorée.
+          if (linkedOnTransaction) {
+            await Transaction.updateOne(
+              {
+                _id: txObjectId,
+                workspaceId: wsId,
+                reconciliationStatus: { $ne: "ignored" },
+                $and: NO_LINKED_DOCUMENTS_CLAUSES,
+              },
+              {
+                $set: {
+                  reconciliationStatus: "unmatched",
+                  reconciliationDate: null,
+                },
+              },
+            );
           }
         }
-        await invoice.save();
+
+        // Côté facture : seulement si elle référençait bien la transaction.
+        if (linkedOnInvoice) {
+          invoice.linkedTransactionIds = (
+            invoice.linkedTransactionIds || []
+          ).filter((id) => String(id) !== String(transactionId));
+          if (invoice.linkedTransactionIds.length === 0) {
+            invoice.isReconciled = false;
+            if (invoice.status === "PAID") {
+              invoice.status = "TO_PAY";
+              invoice.paymentDate = null;
+            }
+          }
+          await invoice.save();
+        }
         return invoice;
       },
     ),
@@ -1803,6 +1900,9 @@ const purchaseInvoiceResolvers = {
       async (_, { purchaseInvoiceId }, context) => {
         const workspaceId = context.workspaceId || context.organizationId;
         const invoice = await checkAccess(purchaseInvoiceId, workspaceId);
+        // Une facture sans transaction liée (payée en espèces, par chèque…)
+        // n'a rien à délier : son statut et sa date de paiement restent.
+        const hadLinks = (invoice.linkedTransactionIds || []).length > 0;
 
         // Retire le lien côté transactions ($pull + receiptFiles nettoyés) et
         // repasse "unmatched" celles qui n'ont plus aucun lien. Updates ciblés
@@ -1817,7 +1917,7 @@ const purchaseInvoiceResolvers = {
         // Symétrique du flux factures client (unlink → PENDING) : le lien de
         // paiement vient d'être retiré, la facture n'est plus "payée par la
         // banque". On ne touche pas aux autres statuts (ARCHIVED...).
-        if (invoice.status === "PAID") {
+        if (hadLinks && invoice.status === "PAID") {
           invoice.status = "TO_PAY";
           invoice.paymentDate = null;
         }
@@ -1832,6 +1932,7 @@ const purchaseInvoiceResolvers = {
         input.workspaceId,
         context.workspaceId,
       );
+      validateSupplierInput(input);
 
       // L'adresse est facultative pour un fournisseur. On ne crée le
       // sous-document `address` QUE si au moins un champ est renseigné : sinon
@@ -1879,6 +1980,7 @@ const purchaseInvoiceResolvers = {
         });
         if (!supplier)
           throw new AppError("Fournisseur non trouvé", ERROR_CODES.NOT_FOUND);
+        validateSupplierInput(input);
 
         Object.keys(input).forEach((key) => {
           if (["street", "city", "postalCode", "country"].includes(key)) {
@@ -1921,14 +2023,21 @@ const purchaseInvoiceResolvers = {
             ERROR_CODES.NOT_FOUND,
           );
 
+        // La fiche cible n'est jamais une source : la fusionner avec
+        // elle-même la supprimerait (IBAN, SIRET) et laisserait ses factures
+        // sans fournisseur.
+        const mergedIds = (sourceIds || []).filter(
+          (id) => String(id) !== String(target._id),
+        );
+
         // Update all purchase invoices to point to target
         await PurchaseInvoice.updateMany(
-          { supplierId: { $in: sourceIds }, workspaceId },
-          { $set: { supplierId: targetId, supplierName: target.name } },
+          { supplierId: { $in: mergedIds }, workspaceId },
+          { $set: { supplierId: target._id, supplierName: target.name } },
         );
 
         // Delete source suppliers
-        await Supplier.deleteMany({ _id: { $in: sourceIds }, workspaceId });
+        await Supplier.deleteMany({ _id: { $in: mergedIds }, workspaceId });
 
         return target;
       },
@@ -2153,11 +2262,37 @@ const purchaseInvoiceResolvers = {
       if (!supplier) return null;
       return { ...supplier, id: supplier._id.toString() };
     },
+    // Auteur vu par les autres membres de l'espace : son identité seulement,
+    // jamais son abonnement, son code de parrainage ni les coordonnées
+    // bancaires de son entreprise.
     createdBy: async (parent) => {
       const User = mongoose.model("User");
-      const user = await User.findById(parent.createdBy).lean();
+      const user = await User.findById(parent.createdBy)
+        .select(
+          "email profile emailVerified isEmailVerified isDisabled createdAt updatedAt",
+        )
+        .lean();
       if (!user) return null;
-      return { ...user, id: user._id.toString() };
+      const iso = (d) => (d ? new Date(d).toISOString() : "");
+      return {
+        id: user._id.toString(),
+        email: user.email,
+        isEmailVerified: Boolean(user.isEmailVerified ?? user.emailVerified),
+        isDisabled: Boolean(user.isDisabled),
+        profile: user.profile
+          ? {
+              firstName: user.profile.firstName ?? null,
+              lastName: user.profile.lastName ?? null,
+              profilePicture: user.profile.profilePicture ?? null,
+            }
+          : null,
+        company: null,
+        subscription: null,
+        isPartner: null,
+        referralCode: null,
+        createdAt: iso(user.createdAt),
+        updatedAt: iso(user.updatedAt),
+      };
     },
   },
 

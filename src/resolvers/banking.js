@@ -10,6 +10,12 @@ import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
+import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  MAX_RECEIPT_FILES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 import { detectFileType, storedFileName } from "../utils/fileSignature.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import transactionReceiptOcrService from "../services/transactionReceiptOcrService.js";
@@ -37,6 +43,8 @@ import {
   PCG,
 } from "../utils/pcg-mapping.js";
 import { toExpenseCategory } from "../utils/categoryTaxonomy.js";
+import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
+import { validateTransactionTextInput } from "../utils/purchaseInputValidation.js";
 
 // Droits par module (mêmes choix d'espace que withWorkspace : argument
 // workspaceId d'abord). Transactions, justificatifs, paiements et synchro :
@@ -112,10 +120,12 @@ const bankingResolvers = {
 
         // raw (réponse brute du fournisseur bancaire) n'est ni exposé ni lu :
         // exclu pour ne pas le transférer depuis Mongo à chaque liste.
+        // Décalage et taille négatifs ramenés à zéro : la requête ne doit pas
+        // échouer (la taille n'est pas plafonnée, des écrans en dépendent).
         return await Transaction.find(query)
           .sort({ date: -1, createdAt: -1 })
-          .limit(limit)
-          .skip(offset)
+          .limit(Math.max(0, Math.floor(Number(limit)) || 0))
+          .skip(Math.max(0, Math.floor(Number(offset)) || 0))
           .select("-raw")
           .lean();
       },
@@ -304,7 +314,8 @@ const bankingResolvers = {
     ),
 
     // Table de correspondance PCG
-    pcgMappingTable: () => {
+    // Référentiel servi aux pages connectées (Analytiques) : session exigée.
+    pcgMappingTable: isAuthenticated(() => {
       return getMappingTable().map((entry) => ({
         bridgeCategoryId: entry.bridgeCategoryId,
         bridgeLabel: entry.bridgeLabel,
@@ -320,12 +331,12 @@ const bankingResolvers = {
           })),
         rules: entry.rules,
       }));
-    },
+    }),
 
     // Liste des comptes PCG disponibles
-    pcgAccounts: () => {
+    pcgAccounts: isAuthenticated(() => {
       return getAllPCGAccounts();
-    },
+    }),
 
     // Historique des transactions
     transactionHistory: readBanking(
@@ -352,6 +363,7 @@ const bankingResolvers = {
     updateTransaction: writeBanking(
       async (parent, { id, input }, { user, workspaceId }) => {
         const updateData = {};
+        validateTransactionTextInput(input);
 
         const existing = await Transaction.findOne({
           _id: id,
@@ -512,22 +524,27 @@ const bankingResolvers = {
             "application/pdf",
           ];
 
-          const uploadedReceiptFiles = [];
-          // Buffers conservés pour l'OCR (création auto de facture d'achat)
-          const receiptBuffersByKey = {};
+          if (filesArray.length > MAX_RECEIPT_FILES) {
+            return {
+              success: false,
+              message: `${MAX_RECEIPT_FILES} justificatifs au plus par envoi.`,
+              receiptFiles: null,
+              transaction: null,
+            };
+          }
 
+          // 1. Tous les fichiers sont lus (10 Mo au plus chacun, lecture
+          // interrompue au-delà) et contrôlés avant d'en envoyer un seul :
+          // un fichier refusé ne laisse aucun objet orphelin sur R2.
+          const validated = [];
           for (const fileInput of filesArray) {
             const { createReadStream, filename, mimetype } = await fileInput;
 
-            const stream = createReadStream();
-            const chunks = [];
-            for await (const chunk of stream) {
-              chunks.push(chunk);
-            }
-            const fileBuffer = Buffer.concat(chunks);
-            const fileSize = fileBuffer.length;
-
-            if (fileSize > 10 * 1024 * 1024) {
+            const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
+              createReadStream,
+              MAX_RECEIPT_FILE_BYTES,
+            );
+            if (tooLarge) {
               return {
                 success: false,
                 message: `Fichier trop volumineux (${filename}). Maximum 10 Mo.`,
@@ -548,25 +565,42 @@ const bankingResolvers = {
                 transaction: null,
               };
             }
+            validated.push({ filename, fileBuffer, detected });
+          }
 
-            const uploadResult = await cloudflareService.uploadImage(
-              fileBuffer,
-              storedFileName(filename, detected.ext),
-              user._id || user.id,
-              "receipt",
-              workspaceId,
-            );
+          // 2. Envoi sur R2 ; en cas d'échec, les fichiers déjà envoyés
+          // sont retirés.
+          const uploadedReceiptFiles = [];
+          // Buffers conservés pour l'OCR (création auto de facture d'achat)
+          const receiptBuffersByKey = {};
+          try {
+            for (const { filename, fileBuffer, detected } of validated) {
+              const uploadResult = await cloudflareService.uploadImage(
+                fileBuffer,
+                storedFileName(filename, detected.ext),
+                user._id || user.id,
+                "receipt",
+                workspaceId,
+              );
 
-            uploadedReceiptFiles.push({
-              url: uploadResult.url,
-              key: uploadResult.key,
-              filename,
-              mimetype: detected.mime,
-              size: fileSize,
-              uploadedAt: new Date(),
-              uploadedBy: String(user._id || user.id),
-            });
-            receiptBuffersByKey[uploadResult.key] = fileBuffer;
+              uploadedReceiptFiles.push({
+                url: uploadResult.url,
+                key: uploadResult.key,
+                filename,
+                mimetype: detected.mime,
+                size: fileBuffer.length,
+                uploadedAt: new Date(),
+                uploadedBy: String(user._id || user.id),
+              });
+              receiptBuffersByKey[uploadResult.key] = fileBuffer;
+            }
+          } catch (uploadError) {
+            for (const uploaded of uploadedReceiptFiles) {
+              await cloudflareService
+                .deleteImage(uploaded.key, cloudflareService.receiptsBucketName)
+                .catch(() => {});
+            }
+            throw uploadError;
           }
 
           const updatedTransaction = await Transaction.findOneAndUpdate(
@@ -791,10 +825,26 @@ const bankingResolvers = {
             }
           }
 
+          const updatedTransaction = await Transaction.findOneAndUpdate(
+            { _id: transactionId, workspaceId },
+            { $pull: { receiptFiles: { _id: fileToRemove._id } } },
+            { new: true },
+          );
+
           // Best-effort suppression R2 (bucket résolu depuis l'URL : les
           // justificatifs vivent dans le bucket receipts, pas le bucket par
-          // défaut)
-          if (deleteR2Object && (fileToRemove.url || fileToRemove.key)) {
+          // défaut), une fois le justificatif retiré. Conservé s'il sert
+          // encore à un autre document : facture d'achat déliée qui garde ce
+          // fichier, autre justificatif.
+          if (
+            deleteR2Object &&
+            (fileToRemove.url || fileToRemove.key) &&
+            !(await isStoredFileReferenced({
+              workspaceId,
+              key: fileToRemove.key,
+              url: fileToRemove.url,
+            }))
+          ) {
             try {
               if (fileToRemove.url) {
                 await cloudflareService.deleteImageByUrl(fileToRemove.url);
@@ -811,12 +861,6 @@ const bankingResolvers = {
               );
             }
           }
-
-          const updatedTransaction = await Transaction.findOneAndUpdate(
-            { _id: transactionId, workspaceId },
-            { $pull: { receiptFiles: { _id: fileToRemove._id } } },
-            { new: true },
-          );
 
           return {
             success: true,
