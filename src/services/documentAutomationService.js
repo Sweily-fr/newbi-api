@@ -961,14 +961,27 @@ const documentAutomationService = {
    * Mapping trigger → modèle, statut, type de document
    */
   _getTriggerConfig(triggerType) {
+    // « En retard » : statut OVERDUE, ou en attente avec l'échéance passée,
+    // comme le cron quotidien (checkOverdueAutomations). Le passage en OVERDUE
+    // n'a lieu qu'à la modification du document : le lancement manuel et le
+    // compteur ne voyaient pas les documents que le cron copie.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const overdueFilter = (unpaidStatus) => ({
+      $or: [
+        { status: "OVERDUE" },
+        { status: unpaidStatus, dueDate: { $lt: startOfToday } },
+      ],
+    });
     const TRIGGER_TO_QUERY = {
       INVOICE_DRAFT: { model: Invoice, status: "DRAFT", docType: "invoice" },
       INVOICE_SENT: { model: Invoice, status: "PENDING", docType: "invoice" },
       INVOICE_PAID: { model: Invoice, status: "COMPLETED", docType: "invoice" },
       INVOICE_OVERDUE: {
         model: Invoice,
-        status: "OVERDUE",
+        status: null,
         docType: "invoice",
+        customFilter: overdueFilter("PENDING"),
       },
       INVOICE_CANCELED: {
         model: Invoice,
@@ -1041,8 +1054,9 @@ const documentAutomationService = {
       },
       PURCHASE_INVOICE_OVERDUE: {
         model: PurchaseInvoice,
-        status: "OVERDUE",
+        status: null,
         docType: "purchaseInvoice",
+        customFilter: overdueFilter("TO_PAY"),
       },
       PURCHASE_INVOICE_ARCHIVED: {
         model: PurchaseInvoice,
