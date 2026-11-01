@@ -75,7 +75,7 @@ beforeAll(async () => {
     mongoose.modelNames().map(async (name) => {
       const Model = mongoose.model(name);
       await Model.createCollection().catch(() => {});
-      await Model.init();
+      await Model.init().catch(() => {});
     }),
   );
   for (const name of [
