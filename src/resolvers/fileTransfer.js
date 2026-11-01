@@ -31,6 +31,7 @@ import {
   normalizeTransferEmailInput,
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
+import { normalizeTransferCreationOptions } from "../utils/transferOptions.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -625,6 +626,16 @@ const fileTransferResolvers = {
             );
           }
 
+          // Durée, mot de passe et paiement validés avant de lire les fichiers
+          const {
+            expiryDays,
+            passwordProtected,
+            password,
+            paymentAmount,
+            paymentCurrency,
+            isPaymentRequired,
+          } = normalizeTransferCreationOptions(input);
+
           // Destinataire unique et message borné ; e-mails plafonnés par jour
           const { recipientEmail, message } =
             normalizeTransferEmailInput(input);
@@ -810,20 +821,9 @@ const fileTransferResolvers = {
           ];
 
           // 6. Options du transfert (allowPreview toujours false pour les ZIP depuis docs partagés)
-          const expiryDays = input?.expiryDays || 7;
           const notifyOnDownload = input?.notifyOnDownload || false;
-          const passwordProtected = input?.passwordProtected || false;
-          const password = input?.password || null;
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
           const hasWatermark = input?.hasWatermark || false;
-          const paymentAmount = input?.paymentAmount || 0;
-          const paymentCurrency =
-            input?.paymentCurrency || input?.currency || "EUR";
-          const isPaymentRequired =
-            paymentAmount > 0 ||
-            input?.isPaymentRequired ||
-            input?.requirePayment ||
-            false;
 
           // 7. Créer le FileTransfer avec un seul fichier (le ZIP)
           const fileTransfer = new FileTransfer({
