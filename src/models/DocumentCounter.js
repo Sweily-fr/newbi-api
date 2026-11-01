@@ -108,6 +108,33 @@ documentCounterSchema.statics.getNextNumber = async function (
 };
 
 /**
+ * Rend le numéro qui vient d'être attribué quand le document n'a finalement
+ * pas été enregistré (ex. avoir refusé par la plateforme de facturation
+ * électronique). Le compteur ne recule que s'il est toujours sur ce numéro :
+ * si un autre document a été numéroté entre-temps, rien ne bouge.
+ * @returns {Promise<boolean>} true si le numéro a été rendu
+ */
+documentCounterSchema.statics.releaseNumber = async function (
+  documentType,
+  prefix,
+  workspaceId,
+  number,
+) {
+  const value = parseInt(number, 10);
+  if (!Number.isFinite(value) || value < 1) return false;
+  const result = await this.updateOne(
+    {
+      documentType,
+      prefix: prefix || "",
+      workspaceId: String(workspaceId),
+      lastNumber: value,
+    },
+    { $inc: { lastNumber: -1 } },
+  );
+  return result.modifiedCount === 1;
+};
+
+/**
  * Prochain numéro que getNextNumber attribuerait, SANS le consommer : une
  * simple lecture (aperçu du numéro dans un éditeur, requête de lecture). Le
  * compteur n'avance qu'à l'attribution réelle ; avancé par une lecture, il

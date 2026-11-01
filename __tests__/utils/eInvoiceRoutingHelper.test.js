@@ -13,6 +13,7 @@ vi.mock("../../src/services/eInvoicingSettingsService.js", () => ({
 vi.mock("../../src/services/superPdpService.js", () => ({
   default: {
     sendInvoice: vi.fn(),
+    sendCreditNote: vi.fn(),
     submitB2cTransaction: vi.fn(),
     submitB2cPayment: vi.fn(),
   },
@@ -32,6 +33,7 @@ import superPdpService from "../../src/services/superPdpService.js";
 import {
   evaluateAndRouteInvoice,
   reportPaymentIfNeeded,
+  evaluateAndRouteCreditNote,
 } from "../../src/utils/eInvoiceRoutingHelper.js";
 
 const WORKSPACE_ID = "ws-1";
@@ -171,5 +173,134 @@ describe("reportPaymentIfNeeded — une seule déclaration d'encaissement", () =
       false,
     );
     expect(superPdpService.submitB2cPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe("evaluateAndRouteCreditNote — routage des avoirs", () => {
+  const buildCreditNote = () => ({
+    prefix: "AV-202608",
+    number: "0001",
+    originalInvoiceNumber: "0042",
+    companyInfo: { vatPaymentCondition: "DEBITS" },
+    finalTotalHT: -100,
+    finalTotalVAT: -20,
+    finalTotalTTC: -120,
+  });
+
+  it("renvoie null si l'e-invoicing est désactivé", async () => {
+    EInvoicingSettingsService.isEInvoicingEnabled.mockResolvedValue(false);
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result).toBeNull();
+    expect(superPdpService.sendCreditNote).not.toHaveBeenCalled();
+  });
+
+  it("E_INVOICING + envoi réussi → superPdpInvoiceId et statut posés sur l'avoir", async () => {
+    eInvoiceRoutingService.determineFlowType.mockReturnValue({
+      flowType: "E_INVOICING",
+      reason: "B2B domestique",
+      details: {},
+    });
+    superPdpService.sendCreditNote.mockResolvedValue({
+      success: true,
+      superPdpInvoiceId: "sp-av-1",
+      status: "PENDING_VALIDATION",
+      lastCode: "api:uploaded",
+      events: [{ code: "api:uploaded" }],
+    });
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result.flowType).toBe("E_INVOICING");
+    expect(result.sendFailed).toBeFalsy();
+    expect(creditNote.superPdpInvoiceId).toBe("sp-av-1");
+    expect(creditNote.eInvoiceStatus).toBe("PENDING_VALIDATION");
+    expect(superPdpService.sendCreditNote).toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      creditNote,
+    );
+  });
+
+  it("E_INVOICING + échec SuperPDP → sendFailed=true (le caller supprime l'avoir)", async () => {
+    eInvoiceRoutingService.determineFlowType.mockReturnValue({
+      flowType: "E_INVOICING",
+      reason: "B2B domestique",
+      details: {},
+    });
+    superPdpService.sendCreditNote.mockResolvedValue({
+      success: false,
+      error: "Destinataire non enregistré sur l'annuaire",
+    });
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result.sendFailed).toBe(true);
+    expect(result.error).toMatch(/annuaire/i);
+    expect(creditNote.eInvoiceStatus).toBe("ERROR");
+  });
+
+  it("E_REPORTING_TRANSACTION → déclaration en négatif (sign: -1), non bloquante", async () => {
+    eInvoiceRoutingService.determineFlowType.mockReturnValue({
+      flowType: "E_REPORTING_TRANSACTION",
+      reason: "Client B2C",
+      details: {},
+    });
+    superPdpService.submitB2cTransaction.mockResolvedValue({
+      success: true,
+      id: 77,
+    });
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result.flowType).toBe("E_REPORTING_TRANSACTION");
+    expect(result.sendFailed).toBeFalsy();
+    expect(superPdpService.submitB2cTransaction).toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      creditNote,
+      { sign: -1 },
+    );
+    expect(creditNote.eReportingStatus).toBe("REPORTED");
+    expect(creditNote.eReportingTransactionId).toBe("77");
+    expect(superPdpService.sendCreditNote).not.toHaveBeenCalled();
+  });
+
+  it("E_REPORTING_TRANSACTION en échec → statut ERROR, pas de sendFailed", async () => {
+    eInvoiceRoutingService.determineFlowType.mockReturnValue({
+      flowType: "E_REPORTING_TRANSACTION",
+      reason: "Client B2C",
+      details: {},
+    });
+    superPdpService.submitB2cTransaction.mockResolvedValue({
+      success: false,
+      error: "rejet e-reporting",
+    });
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result.sendFailed).toBeFalsy();
+    expect(creditNote.eReportingStatus).toBe("ERROR");
+    expect(creditNote.eReportingError).toMatch(/rejet/i);
+  });
+
+  it("NONE → aucun envoi, statut NOT_SENT", async () => {
+    eInvoiceRoutingService.determineFlowType.mockReturnValue({
+      flowType: "NONE",
+      reason: "Obligation pas encore active",
+      details: {},
+    });
+
+    const creditNote = buildCreditNote();
+    const result = await evaluateAndRouteCreditNote(creditNote, WORKSPACE_ID);
+
+    expect(result.flowType).toBe("NONE");
+    expect(creditNote.eInvoiceStatus).toBe("NOT_SENT");
+    expect(superPdpService.sendCreditNote).not.toHaveBeenCalled();
+    expect(superPdpService.submitB2cTransaction).not.toHaveBeenCalled();
   });
 });

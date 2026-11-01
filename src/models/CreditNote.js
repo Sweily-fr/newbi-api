@@ -334,6 +334,85 @@ const creditNoteSchema = new mongoose.Schema(
     archivedPdfKey: { type: String },
     archivedPdfStoredAt: { type: Date },
     archivedPdfSource: { type: String, enum: ["NEWBI"] },
+
+    // === E-INVOICING / E-REPORTING (SuperPDP) ===
+    // Un avoir est une facture au sens de la réforme (UNTDID 1001 type 381) :
+    // il suit le même routage que les factures (mêmes champs que Invoice).
+
+    superPdpInvoiceId: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+
+    // Statut d'affichage dérivé du dernier événement SuperPDP (même enum que Invoice)
+    eInvoiceStatus: {
+      type: String,
+      enum: [
+        "NOT_SENT",
+        "PENDING_VALIDATION",
+        "VALIDATED",
+        "SENT_TO_RECIPIENT",
+        "RECEIVED",
+        "ACCEPTED",
+        "PARTIALLY_ACCEPTED",
+        "DISPUTED",
+        "ON_HOLD",
+        "REFUSED",
+        "PAYMENT_SENT",
+        "REJECTED",
+        "PAID",
+        "ERROR",
+      ],
+      default: "NOT_SENT",
+    },
+
+    // Historique brut des événements SuperPDP (codes api:* / fr:* / ppf:*)
+    eInvoiceEvents: [
+      {
+        code: { type: String },
+        label: { type: String },
+        occurredAt: { type: Date },
+      },
+    ],
+
+    eInvoiceLastCode: { type: String },
+    eInvoiceSentAt: { type: Date },
+    eInvoiceError: { type: String },
+
+    // Type de flux déterminé par le routage (même logique que les factures)
+    eInvoiceFlowType: {
+      type: String,
+      enum: [
+        "E_INVOICING",
+        "E_REPORTING_TRANSACTION",
+        "E_REPORTING_PAYMENT",
+        "NONE",
+      ],
+      default: "NONE",
+    },
+    eInvoiceFlowReason: String,
+    eInvoiceRoutingDetails: {
+      isB2B: Boolean,
+      sellerInFrance: Boolean,
+      clientInFrance: Boolean,
+      sellerVatRegistered: Boolean,
+      clientVatRegistered: Boolean,
+      obligationActive: Boolean,
+      companySize: String,
+      evaluatedAt: Date,
+    },
+
+    // E-reporting transaction (avoir B2C/international : déclaration en négatif).
+    // Pas de eReportingPaymentStatus sur les avoirs : le remboursement éventuel
+    // relève du flux paiement de la facture d'origine.
+    eReportingStatus: {
+      type: String,
+      enum: ["NOT_REPORTED", "PENDING_REPORT", "REPORTED", "ERROR"],
+      default: "NOT_REPORTED",
+    },
+    eReportingTransactionId: { type: String },
+    eReportingError: { type: String },
   },
   {
     timestamps: true,

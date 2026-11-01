@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import Invoice from "../models/Invoice.js";
+import CreditNote from "../models/CreditNote.js";
 import superPdpService from "../services/superPdpService.js";
 import logger from "../utils/logger.js";
 
@@ -113,6 +114,56 @@ async function retryEReportings() {
 }
 
 /**
+ * Réessaie les déclarations e-reporting des AVOIRS en erreur (déclaration en
+ * négatif, même signe que lors du routage initial).
+ * @returns {Promise<{checked: number, updated: number}>}
+ */
+async function retryCreditNoteEReportings() {
+  const creditNotes = await CreditNote.find({
+    eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+    eReportingStatus: "ERROR",
+  })
+    .sort({ updatedAt: 1 })
+    .limit(BATCH_LIMIT);
+
+  if (creditNotes.length === 0) {
+    return { checked: 0, updated: 0 };
+  }
+
+  let updated = 0;
+
+  for (const creditNote of creditNotes) {
+    try {
+      const result = await superPdpService.submitB2cTransaction(
+        creditNote.workspaceId.toString(),
+        creditNote,
+        { sign: -1 },
+      );
+      if (result.success) {
+        creditNote.eReportingStatus = "REPORTED";
+        creditNote.eReportingTransactionId = result.id
+          ? String(result.id)
+          : creditNote.eReportingTransactionId;
+        creditNote.eReportingError = null;
+        updated++;
+        logger.info(
+          `[ereporting-retry] avoir ${creditNote.prefix || ""}${creditNote.number} → REPORTED`,
+        );
+      } else {
+        creditNote.eReportingError = result.error;
+      }
+      await creditNote.save();
+    } catch (error) {
+      logger.warn(
+        `[ereporting-retry] échec avoir ${creditNote._id}: ${error.message}`,
+      );
+    }
+  }
+
+  return { checked: creditNotes.length, updated };
+}
+
+/**
  * Démarre le cron de relance e-reporting.
  */
 function startEReportingRetryCron() {
@@ -127,6 +178,12 @@ function startEReportingRetryCron() {
         if (checked > 0) {
           logger.info(
             `[ereporting-retry] ${checked} facture(s) en erreur, ${updated} déclarée(s) avec succès`,
+          );
+        }
+        const creditNoteResult = await retryCreditNoteEReportings();
+        if (creditNoteResult.checked > 0) {
+          logger.info(
+            `[ereporting-retry] ${creditNoteResult.checked} avoir(s) en erreur, ${creditNoteResult.updated} déclaré(s) avec succès`,
           );
         }
       } catch (error) {
@@ -156,4 +213,9 @@ function stopEReportingRetryCron() {
   }
 }
 
-export { startEReportingRetryCron, stopEReportingRetryCron, retryEReportings };
+export {
+  startEReportingRetryCron,
+  stopEReportingRetryCron,
+  retryEReportings,
+  retryCreditNoteEReportings,
+};
