@@ -75,20 +75,12 @@ import {
 const ALLOWED_WITHOUT_SUBSCRIPTION = {
   // Compte, préférences et données personnelles de l'utilisateur
   account: [
-    "login",
-    "register",
-    "verifyEmail",
-    "resendVerificationEmail",
-    "requestPasswordReset",
-    "resetPassword",
     "updatePassword",
     "updateProfile",
     "uploadProfilePicture",
     "deleteProfilePicture",
     "uploadUserProfileImage",
     "deleteUserProfileImage",
-    "disableAccount",
-    "reactivateAccount",
     "requestAccountDeletion",
     "cancelAccountDeletion",
     "confirmAccountDeletion",
@@ -106,7 +98,6 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "updateCompany",
     "uploadCompanyLogo",
     "deleteCompanyLogo",
-    "setStripeCustomerId",
     "connectStripe",
     "linkInvitedUserToNewbi",
     "regenerateCalendarFeedLink",
