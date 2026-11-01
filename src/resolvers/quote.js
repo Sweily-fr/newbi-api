@@ -64,6 +64,7 @@ import {
   cancelActiveQuoteSignatures,
   findActiveClientQuoteSignature,
 } from "../services/quoteSignatureSync.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 // (règles communes aux documents de vente : voir utils/documentTotals.js,
@@ -699,6 +700,7 @@ const quoteResolvers = {
     createQuote: requireCompanyInfo(
       requireAction("quotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -1064,6 +1066,7 @@ const quoteResolvers = {
 
     updateQuote: requireCompanyInfo(
       requireWrite("quotes")(async (_, { id, input }, context) => {
+        assertDocumentAppearance(input?.appearance);
         const { user, workspaceId } = context;
         // ✅ FIX: Utiliser workspaceId au lieu de createdBy pour permettre aux membres de l'org de voir/modifier
         const quote = await Quote.findOne({

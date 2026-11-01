@@ -55,6 +55,7 @@ import {
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 /**
  * Libère un numéro définitif occupé par un brouillon (même mécanique que
@@ -477,6 +478,7 @@ const purchaseOrderResolvers = {
     createPurchaseOrder: requireCompanyInfo(
       requireAction("purchaseOrders", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -734,6 +736,7 @@ const purchaseOrderResolvers = {
     updatePurchaseOrder: requireCompanyInfo(
       requireWrite("purchaseOrders")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user, workspaceId } = context;
           const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 

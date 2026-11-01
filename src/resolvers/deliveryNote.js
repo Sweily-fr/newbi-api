@@ -54,6 +54,7 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import { DELIVERY_NOTE_STATUS } from "../models/constants/enums.js";
 import { keepHiddenItemPrices } from "../utils/deliveryNoteItemPrices.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 const FINALIZED_DN_STATUSES = ["PENDING", "SHIPPED", "DELIVERED", "CANCELED"];
 
@@ -561,6 +562,7 @@ const deliveryNoteResolvers = {
     createDeliveryNote: requireCompanyInfo(
       requireAction("deliveryNotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -779,6 +781,7 @@ const deliveryNoteResolvers = {
     updateDeliveryNote: requireCompanyInfo(
       requireWrite("deliveryNotes")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user, workspaceId } = context;
           const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
 

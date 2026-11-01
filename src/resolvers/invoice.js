@@ -80,6 +80,7 @@ import {
   creditedTTCForWorkspace,
   isCoveredByCredit,
 } from "../utils/invoiceCredit.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 // ✅ Ancien middleware withWorkspace supprimé - Remplacé par withRBAC de rbac.js
 
@@ -1159,6 +1160,7 @@ const invoiceResolvers = {
     createInvoice: requireCompanyInfo(
       requireAction("invoices", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -1942,6 +1944,7 @@ const invoiceResolvers = {
     updateInvoice: requireCompanyInfo(
       requireWrite("invoices")(
         async (_, { id, workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
