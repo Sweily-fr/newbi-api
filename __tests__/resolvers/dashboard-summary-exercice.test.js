@@ -58,6 +58,8 @@ beforeEach(async () => {
     entries.map(([day, amount]) => ({
       workspaceId: ws(),
       provider: "bridge",
+      // Index unique (provider, externalId) : un identifiant par transaction
+      externalId: `test-${day}`,
       status: "completed",
       deletedAt: null,
       amount,
