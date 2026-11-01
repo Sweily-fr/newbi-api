@@ -18,6 +18,7 @@ import EmailSignatureTemplateV2 from "../models/EmailSignatureTemplateV2.js";
 import SmtpSettings from "../models/SmtpSettings.js";
 import Integration from "../models/Integration.js";
 import FileTransfer from "../models/FileTransfer.js";
+import { deleteTransferStorage } from "../utils/transferStorage.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import GmailConnection from "../models/GmailConnection.js";
 import Notification from "../models/Notification.js";
@@ -188,6 +189,9 @@ export async function deleteUserAccount(userId, organizationId) {
     fileTransfersDeleted: 0,
     organizationDeleted: false,
   };
+
+  // Transferts supprimés : leurs fichiers R2 sont effacés après validation
+  let transfersToPurge = [];
 
   try {
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -426,11 +430,25 @@ export async function deleteUserAccount(userId, organizationId) {
       .deleteMany({ userId: userObjectId }, { session });
 
     // --- Transferts de fichiers ---
+    // Personnels (filtrés sur leur auteur, userId) : ils partent avec le
+    // compte, quel que soit l'espace. Le filtre portait sur un champ
+    // createdBy absent du modèle et ne supprimait rien.
+    transfersToPurge = await FileTransfer.find(
+      { userId: userObjectId },
+      { _id: 1, files: 1 },
+    )
+      .session(session)
+      .lean();
     const ftResult = await FileTransfer.deleteMany({
-      workspaceId: orgObjectId,
-      createdBy: userObjectId,
+      userId: userObjectId,
     }).session(session);
     summary.fileTransfersDeleted = ftResult.deletedCount;
+    await db
+      .collection("downloadevents")
+      .deleteMany(
+        { transferId: { $in: transfersToPurge.map((t) => t._id) } },
+        { session },
+      );
 
     // --- Notifications ---
     await Notification.deleteMany({
@@ -524,6 +542,7 @@ export async function deleteUserAccount(userId, organizationId) {
       { name: "events", filter: { workspaceId: orgObjectId } },
       { name: "shareddocuments", filter: { workspaceId: orgObjectId } },
       { name: "sharedfolders", filter: { workspaceId: orgObjectId } },
+      { name: "sharedtags", filter: { workspaceId: orgObjectId } },
       { name: "publicboardshares", filter: { workspaceId: orgObjectId } },
       { name: "signaturerequests", filter: { workspaceId: orgObjectId } },
       { name: "stripeconnectaccounts", filter: { workspaceId: orgObjectId } },
@@ -581,6 +600,11 @@ export async function deleteUserAccount(userId, organizationId) {
       );
       // TODO: Implement async R2 cleanup via queue/worker
       // For now, these keys are logged for manual or future automated cleanup
+    }
+
+    // Fichiers R2 des transferts supprimés (un échec n'annule rien)
+    for (const transfer of transfersToPurge) {
+      await deleteTransferStorage(transfer);
     }
 
     // Images de signature (photo, logo, bannière) : supprimées maintenant,
@@ -770,8 +794,8 @@ export async function exportUserData(userId, organizationId) {
 
   // --- Transferts de fichiers ---
   const fileTransfers = await FileTransfer.find({
-    workspaceId: orgObjectId,
-    createdBy: userObjectId,
+    userId: userObjectId,
+    workspaceId: { $in: [orgObjectId, null] },
   })
     .lean()
     .exec();
