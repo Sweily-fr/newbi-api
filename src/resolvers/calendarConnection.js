@@ -15,6 +15,10 @@ import {
 import logger from "../utils/logger.js";
 import { accessibleEventFilter } from "../utils/eventAccess.js";
 import {
+  CALDAV_URL_REFUSED,
+  isAllowedCalDavUrl,
+} from "../services/calendar/providers/AppleCalendarProvider.js";
+import {
   checkSubscriptionActive,
   requireWorkspaceAction,
 } from "../middlewares/rbac.js";
@@ -103,6 +107,15 @@ const calendarConnectionResolvers = {
     connectAppleCalendar: async (_, { input }, { user }) => {
       if (!user) {
         return { success: false, message: "Non authentifié", connection: null };
+      }
+
+      // Adresse CalDAV : iCloud seulement, refusée avant toute requête
+      if (!isAllowedCalDavUrl(input.calDavUrl)) {
+        return {
+          success: false,
+          message: CALDAV_URL_REFUSED,
+          connection: null,
+        };
       }
 
       try {

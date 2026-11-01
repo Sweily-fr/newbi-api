@@ -8,6 +8,31 @@ import logger from "../../../utils/logger.js";
 
 const DEFAULT_CALDAV_URL = "https://caldav.icloud.com";
 
+export const CALDAV_URL_REFUSED =
+  "Adresse du serveur CalDAV non autorisée : seul iCloud est accepté.";
+
+/**
+ * Adresse CalDAV acceptée : iCloud en https seulement (caldav.icloud.com et
+ * les serveurs pXX-caldav.icloud.com vers lesquels il redirige). Toute autre
+ * adresse (réseau interne, métadonnées du serveur, fichier…) est refusée
+ * avant la moindre requête.
+ */
+export function isAllowedCalDavUrl(rawUrl) {
+  if (!rawUrl) return true;
+  let url;
+  try {
+    url = new URL(String(rawUrl));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password) return false;
+  if (url.port && url.port !== "443") return false;
+  const host = url.hostname.toLowerCase();
+  return (
+    host === "caldav.icloud.com" || /^p\d+-caldav\.icloud\.com$/.test(host)
+  );
+}
+
 export default class AppleCalendarProvider {
   /**
    * Filter calendars to only include VEVENT calendars (exclude VTODO/reminders)
@@ -24,6 +49,11 @@ export default class AppleCalendarProvider {
    * Validate CalDAV credentials and return a client
    */
   async connect(username, password, calDavUrl) {
+    if (!isAllowedCalDavUrl(calDavUrl)) {
+      const error = new Error(CALDAV_URL_REFUSED);
+      error.calDavUrlRefused = true;
+      throw error;
+    }
     const serverUrl = calDavUrl || DEFAULT_CALDAV_URL;
 
     const client = await createDAVClient({
@@ -89,6 +119,7 @@ export default class AppleCalendarProvider {
       };
     } catch (error) {
       logger.error("Apple CalDAV validation failed:", error.message);
+      if (error.calDavUrlRefused) return { valid: false, error: error.message };
       return { valid: false, error: this._translateError(error) };
     }
   }
