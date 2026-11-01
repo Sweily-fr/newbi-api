@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { assertClientNotBlocked } from "../utils/blockedClient.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import {
@@ -489,6 +490,9 @@ const purchaseOrderResolvers = {
               ERROR_CODES.BAD_REQUEST,
             );
           }
+
+          // Contact bloqué : exclu de la création de documents
+          await assertClientNotBlocked(workspaceId, input.client?.id);
 
           // Déterminer le préfixe
           let prefix = input.prefix;

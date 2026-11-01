@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { assertClientNotBlocked } from "../utils/blockedClient.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
@@ -712,6 +713,9 @@ const quoteResolvers = {
               ERROR_CODES.BAD_REQUEST,
             );
           }
+
+          // Contact bloqué : exclu de la création de documents
+          await assertClientNotBlocked(workspaceId, input.client?.id);
 
           logger.debug("🔍 [createQuote] Input received:", {
             prefix: input.prefix,
