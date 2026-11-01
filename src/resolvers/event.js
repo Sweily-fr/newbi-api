@@ -62,6 +62,9 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 
 const CALENDAR_EVENTS_CHANGED = "CALENDAR_EVENTS_CHANGED";
 
+// Plafond d'une page de getEvents (le site en demande 500)
+export const MAX_EVENTS_PER_PAGE = 1000;
+
 // Rendez-vous pris sur une page de réservation : gérés (déplacés, annulés)
 // depuis la prise de rendez-vous, qui prévient l'invité
 const APPOINTMENT_MANAGED_ELSEWHERE =
@@ -216,6 +219,12 @@ const eventResolvers = {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
           const userId = user?.id || user?._id;
           const hiddenTypes = hiddenDocumentEventTypes(permissions);
+          // Page bornée : une seule requête ne charge pas tout l'historique
+          const boundedLimit = Math.min(
+            Math.max(Number.parseInt(limit, 10) || 0, 1),
+            MAX_EVENTS_PER_PAGE,
+          );
+          const boundedOffset = Math.max(Number.parseInt(offset, 10) || 0, 0);
           if (type && hiddenTypes.includes(type)) {
             return {
               success: true,
@@ -279,8 +288,8 @@ const eventResolvers = {
               },
             })
             .sort({ start: 1 })
-            .limit(limit)
-            .skip(offset);
+            .limit(boundedLimit)
+            .skip(boundedOffset);
 
           const totalCount = await Event.countDocuments(filter);
 

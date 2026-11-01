@@ -57,7 +57,9 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import { invalidateOrganizationRoles } from "../../src/services/organizationRoleService.js";
 import Event from "../../src/models/Event.js";
 import CalendarConnection from "../../src/models/CalendarConnection.js";
-import eventResolvers from "../../src/resolvers/event.js";
+import eventResolvers, {
+  MAX_EVENTS_PER_PAGE,
+} from "../../src/resolvers/event.js";
 import calendarConnectionResolvers from "../../src/resolvers/calendarConnection.js";
 import { pushEventToCalendar } from "../../src/services/calendar/CalendarSyncService.js";
 
@@ -380,5 +382,32 @@ describe("Membres assignés limités à l'espace", () => {
       { db: mongoose.connection.db },
     );
     expect(members.map((m) => m.email)).toEqual(["eli@agenda.test"]);
+  });
+});
+
+describe("getEvents : page bornée", () => {
+  it("une limite démesurée est ramenée au plafond", async () => {
+    await Event.collection.insertMany(
+      Array.from({ length: MAX_EVENTS_PER_PAGE + 5 }, (_, i) => ({
+        title: `Événement ${i}`,
+        type: "MANUAL",
+        start: new Date(day.getTime() + i * 60_000),
+        end: new Date(day.getTime() + i * 60_000),
+        workspaceId,
+        userId: owner,
+        visibility: "workspace",
+        source: "newbi",
+      })),
+    );
+
+    const result = await Query.getEvents(
+      null,
+      { workspaceId: ws(), limit: 1_000_000, offset: -3 },
+      { ...ctx(owner), db: mongoose.connection.db },
+      info("getEvents"),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.events).toHaveLength(MAX_EVENTS_PER_PAGE);
   });
 });
