@@ -193,16 +193,21 @@ describe("requestWithdrawal : refus", () => {
     expect(await Withdrawal.countDocuments()).toBe(0);
   });
 
-  it.each([28, 31, 1, 5])("dans la période (le %i du mois) : accepté", async (day) => {
-    // Octobre 2026 compte 31 jours
-    setDay(day);
-    await seedEarnings(partnerId, 500);
-    const result = await request(asPartner(partnerId), 100);
-    expect(result.success).toBe(true);
-  });
+  it.each([28, 31, 1, 5])(
+    "dans la période (le %i du mois) : accepté",
+    async (day) => {
+      // Octobre 2026 compte 31 jours
+      setDay(day);
+      await seedEarnings(partnerId, 500);
+      const result = await request(asPartner(partnerId), 100);
+      expect(result.success).toBe(true);
+    },
+  );
 
   it("sans session : refusé", async () => {
-    await expect(request({ user: null }, 100)).rejects.toThrow("Non authentifié");
+    await expect(request({ user: null }, 100)).rejects.toThrow(
+      "Non authentifié",
+    );
   });
 });
 

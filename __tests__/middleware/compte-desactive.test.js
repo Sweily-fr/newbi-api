@@ -63,10 +63,22 @@ const cookieReq = (token) => ({
 const jwtReq = () => ({ headers: { authorization: "Bearer jeton.de.test" } });
 
 const CASES = [
-  { label: "compte actif (isActive: true)", extra: { isActive: true }, accepted: true },
+  {
+    label: "compte actif (isActive: true)",
+    extra: { isActive: true },
+    accepted: true,
+  },
   { label: "compte sans champ isActive", extra: {}, accepted: true },
-  { label: "compte désactivé par le site (isActive: false)", extra: { isActive: false }, accepted: false },
-  { label: "compte désactivé (isDisabled: true)", extra: { isDisabled: true }, accepted: false },
+  {
+    label: "compte désactivé par le site (isActive: false)",
+    extra: { isActive: false },
+    accepted: false,
+  },
+  {
+    label: "compte désactivé (isDisabled: true)",
+    extra: { isDisabled: true },
+    accepted: false,
+  },
 ];
 
 beforeAll(async () => {
@@ -90,7 +102,10 @@ describe("authentification par cookie de session (better-auth.js)", () => {
       if (accepted) {
         expect(user?._id?.toString()).toBe(_id.toString());
       } else {
-        expect(user, "un compte désactivé ne doit pas être authentifié").toBeNull();
+        expect(
+          user,
+          "un compte désactivé ne doit pas être authentifié",
+        ).toBeNull();
       }
     });
   }
@@ -105,7 +120,10 @@ describe("authentification par JWT (better-auth-jwt.js, aussi utilisé par les W
       if (accepted) {
         expect(user?._id?.toString()).toBe(_id.toString());
       } else {
-        expect(user, "un compte désactivé ne doit pas être authentifié").toBeNull();
+        expect(
+          user,
+          "un compte désactivé ne doit pas être authentifié",
+        ).toBeNull();
       }
     });
   }
