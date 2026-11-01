@@ -687,6 +687,25 @@ describe("connexion des comptes", () => {
       "/dashboard/outils/kanban",
     );
     expect(sanitizeReturnTo("/dashboardx")).toBe("/dashboard/outils/kanban");
+    for (const piege of [
+      "/\\evil.test",
+      "/dashboard/\\evil.test",
+      "/dashboard/../x",
+      "/dashboard/%2e%2e/x",
+      "/dashboard\u0000/x",
+      "javascript:alert(1)//dashboard",
+      `/dashboard/${"a".repeat(600)}`,
+      null,
+      42,
+    ]) {
+      expect(sanitizeReturnTo(piege), String(piege).slice(0, 40)).toMatch(
+        /^\/dashboard(\/|$|\?)/,
+      );
+      expect(sanitizeReturnTo(piege)).not.toMatch(/evil|\.\.|javascript/);
+    }
+    expect(sanitizeReturnTo("/dashboard/../x")).toBe(
+      "/dashboard/outils/kanban",
+    );
   });
 
   it("adresse de retour courte (limite du state OAuth de X), jeton à usage unique", async () => {
