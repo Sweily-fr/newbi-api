@@ -33,14 +33,6 @@ type UserProfile {
   profilePicture: String
 }
 
-input RegisterInput {
-  email: String!
-  password: String!
-  passwordEncrypted: Boolean
-  profile: UserProfileInput
-  company: CompanyInput
-}
-
 input UserProfileInput {
   firstName: String
   lastName: String
@@ -48,52 +40,9 @@ input UserProfileInput {
   profilePicture: String
 }
 
-input LoginInput {
-  email: String!
-  password: String!
-  rememberMe: Boolean
-  passwordEncrypted: Boolean
-}
-
-input ResetPasswordInput {
-  email: String!
-}
-
-input UpdatePasswordInput {
-  token: String!
-  newPassword: String!
-  passwordEncrypted: Boolean
-}
-
-type AuthPayload {
-  token: String!
-  user: User!
-}
-
-type RegisterResponse {
-  user: User!
-  message: String!
-}
-
 type ResetPasswordResponse {
   success: Boolean!
   message: String!
-}
-
-type EmailVerificationResponse {
-  success: Boolean!
-  message: String!
-}
-
-type DisableAccountResponse {
-  success: Boolean!
-  message: String!
-}
-
-type ReactivateAccountResponse {
-  success: Boolean!
-  message: String!
-  user: User
 }
 
 type UserEmailLookup {
@@ -107,11 +56,13 @@ extend type Query {
   lookupUsersByEmails(emails: [String!]!): [UserEmailLookup!]!
 }
 
+# Inscription, connexion, mot de passe oublié, vérification d'adresse,
+# désactivation et réactivation du compte : gérés par Better Auth et les
+# routes du site. Les anciennes mutations GraphQL (register, login,
+# requestPasswordReset, resetPassword, verifyEmail, resendVerificationEmail,
+# disableAccount, reactivateAccount, setStripeCustomerId), sans appelant,
+# ont été retirées du schéma.
 extend type Mutation {
-  register(input: RegisterInput!): RegisterResponse!
-  login(input: LoginInput!): AuthPayload!
-  requestPasswordReset(input: ResetPasswordInput!): Boolean!
-  resetPassword(input: UpdatePasswordInput!): ResetPasswordResponse!
   updateProfile(input: UserProfileInput!): User!
   updateCompany(input: CompanyInput!): User!
   updateCompanyLogo(logoUrl: String, workspaceId: ID!): User!
@@ -123,13 +74,5 @@ extend type Mutation {
     currentPassword: String!
     newPassword: String!
   ): ResetPasswordResponse!
-  verifyEmail(token: String!): EmailVerificationResponse!
-  resendVerificationEmail(email: String!): Boolean!
-  disableAccount(password: String!): DisableAccountResponse!
-  reactivateAccount(
-    email: String!
-    password: String!
-  ): ReactivateAccountResponse!
-  setStripeCustomerId(stripeCustomerId: String!): User!
   updatePartnerStatus(email: String!, isPartner: Boolean!): User!
 }

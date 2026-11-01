@@ -19,6 +19,12 @@ import {
 } from "../utils/reconciliationMatching.js";
 import { transactionHasNoLinks } from "../utils/transactionLinks.js";
 import {
+  DEBIT_ON_SALES_INVOICE_MESSAGE,
+  IGNORE_LINKED_TRANSACTION_MESSAGE,
+  isBankDebitTransaction,
+  transactionHasLinkedDocuments,
+} from "../utils/reconciliationDirection.js";
+import {
   reconciliationPaymentMarker,
   unlinkTransactionFromSalesInvoice,
 } from "../utils/salesInvoiceLink.js";
@@ -301,6 +307,10 @@ const reconciliationResolvers = {
               message: `Impossible de rapprocher une facture au statut ${targetInvoice.status}`,
             };
           }
+          // Une facture de vente est payée par une entrée d'argent.
+          if (await isBankDebitTransaction(transactionId, workspaceId)) {
+            return { success: false, message: DEBIT_ON_SALES_INVOICE_MESSAGE };
+          }
 
           // Origine du lien (étiquette « rapproché depuis… »), si le client
           // l'a précisée.
@@ -466,6 +476,10 @@ const reconciliationResolvers = {
               success: false,
               message: `Impossible de rapprocher une facture importée au statut ${target.status}`,
             };
+          }
+          // Une facture client est payée par une entrée d'argent.
+          if (await isBankDebitTransaction(transactionId, workspaceId)) {
+            return { success: false, message: DEBIT_ON_SALES_INVOICE_MESSAGE };
           }
 
           const linkEntry = buildReconciliationLinkEntry({
@@ -633,6 +647,14 @@ const reconciliationResolvers = {
       async (parent, { input }, { user, workspaceId }) => {
         try {
           const { transactionId } = input;
+
+          // Une transaction rattachée resterait liée tout en étant ignorée.
+          if (await transactionHasLinkedDocuments(transactionId, workspaceId)) {
+            return {
+              success: false,
+              message: IGNORE_LINKED_TRANSACTION_MESSAGE,
+            };
+          }
 
           const transaction = await setReconciliationIgnored(
             transactionId,

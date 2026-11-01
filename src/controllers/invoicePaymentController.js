@@ -42,11 +42,19 @@ export const redirectToInvoicePayment = async (req, res) => {
       ? await Invoice.findById(invoiceId)
       : null;
     if (!invoice) {
-      return infoPage(res, 404, "Facture introuvable", "Ce lien de paiement n'est plus valide.");
+      return infoPage(
+        res,
+        404,
+        "Facture introuvable",
+        "Ce lien de paiement n'est plus valide.",
+      );
     }
 
     // Déjà payée → page de succès
-    if (invoice.status === "COMPLETED" || invoice.stripePaymentStatus === "paid") {
+    if (
+      invoice.status === "COMPLETED" ||
+      invoice.stripePaymentStatus === "paid"
+    ) {
       return res.redirect(`${FRONTEND_URL}/pay/invoice/${invoiceId}/success`);
     }
 
@@ -134,7 +142,10 @@ export const handleInvoicePaymentWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  let result = { status: "ignored", message: `Événement non géré: ${event.type}` };
+  let result = {
+    status: "ignored",
+    message: `Événement non géré: ${event.type}`,
+  };
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
@@ -148,14 +159,44 @@ export const handleInvoicePaymentWebhook = async (req, res) => {
       const { invoiceId } = session.metadata;
       const invoice = await Invoice.findById(invoiceId);
 
+      const reference = invoice
+        ? `${invoice.prefix || ""}${invoice.prefix ? "-" : ""}${invoice.number}`
+        : invoiceId;
+
       if (!invoice) {
         result = { status: "error", message: "Facture non trouvée" };
       } else if (
         invoice.stripePaymentStatus === "paid" ||
         invoice.status === "COMPLETED"
       ) {
-        // Idempotence : déjà traitée
-        result = { status: "ignored", message: "Facture déjà marquée comme payée" };
+        if (invoice.stripeCheckoutSessionId === session.id) {
+          // Idempotence : même session déjà traitée (Stripe rejoue l'événement)
+          result = {
+            status: "ignored",
+            message: "Facture déjà marquée comme payée",
+          };
+        } else {
+          // Facture déjà réglée (autre session ou paiement enregistré à la
+          // main) : ce second encaissement est à rembourser, on le signale.
+          logger.error(
+            `[invoice-payment] ANOMALIE : second paiement reçu pour la facture ${reference} déjà payée (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser`,
+          );
+          result = {
+            status: "anomaly",
+            message: "Facture déjà payée : second paiement à rembourser",
+          };
+        }
+      } else if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
+        // Facture annulée (ou repassée en brouillon) après l'ouverture de la
+        // session de paiement : elle reste en l'état, l'encaissement est
+        // signalé pour être remboursé ou réaffecté.
+        logger.error(
+          `[invoice-payment] ANOMALIE : paiement reçu pour la facture ${reference} au statut ${invoice.status} (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser ou réaffecter`,
+        );
+        result = {
+          status: "anomaly",
+          message: `Paiement reçu sur une facture au statut ${invoice.status} : non appliqué`,
+        };
       } else {
         await applyInvoicePaid(invoice, {
           paymentDate: new Date(),

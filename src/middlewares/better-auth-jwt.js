@@ -10,6 +10,7 @@ import { getActiveOrganizationCached } from "./org-cache.js";
 import {
   loadCachedUser,
   invalidateUserCache,
+  isUserAccessDenied,
 } from "./user-cache.js";
 
 export { invalidateUserCache };
@@ -90,7 +91,7 @@ const betterAuthJWTMiddleware = async (req) => {
     const user = await loadCachedUser(decoded.sub, () =>
       User.findById(decoded.sub),
     );
-    if (!user || user.isDisabled) {
+    if (isUserAccessDenied(user)) {
       return null;
     }
 

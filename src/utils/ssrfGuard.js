@@ -59,6 +59,21 @@ function isPrivateIpv4(host) {
 }
 
 /**
+ * Adresse IPv6 qui porte une adresse IPv4 (::ffff:a.b.c.d, ::a.b.c.d), sous
+ * la forme normalisée par URL (::ffff:7f00:1) : l'adresse IPv4 portée, ou
+ * null.
+ */
+function embeddedIpv4(host) {
+  const dotted = host.match(/^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted) return dotted[1];
+  const hex = host.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (!hex) return null;
+  const high = parseInt(hex[1], 16);
+  const low = parseInt(hex[2], 16);
+  return [high >> 8, high & 255, low >> 8, low & 255].join(".");
+}
+
+/**
  * Valide une URL de téléchargement. Lève une Error si l'URL est jugée dangereuse.
  * @param {string} rawUrl
  * @returns {URL} l'URL parsée si autorisée
@@ -86,9 +101,12 @@ export function assertSafeDownloadUrl(rawUrl) {
     throw new Error("Hôte de téléchargement non autorisé");
   }
 
+  const mappedIpv4 = embeddedIpv4(host);
   if (
     isPrivateIpv4(host) ||
+    (mappedIpv4 && isPrivateIpv4(mappedIpv4)) ||
     host === "::1" ||
+    host === "::" ||
     host === "0.0.0.0" ||
     host.startsWith("fd") ||
     host.startsWith("fe80") ||

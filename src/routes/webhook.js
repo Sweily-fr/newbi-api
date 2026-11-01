@@ -172,13 +172,12 @@ router.post("/bridge", rawBodyParser, async (req, res) => {
   }
 });
 
-// Endpoint de test pour vérifier que le webhook fonctionne
+// Endpoint de test pour vérifier que le webhook répond (public : il ne
+// révèle ni l'URL configurée ni la présence du secret)
 router.get("/bridge/test", (req, res) => {
   res.json({
     message: "Webhook endpoint is working",
     timestamp: new Date().toISOString(),
-    webhookUrl: process.env.BRIDGE_WEBHOOK_URL,
-    hasSecret: !!process.env.BRIDGE_WEBHOOK_SECRET,
   });
 });
 

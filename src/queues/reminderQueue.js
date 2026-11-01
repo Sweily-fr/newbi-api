@@ -43,77 +43,88 @@ const reminderQueue = new Queue("invoice-reminders", {
 let reminderWorker = null;
 
 /**
+ * Traite un job de relance. L'état est relu au moment de l'envoi : le job a
+ * pu être mis en file (planification horaire, 2 s d'écart entre factures,
+ * nouvelles tentatives) avant un paiement, une annulation, un avoir, la
+ * désactivation des relances ou l'exclusion du client.
+ */
+async function processReminderJob(job) {
+  const { invoiceId, reminderType, workspaceId } = job.data;
+
+  logger.debug(
+    `📧 [Queue] Traitement relance ${reminderType} pour facture ${invoiceId}`,
+  );
+
+  try {
+    // Récupérer la facture
+    const invoice = await Invoice.findById(invoiceId).populate("client");
+    if (!invoice) {
+      throw new Error(`Facture ${invoiceId} non trouvée`);
+    }
+
+    // Vérifier que la relance n'a pas déjà été envoyée (double check)
+    const alreadySent = await InvoiceReminderLog.findOne({
+      invoiceId: invoice._id,
+      reminderType: reminderType,
+      status: "SENT",
+    });
+
+    if (alreadySent) {
+      logger.debug(
+        `⏭️ [Queue] Relance ${reminderType} déjà envoyée pour ${invoice.number}`,
+      );
+      return { skipped: true, reason: "already_sent" };
+    }
+
+    if (!["PENDING", "OVERDUE"].includes(invoice.status)) {
+      return { skipped: true, reason: "not_due" };
+    }
+    if (await isInvoiceFullyCredited(invoice)) {
+      return { skipped: true, reason: "fully_credited" };
+    }
+
+    // Récupérer les paramètres de relance
+    const settings = await InvoiceReminderSettings.findOne({ workspaceId });
+    if (!settings) {
+      throw new Error(
+        `Paramètres de relance non trouvés pour workspace ${workspaceId}`,
+      );
+    }
+    // Relances désactivées depuis la planification
+    if (!settings.enabled) {
+      return { skipped: true, reason: "disabled" };
+    }
+    // Client exclu des relances depuis la planification
+    const excluded = (settings.excludedClientIds || []).map(String);
+    if (invoice.client?.id && excluded.includes(String(invoice.client.id))) {
+      return { skipped: true, reason: "client_excluded" };
+    }
+
+    // Envoyer la relance
+    await sendReminderEmail(invoice, settings, reminderType);
+
+    logger.debug(
+      `✅ [Queue] Relance ${reminderType} envoyée pour ${invoice.number}`,
+    );
+    return { success: true, invoiceNumber: invoice.number };
+  } catch (error) {
+    console.error(`❌ [Queue] Erreur relance ${invoiceId}:`, error.message);
+    throw error; // BullMQ va réessayer
+  }
+}
+
+/**
  * Démarre le worker de traitement des relances
  */
 function startReminderWorker() {
-  reminderWorker = new Worker(
-    "invoice-reminders",
-    async (job) => {
-      const { invoiceId, reminderType, workspaceId } = job.data;
-
-      logger.debug(
-        `📧 [Queue] Traitement relance ${reminderType} pour facture ${invoiceId}`,
-      );
-
-      try {
-        // Récupérer la facture
-        const invoice = await Invoice.findById(invoiceId).populate("client");
-        if (!invoice) {
-          throw new Error(`Facture ${invoiceId} non trouvée`);
-        }
-
-        // Vérifier que la relance n'a pas déjà été envoyée (double check)
-        const alreadySent = await InvoiceReminderLog.findOne({
-          invoiceId: invoice._id,
-          reminderType: reminderType,
-          status: "SENT",
-        });
-
-        if (alreadySent) {
-          logger.debug(
-            `⏭️ [Queue] Relance ${reminderType} déjà envoyée pour ${invoice.number}`,
-          );
-          return { skipped: true, reason: "already_sent" };
-        }
-
-        // État revérifié à l'envoi : le job a pu être mis en file avant un
-        // paiement, une annulation ou un avoir.
-        if (!["PENDING", "OVERDUE"].includes(invoice.status)) {
-          return { skipped: true, reason: "not_due" };
-        }
-        if (await isInvoiceFullyCredited(invoice)) {
-          return { skipped: true, reason: "fully_credited" };
-        }
-
-        // Récupérer les paramètres de relance
-        const settings = await InvoiceReminderSettings.findOne({ workspaceId });
-        if (!settings) {
-          throw new Error(
-            `Paramètres de relance non trouvés pour workspace ${workspaceId}`,
-          );
-        }
-
-        // Envoyer la relance
-        await sendReminderEmail(invoice, settings, reminderType);
-
-        logger.debug(
-          `✅ [Queue] Relance ${reminderType} envoyée pour ${invoice.number}`,
-        );
-        return { success: true, invoiceNumber: invoice.number };
-      } catch (error) {
-        console.error(`❌ [Queue] Erreur relance ${invoiceId}:`, error.message);
-        throw error; // BullMQ va réessayer
-      }
+  reminderWorker = new Worker("invoice-reminders", processReminderJob, {
+    connection: redisConnection,
+    concurrency: 5, // Traiter 5 jobs en parallèle max
+    limiter: {
+      max: 10, // Max 10 jobs
+      duration: 1000, // par seconde
     },
-    {
-      connection: redisConnection,
-      concurrency: 5, // Traiter 5 jobs en parallèle max
-      limiter: {
-        max: 10, // Max 10 jobs
-        duration: 1000, // par seconde
-      },
-    },
-  );
+  });
 
   // Événements du worker
   reminderWorker.on("completed", (job, result) => {
@@ -454,6 +465,7 @@ async function stopReminderWorker() {
 
 export {
   reminderQueue,
+  processReminderJob,
   startReminderWorker,
   stopReminderWorker,
   queueReminder,

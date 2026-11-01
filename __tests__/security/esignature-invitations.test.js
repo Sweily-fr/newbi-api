@@ -122,6 +122,32 @@ describe("e-mail d'invitation : valeurs échappées", () => {
     expect(html).toContain('href="https://sign.test/abc?a=1&amp;b=2"');
   });
 
+  it("image piégée, script et préfixe en HTML : échappés, sujet en texte brut", async () => {
+    await sendSignatureInvitations({
+      signerUrls: [
+        {
+          email: "client@exemple.fr",
+          name: "<img src=x onerror=alert(1)>",
+          surname: "O'Connor",
+          url: "https://sign.test/abc",
+        },
+      ],
+      companyName: "A&B <script>alert(1)</script>",
+      documentNumber: "<b>D</b>-000042",
+    });
+    const { html, subject } = sendEmail.mock.calls[0][0];
+    expect(html).not.toMatch(/<img[^>]*onerror/i);
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<b>D</b>");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("A&amp;B &lt;script&gt;");
+    expect(html).toContain("&lt;b&gt;D&lt;/b&gt;-000042");
+    // Le sujet n'est pas du HTML : valeurs reprises telles quelles
+    expect(subject).toBe(
+      "A&B <script>alert(1)</script> vous invite à signer le devis <b>D</b>-000042",
+    );
+  });
+
   it("un lien qui n'est pas http(s) n'entre pas dans le HTML", async () => {
     await sendSignatureInvitations({
       signerUrls: [

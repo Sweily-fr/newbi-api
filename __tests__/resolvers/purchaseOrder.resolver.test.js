@@ -792,6 +792,7 @@ describe("PurchaseOrder Resolver — convertPurchaseOrderToInvoice", () => {
 // ---------------------------------------------------------------------------
 
 // Insère un BC CONFIRMED rattaché à un devis, prêt à être converti
+// Bon de commande validé par le client : facturable (comme à l'écran)
 async function seedConfirmedPO({ sourceQuoteId, prefix, number }) {
   const _id = new mongoose.Types.ObjectId();
   await PurchaseOrder.collection.insertOne({
@@ -800,7 +801,7 @@ async function seedConfirmedPO({ sourceQuoteId, prefix, number }) {
     createdBy: userId,
     number,
     prefix,
-    status: "CONFIRMED",
+    status: "VALIDATED",
     sourceQuoteId,
     items: [
       { description: "Widget", quantity: 2, unitPrice: 500, vatRate: 20 },

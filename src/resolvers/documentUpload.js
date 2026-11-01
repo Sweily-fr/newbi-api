@@ -98,7 +98,15 @@ const documentUploadResolvers = {
           "application/octet-stream", // Support pour les fichiers dont le MIME type n'est pas détecté correctement
         ];
 
-        if (!allowedTypes.includes(finalMimetype)) {
+        // Type non détecté (application/octet-stream) : l'extension, qui
+        // fixe le type servi par R2, doit être celle d'un type accepté. Un
+        // .html ou un .exe passait sous ce type générique.
+        const allowedExtensions = /\.(jpe?g|png|webp|svg|pdf)$/i;
+        if (
+          !allowedTypes.includes(finalMimetype) ||
+          (finalMimetype === "application/octet-stream" &&
+            !allowedExtensions.test(finalFilename || ""))
+        ) {
           throw new Error(
             "Type de fichier non supporté. Types acceptés: JPEG, PNG, WebP, SVG, PDF",
           );

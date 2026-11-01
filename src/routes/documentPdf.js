@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import Quote from "../models/Quote.js";
 import CreditNote from "../models/CreditNote.js";
@@ -45,7 +46,10 @@ router.get("/:docType/:id/document-pdf", validateJWT, async (req, res) => {
     const userId = req.user;
     if (!userId) return res.status(401).json({ error: "Non authentifié" });
 
-    const doc = await config.Model.findById(id);
+    // Identifiant malformé : introuvable (findById lèverait une CastError)
+    const doc = mongoose.isValidObjectId(id)
+      ? await config.Model.findById(id)
+      : null;
     if (!doc) {
       return res.status(404).json({ error: "Document introuvable" });
     }

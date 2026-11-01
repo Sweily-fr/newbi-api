@@ -282,9 +282,16 @@ router.get("/sign/:token/:signerIndex?", async (req, res) => {
         .sort({ createdAt: -1 })
         .lean();
 
+      // Chaque signataire n'est mené qu'à son propre lien : l'URL générale
+      // de la demande ne sert qu'à un signataire unique (comme l'invitation)
+      const signers = Array.isArray(signatureRequest?.signers)
+        ? signatureRequest.signers
+        : [];
       redirectUrl =
-        signatureRequest?.signers?.[idx]?.signingUrl ||
-        signatureRequest?.signingUrl ||
+        signers[idx]?.signingUrl ||
+        (signers.length <= 1 && idx === 0
+          ? signatureRequest?.signingUrl
+          : null) ||
         null;
     }
   } catch (error) {

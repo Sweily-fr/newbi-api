@@ -7,6 +7,18 @@ import Client from "../models/Client.js";
 import EmailSettings from "../models/EmailSettings.js";
 import emailReminderService from "./emailReminderService.js";
 import { escapeHtml } from "../utils/trialEmails.js";
+import { assertPlanFeature } from "./planLimits.js";
+import { workspaceSenderEmails } from "../utils/crmEmailSender.js";
+
+/** Date du jour en heure de Paris, au format enregistré (AAAA-MM-JJ). */
+function parisDateString(date) {
+  return new Intl.DateTimeFormat("fr-CA", {
+    timeZone: "Europe/Paris",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
 
 /**
  * Traite les automatisations d'email CRM pour tous les workspaces
@@ -39,6 +51,9 @@ async function processCrmEmailAutomations() {
     let totalSent = 0;
 
     for (const automation of activeAutomations) {
+      // Offre qui ne comprend plus les automatisations d'e-mails, ou
+      // abonnement terminé : plus aucun envoi
+      if (!(await workspaceAllowsCrmEmails(automation.workspaceId))) continue;
       const sent = await processAutomation(automation);
       totalSent += sent;
     }
@@ -51,6 +66,23 @@ async function processCrmEmailAutomations() {
   } catch (error) {
     console.error("❌ [CrmEmailAutomation] Erreur lors du processus:", error);
     throw error;
+  }
+}
+
+/** L'offre active de l'espace comprend les automatisations d'e-mails. */
+async function workspaceAllowsCrmEmails(workspaceId) {
+  try {
+    await assertPlanFeature(
+      workspaceId,
+      "crmEmailAutomations",
+      "les automatisations d'e-mails",
+    );
+    return true;
+  } catch {
+    logger.debug(
+      `[CrmEmailAutomation] Espace ${workspaceId} : offre sans automatisations d'e-mails, envois ignorés`,
+    );
+    return false;
   }
 }
 
@@ -125,22 +157,23 @@ async function processAutomation(automation) {
 }
 
 /**
- * Calcule la date cible selon la configuration du timing
+ * Calcule la date cible selon la configuration du timing. Le jour est celui
+ * de Paris (heure d'envoi choisie en heure de Paris), quel que soit le fuseau
+ * du serveur : la date cible est minuit UTC de ce jour.
  */
-function calculateTargetDate(timing) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const targetDate = new Date(today);
+function calculateTargetDate(timing, now = new Date()) {
+  const [year, month, day] = parisDateString(now).split("-").map(Number);
+  const offset = timing.daysOffset || 0;
+  let delta = 0;
 
   switch (timing.type) {
     case "BEFORE_DATE":
       // Si on veut envoyer X jours AVANT la date, on cherche les dates dans X jours
-      targetDate.setDate(targetDate.getDate() + timing.daysOffset);
+      delta = offset;
       break;
     case "AFTER_DATE":
       // Si on veut envoyer X jours APRÈS la date, on cherche les dates d'il y a X jours
-      targetDate.setDate(targetDate.getDate() - timing.daysOffset);
+      delta = -offset;
       break;
     case "ON_DATE":
     default:
@@ -148,7 +181,7 @@ function calculateTargetDate(timing) {
       break;
   }
 
-  return targetDate;
+  return new Date(Date.UTC(year, month - 1, day + delta));
 }
 
 /**
@@ -159,14 +192,7 @@ async function findClientsWithDateField(
   customFieldId,
   targetDate,
 ) {
-  // Créer les bornes de la journée
-  const startOfDay = new Date(targetDate);
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date(targetDate);
-  endOfDay.setHours(23, 59, 59, 999);
-
-  // Format de date stocké: YYYY-MM-DD
+  // Format de date stocké: YYYY-MM-DD (targetDate : minuit UTC du jour)
   const dateString = targetDate.toISOString().split("T")[0];
 
   // Rechercher les clients avec ce champ personnalisé à cette date
@@ -180,6 +206,8 @@ async function findClientsWithDateField(
       },
     },
     email: { $exists: true, $ne: "" },
+    // Contact bloqué : exclu des communications
+    isBlocked: { $ne: true },
   });
 
   return clients;
@@ -193,9 +221,9 @@ async function sendEmailToClient(automation, customField, client, triggerDate) {
     // Vérifier si un email a déjà été envoyé pour cette combinaison
     // Ne pas muter triggerDate — créer des copies pour les bornes de la journée
     const dayStart = new Date(triggerDate);
-    dayStart.setHours(0, 0, 0, 0);
+    dayStart.setUTCHours(0, 0, 0, 0);
     const dayEnd = new Date(triggerDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    dayEnd.setUTCHours(23, 59, 59, 999);
 
     const existingLog = await CrmEmailAutomationLog.findOne({
       automationId: automation._id,
@@ -257,8 +285,14 @@ async function sendEmailToClient(automation, customField, client, triggerDate) {
       workspaceId: automation.workspaceId,
     });
 
-    // Déterminer l'email expéditeur
-    let fromEmail = automation.email.fromEmail;
+    // Déterminer l'email expéditeur : une adresse de l'espace seulement
+    // (paramètres d'e-mail, e-mail de l'entreprise), jamais une adresse libre
+    const senderEmails = await workspaceSenderEmails(automation.workspaceId);
+    let fromEmail = senderEmails.includes(
+      (automation.email.fromEmail || "").toLowerCase(),
+    )
+      ? automation.email.fromEmail
+      : "";
     let fromName = automation.email.fromName;
     let replyTo = automation.email.replyTo;
 
@@ -390,6 +424,8 @@ async function processWorkspaceCrmEmails(workspaceId) {
     isActive: true,
   });
 
+  if (!(await workspaceAllowsCrmEmails(workspaceId))) return 0;
+
   let totalSent = 0;
 
   for (const automation of automations) {
@@ -404,4 +440,5 @@ export {
   processCrmEmailAutomations,
   processAutomation,
   processWorkspaceCrmEmails,
+  calculateTargetDate,
 };
