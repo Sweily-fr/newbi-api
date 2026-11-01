@@ -23,18 +23,40 @@ import {
   buildAssignedMemberInfo,
   loadAssignedUsers,
 } from "../utils/assignedMemberInfo.js";
+import {
+  accessibleEventFilter,
+  hiddenDocumentEventTypes,
+  keepWorkspaceMemberIds,
+} from "../utils/eventAccess.js";
 
-// Événements créés depuis un document (client et montant dans le titre) :
-// visibles seulement avec « Voir » sur la page du document
-const DOCUMENT_EVENT_MODULES = {
-  INVOICE_DUE: "invoices",
-  CREDIT_NOTE_CREATED: "creditNotes",
-};
-
-function hiddenDocumentEventTypes(permissions) {
-  return Object.entries(DOCUMENT_EVENT_MODULES)
-    .filter(([, moduleKey]) => !permissions?.hasPermission?.(moduleKey, "view"))
-    .map(([type]) => type);
+/**
+ * Paires « espace:utilisateur » des membres parmi `userIds`, pour les
+ * espaces `workspaceIds` : seuls ces membres sont décrits (nom, e-mail,
+ * photo) dans les membres assignés d'un événement.
+ */
+async function workspaceMemberPairs(userIds, workspaceIds, db) {
+  const toId = (v) => {
+    try {
+      return new mongoose.Types.ObjectId(String(v));
+    } catch {
+      return null;
+    }
+  };
+  const users = [...new Set(userIds.map(String))].map(toId).filter(Boolean);
+  const orgs = [...new Set(workspaceIds.filter(Boolean).map(String))]
+    .map(toId)
+    .filter(Boolean);
+  const pairs = new Set();
+  if (!db || users.length === 0 || orgs.length === 0) return pairs;
+  const members = await db
+    .collection("member")
+    .find(
+      { organizationId: { $in: orgs }, userId: { $in: users } },
+      { projection: { userId: 1, organizationId: 1 } },
+    )
+    .toArray();
+  for (const m of members) pairs.add(`${m.organizationId}:${m.userId}`);
+  return pairs;
 }
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 
@@ -153,11 +175,17 @@ const eventResolvers = {
     assignedMembersInfo: async (parent, _, { db }) => {
       if (parent.assignedMembersInfo) return parent.assignedMembersInfo;
 
-      const memberIds = (parent.assignedMembers || [])
+      const assignedIds = (parent.assignedMembers || [])
         .filter(Boolean)
         .map(String);
-      if (memberIds.length === 0) return [];
+      if (assignedIds.length === 0) return [];
 
+      // Seuls les membres de l'espace de l'événement sont décrits
+      const workspaceId = String(parent.workspaceId || "");
+      const pairs = await workspaceMemberPairs(assignedIds, [workspaceId], db);
+      const memberIds = assignedIds.filter((id) =>
+        pairs.has(`${workspaceId}:${id}`),
+      );
       const usersMap = await loadAssignedUsers(memberIds, db);
       return memberIds.map((id) =>
         buildAssignedMemberInfo(id, usersMap.get(id) || null),
@@ -264,6 +292,18 @@ const eventResolvers = {
               if (id) allAssignedIds.add(String(id));
             });
           }
+          // Seuls les membres de l'espace de chaque événement sont décrits
+          // (un id d'une autre entreprise ne donne ni nom ni e-mail)
+          const memberPairs = await workspaceMemberPairs(
+            Array.from(allAssignedIds),
+            events.map((event) => event.workspaceId),
+            db,
+          );
+          const assignedOf = (event) =>
+            (event.assignedMembers || [])
+              .filter(Boolean)
+              .map(String)
+              .filter((id) => memberPairs.has(`${event.workspaceId}:${id}`));
           const assignedUsersMap = await loadAssignedUsers(
             Array.from(allAssignedIds),
             db,
@@ -292,13 +332,10 @@ const eventResolvers = {
                   calendarConnectionId: link.calendarConnectionId?.toString(),
                 }),
               ),
-              assignedMembers: (event.assignedMembers || []).map(String),
-              assignedMembersInfo: (event.assignedMembers || [])
-                .filter(Boolean)
-                .map(String)
-                .map((id) =>
-                  buildAssignedMemberInfo(id, assignedUsersMap.get(id) || null),
-                ),
+              assignedMembers: assignedOf(event),
+              assignedMembersInfo: assignedOf(event).map((id) =>
+                buildAssignedMemberInfo(id, assignedUsersMap.get(id) || null),
+              ),
             };
 
             // Seulement inclure invoice si invoiceId existe et est populé
@@ -432,7 +469,7 @@ const eventResolvers = {
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
@@ -445,8 +482,26 @@ const eventResolvers = {
             };
           }
 
+          if (hiddenDocumentEventTypes(permissions).includes(input.type)) {
+            return {
+              success: false,
+              event: null,
+              message:
+                "Vous n'avez pas la permission d'effectuer cette action.",
+            };
+          }
+
           const event = new Event({
             ...input,
+            // Seuls des membres de l'espace sont assignés
+            ...(input.assignedMembers
+              ? {
+                  assignedMembers: await keepWorkspaceMemberIds(
+                    input.assignedMembers,
+                    finalWorkspaceId,
+                  ),
+                }
+              : {}),
             userId: user.id,
             workspaceId: finalWorkspaceId,
           });
@@ -555,18 +610,41 @@ const eventResolvers = {
       async (
         _,
         { input, workspaceId },
-        { user, workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
           const { id, ...updateData } = input;
 
-          // Vérifier si l'événement est en lecture seule (événement externe)
-          const existingEvent = await Event.findOne({
-            _id: id,
+          // Événement que ce membre peut voir : ni l'événement privé d'un
+          // autre membre, ni une échéance cachée par son rôle (introuvables)
+          const accessFilter = accessibleEventFilter({
+            id,
             workspaceId: finalWorkspaceId,
+            userId: user.id || user._id,
+            permissions,
           });
+          const existingEvent = await Event.findOne(accessFilter);
+          if (
+            !existingEvent ||
+            hiddenDocumentEventTypes(permissions).includes(updateData.type)
+          ) {
+            return {
+              success: false,
+              event: null,
+              message: "Événement non trouvé",
+            };
+          }
+
+          if (updateData.assignedMembers) {
+            updateData.assignedMembers = await keepWorkspaceMemberIds(
+              updateData.assignedMembers,
+              finalWorkspaceId,
+            );
+          }
+
+          // Vérifier si l'événement est en lecture seule (événement externe)
           if (existingEvent?.isReadOnly) {
             return {
               success: false,
@@ -587,10 +665,7 @@ const eventResolvers = {
 
           // Si la date ou le rappel email change, recalculer la date d'envoi
           if (updateData.emailReminder || updateData.start) {
-            const event = await Event.findOne({
-              _id: id,
-              workspaceId: finalWorkspaceId,
-            });
+            const event = existingEvent;
 
             if (event) {
               const newStart = updateData.start || event.start;
@@ -640,11 +715,10 @@ const eventResolvers = {
             }
           }
 
-          const event = await Event.findOneAndUpdate(
-            { _id: id, workspaceId: finalWorkspaceId },
-            updateData,
-            { new: true, runValidators: true },
-          ).populate("invoiceId");
+          const event = await Event.findOneAndUpdate(accessFilter, updateData, {
+            new: true,
+            runValidators: true,
+          }).populate("invoiceId");
 
           if (!event) {
             return {
@@ -691,16 +765,29 @@ const eventResolvers = {
       async (
         _,
         { id, workspaceId },
-        { user, workspaceId: contextWorkspaceId },
+        { user, workspaceId: contextWorkspaceId, permissions },
       ) => {
         try {
           const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
-          // Vérifier si l'événement est en lecture seule (événement externe)
-          const existingEvent = await Event.findOne({
-            _id: id,
+          // Ni l'événement privé d'un autre membre, ni une échéance cachée
+          // par son rôle : introuvables
+          const accessFilter = accessibleEventFilter({
+            id,
             workspaceId: finalWorkspaceId,
+            userId: user.id || user._id,
+            permissions,
           });
+          const existingEvent = await Event.findOne(accessFilter);
+          if (!existingEvent) {
+            return {
+              success: false,
+              event: null,
+              message: "Événement non trouvé",
+            };
+          }
+
+          // Vérifier si l'événement est en lecture seule (événement externe)
           if (existingEvent?.isReadOnly) {
             return {
               success: false,
@@ -726,10 +813,7 @@ const eventResolvers = {
             );
           }
 
-          const event = await Event.findOneAndDelete({
-            _id: id,
-            workspaceId: finalWorkspaceId,
-          });
+          const event = await Event.findOneAndDelete(accessFilter);
 
           if (!event) {
             return {
