@@ -32,6 +32,7 @@ import {
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
 import { normalizeTransferCreationOptions } from "../utils/transferOptions.js";
+import { deleteTransferStorage } from "../utils/transferStorage.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -475,10 +476,13 @@ const fileTransferResolvers = {
           fileTransfer.status = "deleted";
           await fileTransfer.save();
 
-          // Supprimer les fichiers physiquement (optionnel, peut être fait par un job de nettoyage)
+          // Fichiers et aperçus effacés tout de suite : le job d'expiration
+          // ne repasse pas sur un transfert supprimé. Fichiers locaux
+          // (anciens envois) par leur chemin, fichiers R2 par leur clé.
           for (const file of fileTransfer.files) {
-            deleteFile(file.filePath);
+            if (file.storageType !== "r2") deleteFile(file.filePath);
           }
+          await deleteTransferStorage(fileTransfer);
 
           return true;
         } catch (error) {
