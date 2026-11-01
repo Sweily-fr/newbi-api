@@ -85,7 +85,6 @@ export const calculateQuoteTotals = (
     isReverseCharge,
   });
 
-
 /**
  * Refuse la modification d'un devis dont une demande de signature client
  * est en cours (le client signe la version envoyée).
@@ -320,6 +319,7 @@ const quoteResolvers = {
           search,
           page = 1,
           limit = 10,
+          clientId,
         },
         context,
       ) => {
@@ -334,6 +334,9 @@ const quoteResolvers = {
           if (startDate) query.createdAt.$gte = new Date(startDate);
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
+
+        // Documents d'un contact (onglets de sa fiche) : filtrés en base
+        if (clientId) query["client.id"] = String(clientId);
 
         if (status) query.status = status;
 
@@ -699,372 +702,372 @@ const quoteResolvers = {
       },
     ),
     createQuote: requireCompanyInfo(
-      requireAction("quotes", "create")(
-        async (_, { workspaceId: inputWorkspaceId, input }, context) => {
-          const { user } = context;
-          const workspaceId = resolveWorkspaceId(
-            inputWorkspaceId,
-            context.workspaceId,
-          );
+      requireAction(
+        "quotes",
+        "create",
+      )(async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
-          if (!workspaceId) {
+        if (!workspaceId) {
+          throw new AppError(
+            "Aucune organisation spécifiée.",
+            ERROR_CODES.BAD_REQUEST,
+          );
+        }
+
+        // Contact bloqué : exclu de la création de documents
+        await assertClientNotBlocked(workspaceId, input.client?.id);
+
+        logger.debug("🔍 [createQuote] Input received:", {
+          prefix: input.prefix,
+          number: input.number,
+          status: input.status,
+        });
+
+        // Utiliser le préfixe fourni, ou celui du dernier devis, ou 'D' par défaut
+        let prefix = input.prefix;
+
+        if (!prefix) {
+          // Chercher le dernier devis créé pour récupérer son préfixe
+          const lastQuote = await Quote.findOne({ workspaceId })
+            .sort({ createdAt: -1 })
+            .select("prefix")
+            .lean();
+
+          if (lastQuote && lastQuote.prefix) {
+            prefix = lastQuote.prefix;
+          } else {
+            // Aucun devis existant, utiliser le préfixe par défaut
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            prefix = `D-${month}${year}`;
+          }
+        }
+
+        // === Génération du numéro (style Pennylane) ===
+        // Règles légales (Art. 242 nonies A CGI) : unicité, chronologie, continuité.
+        //   - Compteur atomique (DocumentCounter) pour éviter toute race condition
+        //   - Numéro manuel autorisé UNIQUEMENT avant le 1er devis finalisé du préfixe
+        //     (équivalent Pennylane : "le compteur ne peut plus être modifié après la 1ère facture")
+        //   - Brouillons hors séquence (numéros DRAFT-timestamp indépendants)
+        // Le numéro est régénéré à chaque tentative dans la boucle de retry (cf. save plus bas).
+
+        // Renomme les brouillons qui entreraient en conflit avec le numéro séquentiel généré
+        const handleDraftConflicts = async (newNumber) => {
+          const conflictingDrafts = await Quote.find({
+            prefix,
+            number: newNumber,
+            status: "DRAFT",
+            workspaceId,
+          });
+          if (conflictingDrafts.length === 0) return;
+          // Suffixe court (slice -6 + index de boucle) : le numéro doit rester
+          // ≤ 20 caractères (validateur du modèle). Date.now() complet (13
+          // chiffres) faisait dépasser 20 → le brouillon renommé devenait
+          // inéditable (échec de validation au prochain save).
+          const renameStamp = Date.now().toString().slice(-6);
+          const bulkOps = conflictingDrafts.map((draft, i) => ({
+            updateOne: {
+              filter: { _id: draft._id },
+              update: {
+                $set: {
+                  number: `${newNumber}-${renameStamp}${i}`,
+                },
+              },
+            },
+          }));
+          await Quote.bulkWrite(bulkOps);
+        };
+
+        const isDraft = !input.status || input.status === "DRAFT";
+
+        // Récupérer les informations de l'organisation (avant la numérotation :
+        // le flag "séquence continue" en dépend)
+        const organization = await getOrganizationInfo(workspaceId);
+        const autoNumbering = organization?.quoteAutoNumbering === true;
+
+        // Verrou Pennylane : un numéro manuel n'est accepté que s'il n'existe encore
+        // aucun devis finalisé (1er document du compteur), OU s'il respecte la
+        // continuité de la séquence (pas de trou, pas de recul).
+        // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
+        let allowManualNumber = false;
+        if (input.number && !isDraft) {
+          if (!/^\d{1,6}$/.test(input.number)) {
             throw new AppError(
-              "Aucune organisation spécifiée.",
-              ERROR_CODES.BAD_REQUEST,
+              "Le numéro de devis doit contenir entre 1 et 6 chiffres",
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
-          // Contact bloqué : exclu de la création de documents
-          await assertClientNotBlocked(workspaceId, input.client?.id);
-
-          logger.debug("🔍 [createQuote] Input received:", {
-            prefix: input.prefix,
-            number: input.number,
-            status: input.status,
-          });
-
-          // Utiliser le préfixe fourni, ou celui du dernier devis, ou 'D' par défaut
-          let prefix = input.prefix;
-
-          if (!prefix) {
-            // Chercher le dernier devis créé pour récupérer son préfixe
-            const lastQuote = await Quote.findOne({ workspaceId })
-              .sort({ createdAt: -1 })
-              .select("prefix")
-              .lean();
-
-            if (lastQuote && lastQuote.prefix) {
-              prefix = lastQuote.prefix;
-            } else {
-              // Aucun devis existant, utiliser le préfixe par défaut
-              const now = new Date();
-              const year = now.getFullYear();
-              const month = String(now.getMonth() + 1).padStart(2, "0");
-              prefix = `D-${month}${year}`;
-            }
-          }
-
-          // === Génération du numéro (style Pennylane) ===
-          // Règles légales (Art. 242 nonies A CGI) : unicité, chronologie, continuité.
-          //   - Compteur atomique (DocumentCounter) pour éviter toute race condition
-          //   - Numéro manuel autorisé UNIQUEMENT avant le 1er devis finalisé du préfixe
-          //     (équivalent Pennylane : "le compteur ne peut plus être modifié après la 1ère facture")
-          //   - Brouillons hors séquence (numéros DRAFT-timestamp indépendants)
-          // Le numéro est régénéré à chaque tentative dans la boucle de retry (cf. save plus bas).
-
-          // Renomme les brouillons qui entreraient en conflit avec le numéro séquentiel généré
-          const handleDraftConflicts = async (newNumber) => {
-            const conflictingDrafts = await Quote.find({
-              prefix,
-              number: newNumber,
-              status: "DRAFT",
-              workspaceId,
-            });
-            if (conflictingDrafts.length === 0) return;
-            // Suffixe court (slice -6 + index de boucle) : le numéro doit rester
-            // ≤ 20 caractères (validateur du modèle). Date.now() complet (13
-            // chiffres) faisait dépasser 20 → le brouillon renommé devenait
-            // inéditable (échec de validation au prochain save).
-            const renameStamp = Date.now().toString().slice(-6);
-            const bulkOps = conflictingDrafts.map((draft, i) => ({
-              updateOne: {
-                filter: { _id: draft._id },
-                update: {
-                  $set: {
-                    number: `${newNumber}-${renameStamp}${i}`,
-                  },
-                },
-              },
-            }));
-            await Quote.bulkWrite(bulkOps);
+          const finalizedQuery = {
+            workspaceId,
+            status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
           };
+          if (!autoNumbering) finalizedQuery.prefix = prefix;
+          const firstFinalized = await Quote.findOne(finalizedQuery).lean();
 
-          const isDraft = !input.status || input.status === "DRAFT";
-
-          // Récupérer les informations de l'organisation (avant la numérotation :
-          // le flag "séquence continue" en dépend)
-          const organization = await getOrganizationInfo(workspaceId);
-          const autoNumbering = organization?.quoteAutoNumbering === true;
-
-          // Verrou Pennylane : un numéro manuel n'est accepté que s'il n'existe encore
-          // aucun devis finalisé (1er document du compteur), OU s'il respecte la
-          // continuité de la séquence (pas de trou, pas de recul).
-          // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
-          let allowManualNumber = false;
-          if (input.number && !isDraft) {
-            if (!/^\d{1,6}$/.test(input.number)) {
+          if (firstFinalized) {
+            // Des documents finalisés existent : le numéro doit suivre la séquence
+            const sequenceCheck = await validateNumberSequence(
+              "quote",
+              input.number,
+              prefix,
+              { workspaceId, autoNumbering },
+            );
+            if (!sequenceCheck.isValid) {
               throw new AppError(
-                "Le numéro de devis doit contenir entre 1 et 6 chiffres",
+                sequenceCheck.message,
                 ERROR_CODES.VALIDATION_ERROR,
               );
             }
-
-            const finalizedQuery = {
-              workspaceId,
-              status: { $in: ["PENDING", "COMPLETED", "CANCELED"] },
-            };
-            if (!autoNumbering) finalizedQuery.prefix = prefix;
-            const firstFinalized = await Quote.findOne(finalizedQuery).lean();
-
-            if (firstFinalized) {
-              // Des documents finalisés existent : le numéro doit suivre la séquence
-              const sequenceCheck = await validateNumberSequence(
-                "quote",
-                input.number,
-                prefix,
-                { workspaceId, autoNumbering },
-              );
-              if (!sequenceCheck.isValid) {
-                throw new AppError(
-                  sequenceCheck.message,
-                  ERROR_CODES.VALIDATION_ERROR,
-                );
-              }
-            }
-            allowManualNumber = true;
           }
+          allowManualNumber = true;
+        }
 
-          // Fonction unifiée appelée à chaque tentative de save (retry loop plus bas)
-          // Padding 4 chiffres = aligné avec les hooks frontend (useQuoteNumber)
-          const generateNumber = async () => {
-            if (allowManualNumber) {
-              return String(parseInt(input.number, 10)).padStart(4, "0");
-            }
-            return await generateQuoteNumber(prefix, {
-              isDraft,
-              workspaceId,
-              userId: user.id,
-              autoNumbering,
-            });
-          };
-
-          if (!organization?.companyName) {
-            throw new AppError(
-              "Les informations de votre entreprise doivent être configurées avant de créer un devis",
-              ERROR_CODES.COMPANY_INFO_REQUIRED,
-            );
+        // Fonction unifiée appelée à chaque tentative de save (retry loop plus bas)
+        // Padding 4 chiffres = aligné avec les hooks frontend (useQuoteNumber)
+        const generateNumber = async () => {
+          if (allowManualNumber) {
+            return String(parseInt(input.number, 10)).padStart(4, "0");
           }
+          return await generateQuoteNumber(prefix, {
+            isDraft,
+            workspaceId,
+            userId: user.id,
+            autoNumbering,
+          });
+        };
 
-          // Calculer les totaux avec la remise et la livraison
-          const totals = calculateQuoteTotals(
-            input.items,
-            input.discount,
-            input.discountType,
-            input.shipping,
-            input.isReverseCharge,
+        if (!organization?.companyName) {
+          throw new AppError(
+            "Les informations de votre entreprise doivent être configurées avant de créer un devis",
+            ERROR_CODES.COMPANY_INFO_REQUIRED,
           );
+        }
 
-          // Vérifier si le client a une adresse de livraison différente
-          const clientData = input.client;
+        // Calculer les totaux avec la remise et la livraison
+        const totals = calculateQuoteTotals(
+          input.items,
+          input.discount,
+          input.discountType,
+          input.shipping,
+          input.isReverseCharge,
+        );
 
-          // Si le client a un ID, c'est un client existant - pas besoin de vérifier l'unicité de l'email
-          // Seuls les nouveaux clients (sans ID) doivent être vérifiés pour éviter les doublons
-          if (!clientData.id) {
-            // Vérifier si un client avec cet email existe déjà dans les devis ou factures
-            const existingQuote = await Quote.findOne({
-              "client.email": clientData.email.toLowerCase(),
-              workspaceId,
-              createdBy: user.id,
-            });
+        // Vérifier si le client a une adresse de livraison différente
+        const clientData = input.client;
 
-            const existingInvoice = await Invoice.findOne({
-              "client.email": clientData.email.toLowerCase(),
-              workspaceId,
-              createdBy: user.id,
-            });
+        // Si le client a un ID, c'est un client existant - pas besoin de vérifier l'unicité de l'email
+        // Seuls les nouveaux clients (sans ID) doivent être vérifiés pour éviter les doublons
+        if (!clientData.id) {
+          // Vérifier si un client avec cet email existe déjà dans les devis ou factures
+          const existingQuote = await Quote.findOne({
+            "client.email": clientData.email.toLowerCase(),
+            workspaceId,
+            createdBy: user.id,
+          });
 
-            if (existingQuote || existingInvoice) {
-              throw createValidationError(
-                `Un client avec l'adresse email "${clientData.email}" existe déjà. Veuillez sélectionner le client existant ou utiliser une adresse email différente.`,
-                {
-                  "client.email":
-                    "Cette adresse email est déjà utilisée par un autre client",
-                },
-              );
-            }
-          }
+          const existingInvoice = await Invoice.findOne({
+            "client.email": clientData.email.toLowerCase(),
+            workspaceId,
+            createdBy: user.id,
+          });
 
-          // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
-          if (
-            clientData.hasDifferentShippingAddress === true &&
-            !clientData.shippingAddress
-          ) {
+          if (existingQuote || existingInvoice) {
             throw createValidationError(
-              "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
+              `Un client avec l'adresse email "${clientData.email}" existe déjà. Veuillez sélectionner le client existant ou utiliser une adresse email différente.`,
               {
-                "client.shippingAddress": "L'adresse de livraison est requise",
+                "client.email":
+                  "Cette adresse email est déjà utilisée par un autre client",
               },
             );
           }
+        }
 
-          // Générer automatiquement le nom pour les clients particuliers si nécessaire
-          if (
-            clientData.type === "INDIVIDUAL" &&
-            (!clientData.name || clientData.name.trim() === "")
-          ) {
-            if (clientData.firstName && clientData.lastName) {
-              clientData.name = `${clientData.firstName} ${clientData.lastName}`;
-            } else {
-              // Fallback si les champs firstName/lastName sont manquants
-              clientData.name = clientData.email
-                ? `Client ${clientData.email}`
-                : "Client Particulier";
-            }
+        // Si le client a une adresse de livraison différente, s'assurer qu'elle est bien fournie
+        if (
+          clientData.hasDifferentShippingAddress === true &&
+          !clientData.shippingAddress
+        ) {
+          throw createValidationError(
+            "L'adresse de livraison est requise lorsque l'option \"Adresse de livraison différente\" est activée",
+            {
+              "client.shippingAddress": "L'adresse de livraison est requise",
+            },
+          );
+        }
+
+        // Générer automatiquement le nom pour les clients particuliers si nécessaire
+        if (
+          clientData.type === "INDIVIDUAL" &&
+          (!clientData.name || clientData.name.trim() === "")
+        ) {
+          if (clientData.firstName && clientData.lastName) {
+            clientData.name = `${clientData.firstName} ${clientData.lastName}`;
+          } else {
+            // Fallback si les champs firstName/lastName sont manquants
+            clientData.name = clientData.email
+              ? `Client ${clientData.email}`
+              : "Client Particulier";
           }
+        }
 
-          // Création avec retry sur E11000 : si le numéro entre en collision
-          // (race condition, index legacy résiduel, ou brouillon conflictuel),
-          // on régénère via le compteur atomique et on retente. Max 5 tentatives.
-          const MAX_SAVE_RETRIES = 5;
-          let quote;
-          let number;
-          for (let attempt = 1; attempt <= MAX_SAVE_RETRIES; attempt++) {
-            number = await generateNumber();
-            await handleDraftConflicts(number);
+        // Création avec retry sur E11000 : si le numéro entre en collision
+        // (race condition, index legacy résiduel, ou brouillon conflictuel),
+        // on régénère via le compteur atomique et on retente. Max 5 tentatives.
+        const MAX_SAVE_RETRIES = 5;
+        let quote;
+        let number;
+        for (let attempt = 1; attempt <= MAX_SAVE_RETRIES; attempt++) {
+          number = await generateNumber();
+          await handleDraftConflicts(number);
 
-            quote = new Quote({
-              ...input,
-              number,
-              prefix,
-              workspaceId,
-              companyInfo: isDraft
+          quote = new Quote({
+            ...input,
+            number,
+            prefix,
+            workspaceId,
+            companyInfo: isDraft
+              ? undefined
+              : mapOrganizationToCompanyInfo(organization),
+            client: {
+              ...input.client,
+              shippingAddress: input.client.hasDifferentShippingAddress
+                ? {
+                    fullName: input.client.shippingAddress?.fullName || "",
+                    street: input.client.shippingAddress?.street || "",
+                    city: input.client.shippingAddress?.city || "",
+                    postalCode: input.client.shippingAddress?.postalCode || "",
+                    country: input.client.shippingAddress?.country || "",
+                  }
+                : undefined,
+              // Champs personnalisés figés dès la création d'un document non brouillon
+              documentFields: isDraft
                 ? undefined
-                : mapOrganizationToCompanyInfo(organization),
-              client: {
-                ...input.client,
-                shippingAddress: input.client.hasDifferentShippingAddress
-                  ? {
-                      fullName: input.client.shippingAddress?.fullName || "",
-                      street: input.client.shippingAddress?.street || "",
-                      city: input.client.shippingAddress?.city || "",
-                      postalCode:
-                        input.client.shippingAddress?.postalCode || "",
-                      country: input.client.shippingAddress?.country || "",
-                    }
-                  : undefined,
-                // Champs personnalisés figés dès la création d'un document non brouillon
-                documentFields: isDraft
-                  ? undefined
-                  : await buildDocumentFieldsForClientId(
-                      input.client.id,
-                      workspaceId,
-                      context,
-                    ),
-              },
-              appearance: input.appearance || {
-                textColor: "#000000",
-                headerTextColor: "#ffffff",
-                headerBgColor: "#1d1d1b",
-              },
-              createdBy: user.id,
-              ...totals,
-            });
+                : await buildDocumentFieldsForClientId(
+                    input.client.id,
+                    workspaceId,
+                    context,
+                  ),
+            },
+            appearance: input.appearance || {
+              textColor: "#000000",
+              headerTextColor: "#ffffff",
+              headerBgColor: "#1d1d1b",
+            },
+            createdBy: user.id,
+            ...totals,
+          });
 
-            try {
-              await quote.save();
-              break;
-            } catch (err) {
-              const isDuplicateKey =
-                err && (err.code === 11000 || err.code === 11001);
-              if (!isDuplicateKey) throw err;
-              // Numéro manuel rejeté : ne pas retry indéfiniment, remonter une erreur claire
-              if (allowManualNumber) {
-                throw new AppError(
-                  "Ce numéro de devis est déjà utilisé",
-                  ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
-                );
-              }
-              if (attempt === MAX_SAVE_RETRIES) {
-                console.error(
-                  "[createQuote] Échec après retries E11000:",
-                  err.keyValue,
-                );
-                throw new AppError(
-                  "Impossible de générer un numéro de devis unique. Veuillez réessayer.",
-                  ERROR_CODES.INTERNAL_ERROR,
-                );
-              }
-              console.warn(
-                `[createQuote] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+          try {
+            await quote.save();
+            break;
+          } catch (err) {
+            const isDuplicateKey =
+              err && (err.code === 11000 || err.code === 11001);
+            if (!isDuplicateKey) throw err;
+            // Numéro manuel rejeté : ne pas retry indéfiniment, remonter une erreur claire
+            if (allowManualNumber) {
+              throw new AppError(
+                "Ce numéro de devis est déjà utilisé",
+                ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
+              );
+            }
+            if (attempt === MAX_SAVE_RETRIES) {
+              console.error(
+                "[createQuote] Échec après retries E11000:",
                 err.keyValue,
               );
+              throw new AppError(
+                "Impossible de générer un numéro de devis unique. Veuillez réessayer.",
+                ERROR_CODES.INTERNAL_ERROR,
+              );
             }
+            console.warn(
+              `[createQuote] Conflit E11000 tentative ${attempt}/${MAX_SAVE_RETRIES}, retry:`,
+              err.keyValue,
+            );
           }
+        }
 
-          // Enregistrer l'activité dans le client si c'est un client existant
-          if (clientData.id) {
-            try {
-              await Client.findOneAndUpdate(
-                { _id: clientData.id, workspaceId },
-                {
-                  $push: {
-                    activity: {
-                      id: new mongoose.Types.ObjectId().toString(),
-                      type: "quote_created",
-                      description: `a créé le devis ${prefix}${number}`,
-                      userId: user._id,
-                      userName: user.name || user.email,
-                      userImage: user.image || null,
-                      metadata: {
-                        documentType: "quote",
-                        documentId: quote._id.toString(),
-                        documentNumber: `${prefix}-${number}`,
-                        status: quote.status,
-                      },
-                      createdAt: new Date(),
+        // Enregistrer l'activité dans le client si c'est un client existant
+        if (clientData.id) {
+          try {
+            await Client.findOneAndUpdate(
+              { _id: clientData.id, workspaceId },
+              {
+                $push: {
+                  activity: {
+                    id: new mongoose.Types.ObjectId().toString(),
+                    type: "quote_created",
+                    description: `a créé le devis ${prefix}${number}`,
+                    userId: user._id,
+                    userName: user.name || user.email,
+                    userImage: user.image || null,
+                    metadata: {
+                      documentType: "quote",
+                      documentId: quote._id.toString(),
+                      documentNumber: `${prefix}-${number}`,
+                      status: quote.status,
                     },
+                    createdAt: new Date(),
                   },
                 },
-              );
-            } catch (activityError) {
+              },
+            );
+          } catch (activityError) {
+            console.error(
+              "Erreur lors de l'enregistrement de l'activité:",
+              activityError,
+            );
+            // Ne pas faire échouer la création de devis si l'activité échoue
+          }
+        }
+
+        // Automatisations documents partagés pour les brouillons (fire-and-forget)
+        if (quote.status === "DRAFT") {
+          documentAutomationService
+            .executeAutomations(
+              "QUOTE_DRAFT",
+              workspaceId,
+              {
+                documentId: quote._id.toString(),
+                documentType: "quote",
+                documentNumber: quote.number,
+                prefix: quote.prefix || "",
+                clientName: quote.client?.name || "",
+                issueDate: quote.issueDate || quote.createdAt,
+                clientId: quote.client?._id || quote.clientId || null,
+              },
+              user._id.toString(),
+            )
+            .catch((err) =>
               console.error(
-                "Erreur lors de l'enregistrement de l'activité:",
-                activityError,
-              );
-              // Ne pas faire échouer la création de devis si l'activité échoue
-            }
-          }
+                "Erreur automatisation documents (quote draft):",
+                err,
+              ),
+            );
+        }
 
-          // Automatisations documents partagés pour les brouillons (fire-and-forget)
-          if (quote.status === "DRAFT") {
-            documentAutomationService
-              .executeAutomations(
-                "QUOTE_DRAFT",
-                workspaceId,
-                {
-                  documentId: quote._id.toString(),
-                  documentType: "quote",
-                  documentNumber: quote.number,
-                  prefix: quote.prefix || "",
-                  clientName: quote.client?.name || "",
-                  issueDate: quote.issueDate || quote.createdAt,
-                  clientId: quote.client?._id || quote.clientId || null,
-                },
-                user._id.toString(),
-              )
-              .catch((err) =>
-                console.error(
-                  "Erreur automatisation documents (quote draft):",
-                  err,
-                ),
-              );
-          }
+        // Sync Qonto (fire-and-forget) — devis créé directement envoyé
+        if (quote.status === "PENDING") {
+          syncQuoteToQontoIfNeeded(
+            quote,
+            context.organizationId || workspaceId,
+          ).catch((err) => console.error("Erreur sync Qonto devis:", err));
+          syncQuoteToAbbyIfNeeded(
+            quote,
+            context.organizationId || workspaceId,
+          ).catch((err) => console.error("Erreur sync Abby devis:", err));
+        }
 
-          // Sync Qonto (fire-and-forget) — devis créé directement envoyé
-          if (quote.status === "PENDING") {
-            syncQuoteToQontoIfNeeded(
-              quote,
-              context.organizationId || workspaceId,
-            ).catch((err) => console.error("Erreur sync Qonto devis:", err));
-            syncQuoteToAbbyIfNeeded(
-              quote,
-              context.organizationId || workspaceId,
-            ).catch((err) => console.error("Erreur sync Abby devis:", err));
-          }
-
-          return await quote.populate("createdBy");
-        },
-      ),
+        return await quote.populate("createdBy");
+      }),
     ),
 
     updateQuote: requireCompanyInfo(
@@ -1505,7 +1508,10 @@ const quoteResolvers = {
     ),
 
     changeQuoteStatus: requireCompanyInfo(
-      requireAction("quotes", STATUS_CHANGE_ACTIONS)(async (_, { id, status }, context) => {
+      requireAction(
+        "quotes",
+        STATUS_CHANGE_ACTIONS,
+      )(async (_, { id, status }, context) => {
         // Valider le brouillon = créer ou modifier ; accepter, refuser,
         // annuler = « status »
         assertStatusChangeAllowed(context, "quotes", status, "PENDING");
@@ -1854,379 +1860,370 @@ const quoteResolvers = {
     convertQuoteToInvoice: requireAllActions([
       ["quotes", "convert"],
       ["invoices", "create"],
-    ])(
-      async (_, { id, distribution, isDeposit, skipValidation }, context) => {
-        const { user, workspaceId } = context;
-        // ✅ FIX: Utiliser workspaceId au lieu de createdBy
-        const quote = await Quote.findOne({
-          _id: id,
-          workspaceId: workspaceId,
+    ])(async (_, { id, distribution, isDeposit, skipValidation }, context) => {
+      const { user, workspaceId } = context;
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+      const quote = await Quote.findOne({
+        _id: id,
+        workspaceId: workspaceId,
+      });
+
+      if (!quote) {
+        throw createNotFoundError("Devis");
+      }
+
+      if (quote.status !== "COMPLETED") {
+        throw new AppError(
+          "Seuls les devis terminés peuvent être convertis en factures",
+          ERROR_CODES.RESOURCE_LOCKED,
+          {
+            resource: "Devis",
+            requiredStatus: "COMPLETED",
+            currentStatus: quote.status,
+          },
+        );
+      }
+
+      // Montant total du devis
+      const quoteAmount = quote.finalTotalTTC;
+
+      // Calculer le montant total des factures déjà liées au devis
+      let existingInvoicesTotalAmount = 0;
+      let validLinkedInvoices = [];
+
+      if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
+        // Récupérer toutes les factures déjà liées au devis qui existent encore
+        const existingInvoices = await Invoice.find({
+          _id: { $in: quote.linkedInvoices },
+          workspaceId: quote.workspaceId,
         });
 
-        if (!quote) {
-          throw createNotFoundError("Devis");
+        // Mettre à jour la liste des factures liées valides
+        validLinkedInvoices = existingInvoices.map((invoice) => invoice._id);
+
+        // Nettoyer la liste des factures liées en supprimant les références aux factures qui n'existent plus
+        if (validLinkedInvoices.length !== quote.linkedInvoices.length) {
+          quote.linkedInvoices = validLinkedInvoices;
+          await quote.save();
         }
 
-        if (quote.status !== "COMPLETED") {
-          throw new AppError(
-            "Seuls les devis terminés peuvent être convertis en factures",
-            ERROR_CODES.RESOURCE_LOCKED,
-            {
-              resource: "Devis",
-              requiredStatus: "COMPLETED",
-              currentStatus: quote.status,
-            },
-          );
-        }
-
-        // Montant total du devis
-        const quoteAmount = quote.finalTotalTTC;
-
-        // Calculer le montant total des factures déjà liées au devis
-        let existingInvoicesTotalAmount = 0;
-        let validLinkedInvoices = [];
-
-        if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
-          // Récupérer toutes les factures déjà liées au devis qui existent encore
-          const existingInvoices = await Invoice.find({
-            _id: { $in: quote.linkedInvoices },
-            workspaceId: quote.workspaceId,
-          });
-
-          // Mettre à jour la liste des factures liées valides
-          validLinkedInvoices = existingInvoices.map((invoice) => invoice._id);
-
-          // Nettoyer la liste des factures liées en supprimant les références aux factures qui n'existent plus
-          if (validLinkedInvoices.length !== quote.linkedInvoices.length) {
-            quote.linkedInvoices = validLinkedInvoices;
-            await quote.save();
-          }
-
-          // Calculer le montant total des factures existantes
-          existingInvoicesTotalAmount = existingInvoices.reduce(
-            (sum, invoice) => sum + invoice.finalTotalTTC,
-            0,
-          );
-
-          // Montant total des factures existantes: ${existingInvoicesTotalAmount}€
-        }
-
-        // Pour la rétrocompatibilité, vérifier aussi convertedToInvoice
-        if (quote.convertedToInvoice) {
-          // Vérifier si la facture référencée dans convertedToInvoice existe toujours
-          const convertedInvoiceExists = await Invoice.exists({
-            _id: quote.convertedToInvoice,
-          });
-
-          if (!convertedInvoiceExists) {
-            // Si la facture n'existe plus, réinitialiser le champ convertedToInvoice
-            quote.convertedToInvoice = null;
-            await quote.save();
-          } else if (
-            !quote.linkedInvoices?.includes(quote.convertedToInvoice)
-          ) {
-            throw createResourceLockedError(
-              "Devis",
-              "déjà converti en facture",
-            );
-          }
-        }
-
-        // Utiliser le préfixe standard pour les factures (F-AAAAMM-)
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const prefix = `F-${year}${month}`;
-
-        // Par défaut, créer une seule facture pour le montant total
-        const invoiceDistribution = distribution || [100];
-        const invoiceCount = invoiceDistribution.length;
-
-        // Calculer le pourcentage déjà utilisé par les factures existantes
-        let existingInvoicesPercentage = 0;
-
-        if (existingInvoicesTotalAmount > 0 && quoteAmount > 0) {
-          existingInvoicesPercentage =
-            (existingInvoicesTotalAmount / quoteAmount) * 100;
-        }
-
-        // Vérifier que la somme des pourcentages est bien égale à 100%
-        const newInvoicesPercentage = invoiceDistribution.reduce(
-          (sum, percent) => sum + percent,
+        // Calculer le montant total des factures existantes
+        existingInvoicesTotalAmount = existingInvoices.reduce(
+          (sum, invoice) => sum + invoice.finalTotalTTC,
           0,
         );
-        const totalPercentage =
-          existingInvoicesPercentage + newInvoicesPercentage;
 
-        // Si skipValidation est true (pour les factures d'acompte), on ignore cette vérification
-        if (!skipValidation && Math.abs(totalPercentage - 100) > 0.01) {
-          // Tolérance pour les erreurs d'arrondi
-          // Ne pas ajuster automatiquement, respecter le choix de l'utilisateur
-          // Vérifier simplement que le total ne dépasse pas 100%
-          if (totalPercentage > 100.01) {
-            throw new AppError(
-              `La somme des pourcentages de répartition (${newInvoicesPercentage.toFixed(
-                2,
-              )}% + ${existingInvoicesPercentage.toFixed(
-                2,
-              )}% déjà facturé) ne peut pas dépasser 100% (actuellement ${totalPercentage.toFixed(
-                2,
-              )}%)`,
-              ERROR_CODES.INVALID_INPUT,
-              {
-                existingPercentage: existingInvoicesPercentage,
-                newPercentage: newInvoicesPercentage,
-                total: totalPercentage,
-              },
-            );
-          }
+        // Montant total des factures existantes: ${existingInvoicesTotalAmount}€
+      }
 
-          // Si le total est inférieur à 100%, c'est acceptable
-          // L'utilisateur pourra créer d'autres factures plus tard pour atteindre 100%
-        }
-
-        // Cette section a été déplacée plus haut
-
-        // Récupérer les informations de l'organisation en utilisant la fonction utilitaire
-        const organization = await getOrganizationInfo(quote.workspaceId);
-
-        // Vérifier que le nom de l'entreprise est défini
-        if (
-          !organization.companyName ||
-          organization.companyName.trim() === ""
-        ) {
-          throw new AppError(
-            "Le nom de votre entreprise doit être défini dans les paramètres de l'organisation avant de créer une facture",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        // Vérifier les informations légales requises selon le statut juridique
-        const legalForm = organization.legalForm || "AUTRE";
-        const requiredForVATStatuses = [
-          "SARL",
-          "SAS",
-          "EURL",
-          "SASU",
-          "SA",
-          "SNC",
-          "SCOP",
-        ];
-
-        if (requiredForVATStatuses.includes(legalForm)) {
-          if (!organization.vatNumber || organization.vatNumber.trim() === "") {
-            throw new AppError(
-              `Le numéro de TVA est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
-              ERROR_CODES.VALIDATION_ERROR,
-              {
-                field: "vatNumber",
-                legalForm: legalForm,
-                requiredFields: ["vatNumber"],
-              },
-            );
-          }
-
-          if (!organization.siret || organization.siret.trim() === "") {
-            throw new AppError(
-              `Le numéro SIRET est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
-              ERROR_CODES.VALIDATION_ERROR,
-              {
-                field: "siret",
-                legalForm: legalForm,
-                requiredFields: ["siret"],
-              },
-            );
-          }
-        }
-
-        // Créer les factures selon la répartition
-        const createdInvoices = [];
-        let mainInvoice = null;
-        let newInvoicesTotalAmount = 0;
-
-        // Calculer le montant restant disponible pour de nouvelles factures
-        const remainingAmount = quoteAmount - existingInvoicesTotalAmount;
-
-        if (remainingAmount <= 0) {
-          throw new AppError(
-            `Le montant total des factures existantes (${existingInvoicesTotalAmount.toFixed(
-              2,
-            )}€) a déjà atteint ou dépassé le montant du devis (${quoteAmount.toFixed(
-              2,
-            )}€)`,
-            ERROR_CODES.RESOURCE_LOCKED,
-            {
-              resource: "Devis",
-              quoteAmount,
-              existingInvoicesTotalAmount,
-              remainingAmount,
-            },
-          );
-        }
-
-        // Montant restant disponible pour de nouvelles factures: ${remainingAmount.toFixed(2)}€
-
-        for (let i = 0; i < invoiceCount; i++) {
-          // Générer un nouveau numéro de facture avec ce préfixe au moment de la création
-          // Cela garantit que le numéro est séquentiel par rapport aux autres factures déjà créées
-          // Utiliser la logique DRAFT-ID pour gérer les conflits avec les brouillons existants
-          const number = await generateInvoiceNumber(prefix, {
-            isDraft: true, // Les factures créées depuis un devis sont toujours des brouillons
-            workspaceId: quote.workspaceId,
-            userId: user.id,
-          });
-
-          // Calculer les montants en fonction du pourcentage
-          const percentage = invoiceDistribution[i] / 100;
-          const totalHT = quote.totalHT * percentage;
-          const totalVAT = quote.totalVAT * percentage;
-          const totalTTC = quote.totalTTC * percentage;
-          const finalTotalHT = quote.finalTotalHT * percentage;
-          const finalTotalTTC = quote.finalTotalTTC * percentage;
-          const discountAmount = quote.discountAmount * percentage;
-
-          // Ajouter au montant total des nouvelles factures
-          newInvoicesTotalAmount += finalTotalTTC;
-
-          // Déterminer s'il s'agit d'une facture d'acompte
-          const isInvoiceDeposit = isDeposit === true;
-
-          // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
-          const quoteObj = quote.toObject();
-
-          // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
-          const invoice = new Invoice({
-            number,
-            prefix,
-            client: quoteObj.client,
-            companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
-            items: quoteObj.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
-            status: "DRAFT", // Toujours créer en brouillon pour permettre les modifications
-            issueDate: new Date(),
-            dueDate: new Date(new Date().setDate(new Date().getDate() + 30)), // Date d'échéance par défaut à 30 jours
-            headerNotes: quote.headerNotes,
-            footerNotes: quote.footerNotes,
-            termsAndConditions: quote.termsAndConditions,
-            annex: quoteObj.annex || null,
-            termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
-            termsAndConditionsLink: quote.termsAndConditionsLink,
-            purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
-            discount: quote.discount,
-            discountType: quote.discountType,
-            customFields: quoteObj.customFields,
-            totalHT,
-            totalVAT,
-            totalTTC,
-            finalTotalHT,
-            finalTotalTTC,
-            discountAmount,
-            workspaceId: quote.workspaceId, // Copier le workspaceId depuis le devis
-            createdBy: user.id,
-            sourceQuote: quote._id, // Référence vers le devis source
-            isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
-            isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
-            isVatExempt: quote.isVatExempt || false, // Copier l'exonération de TVA globale depuis le devis
-            shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
-            appearance: quoteObj.appearance, // Copier l'apparence du document
-            clientPositionRight: quote.clientPositionRight || false,
-            showBankDetails: quote.showBankDetails || false,
-            retenueGarantie: quote.retenueGarantie || 0,
-            escompte: quote.escompte || 0,
-            // Ajouter une note appropriée selon le type de facture
-            notes: isInvoiceDeposit
-              ? `Facture d'acompte (${invoiceDistribution[i]}% du montant total)`
-              : invoiceCount > 1
-                ? `Facture partielle ${i + 1}/${invoiceCount} (${
-                    invoiceDistribution[i]
-                  }% du montant total)`
-                : "",
-          });
-
-          // Nettoyer les coordonnées bancaires si elles sont invalides
-          if (invoice.companyInfo && invoice.companyInfo.bankDetails) {
-            const { iban, bic, bankName } = invoice.companyInfo.bankDetails;
-
-            // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
-            if (!iban || !bic || !bankName) {
-              delete invoice.companyInfo.bankDetails;
-            }
-          }
-
-          await invoice.save();
-          createdInvoices.push(invoice);
-
-          // La première facture est considérée comme la facture principale
-          if (i === 0) {
-            mainInvoice = invoice;
-          }
-        }
-
-        // Vérifier que le montant total des nouvelles factures ne dépasse pas le montant restant
-        if (newInvoicesTotalAmount > remainingAmount + 0.01) {
-          // Tolérance pour les erreurs d'arrondi
-          // Supprimer les factures créées car elles dépassent le montant disponible
-          for (const invoice of createdInvoices) {
-            await Invoice.deleteOne({ _id: invoice._id });
-          }
-
-          throw new AppError(
-            `Le montant total des nouvelles factures (${newInvoicesTotalAmount.toFixed(
-              2,
-            )}€) dépasse le montant restant disponible (${remainingAmount.toFixed(
-              2,
-            )}€)`,
-            ERROR_CODES.INVALID_INPUT,
-            {
-              quoteAmount,
-              existingInvoicesTotalAmount,
-              remainingAmount,
-              newInvoicesTotalAmount,
-            },
-          );
-        }
-
-        // Montant total des nouvelles factures: ${newInvoicesTotalAmount.toFixed(2)}€
-        // Montant total de toutes les factures: ${(existingInvoicesTotalAmount + newInvoicesTotalAmount).toFixed(2)}€ / ${quoteAmount.toFixed(2)}€
-
-        // Mettre à jour le devis avec la référence à la facture principale créée
-        quote.convertedToInvoice = mainInvoice._id;
-
-        // Ajouter toutes les factures à la liste des factures liées
-        if (!quote.linkedInvoices) {
-          quote.linkedInvoices = [];
-        }
-
-        for (const invoice of createdInvoices) {
-          quote.linkedInvoices.push(invoice._id);
-        }
-
-        await quote.save();
-
-        // Retourner la facture principale
-        return await mainInvoice.populate("createdBy");
-      },
-    ),
-
-    sendQuote: requireAction("quotes", "send")(
-      async (_, { id /* email */ }, context) => {
-        const { user, workspaceId } = context;
-        // ✅ FIX: Utiliser workspaceId au lieu de createdBy
-        const quote = await Quote.findOne({
-          _id: id,
-          workspaceId: workspaceId,
+      // Pour la rétrocompatibilité, vérifier aussi convertedToInvoice
+      if (quote.convertedToInvoice) {
+        // Vérifier si la facture référencée dans convertedToInvoice existe toujours
+        const convertedInvoiceExists = await Invoice.exists({
+          _id: quote.convertedToInvoice,
         });
 
-        if (!quote) {
-          throw createNotFoundError("Devis");
+        if (!convertedInvoiceExists) {
+          // Si la facture n'existe plus, réinitialiser le champ convertedToInvoice
+          quote.convertedToInvoice = null;
+          await quote.save();
+        } else if (!quote.linkedInvoices?.includes(quote.convertedToInvoice)) {
+          throw createResourceLockedError("Devis", "déjà converti en facture");
+        }
+      }
+
+      // Utiliser le préfixe standard pour les factures (F-AAAAMM-)
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const prefix = `F-${year}${month}`;
+
+      // Par défaut, créer une seule facture pour le montant total
+      const invoiceDistribution = distribution || [100];
+      const invoiceCount = invoiceDistribution.length;
+
+      // Calculer le pourcentage déjà utilisé par les factures existantes
+      let existingInvoicesPercentage = 0;
+
+      if (existingInvoicesTotalAmount > 0 && quoteAmount > 0) {
+        existingInvoicesPercentage =
+          (existingInvoicesTotalAmount / quoteAmount) * 100;
+      }
+
+      // Vérifier que la somme des pourcentages est bien égale à 100%
+      const newInvoicesPercentage = invoiceDistribution.reduce(
+        (sum, percent) => sum + percent,
+        0,
+      );
+      const totalPercentage =
+        existingInvoicesPercentage + newInvoicesPercentage;
+
+      // Si skipValidation est true (pour les factures d'acompte), on ignore cette vérification
+      if (!skipValidation && Math.abs(totalPercentage - 100) > 0.01) {
+        // Tolérance pour les erreurs d'arrondi
+        // Ne pas ajuster automatiquement, respecter le choix de l'utilisateur
+        // Vérifier simplement que le total ne dépasse pas 100%
+        if (totalPercentage > 100.01) {
+          throw new AppError(
+            `La somme des pourcentages de répartition (${newInvoicesPercentage.toFixed(
+              2,
+            )}% + ${existingInvoicesPercentage.toFixed(
+              2,
+            )}% déjà facturé) ne peut pas dépasser 100% (actuellement ${totalPercentage.toFixed(
+              2,
+            )}%)`,
+            ERROR_CODES.INVALID_INPUT,
+            {
+              existingPercentage: existingInvoicesPercentage,
+              newPercentage: newInvoicesPercentage,
+              total: totalPercentage,
+            },
+          );
         }
 
-        // Ici, vous pourriez implémenter la logique d'envoi d'email
-        // Pour l'instant, nous simulons un succès
-        // TODO: Implémenter l'envoi réel du devis par email
+        // Si le total est inférieur à 100%, c'est acceptable
+        // L'utilisateur pourra créer d'autres factures plus tard pour atteindre 100%
+      }
 
-        return true;
-      },
-    ),
+      // Cette section a été déplacée plus haut
+
+      // Récupérer les informations de l'organisation en utilisant la fonction utilitaire
+      const organization = await getOrganizationInfo(quote.workspaceId);
+
+      // Vérifier que le nom de l'entreprise est défini
+      if (!organization.companyName || organization.companyName.trim() === "") {
+        throw new AppError(
+          "Le nom de votre entreprise doit être défini dans les paramètres de l'organisation avant de créer une facture",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+
+      // Vérifier les informations légales requises selon le statut juridique
+      const legalForm = organization.legalForm || "AUTRE";
+      const requiredForVATStatuses = [
+        "SARL",
+        "SAS",
+        "EURL",
+        "SASU",
+        "SA",
+        "SNC",
+        "SCOP",
+      ];
+
+      if (requiredForVATStatuses.includes(legalForm)) {
+        if (!organization.vatNumber || organization.vatNumber.trim() === "") {
+          throw new AppError(
+            `Le numéro de TVA est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
+            ERROR_CODES.VALIDATION_ERROR,
+            {
+              field: "vatNumber",
+              legalForm: legalForm,
+              requiredFields: ["vatNumber"],
+            },
+          );
+        }
+
+        if (!organization.siret || organization.siret.trim() === "") {
+          throw new AppError(
+            `Le numéro SIRET est obligatoire pour le statut juridique "${legalForm}". Veuillez compléter les informations légales de votre entreprise dans les paramètres de l'organisation.`,
+            ERROR_CODES.VALIDATION_ERROR,
+            {
+              field: "siret",
+              legalForm: legalForm,
+              requiredFields: ["siret"],
+            },
+          );
+        }
+      }
+
+      // Créer les factures selon la répartition
+      const createdInvoices = [];
+      let mainInvoice = null;
+      let newInvoicesTotalAmount = 0;
+
+      // Calculer le montant restant disponible pour de nouvelles factures
+      const remainingAmount = quoteAmount - existingInvoicesTotalAmount;
+
+      if (remainingAmount <= 0) {
+        throw new AppError(
+          `Le montant total des factures existantes (${existingInvoicesTotalAmount.toFixed(
+            2,
+          )}€) a déjà atteint ou dépassé le montant du devis (${quoteAmount.toFixed(
+            2,
+          )}€)`,
+          ERROR_CODES.RESOURCE_LOCKED,
+          {
+            resource: "Devis",
+            quoteAmount,
+            existingInvoicesTotalAmount,
+            remainingAmount,
+          },
+        );
+      }
+
+      // Montant restant disponible pour de nouvelles factures: ${remainingAmount.toFixed(2)}€
+
+      for (let i = 0; i < invoiceCount; i++) {
+        // Générer un nouveau numéro de facture avec ce préfixe au moment de la création
+        // Cela garantit que le numéro est séquentiel par rapport aux autres factures déjà créées
+        // Utiliser la logique DRAFT-ID pour gérer les conflits avec les brouillons existants
+        const number = await generateInvoiceNumber(prefix, {
+          isDraft: true, // Les factures créées depuis un devis sont toujours des brouillons
+          workspaceId: quote.workspaceId,
+          userId: user.id,
+        });
+
+        // Calculer les montants en fonction du pourcentage
+        const percentage = invoiceDistribution[i] / 100;
+        const totalHT = quote.totalHT * percentage;
+        const totalVAT = quote.totalVAT * percentage;
+        const totalTTC = quote.totalTTC * percentage;
+        const finalTotalHT = quote.finalTotalHT * percentage;
+        const finalTotalTTC = quote.finalTotalTTC * percentage;
+        const discountAmount = quote.discountAmount * percentage;
+
+        // Ajouter au montant total des nouvelles factures
+        newInvoicesTotalAmount += finalTotalTTC;
+
+        // Déterminer s'il s'agit d'une facture d'acompte
+        const isInvoiceDeposit = isDeposit === true;
+
+        // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+        const quoteObj = quote.toObject();
+
+        // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
+        const invoice = new Invoice({
+          number,
+          prefix,
+          client: quoteObj.client,
+          companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
+          items: quoteObj.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
+          status: "DRAFT", // Toujours créer en brouillon pour permettre les modifications
+          issueDate: new Date(),
+          dueDate: new Date(new Date().setDate(new Date().getDate() + 30)), // Date d'échéance par défaut à 30 jours
+          headerNotes: quote.headerNotes,
+          footerNotes: quote.footerNotes,
+          termsAndConditions: quote.termsAndConditions,
+          annex: quoteObj.annex || null,
+          termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
+          termsAndConditionsLink: quote.termsAndConditionsLink,
+          purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
+          discount: quote.discount,
+          discountType: quote.discountType,
+          customFields: quoteObj.customFields,
+          totalHT,
+          totalVAT,
+          totalTTC,
+          finalTotalHT,
+          finalTotalTTC,
+          discountAmount,
+          workspaceId: quote.workspaceId, // Copier le workspaceId depuis le devis
+          createdBy: user.id,
+          sourceQuote: quote._id, // Référence vers le devis source
+          isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
+          isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
+          isVatExempt: quote.isVatExempt || false, // Copier l'exonération de TVA globale depuis le devis
+          shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
+          appearance: quoteObj.appearance, // Copier l'apparence du document
+          clientPositionRight: quote.clientPositionRight || false,
+          showBankDetails: quote.showBankDetails || false,
+          retenueGarantie: quote.retenueGarantie || 0,
+          escompte: quote.escompte || 0,
+          // Ajouter une note appropriée selon le type de facture
+          notes: isInvoiceDeposit
+            ? `Facture d'acompte (${invoiceDistribution[i]}% du montant total)`
+            : invoiceCount > 1
+              ? `Facture partielle ${i + 1}/${invoiceCount} (${
+                  invoiceDistribution[i]
+                }% du montant total)`
+              : "",
+        });
+
+        // Nettoyer les coordonnées bancaires si elles sont invalides
+        if (invoice.companyInfo && invoice.companyInfo.bankDetails) {
+          const { iban, bic, bankName } = invoice.companyInfo.bankDetails;
+
+          // Si l'un des champs est vide ou manquant, supprimer complètement bankDetails
+          if (!iban || !bic || !bankName) {
+            delete invoice.companyInfo.bankDetails;
+          }
+        }
+
+        await invoice.save();
+        createdInvoices.push(invoice);
+
+        // La première facture est considérée comme la facture principale
+        if (i === 0) {
+          mainInvoice = invoice;
+        }
+      }
+
+      // Vérifier que le montant total des nouvelles factures ne dépasse pas le montant restant
+      if (newInvoicesTotalAmount > remainingAmount + 0.01) {
+        // Tolérance pour les erreurs d'arrondi
+        // Supprimer les factures créées car elles dépassent le montant disponible
+        for (const invoice of createdInvoices) {
+          await Invoice.deleteOne({ _id: invoice._id });
+        }
+
+        throw new AppError(
+          `Le montant total des nouvelles factures (${newInvoicesTotalAmount.toFixed(
+            2,
+          )}€) dépasse le montant restant disponible (${remainingAmount.toFixed(
+            2,
+          )}€)`,
+          ERROR_CODES.INVALID_INPUT,
+          {
+            quoteAmount,
+            existingInvoicesTotalAmount,
+            remainingAmount,
+            newInvoicesTotalAmount,
+          },
+        );
+      }
+
+      // Montant total des nouvelles factures: ${newInvoicesTotalAmount.toFixed(2)}€
+      // Montant total de toutes les factures: ${(existingInvoicesTotalAmount + newInvoicesTotalAmount).toFixed(2)}€ / ${quoteAmount.toFixed(2)}€
+
+      // Mettre à jour le devis avec la référence à la facture principale créée
+      quote.convertedToInvoice = mainInvoice._id;
+
+      // Ajouter toutes les factures à la liste des factures liées
+      if (!quote.linkedInvoices) {
+        quote.linkedInvoices = [];
+      }
+
+      for (const invoice of createdInvoices) {
+        quote.linkedInvoices.push(invoice._id);
+      }
+
+      await quote.save();
+
+      // Retourner la facture principale
+      return await mainInvoice.populate("createdBy");
+    }),
+
+    sendQuote: requireAction(
+      "quotes",
+      "send",
+    )(async (_, { id /* email */ }, context) => {
+      const { user, workspaceId } = context;
+      // ✅ FIX: Utiliser workspaceId au lieu de createdBy
+      const quote = await Quote.findOne({
+        _id: id,
+        workspaceId: workspaceId,
+      });
+
+      if (!quote) {
+        throw createNotFoundError("Devis");
+      }
+
+      // Ici, vous pourriez implémenter la logique d'envoi d'email
+      // Pour l'instant, nous simulons un succès
+      // TODO: Implémenter l'envoi réel du devis par email
+
+      return true;
+    }),
   },
 };
 

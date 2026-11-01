@@ -275,6 +275,7 @@ const purchaseOrderResolvers = {
           search,
           page = 1,
           limit = 10,
+          clientId,
         },
         context,
       ) => {
@@ -289,6 +290,9 @@ const purchaseOrderResolvers = {
           if (startDate) query.createdAt.$gte = new Date(startDate);
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
+
+        // Documents d'un contact (onglets de sa fiche) : filtrés en base
+        if (clientId) query["client.id"] = String(clientId);
 
         if (status) query.status = status;
 
@@ -476,263 +480,262 @@ const purchaseOrderResolvers = {
       },
     ),
     createPurchaseOrder: requireCompanyInfo(
-      requireAction("purchaseOrders", "create")(
-        async (_, { workspaceId: inputWorkspaceId, input }, context) => {
-          const { user } = context;
-          const workspaceId = resolveWorkspaceId(
-            inputWorkspaceId,
-            context.workspaceId,
-          );
+      requireAction(
+        "purchaseOrders",
+        "create",
+      )(async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+        const { user } = context;
+        const workspaceId = resolveWorkspaceId(
+          inputWorkspaceId,
+          context.workspaceId,
+        );
 
-          if (!workspaceId) {
+        if (!workspaceId) {
+          throw new AppError(
+            "Aucune organisation spécifiée.",
+            ERROR_CODES.BAD_REQUEST,
+          );
+        }
+
+        // Contact bloqué : exclu de la création de documents
+        await assertClientNotBlocked(workspaceId, input.client?.id);
+
+        // Déterminer le préfixe
+        let prefix = input.prefix;
+        if (!prefix) {
+          const lastPO = await PurchaseOrder.findOne({ workspaceId })
+            .sort({ createdAt: -1 })
+            .select("prefix")
+            .lean();
+
+          if (lastPO && lastPO.prefix) {
+            prefix = lastPO.prefix;
+          } else {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            prefix = `BC-${year}${month}`;
+          }
+        }
+
+        // Récupérer les informations de l'organisation (avant la numérotation :
+        // le flag "séquence continue" en dépend)
+        const organization = await getOrganizationInfo(workspaceId);
+        const autoNumbering = organization?.purchaseOrderAutoNumbering === true;
+
+        // === Génération du numéro (style Pennylane) ===
+        // - Aucun BC finalisé → numéro manuel libre accepté
+        // - Des BC finalisés existent → le numéro doit suivre la séquence (pas de trou/recul)
+        // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
+        const isDraft = !input.status || input.status === "DRAFT";
+        let allowManualPONumber = false;
+        if (input.number && !isDraft) {
+          if (!/^\d{1,6}$/.test(input.number)) {
             throw new AppError(
-              "Aucune organisation spécifiée.",
-              ERROR_CODES.BAD_REQUEST,
+              "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
+              ERROR_CODES.VALIDATION_ERROR,
             );
           }
 
-          // Contact bloqué : exclu de la création de documents
-          await assertClientNotBlocked(workspaceId, input.client?.id);
+          const finalizedQuery = {
+            workspaceId,
+            status: {
+              $in: [
+                "CONFIRMED",
+                "VALIDATED",
+                "IN_PROGRESS",
+                "DELIVERED",
+                "CANCELED",
+              ],
+            },
+          };
+          if (!autoNumbering) finalizedQuery.prefix = prefix;
+          const firstFinalized =
+            await PurchaseOrder.findOne(finalizedQuery).lean();
 
-          // Déterminer le préfixe
-          let prefix = input.prefix;
-          if (!prefix) {
-            const lastPO = await PurchaseOrder.findOne({ workspaceId })
-              .sort({ createdAt: -1 })
-              .select("prefix")
-              .lean();
-
-            if (lastPO && lastPO.prefix) {
-              prefix = lastPO.prefix;
-            } else {
-              const now = new Date();
-              const year = now.getFullYear();
-              const month = String(now.getMonth() + 1).padStart(2, "0");
-              prefix = `BC-${year}${month}`;
-            }
-          }
-
-          // Récupérer les informations de l'organisation (avant la numérotation :
-          // le flag "séquence continue" en dépend)
-          const organization = await getOrganizationInfo(workspaceId);
-          const autoNumbering =
-            organization?.purchaseOrderAutoNumbering === true;
-
-          // === Génération du numéro (style Pennylane) ===
-          // - Aucun BC finalisé → numéro manuel libre accepté
-          // - Des BC finalisés existent → le numéro doit suivre la séquence (pas de trou/recul)
-          // Périmètre : par préfixe en mode normal, tous préfixes confondus en séquence continue.
-          const isDraft = !input.status || input.status === "DRAFT";
-          let allowManualPONumber = false;
-          if (input.number && !isDraft) {
-            if (!/^\d{1,6}$/.test(input.number)) {
+          if (firstFinalized) {
+            const sequenceCheck = await validateNumberSequence(
+              "purchaseOrder",
+              input.number,
+              prefix,
+              { workspaceId, autoNumbering },
+            );
+            if (!sequenceCheck.isValid) {
               throw new AppError(
-                "Le numéro de bon de commande doit contenir entre 1 et 6 chiffres",
+                sequenceCheck.message,
                 ERROR_CODES.VALIDATION_ERROR,
               );
             }
+          }
+          allowManualPONumber = true;
+        }
 
-            const finalizedQuery = {
-              workspaceId,
-              status: {
-                $in: [
-                  "CONFIRMED",
-                  "VALIDATED",
-                  "IN_PROGRESS",
-                  "DELIVERED",
-                  "CANCELED",
-                ],
-              },
-            };
-            if (!autoNumbering) finalizedQuery.prefix = prefix;
-            const firstFinalized =
-              await PurchaseOrder.findOne(finalizedQuery).lean();
+        const generatePONumber = async () => {
+          if (allowManualPONumber) {
+            return String(parseInt(input.number, 10)).padStart(4, "0");
+          }
+          // Les brouillons reçoivent un numéro DRAFT-timestamp (comme les devis
+          // et factures) : ils ne consomment pas le compteur séquentiel et ne sont
+          // pas comptés par nextPurchaseOrderNumber. Le numéro définitif est attribué
+          // à la finalisation (DRAFT → CONFIRMED).
+          return await generatePurchaseOrderNumber(prefix, {
+            isDraft,
+            workspaceId,
+            userId: user.id,
+            autoNumbering,
+          });
+        };
 
-            if (firstFinalized) {
-              const sequenceCheck = await validateNumberSequence(
-                "purchaseOrder",
-                input.number,
-                prefix,
-                { workspaceId, autoNumbering },
-              );
-              if (!sequenceCheck.isValid) {
-                throw new AppError(
-                  sequenceCheck.message,
-                  ERROR_CODES.VALIDATION_ERROR,
-                );
-              }
-            }
-            allowManualPONumber = true;
+        let number = await generatePONumber();
+
+        if (!organization?.companyName) {
+          throw new AppError(
+            "Les informations de votre entreprise doivent être configurées avant de créer un bon de commande",
+            ERROR_CODES.COMPANY_INFO_REQUIRED,
+          );
+        }
+
+        // Calculer les totaux
+        const totals = calculatePurchaseOrderTotals(
+          input.items,
+          input.discount,
+          input.discountType,
+          input.shipping,
+          input.isReverseCharge,
+        );
+
+        const clientData = input.client;
+        if (
+          clientData.type === "INDIVIDUAL" &&
+          (!clientData.name || clientData.name.trim() === "")
+        ) {
+          if (clientData.firstName && clientData.lastName) {
+            clientData.name = `${clientData.firstName} ${clientData.lastName}`;
+          } else {
+            clientData.name = clientData.email
+              ? `Client ${clientData.email}`
+              : "Client Particulier";
+          }
+        }
+
+        // Créer le bon de commande - companyInfo uniquement pour les documents non-DRAFT
+        // Retry sur E11000 : régénère le numéro via le compteur atomique en cas
+        // de conflit (race condition). Numéro manuel échoue immédiatement.
+        const PO_MAX_SAVE_RETRIES = 5;
+        let purchaseOrder;
+        for (let attempt = 1; attempt <= PO_MAX_SAVE_RETRIES; attempt++) {
+          // Les brouillons portent un numéro DRAFT-<timestamp> qui n'entre
+          // en conflit avec rien : seuls les numéros définitifs sont à
+          // libérer.
+          if (!isDraft) {
+            await renameConflictingDrafts({ prefix, number, workspaceId });
           }
 
-          const generatePONumber = async () => {
+          purchaseOrder = new PurchaseOrder({
+            ...input,
+            number,
+            prefix,
+            workspaceId,
+            companyInfo: isDraft
+              ? undefined
+              : mapOrganizationToCompanyInfo(organization),
+            client: {
+              ...input.client,
+              shippingAddress: input.client.hasDifferentShippingAddress
+                ? {
+                    fullName: input.client.shippingAddress?.fullName || "",
+                    street: input.client.shippingAddress?.street || "",
+                    city: input.client.shippingAddress?.city || "",
+                    postalCode: input.client.shippingAddress?.postalCode || "",
+                    country: input.client.shippingAddress?.country || "",
+                  }
+                : undefined,
+              // Champs personnalisés figés dès la création d'un document non brouillon
+              documentFields: isDraft
+                ? undefined
+                : await buildDocumentFieldsForClientId(
+                    input.client.id,
+                    workspaceId,
+                    context,
+                  ),
+            },
+            appearance: input.appearance || {
+              textColor: "#000000",
+              headerTextColor: "#ffffff",
+              headerBgColor: "#1d1d1b",
+            },
+            createdBy: user.id,
+            ...totals,
+          });
+
+          try {
+            await purchaseOrder.save();
+            break;
+          } catch (err) {
+            const isDup = err && (err.code === 11000 || err.code === 11001);
+            if (!isDup) throw err;
             if (allowManualPONumber) {
-              return String(parseInt(input.number, 10)).padStart(4, "0");
+              throw new AppError(
+                `Le numéro de bon de commande "${number}" est déjà utilisé`,
+                ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
+              );
             }
-            // Les brouillons reçoivent un numéro DRAFT-timestamp (comme les devis
-            // et factures) : ils ne consomment pas le compteur séquentiel et ne sont
-            // pas comptés par nextPurchaseOrderNumber. Le numéro définitif est attribué
-            // à la finalisation (DRAFT → CONFIRMED).
-            return await generatePurchaseOrderNumber(prefix, {
+            if (attempt === PO_MAX_SAVE_RETRIES) {
+              console.error(
+                "[createPurchaseOrder] Échec après retries E11000:",
+                err.keyValue,
+              );
+              throw new AppError(
+                "Impossible de générer un numéro de bon de commande unique. Veuillez réessayer.",
+                ERROR_CODES.INTERNAL_ERROR,
+              );
+            }
+            console.warn(
+              `[createPurchaseOrder] Conflit E11000 tentative ${attempt}/${PO_MAX_SAVE_RETRIES}, retry:`,
+              err.keyValue,
+            );
+            number = await generatePurchaseOrderNumber(prefix, {
               isDraft,
               workspaceId,
               userId: user.id,
               autoNumbering,
             });
-          };
-
-          let number = await generatePONumber();
-
-          if (!organization?.companyName) {
-            throw new AppError(
-              "Les informations de votre entreprise doivent être configurées avant de créer un bon de commande",
-              ERROR_CODES.COMPANY_INFO_REQUIRED,
-            );
           }
+        }
 
-          // Calculer les totaux
-          const totals = calculatePurchaseOrderTotals(
-            input.items,
-            input.discount,
-            input.discountType,
-            input.shipping,
-            input.isReverseCharge,
-          );
-
-          const clientData = input.client;
-          if (
-            clientData.type === "INDIVIDUAL" &&
-            (!clientData.name || clientData.name.trim() === "")
-          ) {
-            if (clientData.firstName && clientData.lastName) {
-              clientData.name = `${clientData.firstName} ${clientData.lastName}`;
-            } else {
-              clientData.name = clientData.email
-                ? `Client ${clientData.email}`
-                : "Client Particulier";
-            }
-          }
-
-          // Créer le bon de commande - companyInfo uniquement pour les documents non-DRAFT
-          // Retry sur E11000 : régénère le numéro via le compteur atomique en cas
-          // de conflit (race condition). Numéro manuel échoue immédiatement.
-          const PO_MAX_SAVE_RETRIES = 5;
-          let purchaseOrder;
-          for (let attempt = 1; attempt <= PO_MAX_SAVE_RETRIES; attempt++) {
-            // Les brouillons portent un numéro DRAFT-<timestamp> qui n'entre
-            // en conflit avec rien : seuls les numéros définitifs sont à
-            // libérer.
-            if (!isDraft) {
-              await renameConflictingDrafts({ prefix, number, workspaceId });
-            }
-
-            purchaseOrder = new PurchaseOrder({
-              ...input,
-              number,
-              prefix,
+        // Automatisations documents partagés (fire-and-forget)
+        const poTriggerMap = {
+          DRAFT: "PURCHASE_ORDER_DRAFT",
+          CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
+        };
+        const poTrigger = poTriggerMap[purchaseOrder.status];
+        if (poTrigger) {
+          documentAutomationService
+            .executeAutomations(
+              poTrigger,
               workspaceId,
-              companyInfo: isDraft
-                ? undefined
-                : mapOrganizationToCompanyInfo(organization),
-              client: {
-                ...input.client,
-                shippingAddress: input.client.hasDifferentShippingAddress
-                  ? {
-                      fullName: input.client.shippingAddress?.fullName || "",
-                      street: input.client.shippingAddress?.street || "",
-                      city: input.client.shippingAddress?.city || "",
-                      postalCode:
-                        input.client.shippingAddress?.postalCode || "",
-                      country: input.client.shippingAddress?.country || "",
-                    }
-                  : undefined,
-                // Champs personnalisés figés dès la création d'un document non brouillon
-                documentFields: isDraft
-                  ? undefined
-                  : await buildDocumentFieldsForClientId(
-                      input.client.id,
-                      workspaceId,
-                      context,
-                    ),
+              {
+                documentId: purchaseOrder._id.toString(),
+                documentType: "purchaseOrder",
+                documentNumber: purchaseOrder.number,
+                prefix: purchaseOrder.prefix || "",
+                clientName: purchaseOrder.client?.name || "",
+                issueDate: purchaseOrder.issueDate || purchaseOrder.createdAt,
+                clientId:
+                  purchaseOrder.client?._id || purchaseOrder.clientId || null,
               },
-              appearance: input.appearance || {
-                textColor: "#000000",
-                headerTextColor: "#ffffff",
-                headerBgColor: "#1d1d1b",
-              },
-              createdBy: user.id,
-              ...totals,
-            });
+              user._id.toString(),
+            )
+            .catch((err) =>
+              console.error(
+                "Erreur automatisation documents (PO create):",
+                err,
+              ),
+            );
+        }
 
-            try {
-              await purchaseOrder.save();
-              break;
-            } catch (err) {
-              const isDup = err && (err.code === 11000 || err.code === 11001);
-              if (!isDup) throw err;
-              if (allowManualPONumber) {
-                throw new AppError(
-                  `Le numéro de bon de commande "${number}" est déjà utilisé`,
-                  ERROR_CODES.DUPLICATE_DOCUMENT_NUMBER,
-                );
-              }
-              if (attempt === PO_MAX_SAVE_RETRIES) {
-                console.error(
-                  "[createPurchaseOrder] Échec après retries E11000:",
-                  err.keyValue,
-                );
-                throw new AppError(
-                  "Impossible de générer un numéro de bon de commande unique. Veuillez réessayer.",
-                  ERROR_CODES.INTERNAL_ERROR,
-                );
-              }
-              console.warn(
-                `[createPurchaseOrder] Conflit E11000 tentative ${attempt}/${PO_MAX_SAVE_RETRIES}, retry:`,
-                err.keyValue,
-              );
-              number = await generatePurchaseOrderNumber(prefix, {
-                isDraft,
-                workspaceId,
-                userId: user.id,
-                autoNumbering,
-              });
-            }
-          }
-
-          // Automatisations documents partagés (fire-and-forget)
-          const poTriggerMap = {
-            DRAFT: "PURCHASE_ORDER_DRAFT",
-            CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
-          };
-          const poTrigger = poTriggerMap[purchaseOrder.status];
-          if (poTrigger) {
-            documentAutomationService
-              .executeAutomations(
-                poTrigger,
-                workspaceId,
-                {
-                  documentId: purchaseOrder._id.toString(),
-                  documentType: "purchaseOrder",
-                  documentNumber: purchaseOrder.number,
-                  prefix: purchaseOrder.prefix || "",
-                  clientName: purchaseOrder.client?.name || "",
-                  issueDate: purchaseOrder.issueDate || purchaseOrder.createdAt,
-                  clientId:
-                    purchaseOrder.client?._id || purchaseOrder.clientId || null,
-                },
-                user._id.toString(),
-              )
-              .catch((err) =>
-                console.error(
-                  "Erreur automatisation documents (PO create):",
-                  err,
-                ),
-              );
-          }
-
-          return await purchaseOrder.populate("createdBy");
-        },
-      ),
+        return await purchaseOrder.populate("createdBy");
+      }),
     ),
 
     updatePurchaseOrder: requireCompanyInfo(
@@ -1052,219 +1055,217 @@ const purchaseOrderResolvers = {
     ),
 
     changePurchaseOrderStatus: requireCompanyInfo(
-      requireAction("purchaseOrders", STATUS_CHANGE_ACTIONS)(
-        async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
-          // Valider le brouillon (confirmer) = créer ou modifier ; autres
-          // statuts = « status »
-          assertStatusChangeAllowed(
-            context,
-            "purchaseOrders",
+      requireAction(
+        "purchaseOrders",
+        STATUS_CHANGE_ACTIONS,
+      )(async (_, { id, workspaceId: inputWorkspaceId, status }, context) => {
+        // Valider le brouillon (confirmer) = créer ou modifier ; autres
+        // statuts = « status »
+        assertStatusChangeAllowed(
+          context,
+          "purchaseOrders",
+          status,
+          "CONFIRMED",
+        );
+        const { user, workspaceId } = context;
+        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+
+        if (!po) {
+          throw createNotFoundError("Bon de commande");
+        }
+
+        const allowedTransitions = {
+          DRAFT: ["CONFIRMED", "CANCELED"],
+          CONFIRMED: ["VALIDATED", "DRAFT", "CANCELED"],
+          VALIDATED: ["IN_PROGRESS"],
+          IN_PROGRESS: ["DELIVERED"],
+          DELIVERED: [],
+          CANCELED: [],
+        };
+
+        if (!allowedTransitions[po.status]?.includes(status)) {
+          throw createStatusTransitionError(
+            "Bon de commande",
+            po.status,
             status,
-            "CONFIRMED",
           );
-          const { user, workspaceId } = context;
-          const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+        }
 
-          if (!po) {
-            throw createNotFoundError("Bon de commande");
+        if (
+          status === "CANCELED" &&
+          po.linkedInvoices &&
+          po.linkedInvoices.length > 0
+        ) {
+          throw createResourceLockedError(
+            "Bon de commande",
+            "un bon de commande avec des factures liées ne peut pas être annulé",
+          );
+        }
+
+        const oldStatus = po.status;
+
+        // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
+        if (po.status === "DRAFT" && status === "CONFIRMED") {
+          // Recaler les dates d'un brouillon repris plus tard : l'émission
+          // est ramenée à aujourd'hui et la validité décalée d'autant (délai
+          // d'origine conservé). Les vues affichent déjà ces dates recalées
+          // (getDraftEffectiveDates côté front) : sans ce recalage, la
+          // finalisation en un clic persisterait les dates d'origine.
+          const refreshedDates = refreshDraftDates(po.issueDate, po.validUntil);
+          if (refreshedDates.changed) {
+            po.issueDate = refreshedDates.issueDate;
+            po.validUntil = refreshedDates.secondDate;
           }
 
-          const allowedTransitions = {
-            DRAFT: ["CONFIRMED", "CANCELED"],
-            CONFIRMED: ["VALIDATED", "DRAFT", "CANCELED"],
-            VALIDATED: ["IN_PROGRESS"],
-            IN_PROGRESS: ["DELIVERED"],
-            DELIVERED: [],
-            CANCELED: [],
-          };
-
-          if (!allowedTransitions[po.status]?.includes(status)) {
-            throw createStatusTransitionError(
-              "Bon de commande",
-              po.status,
-              status,
-            );
+          // Snapshot companyInfo à la finalisation
+          if (!po.companyInfo || !po.companyInfo.name) {
+            const org = await getOrganizationInfo(workspaceId);
+            po.companyInfo = mapOrganizationToCompanyInfo(org);
           }
 
-          if (
-            status === "CANCELED" &&
-            po.linkedInvoices &&
-            po.linkedInvoices.length > 0
-          ) {
-            throw createResourceLockedError(
-              "Bon de commande",
-              "un bon de commande avec des factures liées ne peut pas être annulé",
-            );
-          }
-
-          const oldStatus = po.status;
-
-          // Si transition DRAFT → CONFIRMED, snapshot companyInfo + client et générer un numéro séquentiel
-          if (po.status === "DRAFT" && status === "CONFIRMED") {
-            // Recaler les dates d'un brouillon repris plus tard : l'émission
-            // est ramenée à aujourd'hui et la validité décalée d'autant (délai
-            // d'origine conservé). Les vues affichent déjà ces dates recalées
-            // (getDraftEffectiveDates côté front) : sans ce recalage, la
-            // finalisation en un clic persisterait les dates d'origine.
-            const refreshedDates = refreshDraftDates(
-              po.issueDate,
-              po.validUntil,
-            );
-            if (refreshedDates.changed) {
-              po.issueDate = refreshedDates.issueDate;
-              po.validUntil = refreshedDates.secondDate;
-            }
-
-            // Snapshot companyInfo à la finalisation
-            if (!po.companyInfo || !po.companyInfo.name) {
-              const org = await getOrganizationInfo(workspaceId);
-              po.companyInfo = mapOrganizationToCompanyInfo(org);
-            }
-
-            // Snapshot client à la finalisation : on ne re-snapshote depuis la
-            // collection Client QUE si le bon de commande n'a pas déjà de client
-            // figé. Sinon on conserve le snapshot du document, qui reflète les
-            // dernières données enregistrées (incl. les éventuelles modifications
-            // manuelles des coordonnées faites lors de l'édition du brouillon).
-            if (!po.client?.id) {
-              const clientId = po.client?.id || po.clientId;
-              if (clientId) {
-                try {
-                  const freshClient = await Client.findOne({
-                    _id: clientId,
-                    workspaceId: po.workspaceId,
-                  });
-                  if (freshClient) {
-                    po.client = {
-                      id: freshClient._id.toString(),
-                      type: freshClient.type,
-                      name: freshClient.name,
-                      firstName: freshClient.firstName,
-                      lastName: freshClient.lastName,
-                      email: freshClient.email,
-                      address: freshClient.address,
-                      hasDifferentShippingAddress:
-                        freshClient.hasDifferentShippingAddress,
-                      shippingAddress: freshClient.shippingAddress,
-                      isInternational: freshClient.isInternational,
-                      documentFields: await buildClientDocumentFields(
-                        freshClient,
-                        context,
-                      ),
-                      siret: freshClient.siret,
-                      vatNumber: freshClient.vatNumber,
-                    };
-                  }
-                } catch (error) {
-                  console.error(
-                    "[changePurchaseOrderStatus] Erreur snapshot client:",
-                    error.message,
-                  );
-                }
-              }
-            }
-
-            // Transaction atomique pour éviter les numéros TEMP orphelins
-            const MAX_RETRIES = 3;
-            for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-              const session = await mongoose.startSession();
+          // Snapshot client à la finalisation : on ne re-snapshote depuis la
+          // collection Client QUE si le bon de commande n'a pas déjà de client
+          // figé. Sinon on conserve le snapshot du document, qui reflète les
+          // dernières données enregistrées (incl. les éventuelles modifications
+          // manuelles des coordonnées faites lors de l'édition du brouillon).
+          if (!po.client?.id) {
+            const clientId = po.client?.id || po.clientId;
+            if (clientId) {
               try {
-                await session.withTransaction(async () => {
-                  let prefix = po.prefix;
-                  if (!prefix) {
-                    const year = (po.issueDate || new Date()).getFullYear();
-                    const month = String(
-                      (po.issueDate || new Date()).getMonth() + 1,
-                    ).padStart(2, "0");
-                    prefix = `BC-${year}${month}`;
-                  }
-
-                  const poOrg = await getOrganizationInfo(po.workspaceId);
-                  const autoNumbering =
-                    poOrg?.purchaseOrderAutoNumbering === true;
-
-                  const newNumber = await generatePurchaseOrderNumber(prefix, {
-                    workspaceId: po.workspaceId,
-                    userId: user.id,
-                    session,
-                    autoNumbering,
-                  });
-
-                  // Libérer le numéro s'il est occupé par un brouillon : sans
-                  // ça, le retry E11000 consommait un numéro suivant et laissait
-                  // un trou dans la séquence.
-                  await renameConflictingDrafts(
-                    {
-                      prefix,
-                      number: newNumber,
-                      workspaceId: po.workspaceId,
-                      excludeId: po._id,
-                    },
-                    { session },
-                  );
-
-                  // Utiliser un numéro temporaire pour éviter les conflits d'unicité
-                  po.number = `TEMP-${Date.now()}`;
-                  await po.save({ session });
-
-                  po.number = newNumber;
-                  po.prefix = prefix;
-                  po.status = status;
-                  await po.save({ session });
+                const freshClient = await Client.findOne({
+                  _id: clientId,
+                  workspaceId: po.workspaceId,
                 });
-                session.endSession();
-                break;
-              } catch (err) {
-                session.endSession();
-                if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
-                  logger.debug(
-                    `⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`,
-                  );
-                  continue;
+                if (freshClient) {
+                  po.client = {
+                    id: freshClient._id.toString(),
+                    type: freshClient.type,
+                    name: freshClient.name,
+                    firstName: freshClient.firstName,
+                    lastName: freshClient.lastName,
+                    email: freshClient.email,
+                    address: freshClient.address,
+                    hasDifferentShippingAddress:
+                      freshClient.hasDifferentShippingAddress,
+                    shippingAddress: freshClient.shippingAddress,
+                    isInternational: freshClient.isInternational,
+                    documentFields: await buildClientDocumentFields(
+                      freshClient,
+                      context,
+                    ),
+                    siret: freshClient.siret,
+                    vatNumber: freshClient.vatNumber,
+                  };
                 }
-                throw err;
+              } catch (error) {
+                console.error(
+                  "[changePurchaseOrderStatus] Erreur snapshot client:",
+                  error.message,
+                );
               }
             }
-          } else {
-            po.status = status;
-            await po.save();
           }
 
-          // Automatisations documents partagés (fire-and-forget)
-          const statusTriggerMap = {
-            CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
-            IN_PROGRESS: "PURCHASE_ORDER_IN_PROGRESS",
-            DELIVERED: "PURCHASE_ORDER_DELIVERED",
-            CANCELED: "PURCHASE_ORDER_CANCELED",
-          };
-          const poStatusTrigger = statusTriggerMap[status];
-          if (poStatusTrigger) {
-            documentAutomationService
-              .executeAutomations(
-                poStatusTrigger,
-                workspaceId,
-                {
-                  documentId: po._id.toString(),
-                  documentType: "purchaseOrder",
-                  documentNumber: po.number,
-                  prefix: po.prefix || "",
-                  clientName: po.client?.name || "",
-                  issueDate: po.issueDate || po.createdAt,
-                  clientId: po.client?._id || po.clientId || null,
-                },
-                user._id.toString(),
-              )
-              .catch((err) =>
-                console.error(
-                  "Erreur automatisation documents (PO status):",
-                  err,
-                ),
-              );
-          }
+          // Transaction atomique pour éviter les numéros TEMP orphelins
+          const MAX_RETRIES = 3;
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            const session = await mongoose.startSession();
+            try {
+              await session.withTransaction(async () => {
+                let prefix = po.prefix;
+                if (!prefix) {
+                  const year = (po.issueDate || new Date()).getFullYear();
+                  const month = String(
+                    (po.issueDate || new Date()).getMonth() + 1,
+                  ).padStart(2, "0");
+                  prefix = `BC-${year}${month}`;
+                }
 
-          return await po.populate("createdBy");
-        },
-      ),
+                const poOrg = await getOrganizationInfo(po.workspaceId);
+                const autoNumbering =
+                  poOrg?.purchaseOrderAutoNumbering === true;
+
+                const newNumber = await generatePurchaseOrderNumber(prefix, {
+                  workspaceId: po.workspaceId,
+                  userId: user.id,
+                  session,
+                  autoNumbering,
+                });
+
+                // Libérer le numéro s'il est occupé par un brouillon : sans
+                // ça, le retry E11000 consommait un numéro suivant et laissait
+                // un trou dans la séquence.
+                await renameConflictingDrafts(
+                  {
+                    prefix,
+                    number: newNumber,
+                    workspaceId: po.workspaceId,
+                    excludeId: po._id,
+                  },
+                  { session },
+                );
+
+                // Utiliser un numéro temporaire pour éviter les conflits d'unicité
+                po.number = `TEMP-${Date.now()}`;
+                await po.save({ session });
+
+                po.number = newNumber;
+                po.prefix = prefix;
+                po.status = status;
+                await po.save({ session });
+              });
+              session.endSession();
+              break;
+            } catch (err) {
+              session.endSession();
+              if (err.code === 11000 && attempt < MAX_RETRIES - 1) {
+                logger.debug(
+                  `⚠️ [changePurchaseOrderStatus] E11000 retry attempt ${attempt + 1}`,
+                );
+                continue;
+              }
+              throw err;
+            }
+          }
+        } else {
+          po.status = status;
+          await po.save();
+        }
+
+        // Automatisations documents partagés (fire-and-forget)
+        const statusTriggerMap = {
+          CONFIRMED: "PURCHASE_ORDER_CONFIRMED",
+          IN_PROGRESS: "PURCHASE_ORDER_IN_PROGRESS",
+          DELIVERED: "PURCHASE_ORDER_DELIVERED",
+          CANCELED: "PURCHASE_ORDER_CANCELED",
+        };
+        const poStatusTrigger = statusTriggerMap[status];
+        if (poStatusTrigger) {
+          documentAutomationService
+            .executeAutomations(
+              poStatusTrigger,
+              workspaceId,
+              {
+                documentId: po._id.toString(),
+                documentType: "purchaseOrder",
+                documentNumber: po.number,
+                prefix: po.prefix || "",
+                clientName: po.client?.name || "",
+                issueDate: po.issueDate || po.createdAt,
+                clientId: po.client?._id || po.clientId || null,
+              },
+              user._id.toString(),
+            )
+            .catch((err) =>
+              console.error(
+                "Erreur automatisation documents (PO status):",
+                err,
+              ),
+            );
+        }
+
+        return await po.populate("createdBy");
+      }),
     ),
 
     // Transformer un devis : action « convert » de la page Devis, et
@@ -1272,305 +1273,302 @@ const purchaseOrderResolvers = {
     convertQuoteToPurchaseOrder: requireAllActions([
       ["quotes", "convert"],
       ["purchaseOrders", "create"],
-    ])(
-      async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId } = context;
-        const quote = await Quote.findOne({ _id: quoteId, workspaceId });
+    ])(async (_, { quoteId, workspaceId: inputWorkspaceId }, context) => {
+      const { user, workspaceId } = context;
+      const quote = await Quote.findOne({ _id: quoteId, workspaceId });
 
-        if (!quote) {
-          throw createNotFoundError("Devis");
-        }
+      if (!quote) {
+        throw createNotFoundError("Devis");
+      }
 
-        if (quote.status !== "COMPLETED") {
-          throw new AppError(
-            "Seuls les devis acceptés peuvent être convertis en bon de commande",
-            ERROR_CODES.RESOURCE_LOCKED,
-          );
-        }
+      if (quote.status !== "COMPLETED") {
+        throw new AppError(
+          "Seuls les devis acceptés peuvent être convertis en bon de commande",
+          ERROR_CODES.RESOURCE_LOCKED,
+        );
+      }
 
-        const organization = await getOrganizationInfo(workspaceId);
+      const organization = await getOrganizationInfo(workspaceId);
 
-        // Générer le préfixe et le numéro
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const prefix = `BC-${year}${month}`;
+      // Générer le préfixe et le numéro
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const prefix = `BC-${year}${month}`;
 
-        const number = await generatePurchaseOrderNumber(prefix, {
-          workspaceId,
-          userId: user.id,
-          autoNumbering: organization?.purchaseOrderAutoNumbering === true,
-        });
+      const number = await generatePurchaseOrderNumber(prefix, {
+        workspaceId,
+        userId: user.id,
+        autoNumbering: organization?.purchaseOrderAutoNumbering === true,
+      });
 
-        // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
-        const quoteObj = quote.toObject();
+      // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+      const quoteObj = quote.toObject();
 
-        const purchaseOrder = new PurchaseOrder({
-          number,
-          prefix,
-          purchaseOrderNumber: quote.prefix
-            ? `${quote.prefix.replace(/-$/, "")}-${quote.number}`
-            : quote.number,
-          client: quoteObj.client,
-          companyInfo: mapOrganizationToCompanyInfo(organization),
-          items: quoteObj.items,
-          status: "CONFIRMED",
-          issueDate: new Date(),
-          validUntil:
-            quote.validUntil && new Date(quote.validUntil) >= new Date()
-              ? quote.validUntil
-              : null,
-          headerNotes:
-            organization.purchaseOrderHeaderNotes ||
-            organization.documentHeaderNotes ||
-            "",
-          footerNotes:
-            organization.purchaseOrderFooterNotes ||
-            organization.documentFooterNotes ||
-            "",
-          termsAndConditions:
-            organization.purchaseOrderTermsAndConditions ||
-            organization.documentTermsAndConditions ||
-            "",
-          termsAndConditionsLinkTitle: "",
-          termsAndConditionsLink: "",
-          annex: getOrganizationDefaultAnnex(organization, "purchaseOrder"),
-          discount: quote.discount,
-          discountType: quote.discountType,
-          customFields: quoteObj.customFields,
-          totalHT: quote.totalHT,
-          totalVAT: quote.totalVAT,
-          totalTTC: quote.totalTTC,
-          finalTotalHT: quote.finalTotalHT,
-          finalTotalVAT: quote.finalTotalVAT,
-          finalTotalTTC: quote.finalTotalTTC,
-          discountAmount: quote.discountAmount,
-          workspaceId,
-          createdBy: user.id,
-          sourceQuoteId: quote._id,
-          appearance: {
-            textColor:
-              organization.purchaseOrderTextColor ||
-              organization.documentTextColor ||
-              "#000000",
-            headerTextColor:
-              organization.purchaseOrderHeaderTextColor ||
-              organization.documentHeaderTextColor ||
-              "#ffffff",
-            headerBgColor:
-              organization.purchaseOrderHeaderBgColor ||
-              organization.documentHeaderBgColor ||
-              "#5b50FF",
-          },
-          shipping: quoteObj.shipping,
-          isReverseCharge: quote.isReverseCharge || false,
-          isVatExempt: quote.isVatExempt || false,
-          clientPositionRight:
-            organization.purchaseOrderClientPositionRight || false,
-          showBankDetails: organization.showBankDetails || false,
-          retenueGarantie: quote.retenueGarantie || 0,
-          escompte: quote.escompte || 0,
-        });
+      const purchaseOrder = new PurchaseOrder({
+        number,
+        prefix,
+        purchaseOrderNumber: quote.prefix
+          ? `${quote.prefix.replace(/-$/, "")}-${quote.number}`
+          : quote.number,
+        client: quoteObj.client,
+        companyInfo: mapOrganizationToCompanyInfo(organization),
+        items: quoteObj.items,
+        status: "CONFIRMED",
+        issueDate: new Date(),
+        validUntil:
+          quote.validUntil && new Date(quote.validUntil) >= new Date()
+            ? quote.validUntil
+            : null,
+        headerNotes:
+          organization.purchaseOrderHeaderNotes ||
+          organization.documentHeaderNotes ||
+          "",
+        footerNotes:
+          organization.purchaseOrderFooterNotes ||
+          organization.documentFooterNotes ||
+          "",
+        termsAndConditions:
+          organization.purchaseOrderTermsAndConditions ||
+          organization.documentTermsAndConditions ||
+          "",
+        termsAndConditionsLinkTitle: "",
+        termsAndConditionsLink: "",
+        annex: getOrganizationDefaultAnnex(organization, "purchaseOrder"),
+        discount: quote.discount,
+        discountType: quote.discountType,
+        customFields: quoteObj.customFields,
+        totalHT: quote.totalHT,
+        totalVAT: quote.totalVAT,
+        totalTTC: quote.totalTTC,
+        finalTotalHT: quote.finalTotalHT,
+        finalTotalVAT: quote.finalTotalVAT,
+        finalTotalTTC: quote.finalTotalTTC,
+        discountAmount: quote.discountAmount,
+        workspaceId,
+        createdBy: user.id,
+        sourceQuoteId: quote._id,
+        appearance: {
+          textColor:
+            organization.purchaseOrderTextColor ||
+            organization.documentTextColor ||
+            "#000000",
+          headerTextColor:
+            organization.purchaseOrderHeaderTextColor ||
+            organization.documentHeaderTextColor ||
+            "#ffffff",
+          headerBgColor:
+            organization.purchaseOrderHeaderBgColor ||
+            organization.documentHeaderBgColor ||
+            "#5b50FF",
+        },
+        shipping: quoteObj.shipping,
+        isReverseCharge: quote.isReverseCharge || false,
+        isVatExempt: quote.isVatExempt || false,
+        clientPositionRight:
+          organization.purchaseOrderClientPositionRight || false,
+        showBankDetails: organization.showBankDetails || false,
+        retenueGarantie: quote.retenueGarantie || 0,
+        escompte: quote.escompte || 0,
+      });
 
-        // Le BC issu du devis est créé finalisé (CONFIRMED) : libérer le numéro
-        // s'il est occupé par un brouillon.
-        await renameConflictingDrafts({ prefix, number, workspaceId });
+      // Le BC issu du devis est créé finalisé (CONFIRMED) : libérer le numéro
+      // s'il est occupé par un brouillon.
+      await renameConflictingDrafts({ prefix, number, workspaceId });
 
-        await purchaseOrder.save();
-        return await purchaseOrder.populate("createdBy");
-      },
-    ),
+      await purchaseOrder.save();
+      return await purchaseOrder.populate("createdBy");
+    }),
 
     // Transformer un bon de commande en facture : « Transformer » sur les
     // bons de commande ET « Créer » sur les factures (comme l'écran)
     convertPurchaseOrderToInvoice: requireAllActions([
       ["purchaseOrders", "convert"],
       ["invoices", "create"],
-    ])(
-      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+    ])(async (_, { id, workspaceId: inputWorkspaceId }, context) => {
+      const { user, workspaceId } = context;
+      const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
 
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
+      if (!po) {
+        throw createNotFoundError("Bon de commande");
+      }
 
-        if (!["CONFIRMED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
-          throw new AppError(
-            "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
-            ERROR_CODES.RESOURCE_LOCKED,
-          );
-        }
+      if (!["CONFIRMED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
+        throw new AppError(
+          "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
+          ERROR_CODES.RESOURCE_LOCKED,
+        );
+      }
 
-        // Si le BC provient d'un devis, garantir qu'on ne facture pas au-delà
-        // du montant du devis, tous chemins confondus (devis→facture directe
-        // OU devis→BC→facture). On charge le devis source pour contrôler et
-        // synchroniser quote.linkedInvoices (source de vérité anti-doublon).
-        let sourceQuote = null;
-        if (po.sourceQuoteId) {
-          sourceQuote = await Quote.findOne({
-            _id: po.sourceQuoteId,
-            workspaceId,
-          });
-
-          if (sourceQuote) {
-            const quoteAmount = sourceQuote.finalTotalTTC || 0;
-
-            // Nettoyer les références mortes et calculer le déjà-facturé
-            let existingInvoicesTotalAmount = 0;
-            if (sourceQuote.linkedInvoices?.length > 0) {
-              const existingInvoices = await Invoice.find({
-                _id: { $in: sourceQuote.linkedInvoices },
-                workspaceId: sourceQuote.workspaceId,
-              });
-              const validIds = existingInvoices.map((inv) => inv._id);
-              if (validIds.length !== sourceQuote.linkedInvoices.length) {
-                sourceQuote.linkedInvoices = validIds;
-                await sourceQuote.save();
-              }
-              existingInvoicesTotalAmount = existingInvoices.reduce(
-                (sum, inv) => sum + (inv.finalTotalTTC || 0),
-                0,
-              );
-            }
-
-            if (
-              quoteAmount > 0 &&
-              quoteAmount - existingInvoicesTotalAmount <= 0.01
-            ) {
-              throw new AppError(
-                `Le devis associé à ce bon de commande est déjà entièrement facturé (${existingInvoicesTotalAmount.toFixed(
-                  2,
-                )}€ sur ${quoteAmount.toFixed(2)}€)`,
-                ERROR_CODES.RESOURCE_LOCKED,
-                {
-                  resource: "Devis",
-                  quoteAmount,
-                  existingInvoicesTotalAmount,
-                },
-              );
-            }
-          }
-        }
-
-        const organization = await getOrganizationInfo(workspaceId);
-
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, "0");
-        const invoicePrefix = `F-${year}${month}`;
-
-        const invoiceNumber = await generateInvoiceNumber(invoicePrefix, {
-          isDraft: true,
+      // Si le BC provient d'un devis, garantir qu'on ne facture pas au-delà
+      // du montant du devis, tous chemins confondus (devis→facture directe
+      // OU devis→BC→facture). On charge le devis source pour contrôler et
+      // synchroniser quote.linkedInvoices (source de vérité anti-doublon).
+      let sourceQuote = null;
+      if (po.sourceQuoteId) {
+        sourceQuote = await Quote.findOne({
+          _id: po.sourceQuoteId,
           workspaceId,
-          userId: user.id,
         });
 
-        // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
-        const poObj = po.toObject();
-
-        const invoice = new Invoice({
-          number: invoiceNumber,
-          prefix: invoicePrefix,
-          client: poObj.client,
-          companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
-          items: poObj.items,
-          status: "DRAFT",
-          issueDate: new Date(),
-          dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
-          headerNotes:
-            organization.invoiceHeaderNotes ||
-            organization.documentHeaderNotes ||
-            "",
-          footerNotes:
-            organization.invoiceFooterNotes ||
-            organization.documentFooterNotes ||
-            "",
-          termsAndConditions:
-            organization.invoiceTermsAndConditions ||
-            organization.documentTermsAndConditions ||
-            "",
-          termsAndConditionsLinkTitle: "",
-          termsAndConditionsLink: "",
-          annex: getOrganizationDefaultAnnex(organization, "invoice"),
-          purchaseOrderNumber: `${po.prefix}-${po.number}`,
-          // Tracer le devis d'origine pour que la garde anti-doublon de
-          // convertQuoteToInvoice voie cette facture (chemin devis→BC→facture)
-          sourceQuote: po.sourceQuoteId || undefined,
-          discount: po.discount,
-          discountType: po.discountType,
-          customFields: poObj.customFields,
-          totalHT: po.totalHT,
-          totalVAT: po.totalVAT,
-          totalTTC: po.totalTTC,
-          finalTotalHT: po.finalTotalHT,
-          finalTotalVAT: po.finalTotalVAT,
-          finalTotalTTC: po.finalTotalTTC,
-          discountAmount: po.discountAmount,
-          workspaceId,
-          createdBy: user.id,
-          isReverseCharge: po.isReverseCharge || false,
-          isVatExempt: po.isVatExempt || false,
-          shipping: poObj.shipping,
-          appearance: {
-            textColor:
-              organization.invoiceTextColor ||
-              organization.documentTextColor ||
-              "#000000",
-            headerTextColor:
-              organization.invoiceHeaderTextColor ||
-              organization.documentHeaderTextColor ||
-              "#ffffff",
-            headerBgColor:
-              organization.invoiceHeaderBgColor ||
-              organization.documentHeaderBgColor ||
-              "#5b50FF",
-          },
-          clientPositionRight: organization.invoiceClientPositionRight || false,
-          showBankDetails: false, // Les coordonnées bancaires seront ajoutées lors de l'édition de la facture
-          retenueGarantie: po.retenueGarantie || 0,
-          escompte: po.escompte || 0,
-        });
-
-        await invoice.save();
-
-        // Lier la facture au bon de commande
-        if (!po.linkedInvoices) {
-          po.linkedInvoices = [];
-        }
-        po.linkedInvoices.push(invoice._id);
-        await po.save();
-
-        // Synchroniser le devis source : sans cela, le devis paraît « vierge »
-        // et pourrait être reconverti directement en facture → doublon.
         if (sourceQuote) {
-          if (!sourceQuote.linkedInvoices) {
-            sourceQuote.linkedInvoices = [];
+          const quoteAmount = sourceQuote.finalTotalTTC || 0;
+
+          // Nettoyer les références mortes et calculer le déjà-facturé
+          let existingInvoicesTotalAmount = 0;
+          if (sourceQuote.linkedInvoices?.length > 0) {
+            const existingInvoices = await Invoice.find({
+              _id: { $in: sourceQuote.linkedInvoices },
+              workspaceId: sourceQuote.workspaceId,
+            });
+            const validIds = existingInvoices.map((inv) => inv._id);
+            if (validIds.length !== sourceQuote.linkedInvoices.length) {
+              sourceQuote.linkedInvoices = validIds;
+              await sourceQuote.save();
+            }
+            existingInvoicesTotalAmount = existingInvoices.reduce(
+              (sum, inv) => sum + (inv.finalTotalTTC || 0),
+              0,
+            );
           }
-          sourceQuote.linkedInvoices.push(invoice._id);
-          if (!sourceQuote.convertedToInvoice) {
-            sourceQuote.convertedToInvoice = invoice._id;
+
+          if (
+            quoteAmount > 0 &&
+            quoteAmount - existingInvoicesTotalAmount <= 0.01
+          ) {
+            throw new AppError(
+              `Le devis associé à ce bon de commande est déjà entièrement facturé (${existingInvoicesTotalAmount.toFixed(
+                2,
+              )}€ sur ${quoteAmount.toFixed(2)}€)`,
+              ERROR_CODES.RESOURCE_LOCKED,
+              {
+                resource: "Devis",
+                quoteAmount,
+                existingInvoicesTotalAmount,
+              },
+            );
           }
-          await sourceQuote.save();
         }
+      }
 
-        return await invoice.populate("createdBy");
-      },
-    ),
+      const organization = await getOrganizationInfo(workspaceId);
 
-    sendPurchaseOrder: requireAction("purchaseOrders", "send")(
-      async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const invoicePrefix = `F-${year}${month}`;
 
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
+      const invoiceNumber = await generateInvoiceNumber(invoicePrefix, {
+        isDraft: true,
+        workspaceId,
+        userId: user.id,
+      });
+
+      // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+      const poObj = po.toObject();
+
+      const invoice = new Invoice({
+        number: invoiceNumber,
+        prefix: invoicePrefix,
+        client: poObj.client,
+        companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
+        items: poObj.items,
+        status: "DRAFT",
+        issueDate: new Date(),
+        dueDate: new Date(new Date().setDate(new Date().getDate() + 30)),
+        headerNotes:
+          organization.invoiceHeaderNotes ||
+          organization.documentHeaderNotes ||
+          "",
+        footerNotes:
+          organization.invoiceFooterNotes ||
+          organization.documentFooterNotes ||
+          "",
+        termsAndConditions:
+          organization.invoiceTermsAndConditions ||
+          organization.documentTermsAndConditions ||
+          "",
+        termsAndConditionsLinkTitle: "",
+        termsAndConditionsLink: "",
+        annex: getOrganizationDefaultAnnex(organization, "invoice"),
+        purchaseOrderNumber: `${po.prefix}-${po.number}`,
+        // Tracer le devis d'origine pour que la garde anti-doublon de
+        // convertQuoteToInvoice voie cette facture (chemin devis→BC→facture)
+        sourceQuote: po.sourceQuoteId || undefined,
+        discount: po.discount,
+        discountType: po.discountType,
+        customFields: poObj.customFields,
+        totalHT: po.totalHT,
+        totalVAT: po.totalVAT,
+        totalTTC: po.totalTTC,
+        finalTotalHT: po.finalTotalHT,
+        finalTotalVAT: po.finalTotalVAT,
+        finalTotalTTC: po.finalTotalTTC,
+        discountAmount: po.discountAmount,
+        workspaceId,
+        createdBy: user.id,
+        isReverseCharge: po.isReverseCharge || false,
+        isVatExempt: po.isVatExempt || false,
+        shipping: poObj.shipping,
+        appearance: {
+          textColor:
+            organization.invoiceTextColor ||
+            organization.documentTextColor ||
+            "#000000",
+          headerTextColor:
+            organization.invoiceHeaderTextColor ||
+            organization.documentHeaderTextColor ||
+            "#ffffff",
+          headerBgColor:
+            organization.invoiceHeaderBgColor ||
+            organization.documentHeaderBgColor ||
+            "#5b50FF",
+        },
+        clientPositionRight: organization.invoiceClientPositionRight || false,
+        showBankDetails: false, // Les coordonnées bancaires seront ajoutées lors de l'édition de la facture
+        retenueGarantie: po.retenueGarantie || 0,
+        escompte: po.escompte || 0,
+      });
+
+      await invoice.save();
+
+      // Lier la facture au bon de commande
+      if (!po.linkedInvoices) {
+        po.linkedInvoices = [];
+      }
+      po.linkedInvoices.push(invoice._id);
+      await po.save();
+
+      // Synchroniser le devis source : sans cela, le devis paraît « vierge »
+      // et pourrait être reconverti directement en facture → doublon.
+      if (sourceQuote) {
+        if (!sourceQuote.linkedInvoices) {
+          sourceQuote.linkedInvoices = [];
         }
+        sourceQuote.linkedInvoices.push(invoice._id);
+        if (!sourceQuote.convertedToInvoice) {
+          sourceQuote.convertedToInvoice = invoice._id;
+        }
+        await sourceQuote.save();
+      }
 
-        // TODO: Implémenter l'envoi réel par email
-        return true;
-      },
-    ),
+      return await invoice.populate("createdBy");
+    }),
+
+    sendPurchaseOrder: requireAction(
+      "purchaseOrders",
+      "send",
+    )(async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
+      const { user, workspaceId } = context;
+      const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
+
+      if (!po) {
+        throw createNotFoundError("Bon de commande");
+      }
+
+      // TODO: Implémenter l'envoi réel par email
+      return true;
+    }),
   },
 };
 

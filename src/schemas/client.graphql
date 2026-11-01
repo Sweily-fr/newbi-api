@@ -16,6 +16,8 @@ extend type Query {
     search: String
     searchExact: Boolean
     types: [ClientType!]
+    # blocked : true = contacts bloqués seulement (page « Contacts bloqués »)
+    blocked: Boolean
   ): ClientsResult!
 }
 

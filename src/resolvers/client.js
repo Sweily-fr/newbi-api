@@ -172,6 +172,7 @@ const clientResolvers = {
           search,
           searchExact = false,
           types,
+          blocked,
           workspaceId: inputWorkspaceId,
         },
         context,
@@ -207,6 +208,11 @@ const clientResolvers = {
         if (Array.isArray(types) && types.length > 0) {
           query.type = { $in: types };
         }
+
+        // Contacts bloqués (ou non bloqués) de tout l'espace, pas seulement
+        // d'une première page filtrée dans le navigateur
+        if (blocked === true) query.isBlocked = true;
+        else if (blocked === false) query.isBlocked = { $ne: true };
 
         // Page et taille bornées (page 0, taille 0 ou démesurée)
         const {
