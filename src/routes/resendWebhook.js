@@ -20,14 +20,26 @@ const router = express.Router();
  * `v1,<base64>` séparées par des espaces, calculées en HMAC-SHA256 sur
  * `${id}.${timestamp}.${rawBody}` avec le secret décodé de base64.
  */
-function verifySvixSignature({
+// Écart toléré entre l'horodatage signé et l'heure du serveur (recommandation
+// Svix) : un événement capturé ne se rejoue pas au-delà
+export const SVIX_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
+
+export function verifySvixSignature({
   id,
   timestamp,
   rawBody,
   signatureHeader,
   secret,
+  now = Date.now(),
 }) {
   if (!secret || !id || !timestamp || !signatureHeader) return false;
+  const signedAtMs = Number(timestamp) * 1000;
+  if (
+    !Number.isFinite(signedAtMs) ||
+    Math.abs(now - signedAtMs) > SVIX_TIMESTAMP_TOLERANCE_MS
+  ) {
+    return false;
+  }
   try {
     const secretBytes = Buffer.from(
       String(secret).replace(/^whsec_/, ""),
