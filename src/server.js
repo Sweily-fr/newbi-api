@@ -46,6 +46,7 @@ import {
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
 import { rootFieldLimitRule } from "./utils/graphqlOperationLimits.js";
+import { isTechnicalError, INTERNAL_ERROR_MESSAGE } from "./utils/errors.js";
 import { createDataLoaders } from "./dataloaders/index.js";
 import mongoose from "mongoose";
 import { graphqlUploadMiddleware } from "./middlewares/graphql-upload.js";
@@ -1001,6 +1002,16 @@ function formatError(error) {
         code: "VALIDATION_ERROR",
         details: error.extensions.exception?.validationErrors,
       },
+      path: error.path,
+    };
+  }
+
+  // Erreur technique (base, identifiant mal formé, bug) : message gardé
+  // dans le journal ci-dessus, jamais renvoyé au client
+  if (isTechnicalError(originalError)) {
+    return {
+      message: INTERNAL_ERROR_MESSAGE,
+      extensions: { code: "INTERNAL_ERROR" },
       path: error.path,
     };
   }
