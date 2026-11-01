@@ -1,4 +1,6 @@
 import logger from "../utils/logger.js";
+import { assertClientNotBlocked } from "../utils/blockedClient.js";
+import { automationService } from "./clientAutomation.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
@@ -344,6 +346,7 @@ const quoteResolvers = {
           search,
           page = 1,
           limit = 10,
+          clientId,
         },
         context,
       ) => {
@@ -358,6 +361,9 @@ const quoteResolvers = {
           if (startDate) query.createdAt.$gte = new Date(startDate);
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
+
+        // Documents d'un contact (onglets de sa fiche) : filtrés en base
+        if (clientId) query["client.id"] = String(clientId);
 
         if (status) query.status = status;
 
@@ -738,6 +744,9 @@ const quoteResolvers = {
               ERROR_CODES.BAD_REQUEST,
             );
           }
+
+          // Contact bloqué : exclu de la création de documents
+          await assertClientNotBlocked(workspaceId, input.client?.id);
 
           // Accepté, refusé : changement de statut (« Accepter, refuser ») ;
           // importé : réservé à l'import des devis
@@ -1842,6 +1851,11 @@ const quoteResolvers = {
             );
             // Ne pas faire échouer le changement de statut si l'activité échoue
           }
+        }
+
+        // Automatisations de listes de contacts « Devis accepté »
+        if (status === "COMPLETED") {
+          await automationService.onQuoteAccepted(quote, workspaceId);
         }
 
         // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)

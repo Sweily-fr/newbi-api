@@ -6,11 +6,13 @@ import {
   requireWrite,
   requireDelete,
   resolveWorkspaceId,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 import { createNotFoundError, AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import { assertPlanFeature } from "../services/planLimits.js";
+import { boundedPage } from "../utils/pageBounds.js";
 
 // Opérateurs qui se suffisent à eux-mêmes ; tous les autres comparent le
 // champ à une valeur, sans laquelle la règle ne veut rien dire (et le calcul
@@ -47,12 +49,74 @@ export function assertRulesHaveValues(rules, existingRules = []) {
   }
 }
 
+// Opérateurs qui comparent du texte : la valeur doit être un texte
+const TEXT_OPERATORS = ["contains", "not_contains", "starts_with", "ends_with"];
+const IN_LAST_DAYS_MAX = 36500;
+
+const ruleValueError = (message) =>
+  new AppError(message, ERROR_CODES.VALIDATION_ERROR);
+
+const isValidDate = (value) =>
+  (typeof value === "string" || typeof value === "number") &&
+  String(value).trim() !== "" &&
+  !Number.isNaN(new Date(value).getTime());
+
+/**
+ * Refuse une valeur qui ne correspond pas à l'opérateur de la règle : texte
+ * pour « contient », nombre pour « supérieur à », date valide pour « avant »,
+ * nombre de jours entier pour « dans les derniers jours », jamais un objet.
+ * `existingRules` : règles déjà enregistrées, laissées telles quelles.
+ */
+export function assertRuleValuesValid(rules, existingRules = []) {
+  const unchanged = new Set(existingRules.map(ruleKey));
+  for (const rule of rules || []) {
+    if (OPERATORS_WITHOUT_VALUE.includes(rule.operator)) continue;
+    if (unchanged.has(ruleKey(rule))) continue;
+    const { operator, value } = rule;
+    if (value !== null && typeof value === "object") {
+      throw ruleValueError(
+        "La valeur d'une règle doit être un texte, un nombre ou une date.",
+      );
+    }
+    if (TEXT_OPERATORS.includes(operator) && typeof value !== "string") {
+      throw ruleValueError("La valeur de cette règle doit être un texte.");
+    }
+    if (
+      ["greater_than", "less_than"].includes(operator) &&
+      !Number.isFinite(Number(value))
+    ) {
+      throw ruleValueError("La valeur de cette règle doit être un nombre.");
+    }
+    if (["before", "after"].includes(operator) && !isValidDate(value)) {
+      throw ruleValueError("La date de cette règle n'est pas valide.");
+    }
+    if (operator === "in_last_days") {
+      const days = Number(value);
+      if (!Number.isInteger(days) || days < 1 || days > IN_LAST_DAYS_MAX) {
+        throw ruleValueError(
+          "Le nombre de jours de cette règle doit être un nombre entier positif.",
+        );
+      }
+    }
+    if (
+      ["assigned_to", "not_assigned_to"].includes(operator) &&
+      typeof value !== "string"
+    ) {
+      throw ruleValueError("Choisissez un membre pour cette règle.");
+    }
+  }
+}
+
 /**
  * Escape special regex characters in a string
  */
 function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+// Condition qui ne retient aucun contact (règle enregistrée avant les
+// contrôles, avec une valeur inutilisable)
+const MATCH_NOTHING = { _id: { $exists: false } };
 
 /**
  * Build a MongoDB query from segment rules
@@ -61,6 +125,19 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
   const conditions = rules.map((rule) => {
     const field = rule.field;
     const value = rule.value;
+
+    // Membres assignés : un tableau, vide quand personne n'est assigné
+    if (field === "assignedMembers" && rule.operator === "is_empty") {
+      return {
+        $or: [
+          { assignedMembers: { $exists: false } },
+          { assignedMembers: { $size: 0 } },
+        ],
+      };
+    }
+    if (field === "assignedMembers" && rule.operator === "is_not_empty") {
+      return { "assignedMembers.0": { $exists: true } };
+    }
 
     switch (rule.operator) {
       case "equals":
@@ -102,12 +179,18 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
           ],
         };
       case "before":
-        return { [field]: { $lt: new Date(value) } };
+        return isValidDate(value)
+          ? { [field]: { $lt: new Date(value) } }
+          : MATCH_NOTHING;
       case "after":
-        return { [field]: { $gt: new Date(value) } };
+        return isValidDate(value)
+          ? { [field]: { $gt: new Date(value) } }
+          : MATCH_NOTHING;
       case "in_last_days": {
+        const days = Number(value);
+        if (!Number.isFinite(days)) return MATCH_NOTHING;
         const daysAgo = new Date();
-        daysAgo.setDate(daysAgo.getDate() - Number(value));
+        daysAgo.setDate(daysAgo.getDate() - days);
         return { [field]: { $gte: daysAgo } };
       }
       case "assigned_to":
@@ -132,6 +215,21 @@ function buildSegmentQuery(rules, matchType, workspaceId) {
   }
 
   return query;
+}
+
+/** Nom de segment déjà pris dans l'espace : message clair. */
+async function assertSegmentNameFree(workspaceId, name, exceptId = null) {
+  const existing = await ClientSegment.findOne({
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    name: typeof name === "string" ? name.trim() : name,
+    ...(exceptId ? { _id: { $ne: exceptId } } : {}),
+  });
+  if (existing) {
+    throw new AppError(
+      "Un segment porte déjà ce nom.",
+      ERROR_CODES.ALREADY_EXISTS,
+    );
+  }
 }
 
 // Création : action « create » de la page Segments
@@ -181,6 +279,9 @@ export const clientSegmentResolvers = {
         },
         context,
       ) => {
+        // Fiches des contacts renvoyées : « Mes clients : voir » exigé en
+        // plus des segments
+        assertPermissionAction(context, "clients", "view");
         const workspaceId = resolveWorkspaceId(
           inputWorkspaceId,
           context.workspaceId,
@@ -212,14 +313,17 @@ export const clientSegmentResolvers = {
           }
         }
 
-        const currentPage = parseInt(page, 10);
-        const itemsPerPage = parseInt(limit, 10);
+        const {
+          page: currentPage,
+          limit: itemsPerPage,
+          skip,
+        } = boundedPage(page, limit);
         const totalItems = await Client.countDocuments(query);
         const totalPages = Math.ceil(totalItems / itemsPerPage);
 
         const items = await Client.find(query)
           .sort({ name: 1 })
-          .skip((currentPage - 1) * itemsPerPage)
+          .skip(skip)
           .limit(itemsPerPage);
 
         return { items, totalItems, currentPage, totalPages };
@@ -250,6 +354,8 @@ export const clientSegmentResolvers = {
           );
         }
         assertRulesHaveValues(input.rules);
+        assertRuleValuesValid(input.rules);
+        await assertSegmentNameFree(workspaceId, input.name);
 
         const segment = new ClientSegment({
           ...input,
@@ -257,7 +363,18 @@ export const clientSegmentResolvers = {
           createdBy: user.id,
         });
 
-        await segment.save();
+        try {
+          await segment.save();
+        } catch (error) {
+          // Création simultanée sous le même nom (index unique)
+          if (error?.code === 11000) {
+            throw new AppError(
+              "Un segment porte déjà ce nom.",
+              ERROR_CODES.ALREADY_EXISTS,
+            );
+          }
+          throw error;
+        }
         return segment;
       },
     ),
@@ -283,13 +400,30 @@ export const clientSegmentResolvers = {
         }
         // Règles ajoutées ou modifiées seulement : une ancienne règle sans
         // valeur ne bloque pas le renommage du segment
-        if (input.rules) assertRulesHaveValues(input.rules, segment.rules);
+        if (input.rules) {
+          assertRulesHaveValues(input.rules, segment.rules);
+          assertRuleValuesValid(input.rules, segment.rules);
+        }
+        if (input.name && input.name !== segment.name) {
+          await assertSegmentNameFree(workspaceId, input.name, segment._id);
+        }
 
         Object.keys(input).forEach((key) => {
           segment[key] = input[key];
         });
 
-        await segment.save();
+        try {
+          await segment.save();
+        } catch (error) {
+          // Création simultanée sous le même nom (index unique)
+          if (error?.code === 11000) {
+            throw new AppError(
+              "Un segment porte déjà ce nom.",
+              ERROR_CODES.ALREADY_EXISTS,
+            );
+          }
+          throw error;
+        }
         return segment;
       },
     ),

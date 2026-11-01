@@ -1,6 +1,7 @@
 import logger from "../utils/logger.js";
 import cron from "node-cron";
 import documentAutomationService from "../services/documentAutomationService.js";
+import { automationService } from "../resolvers/clientAutomation.js";
 
 /**
  * Cron job quotidien qui vérifie les factures en retard
@@ -25,6 +26,13 @@ function startOverdueAutomationCron() {
         }
       } catch (error) {
         console.error("❌ [OverdueCron] Erreur:", error.message);
+      }
+
+      // Automatisations de listes de contacts « Facture en retard »
+      try {
+        await automationService.checkOverdueInvoices();
+      } catch (error) {
+        console.error("❌ [OverdueCron] Listes de contacts:", error.message);
       }
     },
     {

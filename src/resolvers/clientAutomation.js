@@ -135,18 +135,25 @@ export const automationService = {
   async executeAction(automation, clientId) {
     const { actionType, sourceListId, targetListId } = automation;
 
+    // Listes dont le contact est retiré par un déplacement : la liste source,
+    // ou à défaut toutes ses listes sauf la cible. Chaque retrait est tracé
+    // dans son journal (« a retiré le client de la liste … »).
+    let removedFrom = [];
+
     switch (actionType) {
-      case "MOVE_TO_LIST":
-        // Retirer de la liste source si spécifiée
-        if (sourceListId) {
-          await ClientList.findOneAndUpdate(
-            { _id: sourceListId, workspaceId: automation.workspaceId },
-            { $pull: { clients: clientId } },
-          );
-        } else {
-          // Retirer de toutes les listes du workspace
+      case "MOVE_TO_LIST": {
+        const listFilter = {
+          workspaceId: automation.workspaceId,
+          clients: clientId,
+          _id: sourceListId || { $ne: targetListId },
+        };
+        removedFrom = await ClientList.find(listFilter, "name").lean();
+        if (removedFrom.length > 0) {
           await ClientList.updateMany(
-            { workspaceId: automation.workspaceId },
+            {
+              _id: { $in: removedFrom.map((list) => list._id) },
+              workspaceId: automation.workspaceId,
+            },
             { $pull: { clients: clientId } },
           );
         }
@@ -156,6 +163,7 @@ export const automationService = {
           { $addToSet: { clients: clientId } },
         );
         break;
+      }
 
       case "ADD_TO_LIST":
         // Ajouter à la liste cible sans retirer des autres
@@ -178,26 +186,120 @@ export const automationService = {
     }
 
     // Enregistrer l'activité dans le client
+    const removals = removedFrom.map((list) => ({
+      id: new mongoose.Types.ObjectId().toString(),
+      type: "removed_from_list",
+      userName: "Système",
+      description: `a retiré le client de la liste "${list.name}"`,
+      metadata: {
+        listId: list._id.toString(),
+        listName: list.name,
+        automationId: automation._id.toString(),
+        automationName: automation.name,
+      },
+      createdAt: new Date(),
+    }));
     await Client.findOneAndUpdate(
       { _id: clientId, workspaceId: automation.workspaceId },
       {
         $push: {
           activity: {
-            id: new mongoose.Types.ObjectId().toString(),
-            type: "automation_executed",
-            userName: "Système",
-            description: `Automatisation "${automation.name}" exécutée`,
-            metadata: {
-              automationId: automation._id.toString(),
-              automationName: automation.name,
-              actionType,
-              targetListId: targetListId.toString(),
-            },
-            createdAt: new Date(),
+            $each: [
+              ...removals,
+              {
+                id: new mongoose.Types.ObjectId().toString(),
+                type: "automation_executed",
+                userName: "Système",
+                description: `Automatisation "${automation.name}" exécutée`,
+                metadata: {
+                  automationId: automation._id.toString(),
+                  automationName: automation.name,
+                  actionType,
+                  targetListId: targetListId.toString(),
+                },
+                createdAt: new Date(),
+              },
+            ],
           },
         },
       },
     );
+  },
+
+  /**
+   * Devis accepté (à la main ou par signature) : automatisations de listes
+   * « Devis accepté » du contact du devis. N'échoue jamais.
+   */
+  async onQuoteAccepted(quote, workspaceId) {
+    const clientId = quote?.client?.id;
+    if (!clientId || !workspaceId) return { executed: 0, results: [] };
+    try {
+      return await this.executeAutomations(
+        "QUOTE_ACCEPTED",
+        workspaceId.toString(),
+        clientId.toString(),
+        {
+          amount: quote.finalTotalTTC,
+          quoteId: quote._id?.toString(),
+        },
+      );
+    } catch (error) {
+      console.error("Erreur automatisations « Devis accepté »:", error);
+      return { executed: 0, results: [] };
+    }
+  },
+
+  /**
+   * « Facture en retard » : passage quotidien (cron des retards). Une
+   * facture en attente dont l'échéance tombait la veille vient de passer en
+   * retard ; les automatisations de son contact s'exécutent une fois, avec
+   * le plus gros montant concerné du contact.
+   */
+  async checkOverdueInvoices(now = new Date()) {
+    const workspaceIds = await ClientAutomation.distinct("workspaceId", {
+      triggerType: "INVOICE_OVERDUE",
+      isActive: true,
+    });
+    if (workspaceIds.length === 0) return { executed: 0 };
+
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    let executed = 0;
+    for (const workspaceId of workspaceIds) {
+      const invoices = await Invoice.find(
+        {
+          workspaceId,
+          status: { $in: ["PENDING", "OVERDUE"] },
+          dueDate: { $gte: yesterday, $lt: today },
+          "client.id": { $exists: true, $ne: null },
+        },
+        "client.id finalTotalTTC",
+      ).lean();
+
+      const amountByClient = new Map();
+      for (const invoice of invoices) {
+        const clientId = invoice.client.id.toString();
+        const amount = invoice.finalTotalTTC || 0;
+        amountByClient.set(
+          clientId,
+          Math.max(amountByClient.get(clientId) ?? 0, amount),
+        );
+      }
+
+      for (const [clientId, amount] of amountByClient) {
+        const result = await this.executeAutomations(
+          "INVOICE_OVERDUE",
+          workspaceId.toString(),
+          clientId,
+          { amount },
+        );
+        executed += result.executed || 0;
+      }
+    }
+    return { executed };
   },
 
   /**
@@ -276,9 +378,10 @@ export const automationService = {
       }
 
       case "QUOTE_ACCEPTED": {
+        // Devis accepté (signé ou accepté à la main) : statut COMPLETED
         const acceptedQuotes = await Quote.find({
           workspaceId,
-          status: "ACCEPTED",
+          status: "COMPLETED",
           "client.id": { $in: clientIds },
         }).distinct("client.id");
         matchingClientIds = acceptedQuotes.map((id) => id.toString());
@@ -289,7 +392,7 @@ export const automationService = {
         const now = new Date();
         const overdueInvoices = await Invoice.find({
           workspaceId,
-          status: { $in: ["SENT", "PENDING"] },
+          status: { $in: ["PENDING", "OVERDUE"] },
           dueDate: { $lt: now },
           "client.id": { $in: clientIds },
         }).distinct("client.id");
@@ -301,19 +404,26 @@ export const automationService = {
         return results;
     }
 
-    // Vérifier le montant minimum si configuré
+    // Vérifier le montant minimum si configuré, sur le document qui
+    // déclenche : devis acceptés, factures en retard ou factures payées
     if (
       automation.triggerConfig?.minAmount &&
       automation.triggerType !== "CLIENT_CREATED"
     ) {
       const minAmount = automation.triggerConfig.minAmount;
-      const invoicesAboveMin = await Invoice.find({
+      const [Model, status] =
+        automation.triggerType === "QUOTE_ACCEPTED"
+          ? [Quote, "COMPLETED"]
+          : automation.triggerType === "INVOICE_OVERDUE"
+            ? [Invoice, { $in: ["PENDING", "OVERDUE"] }]
+            : [Invoice, "COMPLETED"];
+      const documentsAboveMin = await Model.find({
         workspaceId,
-        status: "COMPLETED",
+        status,
         "client.id": { $in: matchingClientIds },
         finalTotalTTC: { $gte: minAmount },
       }).distinct("client.id");
-      matchingClientIds = invoicesAboveMin.map((id) => id.toString());
+      matchingClientIds = documentsAboveMin.map((id) => id.toString());
     }
 
     // Exécuter l'action sur chaque client correspondant
@@ -345,6 +455,10 @@ export const automationService = {
   },
 };
 
+// Créateur d'une automatisation : nom et e-mail seulement (le type User
+// expose aussi téléphone, code de parrainage, coordonnées bancaires)
+const CREATED_BY_FIELDS = "name email";
+
 // Automatisations clients : module « automations ». preferArgsWorkspace :
 // les resolvers lisent args.workspaceId, le rôle est vérifié sur ce même espace
 const readAutomations = requireRead("automations", {
@@ -364,7 +478,7 @@ const clientAutomationResolvers = {
   Query: {
     clientAutomations: readAutomations(async (_, { workspaceId }) => {
       const automations = await ClientAutomation.find({ workspaceId })
-        .populate("createdBy")
+        .populate("createdBy", CREATED_BY_FIELDS)
         .populate("sourceListId")
         .populate("targetListId")
         .sort({ createdAt: -1 })
@@ -390,7 +504,7 @@ const clientAutomationResolvers = {
         _id: id,
         workspaceId,
       })
-        .populate("createdBy")
+        .populate("createdBy", CREATED_BY_FIELDS)
         .populate("sourceListId")
         .populate("targetListId")
         .lean();
@@ -442,27 +556,31 @@ const clientAutomationResolvers = {
 
         await automation.save();
 
-        // Appliquer rétroactivement aux clients existants
-        try {
-          const result = await automationService.applyToExistingClients(
-            automation,
-            workspaceId,
-          );
-          if (result.applied > 0) {
-            logger.debug(
-              `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
+        // Appliquer rétroactivement aux clients existants, seulement si
+        // l'automatisation est créée active (comme « Appliquer aux contacts
+        // existants »)
+        if (automation.isActive) {
+          try {
+            const result = await automationService.applyToExistingClients(
+              automation,
+              workspaceId,
             );
+            if (result.applied > 0) {
+              logger.debug(
+                `Automatisation "${automation.name}" appliquée rétroactivement à ${result.applied} client(s)`,
+              );
+            }
+          } catch (error) {
+            console.error("Erreur application rétroactive:", error);
+            // Ne pas faire échouer la création si l'application rétroactive échoue
           }
-        } catch (error) {
-          console.error("Erreur application rétroactive:", error);
-          // Ne pas faire échouer la création si l'application rétroactive échoue
         }
 
         return await ClientAutomation.findOne({
           _id: automation._id,
           workspaceId,
         })
-          .populate("createdBy")
+          .populate("createdBy", CREATED_BY_FIELDS)
           .populate("sourceListId")
           .populate("targetListId");
       },
@@ -514,7 +632,7 @@ const clientAutomationResolvers = {
           _id: automation._id,
           workspaceId,
         })
-          .populate("createdBy")
+          .populate("createdBy", CREATED_BY_FIELDS)
           .populate("sourceListId")
           .populate("targetListId");
       },
@@ -574,7 +692,7 @@ const clientAutomationResolvers = {
         _id: automation._id,
         workspaceId,
       })
-        .populate("createdBy")
+        .populate("createdBy", CREATED_BY_FIELDS)
         .populate("sourceListId")
         .populate("targetListId");
     }),

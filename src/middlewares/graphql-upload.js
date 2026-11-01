@@ -1,5 +1,6 @@
 import { graphqlUploadExpress } from "graphql-upload";
 import logger from "../utils/logger.js";
+import { stripOperatorKeys } from "./strip-mongo-operators.js";
 
 /**
  * graphqlUploadExpress, mais un multipart invalide (champ « operations »
@@ -9,6 +10,10 @@ import logger from "../utils/logger.js";
  *
  * res.json passe par le send patché par graphql-upload, qui attend la fin de
  * la requête avant d'envoyer la réponse.
+ *
+ * Le corps d'un multipart (champ « operations ») n'est lu qu'ici, après le
+ * nettoyage des corps JSON : les clés « $… » (opérateurs MongoDB) y sont
+ * retirées de la même façon.
  */
 export function graphqlUploadMiddleware(options) {
   const uploadMiddleware = graphqlUploadExpress(options);
@@ -23,6 +28,7 @@ export function graphqlUploadMiddleware(options) {
           errors: [{ message: error.message }],
         });
       }
+      if (!error) stripOperatorKeys(req.body);
       next(error);
     });
   };

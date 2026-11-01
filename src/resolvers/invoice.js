@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import { assertClientNotBlocked } from "../utils/blockedClient.js";
 import CreditNote from "../models/CreditNote.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
@@ -1241,6 +1242,9 @@ const invoiceResolvers = {
         // de ces statuts, elle contournerait ces règles et sortirait de la
         // séquence de numérotation.
         assertInvoiceCreationStatus(input.status);
+
+        // Contact bloqué : exclu de la création de documents
+        await assertClientNotBlocked(workspaceId, input.client?.id);
 
         // ✅ Les permissions sont déjà vérifiées par requireAction (création)
 

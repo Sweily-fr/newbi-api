@@ -84,6 +84,28 @@ export function isAllowedProductImageUrl(url) {
 }
 
 /**
+ * Image choisie pour un produit : en plus des règles ci-dessus, elle doit
+ * être rangée dans les images de produits de l'espace lui-même
+ * (`/{workspaceId}/products/…`), sur le domaine configuré quand il l'est
+ * (celui des envois d'images) : jamais l'image d'un autre espace ni d'un
+ * autre compte R2. Les documents existants gardent la règle plus large.
+ */
+export function isWorkspaceProductImageUrl(url, workspaceId) {
+  if (!isAllowedProductImageUrl(url) || !workspaceId) return false;
+  const parsed = new URL(url);
+  const configured = process.env.COMPANY_IMAGE_URL;
+  if (configured) {
+    try {
+      if (parsed.host !== new URL(configured).host) return false;
+    } catch {
+      // URL configurée invalide : seule la règle de chemin s'applique
+    }
+  }
+  const [, folder] = parsed.pathname.split("/");
+  return folder === String(workspaceId);
+}
+
+/**
  * Setter Mongoose : une URL non autorisée est retirée plutôt que de faire
  * échouer l'enregistrement du document entier.
  */

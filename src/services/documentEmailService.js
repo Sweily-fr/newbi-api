@@ -6,6 +6,10 @@ import CreditNote from "../models/CreditNote.js";
 import PurchaseOrder from "../models/PurchaseOrder.js";
 import DeliveryNote from "../models/DeliveryNote.js";
 import Client from "../models/Client.js";
+import {
+  assertClientNotBlocked,
+  BLOCKED_CLIENT_SEND_MESSAGE,
+} from "../utils/blockedClient.js";
 import EmailSettings from "../models/EmailSettings.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import emailReminderService from "./emailReminderService.js";
@@ -834,6 +838,13 @@ async function sendDocumentEmail({
       ERROR_CODES.VALIDATION_ERROR,
     );
   }
+
+  // Contact bloqué : exclu des communications
+  await assertClientNotBlocked(
+    workspaceId,
+    document.client?.id,
+    BLOCKED_CLIENT_SEND_MESSAGE,
+  );
 
   // Préparer les variables
   const summary = buildDocumentSummary(document);
