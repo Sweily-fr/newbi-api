@@ -17,6 +17,8 @@ import typeDefs from "../../src/schemas/index.js";
 import {
   MAX_ROOT_FIELDS,
   rootFieldLimitRule,
+  withoutSchemaSuggestions,
+  isGraphqlIntrospectionOpen,
 } from "../../src/utils/graphqlOperationLimits.js";
 
 const root = path.resolve(
@@ -131,5 +133,34 @@ describe("champs racine d'une opération", () => {
       /graphqlIntrospection \? \[\] : \[NoSchemaIntrospectionCustomRule\]/,
     );
     expect(server).toMatch(/introspection: graphqlIntrospection/);
+  });
+});
+
+describe("requête refusée, introspection fermée", () => {
+  it("le message ne suggère aucun nom du schéma", () => {
+    const [message] = validate(schema, parse("query { mee { id } }"));
+    expect(message.message).toMatch(/Did you mean/);
+    const cleaned = withoutSchemaSuggestions(message.message);
+    expect(cleaned).not.toMatch(/Did you mean|"me"/);
+    expect(cleaned).toMatch(/Cannot query field "mee"/);
+  });
+
+  it("introspection ouverte seulement en développement ou sur demande", () => {
+    expect(isGraphqlIntrospectionOpen({ NODE_ENV: "production" })).toBe(false);
+    expect(isGraphqlIntrospectionOpen({ NODE_ENV: "staging" })).toBe(false);
+    expect(isGraphqlIntrospectionOpen({ NODE_ENV: "development" })).toBe(true);
+    expect(
+      isGraphqlIntrospectionOpen({
+        NODE_ENV: "production",
+        ENABLE_GRAPHQL_INTROSPECTION: "true",
+      }),
+    ).toBe(true);
+  });
+
+  it("le serveur retire les suggestions des erreurs de validation", () => {
+    const server = readFileSync(path.join(root, "src/server.js"), "utf8");
+    const formatError = server.slice(server.indexOf("function formatError("));
+    expect(formatError).toMatch(/withoutSchemaSuggestions\(error\.message\)/);
+    expect(formatError).toMatch(/!isGraphqlIntrospectionOpen\(\)/);
   });
 });

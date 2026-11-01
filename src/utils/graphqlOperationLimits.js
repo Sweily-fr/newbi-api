@@ -28,12 +28,7 @@ function collectRootFields(selectionSet, context, names, seenFragments) {
       seenFragments.add(fragmentName);
       const fragment = context.getFragment(fragmentName);
       if (fragment) {
-        collectRootFields(
-          fragment.selectionSet,
-          context,
-          names,
-          seenFragments,
-        );
+        collectRootFields(fragment.selectionSet, context, names, seenFragments);
       }
     }
   }
@@ -69,4 +64,21 @@ export function rootFieldLimitRule(maxRootFields = MAX_ROOT_FIELDS) {
       }
     },
   });
+}
+
+/**
+ * Message d'une requête refusée sans les noms de champs, d'arguments ou de
+ * types suggérés (« Did you mean … ? ») : avec l'introspection fermée, ils
+ * révéleraient le schéma nom par nom.
+ */
+export function withoutSchemaSuggestions(message) {
+  return String(message || "").replace(/\s*Did you mean [^?]*\?/g, "");
+}
+
+/** Introspection ouverte (développement local ou variable explicite). */
+export function isGraphqlIntrospectionOpen(env = process.env) {
+  return (
+    env.NODE_ENV === "development" ||
+    env.ENABLE_GRAPHQL_INTROSPECTION === "true"
+  );
 }

@@ -45,7 +45,11 @@ import {
 } from "./collab/kanbanCollabServer.js";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import depthLimit from "graphql-depth-limit";
-import { rootFieldLimitRule } from "./utils/graphqlOperationLimits.js";
+import {
+  rootFieldLimitRule,
+  withoutSchemaSuggestions,
+  isGraphqlIntrospectionOpen,
+} from "./utils/graphqlOperationLimits.js";
 import { createOriginChecker } from "./utils/corsOrigins.js";
 import { isTechnicalError, INTERNAL_ERROR_MESSAGE } from "./utils/errors.js";
 import { createDataLoaders } from "./dataloaders/index.js";
@@ -489,9 +493,7 @@ async function startServer() {
   });
 
   // Introspection désactivée partout sauf dev local (HTTP et WebSocket)
-  const graphqlIntrospection =
-    process.env.NODE_ENV === "development" ||
-    process.env.ENABLE_GRAPHQL_INTROSPECTION === "true";
+  const graphqlIntrospection = isGraphqlIntrospectionOpen();
 
   // Configuration Apollo Server
   const server = new ApolloServer({
@@ -919,6 +921,20 @@ function formatError(error) {
     console.error("❌ [GraphQL Error]:", error.message);
     console.error("Path:", error.path);
     console.error("Extensions:", error.extensions);
+  }
+
+  // Requête refusée à la validation : sans introspection, pas de noms du
+  // schéma suggérés dans le message
+  if (
+    clientErrorCodes.includes(error.extensions?.code) &&
+    !isGraphqlIntrospectionOpen()
+  ) {
+    return {
+      message: withoutSchemaSuggestions(error.message),
+      extensions: { code: error.extensions.code },
+      locations: error.locations,
+      path: error.path,
+    };
   }
 
   // Cas 1: originalError est une AppError directe
