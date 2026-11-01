@@ -11,6 +11,7 @@ import Booking, {
 import BookingPage from "../../models/BookingPage.js";
 import CalendarConnection from "../../models/CalendarConnection.js";
 import Client from "../../models/Client.js";
+import { isValidPersonName } from "../../utils/validators.js";
 import Event from "../../models/Event.js";
 import { getCacheClient } from "../../config/redis.js";
 import {
@@ -276,14 +277,48 @@ async function assertSlotAvailable({ page, type, start, now, excludeBooking }) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Verrous de repli, propres au processus : réservations d'un même
+// organisateur traitées une à une quand Redis manque
+const localHostLocks = new Map();
+
+/**
+ * Verrou du processus pour cet organisateur : attend (5 s au plus) la fin
+ * de la réservation en cours. Sans lui, deux réservations simultanées qui se
+ * chevauchent avec des débuts différents passaient toutes deux (l'index
+ * unique ne protège que l'heure de début).
+ */
+async function acquireLocalHostLock(hostUserId) {
+  const key = String(hostUserId);
+  const previous = localHostLocks.get(key) || Promise.resolve();
+  let releaseCurrent;
+  const current = new Promise((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const tail = previous.then(() => current);
+  localHostLocks.set(key, tail);
+  const release = () => {
+    releaseCurrent();
+    if (localHostLocks.get(key) === tail) localHostLocks.delete(key);
+  };
+  const acquired = await Promise.race([
+    previous.then(() => true),
+    sleep(LOCK_WAIT_MS).then(() => false),
+  ]);
+  if (!acquired) {
+    release();
+    throw new BookingError("SLOT_TAKEN", 409);
+  }
+  return { local: true, release };
+}
+
 /**
  * Verrou Redis `booking-lock:<organisateur>` (SET NX PX 15000). Attend
- * jusqu'à 5 s qu'une réservation en cours se termine. Sans Redis : null
- * (l'index unique partiel protège encore l'heure de début).
+ * jusqu'à 5 s qu'une réservation en cours se termine. Sans Redis (ou Redis
+ * injoignable) : verrou du processus.
  */
 async function acquireHostLock(hostUserId) {
   const client = getCacheClient();
-  if (!client) return null;
+  if (!client) return acquireLocalHostLock(hostUserId);
   const key = `booking-lock:${hostUserId}`;
   const value = crypto.randomUUID();
   const deadline = Date.now() + LOCK_WAIT_MS;
@@ -301,13 +336,17 @@ async function acquireHostLock(hostUserId) {
     }
   } catch (error) {
     logger.warn(`[rendez-vous] verrou Redis indisponible : ${error.message}`);
-    return null;
+    return acquireLocalHostLock(hostUserId);
   }
   throw new BookingError("SLOT_TAKEN", 409);
 }
 
 async function releaseHostLock(lock) {
   if (!lock) return;
+  if (lock.local) {
+    lock.release();
+    return;
+  }
   try {
     if ((await lock.client.get(lock.key)) === lock.value) {
       await lock.client.del(lock.key);
@@ -331,16 +370,22 @@ async function findClientByEmail(workspaceId, email) {
     .lean();
 }
 
-// Lettres, espaces, apostrophes et tirets : format exigé par la fiche client
-const clientNamePart = (value) =>
+// Format de la fiche client (isValidPersonName) : lettres de tous les
+// alphabets (« Lecœur »), espaces, apostrophes droite et typographique,
+// points et tirets ; le reste devient une espace
+const clientNamePart = (value, maxLength = 50) =>
   String(value || "")
-    .replace(/[^a-zA-ZÀ-ÿ\s'-]/g, " ")
+    .replace(/[^\p{L}\p{M}\s'’.-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 50)
+    .slice(0, maxLength)
     .trim();
 
-const validNamePart = (value) => /^[a-zA-ZÀ-ÿ\s'-]{2,50}$/.test(value);
+const validNamePart = (value, maxLength = 50) =>
+  isValidPersonName(value, maxLength);
+
+// « Prénom Nom » d'un particulier : chaque partie peut faire 50 caractères
+const FULL_NAME_MAX = 101;
 
 /** Téléphone au format de la fiche client, sinon null (gardé sur la réservation). */
 function clientPhone(phone) {
@@ -396,11 +441,11 @@ async function attachClient({ booking, page, host }) {
 
   const firstName = clientNamePart(booking.guest.firstName);
   const lastName = clientNamePart(booking.guest.lastName);
-  const fullName = clientNamePart(`${firstName} ${lastName}`);
-  const name = validNamePart(fullName)
+  const fullName = clientNamePart(`${firstName} ${lastName}`, FULL_NAME_MAX);
+  const name = validNamePart(fullName, FULL_NAME_MAX)
     ? fullName
     : clientNamePart(booking.guest.email.split("@")[0]);
-  if (!validNamePart(name)) {
+  if (!validNamePart(name, FULL_NAME_MAX)) {
     logger.warn(
       `[rendez-vous] client non créé pour la réservation ${booking._id} : nom inutilisable`,
     );
