@@ -20,6 +20,30 @@ import {
 // Logo de l'organisation : paramètres de l'entreprise (« orgSettings »)
 const writeOrgSettings = requireWorkspaceLevel("orgSettings", "write");
 
+/**
+ * Supprime le fichier local d'une image du compte (photo de profil, ancien
+ * logo). Seul un chemin « /uploads/<dossier attendu>/<fichier> » est
+ * supprimé (voir resolveUploadPath), et jamais un fichier qu'un autre compte
+ * référence aussi.
+ */
+const deleteOwnUpload = async (userDoc, field, directory) => {
+  const relativePath = field
+    .split(".")
+    .reduce((value, key) => value?.[key], userDoc);
+  if (!relativePath) return false;
+  const sharedWithAnotherAccount = await User.exists({
+    _id: { $ne: userDoc._id },
+    [field]: relativePath,
+  });
+  if (sharedWithAnotherAccount) {
+    logger.warn(
+      `Fichier ${field} référencé par un autre compte : suppression ignorée`,
+    );
+    return false;
+  }
+  return deleteFile(relativePath, { directory });
+};
+
 const userResolvers = {
   Query: {
     me: isAuthenticated(async (_, __, { user }) => {
@@ -114,8 +138,11 @@ const userResolvers = {
             // Si une photo de profil existe déjà, la supprimer
             if (userDoc.profile && userDoc.profile.profilePicture) {
               try {
-                const oldPicturePath = userDoc.profile.profilePicture;
-                await deleteFile(oldPicturePath);
+                await deleteOwnUpload(
+                  userDoc,
+                  "profile.profilePicture",
+                  "profile-pictures",
+                );
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
@@ -133,8 +160,11 @@ const userResolvers = {
             // Si une photo de profil existe déjà, la supprimer
             if (userDoc.profile && userDoc.profile.profilePicture) {
               try {
-                const oldPicturePath = userDoc.profile.profilePicture;
-                await deleteFile(oldPicturePath);
+                await deleteOwnUpload(
+                  userDoc,
+                  "profile.profilePicture",
+                  "profile-pictures",
+                );
               } catch (err) {
                 console.error(
                   "Erreur lors de la suppression de l'ancienne photo de profil:",
@@ -153,8 +183,14 @@ const userResolvers = {
             // Mettre à jour le champ profilePicture avec le chemin de la nouvelle image
             input.profilePicture = picturePath;
           }
-          // Si la photo de profil n'est ni une chaîne vide ni une chaîne base64, la supprimer de l'input
-          else if (!input.profilePicture.startsWith("/uploads/")) {
+          // Tout autre valeur (chemin choisi par le client) est ignorée : seule
+          // la photo déjà enregistrée sur ce compte peut être renvoyée telle
+          // quelle. Un chemin libre permettait de faire pointer son profil
+          // vers un fichier quelconque, supprimé ensuite par
+          // deleteProfilePicture.
+          else if (
+            input.profilePicture !== (userDoc.profile?.profilePicture || "")
+          ) {
             delete input.profilePicture;
           }
         }
@@ -324,8 +360,11 @@ const userResolvers = {
           // Si une photo de profil existe déjà, la supprimer
           if (userDoc.profile && userDoc.profile.profilePicture) {
             try {
-              const oldPicturePath = userDoc.profile.profilePicture;
-              await deleteFile(oldPicturePath);
+              await deleteOwnUpload(
+                userDoc,
+                "profile.profilePicture",
+                "profile-pictures",
+              );
             } catch (err) {
               console.error(
                 "Erreur lors de la suppression de l'ancienne photo de profil:",
@@ -372,8 +411,7 @@ const userResolvers = {
         // Si un logo existe, le supprimer
         if (userDoc.company && userDoc.company.logo) {
           try {
-            const logoPath = userDoc.company.logo;
-            const deleted = await deleteFile(logoPath);
+            await deleteOwnUpload(userDoc, "company.logo", "company-logos");
           } catch (err) {
             console.error("Erreur lors de la suppression du logo:", err);
             // Continuer même si la suppression échoue
@@ -408,8 +446,11 @@ const userResolvers = {
         // Si une photo de profil existe, la supprimer
         if (userDoc.profile && userDoc.profile.profilePicture) {
           try {
-            const picturePath = userDoc.profile.profilePicture;
-            const deleted = await deleteFile(picturePath);
+            await deleteOwnUpload(
+              userDoc,
+              "profile.profilePicture",
+              "profile-pictures",
+            );
           } catch (err) {
             console.error(
               "Erreur lors de la suppression de la photo de profil:",
