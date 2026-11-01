@@ -379,29 +379,28 @@ const partnerResolvers = {
     },
 
     /**
-     * Récupère les coordonnées bancaires de l'organisation
-     * IDOR fix: vérifie que l'utilisateur est membre de l'organisation
+     * Récupère les coordonnées bancaires de l'organisation : droit « Voir »
+     * des informations de l'entreprise (rôles ajustés et personnalisés
+     * compris), sur l'espace actif. L'appartenance seule ne suffit plus :
+     * un rôle sans ce droit lisait l'IBAN.
      */
-    getOrganizationBankDetails: async (_, { organizationId }, { user }) => {
-      if (!user) {
-        throw new AppError("Non authentifié", ERROR_CODES.UNAUTHENTICATED);
+    getOrganizationBankDetails: requireAction(
+      "orgSettings",
+      "view",
+    )(async (_, { organizationId }, context) => {
+      // Le droit est vérifié sur l'espace actif (en-tête, à défaut
+      // l'argument) : l'espace lu doit être celui-là
+      if (String(organizationId) !== String(context.workspaceId)) {
+        throw new AppError(
+          "Vous n'avez pas la permission d'effectuer cette action.",
+          ERROR_CODES.FORBIDDEN,
+        );
       }
 
       try {
-        const db = mongoose.connection.db;
-
-        // Vérifier que l'utilisateur est membre de cette organisation
-        const member = await db.collection("member").findOne({
-          userId: new mongoose.Types.ObjectId(user._id || user.id),
-          organizationId: new mongoose.Types.ObjectId(organizationId),
-        });
-        if (!member) {
-          throw new AppError("Accès refusé", ERROR_CODES.FORBIDDEN);
-        }
-
-        const organization = await db.collection("organization").findOne({
-          _id: new mongoose.Types.ObjectId(organizationId),
-        });
+        const organization = await mongoose.connection.db
+          .collection("organization")
+          .findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
 
         if (!organization) {
           return null;
@@ -413,14 +412,13 @@ const partnerResolvers = {
           bankBic: organization.bankBic || null,
         };
       } catch (error) {
-        if (error instanceof AppError) throw error;
         logger.error(
           "Erreur lors de la récupération des coordonnées bancaires:",
           error,
         );
         return null;
       }
-    },
+    }),
 
     /**
      * ADMIN: Récupère tous les retraits (avec filtre optionnel par statut)
@@ -652,6 +650,15 @@ const partnerResolvers = {
       }
 
       try {
+        // Saisie normalisée avant validation : espaces retirés, majuscules
+        // (un IBAN est souvent copié par groupes de quatre caractères)
+        const normalize = (value) =>
+          String(value || "")
+            .replace(/\s+/g, "")
+            .toUpperCase();
+        bankIban = normalize(bankIban);
+        bankBic = normalize(bankBic);
+
         // Validation de l'IBAN (format international, pas uniquement FR)
         // Format: 2 lettres pays + 2 chiffres clé + jusqu'à 30 caractères alphanumériques
         const ibanRegex = /^[A-Z]{2}[0-9]{2}[A-Z0-9]{10,30}$/;
@@ -688,8 +695,8 @@ const partnerResolvers = {
           {
             $set: {
               bankName: bankName.trim(),
-              bankIban: bankIban.toUpperCase(),
-              bankBic: bankBic.toUpperCase(),
+              bankIban,
+              bankBic,
             },
           },
         );
