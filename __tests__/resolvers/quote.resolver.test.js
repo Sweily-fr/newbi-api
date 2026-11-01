@@ -235,8 +235,11 @@ describe("Quote Resolver - Query.quotes", () => {
 describe("Quote Resolver - Mutation.deleteQuote (RBAC + status guard)", () => {
   const resolver = quoteResolvers.Mutation.deleteQuote;
 
-  it("deletes a PENDING quote", async () => {
-    const { insertedId } = await insertQuote({ status: "PENDING" });
+  it("deletes a DRAFT quote", async () => {
+    const { insertedId } = await insertQuote({
+      status: "DRAFT",
+      number: "DRAFT-0001",
+    });
 
     const result = await resolver(null, { id: insertedId.toString() }, ctx());
 
@@ -244,17 +247,45 @@ describe("Quote Resolver - Mutation.deleteQuote (RBAC + status guard)", () => {
     expect(await Quote.collection.findOne({ _id: insertedId })).toBeNull();
   });
 
+  it("blocks deletion of a numbered PENDING or CANCELED quote, like the screen", async () => {
+    for (const status of ["PENDING", "CANCELED"]) {
+      const { insertedId } = await insertQuote({
+        status,
+        number: status === "PENDING" ? "0001" : "0002",
+      });
+
+      await expect(
+        resolver(null, { id: insertedId.toString() }, ctx()),
+      ).rejects.toThrow(/brouillons/i);
+      expect(await Quote.collection.findOne({ _id: insertedId })).not.toBeNull();
+    }
+  });
+
+  it("deletes a quote of imported origin (empty prefix), whatever its status", async () => {
+    const { insertedId } = await insertQuote({
+      status: "COMPLETED",
+      prefix: "",
+      number: "DEV-ORIGINE-12",
+    });
+
+    const result = await resolver(null, { id: insertedId.toString() }, ctx());
+    expect(result).toBe(true);
+  });
+
   it("blocks deletion of a COMPLETED quote", async () => {
     const { insertedId } = await insertQuote({ status: "COMPLETED" });
 
     await expect(
       resolver(null, { id: insertedId.toString() }, ctx()),
-    ).rejects.toThrow(/terminé|completed/i);
+    ).rejects.toThrow(/brouillons|numéroté/i);
   });
 
   it("blocks deletion of a quote already converted to invoice", async () => {
+    // Origine import (préfixe vide) : supprimable, sauf une fois converti
     const { insertedId } = await insertQuote({
-      status: "PENDING",
+      status: "COMPLETED",
+      prefix: "",
+      number: "DEV-ORIGINE-13",
       convertedToInvoice: new mongoose.Types.ObjectId(),
     });
 

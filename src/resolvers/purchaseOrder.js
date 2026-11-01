@@ -10,6 +10,7 @@ import {
   loadWorkspaceInvoices,
   loadWorkspaceQuote,
 } from "../utils/workspaceDocumentLoaders.js";
+import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -54,6 +55,7 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import { assertCreationStatusAllowed } from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 
 /**
@@ -210,11 +212,18 @@ const purchaseOrderResolvers = {
     },
     // Documents liés via les DataLoaders de la requête (une requête pour toute
     // la liste au lieu d'une par bon de commande).
+    // Chacun suit « Voir » de sa page (devis d'origine, factures)
     sourceQuote: async (po, _args, context) => {
       if (!po.sourceQuoteId) return null;
+      if (!(await canViewLinkedPage(context, po.workspaceId, "quotes"))) {
+        return null;
+      }
       return loadWorkspaceQuote(context, po.sourceQuoteId, po.workspaceId);
     },
     linkedInvoices: async (po, _args, context) => {
+      if (!(await canViewLinkedPage(context, po.workspaceId, "invoices"))) {
+        return [];
+      }
       if (po.linkedInvoices && po.linkedInvoices.length > 0) {
         return loadWorkspaceInvoices(
           context,
@@ -468,6 +477,7 @@ const purchaseOrderResolvers = {
           Model: PurchaseOrder,
           docType: "purchaseOrder",
           draftStatus: "DRAFT",
+          lockedStatuses: ["DELIVERED"],
           workspaceId,
           docId: purchaseOrderId,
           file,
@@ -482,6 +492,12 @@ const purchaseOrderResolvers = {
             inputWorkspaceId,
             context.workspaceId,
           );
+
+          // Validé, en cours, livré, annulé : changement de statut
+          // (« Changer le statut »), pas une simple création
+          assertCreationStatusAllowed(context, "purchaseOrders", input.status, {
+            issuedStatus: "CONFIRMED",
+          });
 
           if (!workspaceId) {
             throw new AppError(
@@ -745,6 +761,16 @@ const purchaseOrderResolvers = {
             throw createResourceLockedError(
               "Bon de commande",
               "un bon de commande livré ne peut pas être modifié",
+            );
+          }
+
+          // Comme un bon de livraison annulé, et comme l'écran qui ne propose
+          // « Modifier » que pour un brouillon ou un bon confirmé
+          if (po.status === "CANCELED") {
+            throw new AppError(
+              "Un bon de commande annulé ne peut pas être modifié.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "purchaseOrder", reason: "CANCELED" },
             );
           }
 
@@ -1027,10 +1053,13 @@ const purchaseOrderResolvers = {
             throw createNotFoundError("Bon de commande");
           }
 
-          if (po.status === "DELIVERED") {
-            throw createResourceLockedError(
-              "Bon de commande",
-              "un bon de commande livré ne peut pas être supprimé",
+          // Comme l'écran : seul un brouillon se supprime. Un bon émis porte
+          // un numéro de la séquence et a pu partir chez le client.
+          if (po.status !== "DRAFT") {
+            throw new AppError(
+              "Seuls les brouillons peuvent être supprimés : ce bon de commande est numéroté.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "purchaseOrder", reason: "NUMBERED_DOCUMENT" },
             );
           }
 
@@ -1391,9 +1420,11 @@ const purchaseOrderResolvers = {
           throw createNotFoundError("Bon de commande");
         }
 
-        if (!["CONFIRMED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
+        // Mêmes statuts qu'à l'écran (« Convertir en facture ») : un bon
+        // validé par le client, en cours ou livré
+        if (!["VALIDATED", "IN_PROGRESS", "DELIVERED"].includes(po.status)) {
           throw new AppError(
-            "Seuls les bons de commande confirmés, en cours ou livrés peuvent être convertis en facture",
+            "Seuls les bons de commande validés, en cours ou livrés peuvent être convertis en facture",
             ERROR_CODES.RESOURCE_LOCKED,
           );
         }
@@ -1427,6 +1458,30 @@ const purchaseOrderResolvers = {
               existingInvoicesTotalAmount = existingInvoices.reduce(
                 (sum, inv) => sum + (inv.finalTotalTTC || 0),
                 0,
+              );
+            }
+
+            const remaining =
+              Math.round((quoteAmount - existingInvoicesTotalAmount) * 100) /
+              100;
+            // La facture reprend tout le bon de commande : elle ne doit pas
+            // dépasser le reste à facturer du devis (acompte, factures liées)
+            if (
+              quoteAmount > 0 &&
+              remaining > 0.01 &&
+              Math.round((po.finalTotalTTC || 0) * 100) >
+                Math.round(remaining * 100)
+            ) {
+              const euros = (n) => `${n.toFixed(2).replace(".", ",")} €`;
+              throw new AppError(
+                `Ce bon de commande (${euros(po.finalTotalTTC || 0)}) dépasse le reste à facturer du devis associé (${euros(remaining)} sur ${euros(quoteAmount)}, ${euros(existingInvoicesTotalAmount)} déjà facturés).`,
+                ERROR_CODES.RESOURCE_LOCKED,
+                {
+                  resource: "Devis",
+                  quoteAmount,
+                  existingInvoicesTotalAmount,
+                  remaining,
+                },
               );
             }
 

@@ -48,8 +48,18 @@ const documentSettingsResolvers = {
         return settings;
       } catch (error) {
         console.error("Erreur lors de la sauvegarde des paramètres:", error);
+        // Valeur refusée par le modèle (lien des conditions, longueurs…) :
+        // le message dit laquelle et pourquoi
+        const validationMessages =
+          error?.name === "ValidationError"
+            ? Object.values(error.errors || {})
+                .map((e) => e.message)
+                .filter(Boolean)
+            : [];
         throw new UserInputError(
-          "Erreur lors de la sauvegarde des paramètres",
+          validationMessages.length > 0
+            ? validationMessages.join(" ")
+            : "Erreur lors de la sauvegarde des paramètres",
           {
             invalidArgs: Object.keys(error.errors || {}),
           },
