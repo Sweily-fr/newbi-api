@@ -108,6 +108,33 @@ documentCounterSchema.statics.getNextNumber = async function (
 };
 
 /**
+ * Prochain numéro que getNextNumber attribuerait, SANS le consommer : une
+ * simple lecture (aperçu du numéro dans un éditeur, requête de lecture). Le
+ * compteur n'avance qu'à l'attribution réelle ; avancé par une lecture, il
+ * laissait un trou dans la séquence au document suivant.
+ */
+documentCounterSchema.statics.peekNextNumber = async function (
+  documentType,
+  prefix,
+  workspaceId,
+  options = {},
+) {
+  const isGlobal = options.global === true;
+  const counterPrefix = isGlobal ? GLOBAL_SEQUENCE : prefix;
+  const existingMax = await getExistingMaxNumber(
+    documentType,
+    isGlobal ? "" : prefix,
+    workspaceId,
+  );
+  const counter = await this.findOne({
+    documentType,
+    prefix: counterPrefix,
+    workspaceId,
+  }).lean();
+  return Math.max(counter?.lastNumber || 0, existingMax) + 1;
+};
+
+/**
  * Cherche le numéro maximum existant parmi les documents finalisés
  * pour un type de document / préfixe / workspace donnés.
  * Pas de filtre par année — la séquence est par préfixe uniquement.

@@ -66,3 +66,51 @@ export function assertNotEInvoiceTransmitted(
     },
   );
 }
+
+// Après ces statuts, un nouveau dépôt est possible : dépôt refusé avant
+// enregistrement (irrecevable) ou rejeté par la plateforme.
+const REDEPOSIT_STATUSES = new Set(["ERROR", "REJECTED"]);
+
+/**
+ * Refuse le renvoi à la plateforme d'une facture qui n'a pas à y être
+ * déposée de nouveau : annulée, relevant de l'e-reporting (déclaration à
+ * l'administration, pas de dépôt), ou déjà déposée (le renvoi créerait un
+ * doublon sur la plateforme et remplacerait l'identifiant du premier dépôt).
+ * @param {Object} invoice - facture enregistrée
+ */
+export function assertInvoiceResendable(invoice) {
+  if (invoice?.status === "CANCELED") {
+    throw new AppError(
+      "Une facture annulée ne se transmet pas en facturation électronique.",
+      ERROR_CODES.VALIDATION_ERROR,
+      { resource: "invoice", action: "resend", reason: "INVOICE_CANCELED" },
+    );
+  }
+  if (
+    ["E_REPORTING_TRANSACTION", "E_REPORTING_PAYMENT"].includes(
+      invoice?.eInvoiceFlowType,
+    )
+  ) {
+    throw new AppError(
+      "Cette facture relève de l'e-reporting (déclaration à l'administration) : elle ne se dépose pas sur la plateforme de facturation électronique.",
+      ERROR_CODES.VALIDATION_ERROR,
+      { resource: "invoice", action: "resend", reason: "E_REPORTING_FLOW" },
+    );
+  }
+  if (
+    isEInvoiceTransmitted(invoice) &&
+    !REDEPOSIT_STATUSES.has(invoice.eInvoiceStatus)
+  ) {
+    throw new AppError(
+      "Cette facture a déjà été déposée sur la plateforme de facturation électronique : elle ne se renvoie pas. Créez un avoir pour la corriger.",
+      ERROR_CODES.RESOURCE_LOCKED,
+      {
+        resource: "invoice",
+        action: "resend",
+        reason: "E_INVOICE_TRANSMITTED",
+        superPdpInvoiceId: invoice.superPdpInvoiceId || null,
+        eInvoiceStatus: invoice.eInvoiceStatus || null,
+      },
+    );
+  }
+}

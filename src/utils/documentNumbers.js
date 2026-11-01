@@ -1347,7 +1347,40 @@ const generateDeliveryNoteNumber = async (customPrefix, options = {}) => {
   return await generateDeliveryNoteSequentialNumber(prefix, options);
 };
 
+/**
+ * Aperçus de numéro en LECTURE SEULE (requêtes nextInvoiceNumber en
+ * brouillon et nextCreditNoteNumber) : même préfixe par défaut que la
+ * génération, aucun compteur avancé, aucun brouillon renommé.
+ */
+const defaultMonthlyPrefix = (letter) => {
+  const now = _getNow();
+  return `${letter}-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+};
+
+const previewInvoiceDraftNumber = async (customPrefix, options = {}) => {
+  const prefix = customPrefix || defaultMonthlyPrefix("F");
+  const next = await DocumentCounter.peekNextNumber(
+    "invoice",
+    prefix,
+    options.workspaceId || options.userId || "default",
+    { global: options.autoNumbering === true },
+  );
+  return `DRAFT-${String(next).padStart(4, "0")}`;
+};
+
+const previewCreditNoteNumber = async (customPrefix, options = {}) => {
+  const prefix = customPrefix || defaultMonthlyPrefix("AV");
+  const next = await DocumentCounter.peekNextNumber(
+    "creditNote",
+    prefix,
+    options.workspaceId || options.userId || "default",
+  );
+  return String(next).padStart(4, "0");
+};
+
 export {
+  previewInvoiceDraftNumber,
+  previewCreditNoteNumber,
   generateInvoiceNumber,
   generateQuoteNumber,
   generateCreditNoteNumber,

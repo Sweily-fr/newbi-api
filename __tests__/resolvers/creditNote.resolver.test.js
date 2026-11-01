@@ -327,13 +327,267 @@ describe("CreditNote Resolver — createCreditNote", () => {
   });
 });
 
+describe("CreditNote Resolver — client et émetteur de la facture d'origine", () => {
+  const invoiceClient = {
+    id: "client-lumiere",
+    name: "Boulangerie Lumière",
+    email: "compta@lumiere.test",
+    type: "COMPANY",
+    address: {
+      street: "12 rue de la République",
+      city: "Lyon",
+      postalCode: "69002",
+      country: "France",
+    },
+  };
+  const invoiceCompany = {
+    name: "Studio Émetteur",
+    email: "studio@test.fr",
+    siret: "98765432100012",
+    address: {
+      street: "1 rue de la Paix",
+      city: "Paris",
+      postalCode: "75001",
+      country: "France",
+    },
+  };
+  const otherClient = {
+    name: "Cabinet Dumas",
+    email: "contact@dumas.test",
+    address: {
+      street: "7 boulevard Haussmann",
+      city: "Paris",
+      postalCode: "75009",
+      country: "France",
+    },
+  };
+  const otherCompany = {
+    name: "Société fictive",
+    email: "fictive@test.fr",
+    siret: "12345678900011",
+    address: {
+      street: "2 rue Ailleurs",
+      city: "Nantes",
+      postalCode: "44000",
+      country: "France",
+    },
+  };
+
+  it("à la création, client et émetteur saisis sont ignorés : ceux de la facture", async () => {
+    const inv = await insertInvoice({
+      client: invoiceClient,
+      companyInfo: invoiceCompany,
+    });
+    const input = buildCreditNoteInput(inv._id, {
+      client: otherClient,
+      companyInfo: otherCompany,
+    });
+
+    const result = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input },
+      ctx(),
+    );
+
+    const saved = await CreditNote.collection.findOne({ _id: result._id });
+    expect(saved.client.name).toBe(invoiceClient.name);
+    expect(saved.client.email).toBe(invoiceClient.email);
+    expect(saved.client.address.city).toBe("Lyon");
+    expect(saved.companyInfo.name).toBe(invoiceCompany.name);
+    expect(saved.companyInfo.siret).toBe(invoiceCompany.siret);
+  });
+
+  it("à la modification, client et émetteur ne changent pas", async () => {
+    const inv = await insertInvoice({
+      client: invoiceClient,
+      companyInfo: invoiceCompany,
+    });
+    const created = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id) },
+      ctx(),
+    );
+
+    await creditNoteResolvers.Mutation.updateCreditNote(
+      null,
+      {
+        id: created._id.toString(),
+        input: {
+          client: otherClient,
+          companyInfo: otherCompany,
+          reason: "Motif corrigé",
+        },
+      },
+      ctx(),
+    );
+
+    const saved = await CreditNote.collection.findOne({ _id: created._id });
+    expect(saved.reason).toBe("Motif corrigé");
+    expect(saved.client.name).toBe(invoiceClient.name);
+    expect(saved.companyInfo.name).toBe(invoiceCompany.name);
+  });
+});
+
+describe("CreditNote Resolver — date de l'avoir", () => {
+  it("un avoir daté d'avant sa facture est refusé, à la création comme à la modification", async () => {
+    const inv = await insertInvoice({
+      issueDate: new Date("2026-10-15T10:00:00.000Z"),
+    });
+
+    await expect(
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: buildCreditNoteInput(inv._id, { issueDate: "2026-10-01" }) },
+        ctx(),
+      ),
+    ).rejects.toThrow(
+      /ne peut pas précéder celle de la facture d'origine \(15\/10\/2026\)/,
+    );
+    expect(await CreditNote.countDocuments({ originalInvoice: inv._id })).toBe(
+      0,
+    );
+
+    const created = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: buildCreditNoteInput(inv._id, { issueDate: "2026-10-15" }) },
+      ctx(),
+    );
+    await expect(
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        { id: created._id.toString(), input: { issueDate: "2026-10-14" } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/ne peut pas précéder/);
+  });
+});
+
+describe("CreditNote Resolver — avoirs simultanés", () => {
+  const sumCredited = async (invoiceId) =>
+    (await CreditNote.collection.find({ originalInvoice: invoiceId }).toArray())
+      .map((c) => Math.abs(c.finalTotalTTC))
+      .reduce((a, b) => a + b, 0);
+
+  it("deux avoirs de 100 % créés au même instant : un seul passe, l'autre est refusé", async () => {
+    // Facture de 1 200 € TTC ; chaque avoir vaut 1 200 € TTC
+    const inv = await insertInvoice();
+    const input = buildCreditNoteInput(inv._id, {
+      items: [
+        { description: "Total", quantity: 1, unitPrice: 1000, vatRate: 20 },
+      ],
+    });
+    const create = () =>
+      creditNoteResolvers.Mutation.createCreditNote(null, { input }, ctx());
+
+    const results = await Promise.allSettled([create(), create(), create()]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    for (const r of results.filter((r) => r.status === "rejected")) {
+      expect(r.reason.message).toMatch(/dépasse le montant restant/);
+    }
+    expect(await sumCredited(inv._id)).toBeCloseTo(1200, 2);
+  });
+
+  it("deux avoirs modifiés au même instant ne dépassent pas la facture", async () => {
+    const inv = await insertInvoice();
+    const small = buildCreditNoteInput(inv._id, {
+      items: [
+        { description: "Part", quantity: 1, unitPrice: 100, vatRate: 20 },
+      ],
+    });
+    const a = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: small },
+      ctx(),
+    );
+    const b = await creditNoteResolvers.Mutation.createCreditNote(
+      null,
+      { input: small },
+      ctx(),
+    );
+    // Chacun passe à 900 € HT (1 080 € TTC) : ensemble 2 160 € > 1 200 €
+    const grow = (cn) =>
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        {
+          id: cn._id.toString(),
+          input: {
+            items: [
+              { description: "Part", quantity: 1, unitPrice: 900, vatRate: 20 },
+            ],
+          },
+        },
+        ctx(),
+      );
+
+    const results = await Promise.allSettled([grow(a), grow(b)]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(await sumCredited(inv._id)).toBeLessThanOrEqual(1200);
+  });
+});
+
 describe("CreditNote Resolver — numérotation", () => {
+  const smallCredit = (inv, overrides = {}) =>
+    buildCreditNoteInput(inv._id, {
+      prefix: "AV-TEST",
+      items: [{ description: "R", quantity: 1, unitPrice: 10, vatRate: 20 }],
+      ...overrides,
+    });
+
+  it("lire le prochain numéro ne le consomme pas : l'avoir suivant ne saute aucun numéro", async () => {
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    const create = (overrides) =>
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: smallCredit(inv, overrides) },
+        ctx(),
+      );
+    const next = () =>
+      creditNoteResolvers.Query.nextCreditNoteNumber(
+        null,
+        { workspaceId: organizationId.toString(), prefix: "AV-TEST" },
+        ctx(),
+      );
+
+    expect((await create()).number).toBe("0001");
+    const counters = () =>
+      mongoose.connection.db.collection("documentcounters").find().toArray();
+    const avant = JSON.stringify(await counters());
+    expect([await next(), await next(), await next()]).toEqual([
+      "0002",
+      "0002",
+      "0002",
+    ]);
+    expect(JSON.stringify(await counters())).toBe(avant);
+
+    expect((await create()).number).toBe("0002");
+  });
+
+  it("un avoir refusé à l'enregistrement ne consomme pas de numéro", async () => {
+    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    const create = (overrides) =>
+      creditNoteResolvers.Mutation.createCreditNote(
+        null,
+        { input: smallCredit(inv, overrides) },
+        ctx(),
+      );
+
+    expect((await create()).number).toBe("0001");
+    await expect(create({ refundMethod: "INCONNU" })).rejects.toThrow();
+    expect((await create()).number).toBe("0002");
+  });
+
   it("accepte un avoir 0001 sous deux préfixes mensuels distincts la même année (index avec prefix)", async () => {
     // Le bug d'origine : l'index unique (number, workspaceId, issueYear) sans
     // prefix rejetait le 2e "0001" d'une même année alors que le préfixe
     // mensuel diffère. L'index inclut désormais prefix.
     await CreditNote.syncIndexes();
-    const inv = await insertInvoice({ finalTotalTTC: 100000 });
+    // Facture du 1er janvier : les avoirs de janvier et février la suivent
+    const inv = await insertInvoice({
+      finalTotalTTC: 100000,
+      issueDate: new Date("2026-01-01T09:00:00.000Z"),
+    });
 
     const resolver = creditNoteResolvers.Mutation.createCreditNote;
 
