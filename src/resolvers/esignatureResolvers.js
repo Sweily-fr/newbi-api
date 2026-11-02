@@ -29,6 +29,7 @@ import {
 } from "../services/esignaturePubsub.js";
 import { getPubSub } from "../config/redis.js";
 import { normalizeSigners } from "../utils/signatureSigners.js";
+import { withDocumentLock } from "../utils/documentLock.js";
 import { quoteContentHash } from "../utils/quoteContentHash.js";
 
 /**
@@ -336,404 +337,415 @@ const esignatureResolvers = {
     requestDocumentSignature: requireAction(
       "quotes",
       "sign",
-    )(async (_, { input }, context) => {
-      try {
-        const {
-          documentType,
-          documentId,
-          signatureType = "SES",
-          signers: rawSigners,
-          title,
-          signatureMode,
-          documentBase64,
-          signaturePlacement,
-        } = input;
+    )(async (_, { input }, context) =>
+      // Une demande à la fois par espace, du contrôle du quota à l'envoi au
+      // prestataire : deux envois simultanés ne dépassent pas le quota
+      withDocumentLock(
+        `esignature:${context.workspaceId}`,
+        async () => {
+          try {
+            const {
+              documentType,
+              documentId,
+              signatureType = "SES",
+              signers: rawSigners,
+              title,
+              signatureMode,
+              documentBase64,
+              signaturePlacement,
+            } = input;
 
-        // Placement de la zone de signature calculé par le frontend
-        // (juste au-dessus du pied de page, sur la partie blanche).
-        const placementOption = signaturePlacement?.length
-          ? {
-              signaturePlacement: signaturePlacement.map((p) => ({
-                page: p.page,
-                x: Math.round(p.x),
-                y: Math.round(p.y),
-              })),
+            // Placement de la zone de signature calculé par le frontend
+            // (juste au-dessus du pied de page, sur la partie blanche).
+            const placementOption = signaturePlacement?.length
+              ? {
+                  signaturePlacement: signaturePlacement.map((p) => ({
+                    page: p.page,
+                    x: Math.round(p.x),
+                    y: Math.round(p.y),
+                  })),
+                }
+              : {};
+
+            // Seuls les devis peuvent être signés électroniquement
+            if (documentType !== "quote") {
+              throw new AppError(
+                "Seuls les devis peuvent être signés électroniquement.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
             }
-          : {};
 
-        // Seuls les devis peuvent être signés électroniquement
-        if (documentType !== "quote") {
-          throw new AppError(
-            "Seuls les devis peuvent être signés électroniquement.",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
+            // Le cachet de l'entreprise ne passe jamais par une demande de
+            // signature : il s'appose sur un devis déjà signé par le client
+            // (sealQuoteDocument), et il ne contourne pas le quota.
+            if (signatureType === "QES_automatic") {
+              throw new AppError(
+                "Le cachet de l'entreprise s'appose sur un devis déjà signé par le client.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
 
-        // Le cachet de l'entreprise ne passe jamais par une demande de
-        // signature : il s'appose sur un devis déjà signé par le client
-        // (sealQuoteDocument), et il ne contourne pas le quota.
-        if (signatureType === "QES_automatic") {
-          throw new AppError(
-            "Le cachet de l'entreprise s'appose sur un devis déjà signé par le client.",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
+            // 1 à 5 signataires, prénom, nom et adresse e-mail valides et distincts
+            const signers = normalizeSigners(rawSigners);
 
-        // 1 à 5 signataires, prénom, nom et adresse e-mail valides et distincts
-        const signers = normalizeSigners(rawSigners);
+            // Signature qualifiée : offre Entreprise seulement
+            if (signatureType === "QES_otp") {
+              await assertQualifiedSignatureAllowed(context.workspaceId);
+            }
 
-        // Signature qualifiée : offre Entreprise seulement
-        if (signatureType === "QES_otp") {
-          await assertQualifiedSignatureAllowed(context.workspaceId);
-        }
+            // Vérifier que le document existe
+            const Model = getDocumentModel(documentType);
+            const document = await Model.findOne({
+              _id: documentId,
+              workspaceId: context.workspaceId,
+            });
 
-        // Vérifier que le document existe
-        const Model = getDocumentModel(documentType);
-        const document = await Model.findOne({
-          _id: documentId,
-          workspaceId: context.workspaceId,
-        });
+            if (!document) {
+              throw new AppError("Document non trouvé", ERROR_CODES.NOT_FOUND);
+            }
 
-        if (!document) {
-          throw new AppError("Document non trouvé", ERROR_CODES.NOT_FOUND);
-        }
+            // Vérifier que le document n'est pas un brouillon
+            if (document.status === "DRAFT") {
+              throw new AppError(
+                "Les brouillons ne peuvent pas être signés. Veuillez d'abord valider le document.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
 
-        // Vérifier que le document n'est pas un brouillon
-        if (document.status === "DRAFT") {
-          throw new AppError(
-            "Les brouillons ne peuvent pas être signés. Veuillez d'abord valider le document.",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
+            // Un devis déjà accepté ou refusé ne peut plus être envoyé en signature
+            if (document.status !== "PENDING") {
+              throw new AppError(
+                "Seul un devis en attente peut être envoyé en signature.",
+                ERROR_CODES.VALIDATION_ERROR,
+              );
+            }
 
-        // Un devis déjà accepté ou refusé ne peut plus être envoyé en signature
-        if (document.status !== "PENDING") {
-          throw new AppError(
-            "Seul un devis en attente peut être envoyé en signature.",
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
+            // Vérifier qu'il n'y a pas déjà une signature en cours
+            const existingSignature = await SignatureRequest.findOne({
+              documentType,
+              documentId,
+              status: {
+                $in: ["PENDING", "WAIT_VALIDATION", "WAIT_SIGN", "WAIT_SIGNER"],
+              },
+            });
 
-        // Vérifier qu'il n'y a pas déjà une signature en cours
-        const existingSignature = await SignatureRequest.findOne({
-          documentType,
-          documentId,
-          status: {
-            $in: ["PENDING", "WAIT_VALIDATION", "WAIT_SIGN", "WAIT_SIGNER"],
-          },
-        });
-
-        if (existingSignature) {
-          // Une demande PENDING n'a jamais été confirmée comme réellement envoyée
-          // (une demande active côté provider est en WAIT_VALIDATION/WAIT_SIGN/WAIT_SIGNER).
-          // On l'auto-annule pour permettre un renvoi, même si un externalSignatureId
-          // existe (cas d'une demande restée coincée en PENDING).
-          if (existingSignature.status === "PENDING") {
-            logger.info(
-              `Auto-annulation de la demande PENDING ${existingSignature._id} (externalSignatureId: ${existingSignature.externalSignatureId || "aucun"})`,
-            );
-            // Supprimer l'orphelin côté API si une demande externe avait été créée
-            if (existingSignature.externalSignatureId) {
-              try {
-                await esignatureService.deleteSignature(
-                  existingSignature.externalSignatureId,
+            if (existingSignature) {
+              // Une demande PENDING n'a jamais été confirmée comme réellement envoyée
+              // (une demande active côté provider est en WAIT_VALIDATION/WAIT_SIGN/WAIT_SIGNER).
+              // On l'auto-annule pour permettre un renvoi, même si un externalSignatureId
+              // existe (cas d'une demande restée coincée en PENDING).
+              if (existingSignature.status === "PENDING") {
+                logger.info(
+                  `Auto-annulation de la demande PENDING ${existingSignature._id} (externalSignatureId: ${existingSignature.externalSignatureId || "aucun"})`,
                 );
-              } catch (err) {
-                logger.warn(
-                  `Impossible de supprimer la signature externe orpheline ${existingSignature.externalSignatureId}: ${err.message}`,
+                // Supprimer l'orphelin côté API si une demande externe avait été créée
+                if (existingSignature.externalSignatureId) {
+                  try {
+                    await esignatureService.deleteSignature(
+                      existingSignature.externalSignatureId,
+                    );
+                  } catch (err) {
+                    logger.warn(
+                      `Impossible de supprimer la signature externe orpheline ${existingSignature.externalSignatureId}: ${err.message}`,
+                    );
+                  }
+                }
+                existingSignature.status = "CANCELLED";
+                await existingSignature.save();
+              } else {
+                throw new AppError(
+                  "Une demande de signature est déjà en attente de signature pour ce devis. Annulez la demande en cours avant d'en envoyer une nouvelle.",
+                  ERROR_CODES.VALIDATION_ERROR,
                 );
               }
             }
-            existingSignature.status = "CANCELLED";
-            await existingSignature.save();
-          } else {
-            throw new AppError(
-              "Une demande de signature est déjà en attente de signature pour ce devis. Annulez la demande en cours avant d'en envoyer une nouvelle.",
-              ERROR_CODES.VALIDATION_ERROR,
+
+            // Quota mensuel du plan
+            await assertEsignatureQuotaAvailable(context.workspaceId);
+
+            // Créer l'entrée SignatureRequest en base
+            const signatureRequest = new SignatureRequest({
+              organizationId: context.organizationId,
+              workspaceId: context.workspaceId,
+              documentType,
+              documentId,
+              documentNumber: document.number || null,
+              // Version du devis envoyée : l'acceptation automatique à la
+              // signature exige la même version
+              documentHash: quoteContentHash(document),
+              signatureType,
+              status: "PENDING",
+              signers: signers.map((s) => ({
+                name: s.name,
+                surname: s.surname,
+                email: s.email,
+                mobile: s.mobile || null,
+                authentication: s.authentication || ["email"],
+              })),
+              createdBy: context.user._id,
+            });
+
+            await signatureRequest.save();
+
+            // Préparer le callback webhook
+            const callbackConfig = esignatureService.buildCallbackConfig(
+              signatureRequest._id.toString(),
             );
-          }
-        }
 
-        // Quota mensuel du plan
-        await assertEsignatureQuotaAvailable(context.workspaceId);
+            // Appeler l'API eSignature
+            let apiResult;
 
-        // Créer l'entrée SignatureRequest en base
-        const signatureRequest = new SignatureRequest({
-          organizationId: context.organizationId,
-          workspaceId: context.workspaceId,
-          documentType,
-          documentId,
-          documentNumber: document.number || null,
-          // Version du devis envoyée : l'acceptation automatique à la
-          // signature exige la même version
-          documentHash: quoteContentHash(document),
-          signatureType,
-          status: "PENDING",
-          signers: signers.map((s) => ({
-            name: s.name,
-            surname: s.surname,
-            email: s.email,
-            mobile: s.mobile || null,
-            authentication: s.authentication || ["email"],
-          })),
-          createdBy: context.user._id,
-        });
+            if (signatureType === "SES") {
+              if (!documentBase64) {
+                throw new AppError(
+                  "Le PDF du document est requis pour la signature SES",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
 
-        await signatureRequest.save();
+              apiResult = await esignatureService.createSESSignature(
+                documentBase64,
+                signers,
+                {
+                  title:
+                    title ||
+                    `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
+                  signatureMode: signatureMode || ["typed", "drawn"],
+                  signerMustRead: true,
+                  ...placementOption,
+                  ui: {
+                    completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
+                    cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
+                  },
+                },
+                callbackConfig,
+              );
+            } else if (signatureType === "QES_otp") {
+              if (!documentBase64) {
+                throw new AppError(
+                  "Le PDF du document est requis pour la signature QES",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
+              if (!signers || signers.length === 0) {
+                throw new AppError(
+                  "Au moins un signataire est requis pour la signature QES",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
 
-        // Préparer le callback webhook
-        const callbackConfig = esignatureService.buildCallbackConfig(
-          signatureRequest._id.toString(),
-        );
+              apiResult = await esignatureService.createQESOTP(
+                documentBase64,
+                signers,
+                {
+                  title:
+                    title ||
+                    `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
+                  signatureMode: signatureMode || ["typed", "drawn"],
+                  signerMustRead: true,
+                  ...placementOption,
+                  ui: {
+                    completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
+                    cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
+                  },
+                },
+                callbackConfig,
+              );
+            } else if (signatureType === "QES_automatic") {
+              if (!documentBase64) {
+                throw new AppError(
+                  "Le PDF du document est requis pour la signature QES",
+                  ERROR_CODES.VALIDATION_ERROR,
+                );
+              }
 
-        // Appeler l'API eSignature
-        let apiResult;
-
-        if (signatureType === "SES") {
-          if (!documentBase64) {
-            throw new AppError(
-              "Le PDF du document est requis pour la signature SES",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-
-          apiResult = await esignatureService.createSESSignature(
-            documentBase64,
-            signers,
-            {
-              title:
-                title ||
-                `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
-              signatureMode: signatureMode || ["typed", "drawn"],
-              signerMustRead: true,
-              ...placementOption,
-              ui: {
-                completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
-                cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
-              },
-            },
-            callbackConfig,
-          );
-        } else if (signatureType === "QES_otp") {
-          if (!documentBase64) {
-            throw new AppError(
-              "Le PDF du document est requis pour la signature QES",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-          if (!signers || signers.length === 0) {
-            throw new AppError(
-              "Au moins un signataire est requis pour la signature QES",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-
-          apiResult = await esignatureService.createQESOTP(
-            documentBase64,
-            signers,
-            {
-              title:
-                title ||
-                `Signature ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
-              signatureMode: signatureMode || ["typed", "drawn"],
-              signerMustRead: true,
-              ...placementOption,
-              ui: {
-                completeUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=true`,
-                cancelUrl: `${process.env.FRONTEND_URL || ""}/dashboard/outils/${documentType === "invoice" ? "factures" : "devis"}?id=${documentId}&signed=cancelled`,
-              },
-            },
-            callbackConfig,
-          );
-        } else if (signatureType === "QES_automatic") {
-          if (!documentBase64) {
-            throw new AppError(
-              "Le PDF du document est requis pour la signature QES",
-              ERROR_CODES.VALIDATION_ERROR,
-            );
-          }
-
-          apiResult = await esignatureService.createQESAutomatic(
-            documentBase64,
-            {
-              title:
-                title ||
-                `Cachet ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
-            },
-            callbackConfig,
-          );
-        } else {
-          throw new AppError(
-            `Type de signature non supporté: ${signatureType}`,
-            ERROR_CODES.VALIDATION_ERROR,
-          );
-        }
-
-        // Mettre à jour avec les infos de l'API
-        // La réponse API encapsule les données dans apiResult.data
-        const resultData = apiResult.data || apiResult;
-        signatureRequest.externalSignatureId = resultData.id || resultData._id;
-        // La demande vient d'être acceptée par le fournisseur : à défaut
-        // d'état exploitable, elle est vivante, jamais PENDING.
-        signatureRequest.status =
-          mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
-        // L'URL de signature est dans le premier signataire
-        const firstSignerUrl = resultData.signers?.[0]?.url || null;
-        signatureRequest.signingUrl = resultData.signingUrl || firstSignerUrl;
-        await signatureRequest.save();
-
-        publishSignatureStatus(signatureRequest);
-
-        logger.info(
-          `Signature ${signatureType} créée pour ${documentType} ${document.number || documentId}`,
-        );
-
-        // Envoyer l'invitation à signer à chaque signataire (sauf cachet entreprise).
-        // L'API n'envoie pas toujours d'email (sandbox) : on garantit l'acheminement
-        // du lien via Resend. Fire-and-forget pour ne pas bloquer la réponse.
-        if (signatureType !== "QES_automatic") {
-          const apiSigners = Array.isArray(resultData.signers)
-            ? resultData.signers
-            : [];
-          // Associer chaque URL renvoyée par l'API au signataire correspondant
-          // (par email si disponible, sinon par position).
-          const signerUrls = signers.map((s, i) => {
-            const match =
-              apiSigners.find(
-                (as) =>
-                  as?.email &&
-                  s?.email &&
-                  as.email.toLowerCase() === s.email.toLowerCase(),
-              ) ||
-              apiSigners[i] ||
-              {};
-            // L'URL générale de la demande ne sert qu'à un signataire unique :
-            // chaque signataire ne reçoit que son propre lien
-            return {
-              email: s.email,
-              name: s.name,
-              surname: s.surname,
-              url:
-                match.url ||
-                (signers.length === 1 ? signatureRequest.signingUrl : null),
-            };
-          });
-
-          // Conserver l'URL individuelle de chaque signataire : cible de la
-          // redirection du lien tracké /tracking/sign/:token/:index
-          signerUrls.forEach((s, i) => {
-            if (signatureRequest.signers[i]) {
-              signatureRequest.signers[i].signingUrl = s.url || null;
+              apiResult = await esignatureService.createQESAutomatic(
+                documentBase64,
+                {
+                  title:
+                    title ||
+                    `Cachet ${documentType === "invoice" ? "facture" : "devis"} ${document.number || ""}`,
+                },
+                callbackConfig,
+              );
+            } else {
+              throw new AppError(
+                `Type de signature non supporté: ${signatureType}`,
+                ERROR_CODES.VALIDATION_ERROR,
+              );
             }
-          });
-          await signatureRequest.save();
 
-          const documentNumber =
-            `${document.prefix || ""}-${document.number || ""}`.replace(
-              /^-/,
-              "",
+            // Mettre à jour avec les infos de l'API
+            // La réponse API encapsule les données dans apiResult.data
+            const resultData = apiResult.data || apiResult;
+            signatureRequest.externalSignatureId =
+              resultData.id || resultData._id;
+            // La demande vient d'être acceptée par le fournisseur : à défaut
+            // d'état exploitable, elle est vivante, jamais PENDING.
+            signatureRequest.status =
+              mapExternalStatus(resultData.state) || "WAIT_VALIDATION";
+            // L'URL de signature est dans le premier signataire
+            const firstSignerUrl = resultData.signers?.[0]?.url || null;
+            signatureRequest.signingUrl =
+              resultData.signingUrl || firstSignerUrl;
+            await signatureRequest.save();
+
+            publishSignatureStatus(signatureRequest);
+
+            logger.info(
+              `Signature ${signatureType} créée pour ${documentType} ${document.number || documentId}`,
             );
-          const companyName = document.companyInfo?.name || "Votre prestataire";
-          const totalAmount =
-            document.finalTotalTTC ?? document.totalTTC ?? null;
 
-          // Suivi email : même mécanique que l'envoi classique par email.
-          // L'envoi en signature marque le devis « Envoyé » dans la colonne
-          // Suivi ; le pixel et le lien tracké marqueront « Ouvert »/« Consulté ».
-          const trackingToken = crypto.randomBytes(32).toString("hex");
-          const apiBaseUrl =
-            process.env.API_URL ||
-            process.env.NEXT_PUBLIC_API_URL ||
-            process.env.BACKEND_URL ||
-            "http://localhost:4000";
-          const emailSentAt = new Date();
-          // $set de l'objet entier (pas de chemins pointés) : un document dont
-          // emailTracking vaut null ferait échouer la création de sous-champs.
-          await Quote.updateOne(
-            { _id: documentId },
-            {
-              $set: {
+            // Envoyer l'invitation à signer à chaque signataire (sauf cachet entreprise).
+            // L'API n'envoie pas toujours d'email (sandbox) : on garantit l'acheminement
+            // du lien via Resend. Fire-and-forget pour ne pas bloquer la réponse.
+            if (signatureType !== "QES_automatic") {
+              const apiSigners = Array.isArray(resultData.signers)
+                ? resultData.signers
+                : [];
+              // Associer chaque URL renvoyée par l'API au signataire correspondant
+              // (par email si disponible, sinon par position).
+              const signerUrls = signers.map((s, i) => {
+                const match =
+                  apiSigners.find(
+                    (as) =>
+                      as?.email &&
+                      s?.email &&
+                      as.email.toLowerCase() === s.email.toLowerCase(),
+                  ) ||
+                  apiSigners[i] ||
+                  {};
+                // L'URL générale de la demande ne sert qu'à un signataire unique :
+                // chaque signataire ne reçoit que son propre lien
+                return {
+                  email: s.email,
+                  name: s.name,
+                  surname: s.surname,
+                  url:
+                    match.url ||
+                    (signers.length === 1 ? signatureRequest.signingUrl : null),
+                };
+              });
+
+              // Conserver l'URL individuelle de chaque signataire : cible de la
+              // redirection du lien tracké /tracking/sign/:token/:index
+              signerUrls.forEach((s, i) => {
+                if (signatureRequest.signers[i]) {
+                  signatureRequest.signers[i].signingUrl = s.url || null;
+                }
+              });
+              await signatureRequest.save();
+
+              const documentNumber =
+                `${document.prefix || ""}-${document.number || ""}`.replace(
+                  /^-/,
+                  "",
+                );
+              const companyName =
+                document.companyInfo?.name || "Votre prestataire";
+              const totalAmount =
+                document.finalTotalTTC ?? document.totalTTC ?? null;
+
+              // Suivi email : même mécanique que l'envoi classique par email.
+              // L'envoi en signature marque le devis « Envoyé » dans la colonne
+              // Suivi ; le pixel et le lien tracké marqueront « Ouvert »/« Consulté ».
+              const trackingToken = crypto.randomBytes(32).toString("hex");
+              const apiBaseUrl =
+                process.env.API_URL ||
+                process.env.NEXT_PUBLIC_API_URL ||
+                process.env.BACKEND_URL ||
+                "http://localhost:4000";
+              const emailSentAt = new Date();
+              // $set de l'objet entier (pas de chemins pointés) : un document dont
+              // emailTracking vaut null ferait échouer la création de sous-champs.
+              await Quote.updateOne(
+                { _id: documentId },
+                {
+                  $set: {
+                    emailTracking: {
+                      trackingToken,
+                      emailSentAt,
+                      emailOpenedAt: null,
+                      emailOpenCount: 0,
+                      emailClickedAt: null,
+                      emailClickCount: 0,
+                    },
+                  },
+                },
+              );
+              publishEmailTrackingUpdate({
+                documentId: documentId.toString(),
+                documentType: "quote",
+                workspaceId: context.workspaceId.toString(),
                 emailTracking: {
-                  trackingToken,
-                  emailSentAt,
+                  emailSentAt: emailSentAt.toISOString(),
                   emailOpenedAt: null,
                   emailOpenCount: 0,
                   emailClickedAt: null,
                   emailClickCount: 0,
                 },
-              },
-            },
-          );
-          publishEmailTrackingUpdate({
-            documentId: documentId.toString(),
-            documentType: "quote",
-            workspaceId: context.workspaceId.toString(),
-            emailTracking: {
-              emailSentAt: emailSentAt.toISOString(),
-              emailOpenedAt: null,
-              emailOpenCount: 0,
-              emailClickedAt: null,
-              emailClickCount: 0,
-            },
-          });
+              });
 
-          sendSignatureInvitations({
-            signerUrls: signerUrls.map((s, i) => ({
-              ...s,
-              trackedUrl: `${apiBaseUrl}/tracking/sign/${trackingToken}/${i}`,
-            })),
-            companyName,
-            documentNumber: documentNumber || document.number || "",
-            totalAmount:
-              totalAmount != null
-                ? new Intl.NumberFormat("fr-FR", {
-                    style: "currency",
-                    currency: "EUR",
-                  }).format(totalAmount)
-                : null,
-            qualified: signatureType === "QES_otp",
-            trackingPixelUrl: `${apiBaseUrl}/tracking/open/${trackingToken}`,
-          })
-            .then(({ resendMessageId }) => {
-              // Second signal d'ouverture via le webhook Resend email.opened,
-              // utile quand le pixel est bloqué par le client mail.
-              if (resendMessageId) {
-                return Quote.updateOne(
-                  { _id: documentId },
-                  {
-                    $set: {
-                      "emailTracking.resendMessageId": resendMessageId,
-                    },
-                  },
+              sendSignatureInvitations({
+                signerUrls: signerUrls.map((s, i) => ({
+                  ...s,
+                  trackedUrl: `${apiBaseUrl}/tracking/sign/${trackingToken}/${i}`,
+                })),
+                companyName,
+                documentNumber: documentNumber || document.number || "",
+                totalAmount:
+                  totalAmount != null
+                    ? new Intl.NumberFormat("fr-FR", {
+                        style: "currency",
+                        currency: "EUR",
+                      }).format(totalAmount)
+                    : null,
+                qualified: signatureType === "QES_otp",
+                trackingPixelUrl: `${apiBaseUrl}/tracking/open/${trackingToken}`,
+              })
+                .then(({ resendMessageId }) => {
+                  // Second signal d'ouverture via le webhook Resend email.opened,
+                  // utile quand le pixel est bloqué par le client mail.
+                  if (resendMessageId) {
+                    return Quote.updateOne(
+                      { _id: documentId },
+                      {
+                        $set: {
+                          "emailTracking.resendMessageId": resendMessageId,
+                        },
+                      },
+                    );
+                  }
+                })
+                .catch((err) =>
+                  logger.error(
+                    `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
+                  ),
                 );
-              }
-            })
-            .catch((err) =>
-              logger.error(
-                `Envoi invitations signature (devis ${documentNumber}): ${err.message}`,
-              ),
+            }
+
+            return {
+              success: true,
+              message: "Demande de signature envoyée avec succès",
+              signatureRequest,
+            };
+          } catch (error) {
+            logger.error("Erreur création signature:", error);
+
+            if (error instanceof AppError) {
+              throw error;
+            }
+
+            throw new AppError(
+              error.message ||
+                "Erreur lors de la création de la demande de signature",
+              ERROR_CODES.INTERNAL_ERROR,
             );
-        }
-
-        return {
-          success: true,
-          message: "Demande de signature envoyée avec succès",
-          signatureRequest,
-        };
-      } catch (error) {
-        logger.error("Erreur création signature:", error);
-
-        if (error instanceof AppError) {
-          throw error;
-        }
-
-        throw new AppError(
-          error.message ||
-            "Erreur lors de la création de la demande de signature",
-          ERROR_CODES.INTERNAL_ERROR,
-        );
-      }
-    }),
+          }
+        },
+        { ttlMs: 120_000, waitMs: 60_000 },
+      ),
+    ),
 
     /**
      * Apposer un cachet qualifié (QES automatique) sur le document signé d'un devis.
