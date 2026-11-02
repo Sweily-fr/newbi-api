@@ -30,6 +30,10 @@ import mongoose from "mongoose";
 import { getPubSub, cacheDel } from "../config/redis.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
+  kanbanFileType,
+  isSafeImageFileName,
+} from "../utils/kanbanFileTypes.js";
+import {
   sendShareAccessApprovedEmail,
   sendShareAccessRejectedEmail,
 } from "../utils/mailer.js";
@@ -2139,7 +2143,14 @@ const resolvers = {
         // Traiter le fichier uploadé
         const { createReadStream, filename, mimetype } = await file;
 
-        if (!mimetype.startsWith("image/")) {
+        // Image JPEG, PNG, GIF ou WebP d'après le type déclaré ET l'extension
+        // (uploadImage sert le type de l'extension : jamais de SVG)
+        if (
+          !kanbanFileType(filename, mimetype)?.contentType.startsWith(
+            "image/",
+          ) ||
+          !isSafeImageFileName(filename)
+        ) {
           return {
             success: false,
             message: "Le fichier doit être une image",
@@ -2320,7 +2331,12 @@ const resolvers = {
           "image/gif",
           "image/webp",
         ];
-        if (!validMimeTypes.includes(mimetype)) {
+        // Type déclaré accepté (il décide du type servi, voir kanbanFileTypes.js)
+        const fileType = kanbanFileType(filename, mimetype);
+        if (
+          !validMimeTypes.includes(mimetype) ||
+          !fileType?.contentType.startsWith("image/")
+        ) {
           return {
             success: false,
             image: null,
@@ -2347,6 +2363,8 @@ const resolvers = {
           task._id.toString(),
           `visitor_${visitorEmail.replace("@", "_at_")}`,
           "comment",
+          null,
+          mimetype,
         );
 
         // Créer l'objet image

@@ -2,6 +2,7 @@
 import { GraphQLUpload } from "graphql-upload";
 import { Board, Task } from "../models/kanban.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { kanbanFileType } from "../utils/kanbanFileTypes.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
@@ -158,7 +159,12 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          if (!VALID_MIME_TYPES.includes(mimetype)) {
+          // Type déclaré accepté : il décide du type servi et de l'extension
+          // de la clé (jamais de SVG ni de HTML dans le bucket public)
+          if (
+            !VALID_MIME_TYPES.includes(mimetype) ||
+            !kanbanFileType(filename, mimetype)
+          ) {
             return {
               success: false,
               image: null,
@@ -196,6 +202,8 @@ const taskImageResolvers = {
             taskId,
             user.id,
             imageType,
+            null,
+            mimetype,
           );
 
           // Créer l'objet image
@@ -499,7 +507,12 @@ const taskImageResolvers = {
         const fileBuffer = Buffer.concat(chunks);
 
         // Valider le type de fichier
-        if (!VALID_MIME_TYPES.includes(mimetype)) {
+        // Type déclaré ET extension (le type servi vient de l'extension :
+        // jamais de SVG ni de HTML dans le bucket public)
+        if (
+          !VALID_MIME_TYPES.includes(mimetype) ||
+          !kanbanFileType(filename, mimetype)
+        ) {
           return {
             success: false,
             image: null,
@@ -525,6 +538,7 @@ const taskImageResolvers = {
           user.id,
           "comment",
           commentId,
+          mimetype,
         );
 
         // Créer l'objet image
