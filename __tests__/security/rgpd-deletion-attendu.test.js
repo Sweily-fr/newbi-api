@@ -79,8 +79,8 @@ beforeAll(async () => {
     "organization",
     "invitation",
     "subscription",
-    "kanbanprojects",
-    "kanbantasks",
+    // Tableaux, colonnes et cartes : modèles mongoose ci-dessus
+    "kanban_collab_docs",
     "calendar_feed_tokens",
     "calendar_digest_log",
   ]) {

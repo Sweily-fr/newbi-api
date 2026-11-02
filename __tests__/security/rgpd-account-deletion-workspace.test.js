@@ -28,12 +28,15 @@ vi.hoisted(() => {
     process.env.CALENDAR_ENCRYPTION_KEY || "a".repeat(64);
 });
 
+// Pièces jointes des cartes effacées du bucket kanban
+const deleteTaskImage = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
     signatureBucketName: "signatures-test",
     client: {
       send: vi.fn().mockResolvedValue({ Contents: [], IsTruncated: false }),
     },
+    deleteTaskImage,
   },
 }));
 
@@ -52,6 +55,7 @@ import EmailSettings from "../../src/models/EmailSettings.js";
 import DocumentSettings from "../../src/models/DocumentSettings.js";
 import Notification from "../../src/models/Notification.js";
 import DeletionRequest from "../../src/models/DeletionRequest.js";
+import { Board, Column, Task } from "../../src/models/kanban.js";
 import rgpdResolvers from "../../src/resolvers/rgpd.js";
 import { processAccountDeletions } from "../../src/jobs/processAccountDeletions.js";
 
@@ -61,10 +65,14 @@ const org = buildOrganizationId();
 
 const db = () => mongoose.connection.db;
 
-// Collections de l'espace effacées par la suppression (filtre workspaceId)
+// Collections de l'espace effacées par la suppression (filtre workspaceId) :
+// kanban sous ses vrais noms (boards, columns, tasks), pas kanbanprojects /
+// kanbantasks qui n'existent pas
 const WORKSPACE_COLLECTIONS = [
-  "kanbanprojects",
-  "kanbantasks",
+  "boards",
+  "columns",
+  "tasks",
+  "kanbantemplates",
   "transactions",
   "purchaseinvoices",
   "suppliers",
@@ -77,10 +85,27 @@ async function seedUser(_id, email) {
   await User.collection.insertOne({ _id, email, createdAt: new Date() });
 }
 
+const kanbanTaskId = new mongoose.Types.ObjectId();
+
 async function seedWorkspaceData() {
   for (const name of WORKSPACE_COLLECTIONS) {
-    await db().collection(name).insertOne({ workspaceId: org, label: name });
+    await db()
+      .collection(name)
+      .insertOne({
+        ...(name === "tasks"
+          ? {
+              _id: kanbanTaskId,
+              images: [{ key: `${kanbanTaskId}/u1/description/photo.jpg` }],
+            }
+          : {}),
+        workspaceId: org,
+        label: name,
+      });
   }
+  // Description collaborative d'une carte (rattachée par taskId)
+  await db()
+    .collection("kanban_collab_docs")
+    .insertOne({ taskId: String(kanbanTaskId), field: "description" });
   for (const Model of SETTINGS_MODELS) {
     await Model.collection.insertOne({ workspaceId: org });
   }
@@ -131,6 +156,9 @@ async function workspaceState() {
       workspaceId: org,
     });
   }
+  counts.kanban_collab_docs = await db()
+    .collection("kanban_collab_docs")
+    .countDocuments({ taskId: String(kanbanTaskId) });
   counts.qontoaccounts = await db()
     .collection("qontoaccounts")
     .countDocuments({ organizationId: String(org) });
@@ -200,6 +228,9 @@ beforeAll(async () => {
       Product,
       Notification,
       DeletionRequest,
+      Board,
+      Column,
+      Task,
       ...SETTINGS_MODELS,
     ].map((Model) => Model.init()),
   );
@@ -212,6 +243,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await clearMongo();
+  deleteTaskImage.mockClear();
   invalidateOrgCache();
   await seedUser(leaver, "leaver@test.fr");
   await seedUser(colleague, "colleague@test.fr");
@@ -232,6 +264,7 @@ describe("confirmAccountDeletion", () => {
     expect(result.success).toBe(true);
     expect(result.summary.organizationDeleted).toBe(false);
     await expectWorkspaceKept();
+    expect(deleteTaskImage).not.toHaveBeenCalled();
     await expectAccountDeleted();
     expect(
       await db()
@@ -263,11 +296,39 @@ describe("confirmAccountDeletion", () => {
   it("le dernier membre emporte l'espace, comme avant", async () => {
     await seedOrgMembership({ userId: leaver, organizationId: org });
     await seedWorkspaceData();
+    // Kanban d'un autre espace : jamais touché
+    const otherOrg = buildOrganizationId();
+    const otherTaskId = new mongoose.Types.ObjectId();
+    await db().collection("boards").insertOne({ workspaceId: otherOrg });
+    await db()
+      .collection("tasks")
+      .insertOne({ _id: otherTaskId, workspaceId: otherOrg });
+    await db()
+      .collection("kanban_collab_docs")
+      .insertOne({ taskId: String(otherTaskId), field: "description" });
 
     const result = await confirm();
 
     expect(result.summary.organizationDeleted).toBe(true);
     expect(result.summary.invoicesAnonymized).toBe(1);
+    // Tableaux réellement supprimés (avant : collection inexistante, 0)
+    expect(result.summary.kanbanProjectsDeleted).toBe(1);
+    // Pièce jointe de la carte effacée du bucket kanban (après validation)
+    await vi.waitFor(() =>
+      expect(deleteTaskImage).toHaveBeenCalledWith(
+        `${kanbanTaskId}/u1/description/photo.jpg`,
+      ),
+    );
+    for (const name of ["boards", "tasks"]) {
+      expect(
+        await db().collection(name).countDocuments({ workspaceId: otherOrg }),
+      ).toBe(1);
+    }
+    expect(
+      await db()
+        .collection("kanban_collab_docs")
+        .countDocuments({ taskId: String(otherTaskId) }),
+    ).toBe(1);
     const counts = await workspaceState();
     for (const [name, count] of Object.entries(counts)) {
       expect(count, `${name} doit être supprimé`).toBe(0);
@@ -316,7 +377,11 @@ describe("processAccountDeletions (demande différée)", () => {
   });
 
   it("garde l'espace d'un membre (non super admin) qui part", async () => {
-    await seedOrgMembership({ userId: leaver, organizationId: org, role: "admin" });
+    await seedOrgMembership({
+      userId: leaver,
+      organizationId: org,
+      role: "admin",
+    });
     await seedOrgMembership({ userId: colleague, organizationId: org });
     await seedWorkspaceData();
     await schedulePastRequest();
