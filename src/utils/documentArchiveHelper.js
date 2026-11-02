@@ -110,20 +110,21 @@ export async function archiveDocumentPdf({
     { fileName },
   );
 
+  const previousArchiveKey = doc.archivedPdfKey;
+  doc.archivedPdfKey = key;
+  doc.archivedPdfStoredAt = new Date();
+  doc.archivedPdfSource = "NEWBI";
+  await doc.save();
+
   await recordReplacedFile({
     workspaceId,
-    previousKey: doc.archivedPdfKey,
+    previousKey: previousArchiveKey,
     key,
     bucket: cloudflareService.documentBuckets?.[docType],
     size: pdfBuffer.length,
     category: "billingDocuments",
     userId: doc.createdBy,
   });
-
-  doc.archivedPdfKey = key;
-  doc.archivedPdfStoredAt = new Date();
-  doc.archivedPdfSource = "NEWBI";
-  await doc.save();
 
   return doc;
 }
