@@ -33,6 +33,10 @@ const SOURCE_MODULES = {
   transaction: "banking",
 };
 
+// Créateur d'une automatisation : nom et e-mail seulement (le type User
+// expose aussi téléphone, coordonnées bancaires, code de parrainage)
+const CREATED_BY_FIELDS = "name email";
+
 /**
  * Une automatisation copie les PDF de sa page source dans un dossier
  * partagé : la créer, la modifier, l'activer ou la lancer exige aussi de
@@ -90,7 +94,7 @@ const documentAutomationResolvers = {
   Query: {
     documentAutomations: scopedQuery(async (_, { workspaceId }) => {
       const automations = await DocumentAutomation.find({ workspaceId })
-        .populate("createdBy")
+        .populate("createdBy", CREATED_BY_FIELDS)
         .sort({ createdAt: -1 });
 
       return automations;
@@ -100,7 +104,7 @@ const documentAutomationResolvers = {
       const automation = await DocumentAutomation.findOne({
         _id: id,
         workspaceId,
-      }).populate("createdBy");
+      }).populate("createdBy", CREATED_BY_FIELDS);
 
       if (!automation) {
         throw createNotFoundError("Automatisation");
@@ -219,6 +223,7 @@ const documentAutomationResolvers = {
 
         return await DocumentAutomation.findById(automation._id).populate(
           "createdBy",
+          CREATED_BY_FIELDS,
         );
       },
     ),
@@ -314,7 +319,7 @@ const documentAutomationResolvers = {
           { runValidators: true },
         );
 
-        return await DocumentAutomation.findById(id).populate("createdBy");
+        return await DocumentAutomation.findById(id).populate("createdBy", CREATED_BY_FIELDS);
       },
     ),
 
@@ -358,6 +363,7 @@ const documentAutomationResolvers = {
 
         return await DocumentAutomation.findById(automation._id).populate(
           "createdBy",
+          CREATED_BY_FIELDS,
         );
       },
     ),
