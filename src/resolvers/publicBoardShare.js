@@ -13,6 +13,12 @@ import { resolveVisitorSession } from "../utils/boardVisitorSession.js";
 import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
+import {
+  withBoardAccess,
+  assertBoardAccess,
+  byBoardArg,
+  byInputBoard,
+} from "../services/kanbanBoardAccess.js";
 import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import mongoose from "mongoose";
@@ -114,6 +120,7 @@ const subscribeAsBoardMember =
     if (!board?.workspaceId) {
       throw new AppError("Tableau non trouvé", ERROR_CODES.NOT_FOUND);
     }
+    await assertBoardAccess(args.boardId, context.user);
     return requireWorkspaceLevel("kanban", "read")(subscribe)(
       parent,
       { ...args, workspaceId: String(board.workspaceId) },
@@ -2801,6 +2808,36 @@ const resolvers = {
     },
   },
 };
+
+// Tableau réservé à une liste de membres : ni ses liens publics, ni ses
+// visiteurs pour qui n'en fait pas partie (voir kanbanBoardAccess.js)
+const boardOfShare = (name) => async (args) => {
+  const shareId = args[name];
+  if (!mongoose.isValidObjectId(shareId)) return null;
+  const share = await PublicBoardShare.findById(shareId)
+    .select("boardId")
+    .lean();
+  return share?.boardId ? String(share.boardId) : null;
+};
+const PUBLIC_SHARE_BOARD_GUARDS = {
+  Query: { getPublicShares: byBoardArg() },
+  Mutation: {
+    createPublicShare: byInputBoard,
+    updatePublicShare: async (args) => boardOfShare("id")(args.input || {}),
+    deletePublicShare: boardOfShare("id"),
+    revokePublicShare: boardOfShare("id"),
+    reactivatePublicShare: boardOfShare("id"),
+    revokeVisitorAccess: boardOfShare("shareId"),
+    unbanVisitor: boardOfShare("shareId"),
+    approveAccessRequest: boardOfShare("shareId"),
+    rejectAccessRequest: boardOfShare("shareId"),
+  },
+};
+for (const [type, guards] of Object.entries(PUBLIC_SHARE_BOARD_GUARDS)) {
+  for (const [name, locate] of Object.entries(guards)) {
+    resolvers[type][name] = withBoardAccess(locate)(resolvers[type][name]);
+  }
+}
 
 // ✅ Phase A.4 — Subscription check on public board share mutations (exclude delete/revoke/unban + public mutations)
 const PUBLIC_SHARE_BLOCK = [

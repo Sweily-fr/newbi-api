@@ -33,6 +33,7 @@ import {
   clientIpOf,
 } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
+import { assertBoardAccess } from "../services/kanbanBoardAccess.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { publishTaskUpdated } from "../resolvers/kanban.js";
@@ -242,6 +243,12 @@ const authenticateOrThrow = async ({
     organization.memberRole,
   );
   if (!levelsAllowLevel(levels, "kanban", "read")) {
+    throw new Error("Accès refusé");
+  }
+  // Tableau réservé à une liste de membres dont l'utilisateur ne fait pas partie
+  try {
+    await assertBoardAccess(task.boardId?.toString(), user);
+  } catch {
     throw new Error("Accès refusé");
   }
   const readOnly = !levelsAllowLevel(levels, "kanban", "write");

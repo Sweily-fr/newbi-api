@@ -5,6 +5,7 @@ import cloudflareService from "../services/cloudflareService.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
+import { withBoardAccess, byTaskArg } from "../services/kanbanBoardAccess.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -660,8 +661,11 @@ const taskImageResolvers = {
 };
 
 // ✅ Phase A.4 — Subscription check on all task image mutations
+// (et tableau réservé à une liste de membres : voir kanbanBoardAccess.js)
 Object.keys(taskImageResolvers.Mutation).forEach((name) => {
-  const original = taskImageResolvers.Mutation[name];
+  const original = withBoardAccess(byTaskArg())(
+    taskImageResolvers.Mutation[name],
+  );
   taskImageResolvers.Mutation[name] = async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
     return original(parent, args, context, info);
