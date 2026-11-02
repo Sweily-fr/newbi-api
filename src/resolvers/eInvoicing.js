@@ -8,6 +8,7 @@ import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js"
 import superPdpService from "../services/superPdpService.js";
 import eInvoiceRoutingService from "../services/eInvoiceRoutingService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { recordReplacedFile } from "../services/storage/storageService.js";
 import Invoice from "../models/Invoice.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { assertInvoiceResendable } from "../utils/eInvoiceLock.js";
@@ -576,11 +577,24 @@ const eInvoicingResolvers = {
         { source: "NEWBI", fileName },
       );
 
+      const previousArchiveKey = invoice.archivedPdfKey;
       invoice.archivedPdfKey = uploadResult.key;
       invoice.archivedPdfUrl = null; // bucket privé : pas d'URL publique
       invoice.archivedPdfStoredAt = new Date();
       invoice.archivedPdfSource = "NEWBI";
       await invoice.save();
+
+      // Archive légale d'une facture émise : jamais refusée pour manque de
+      // stockage, mais comptée
+      await recordReplacedFile({
+        workspaceId,
+        previousKey: previousArchiveKey,
+        key: uploadResult.key,
+        bucket: cloudflareService.invoicesBucketName,
+        size: pdfBuffer.length,
+        category: "billingDocuments",
+        userId: context.user?.id,
+      });
 
       logger.info(
         `🗄️ PDF Factur-X archivé sur R2 pour la facture ${invoiceId} (${uploadResult.key})`,

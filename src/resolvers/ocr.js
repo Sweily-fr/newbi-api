@@ -13,6 +13,11 @@ import mongoose from "mongoose";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { getActiveOrganizationCached } from "../middlewares/org-cache.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+} from "../services/storage/storageService.js";
 import ocrCacheService from "../services/ocrCacheService.js";
 import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
@@ -91,6 +96,20 @@ const ocrResolvers = {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
+          // Le fichier est conservé dans l'espace : il doit y tenir. Seul un
+          // espace dont l'utilisateur est membre est contrôlé et compté.
+          const requestedOrg = workspaceId || contextOrgId;
+          const storageOrg = requestedOrg
+            ? await getActiveOrganizationCached(
+                String(user._id || user.id),
+                requestedOrg,
+              ).catch(() => null)
+            : null;
+          const storageWorkspaceId = storageOrg?.id || null;
+          if (storageWorkspaceId) {
+            await assertStorageAvailable(storageWorkspaceId, fileBuffer.length);
+          }
+
           // Hash du contenu pour le cache
           const contentHash = crypto
             .createHash("sha256")
@@ -162,6 +181,14 @@ const ocrResolvers = {
                   "ocr",
                   fallbackOrgId,
                 );
+                await recordStoredFile({
+                  workspaceId: storageWorkspaceId,
+                  key: uploadResult?.key,
+                  bucket: cloudflareService.ocrBucketName,
+                  size: fileBuffer.length,
+                  category: "purchaseInvoices",
+                  userId: user.id,
+                });
 
                 if (!uploadResult?.url) {
                   throw new Error("Échec upload Cloudflare");
@@ -249,6 +276,14 @@ const ocrResolvers = {
               );
               documentUrl = uploadResult.url;
               cloudflareKey = uploadResult.key;
+              await recordStoredFile({
+                workspaceId: storageWorkspaceId,
+                key: uploadResult.key,
+                bucket: cloudflareService.ocrBucketName,
+                size: fileBuffer.length,
+                category: "purchaseInvoices",
+                userId: user.id,
+              });
             } catch (uploadErr) {
               console.error(
                 "❌ Erreur upload Cloudflare (OCR) :",

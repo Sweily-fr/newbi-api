@@ -11,6 +11,12 @@ import {
   requireWorkspaceAction,
 } from "../middlewares/rbac.js";
 import cloudflareService from "../services/cloudflareService.js";
+import EmailSignature from "../models/EmailSignature.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import User from "../models/User.js";
 import {
   createValidationError,
@@ -145,6 +151,17 @@ const imageUploadResolvers = {
             `🔄 Upload ${imageType} pour signature ${signatureId} par utilisateur ${user.id}`,
           );
 
+          // Espace de la signature (si elle est déjà enregistrée)
+          const signature = /^[a-f\d]{24}$/i.test(String(signatureId))
+            ? await EmailSignature.findById(signatureId)
+                .select("workspaceId")
+                .lean()
+            : null;
+          const signatureWorkspaceId = signature?.workspaceId || null;
+          if (signatureWorkspaceId) {
+            await assertStorageAvailable(signatureWorkspaceId, fileBuffer.length);
+          }
+
           // Upload vers Cloudflare avec la nouvelle méthode
           const result = await cloudflareService.uploadSignatureImage(
             fileBuffer,
@@ -153,6 +170,16 @@ const imageUploadResolvers = {
             signatureId,
             imageType,
           );
+          if (signatureWorkspaceId) {
+            await recordStoredFile({
+              workspaceId: signatureWorkspaceId,
+              key: result.key,
+              bucket: cloudflareService.signatureBucketName,
+              size: fileBuffer.length,
+              category: "branding",
+              userId: user.id,
+            });
+          }
 
           return {
             success: true,
@@ -162,6 +189,7 @@ const imageUploadResolvers = {
             message: "Image uploadée avec succès",
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("Erreur upload image signature:", error);
 
           if (

@@ -42,6 +42,13 @@ const storage = vi.hoisted(() => ({
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: storage,
 }));
+// Compteur de stockage : couvert par ses propres tests. Ici, la place est
+// toujours disponible (sans attendre un premier calcul de l'espace, qui
+// ferait déborder la conservation des fichiers sur le test suivant)
+vi.mock("../../src/services/storage/storageService.js", () => ({
+  hasStorageAvailable: async () => true,
+  recordStoredFile: async () => {},
+}));
 vi.mock("axios", () => ({
   default: {
     post: vi.fn().mockResolvedValue({ data: Buffer.from("%PDF-1.4") }),

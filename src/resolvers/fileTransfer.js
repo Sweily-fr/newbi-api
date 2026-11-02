@@ -40,6 +40,12 @@ import {
   normalizeTransferCreationOptions,
 } from "../utils/transferOptions.js";
 import { deleteTransferStorage } from "../utils/transferStorage.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordTransferRemoved,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -504,6 +510,7 @@ const fileTransferResolvers = {
             if (file.storageType !== "r2") deleteFile(file.filePath);
           }
           await deleteTransferStorage(fileTransfer);
+          await recordTransferRemoved(fileTransfer);
 
           return true;
         } catch (error) {
@@ -796,6 +803,16 @@ const fileTransferResolvers = {
             zipName = "Documents.zip";
           }
 
+          // Espace de stockage : le ZIP (au plus la somme des documents
+          // sources) doit y tenir
+          await assertStorageAvailable(
+            workspaceId,
+            allDocumentsToZip.reduce(
+              (sum, { document: doc }) => sum + (Number(doc.fileSize) || 0),
+              0,
+            ),
+          );
+
           // 5. ZIP construit à la volée et envoyé en même temps vers le
           // bucket des transferts (jamais entièrement en mémoire), un
           // document source ouvert à la fois
@@ -898,6 +915,14 @@ const fileTransferResolvers = {
           // Générer les liens de partage
           await fileTransfer.generateShareCredentials();
           await fileTransfer.save();
+          await recordStoredFile({
+            workspaceId,
+            key: result.key,
+            bucket: cloudflareTransferService.bucketName,
+            size: result.size,
+            category: "transfers",
+            userId: user.id,
+          });
 
           // Envoyer l'email si un destinataire est spécifié
           if (
@@ -942,6 +967,7 @@ const fileTransferResolvers = {
             accessKey: fileTransfer.accessKey,
           };
         } catch (error) {
+          rethrowStorageError(error);
           if (error instanceof UserInputError) {
             throw error;
           }

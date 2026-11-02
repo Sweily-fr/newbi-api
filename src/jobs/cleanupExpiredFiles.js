@@ -11,6 +11,7 @@ import { deleteFile } from "../utils/fileTransferUtils.js";
 import { deleteFileFromR2 } from "../utils/chunkUploadR2Utils.js";
 import { transferPreviewKey } from "../utils/transferStorage.js";
 import logger from "../utils/logger.js";
+import { recordTransferRemoved } from "../services/storage/storageService.js";
 
 /**
  * Marque les transferts de fichiers expirés et supprime immédiatement les fichiers R2
@@ -85,6 +86,8 @@ async function markExpiredTransfersAndDeleteR2() {
       }
 
       await transfer.save();
+      // Transfert expiré : ses fichiers sortent de l'espace de stockage
+      await recordTransferRemoved(transfer);
       logger.info(
         `✅ Transfert ${transfer._id} marqué comme ${transfer.status}`
       );

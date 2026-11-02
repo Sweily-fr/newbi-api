@@ -4,6 +4,11 @@ import logger from "../utils/logger.js";
  */
 
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { GraphQLUpload } from "graphql-upload";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
@@ -234,6 +239,32 @@ const documentUploadResolvers = {
           );
         }
 
+        // Espace de stockage de l'espace qui reçoit le fichier (logo, OCR,
+        // facture importée ; fichier temporaire d'un scan : espace actif)
+        const STORAGE_CATEGORY_BY_FOLDER = {
+          imgCompany: "branding",
+          ocr: "purchaseInvoices",
+          importedInvoice: "importedDocuments",
+          temp: "purchaseInvoices",
+        };
+        let storageWorkspaceId =
+          organizationId && organizationId !== user.id ? organizationId : null;
+        if (finalFolderType === "temp") {
+          const requestedOrgId =
+            req?.headers?.["x-organization-id"] ||
+            req?.headers?.["x-workspace-id"];
+          const activeOrg = requestedOrgId
+            ? await getActiveOrganizationCached(
+                user._id?.toString() || user.id,
+                requestedOrgId,
+              )
+            : null;
+          storageWorkspaceId = activeOrg?.id || null;
+        }
+        if (storageWorkspaceId) {
+          await assertStorageAvailable(storageWorkspaceId, fileBuffer.length);
+        }
+
         // Upload vers Cloudflare R2
         logger.debug(
           "📤 DocumentUpload - Appel cloudflareService avec finalFolderType:",
@@ -246,6 +277,15 @@ const documentUploadResolvers = {
           finalFolderType,
           organizationId,
         );
+        if (storageWorkspaceId) {
+          await recordStoredFile({
+            workspaceId: storageWorkspaceId,
+            key: uploadResult.key,
+            size: fileBuffer.length,
+            category: STORAGE_CATEGORY_BY_FOLDER[finalFolderType] || "other",
+            userId: user.id,
+          });
+        }
 
         return {
           success: true,
@@ -257,6 +297,7 @@ const documentUploadResolvers = {
           message: "Document uploadé avec succès",
         };
       } catch (error) {
+        rethrowStorageError(error);
         console.error("❌ Erreur upload document:", error);
 
         return {

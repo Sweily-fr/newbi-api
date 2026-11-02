@@ -34,6 +34,11 @@ import {
   isSafeImageFileName,
 } from "../utils/kanbanFileTypes.js";
 import {
+  assertStorageAvailable,
+  recordStoredFile,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
+import {
   sendShareAccessApprovedEmail,
   sendShareAccessRejectedEmail,
 } from "../utils/mailer.js";
@@ -2355,6 +2360,9 @@ const resolvers = {
           };
         }
 
+        // Espace de stockage de l'espace qui partage le tableau
+        await assertStorageAvailable(task.workspaceId, fileBuffer.length);
+
         // Upload vers Cloudflare R2, dans le dossier de ce visiteur pour
         // cette tâche (seul dossier accepté ensuite par addExternalComment)
         const uploadResult = await cloudflareService.uploadTaskImage(
@@ -2366,6 +2374,13 @@ const resolvers = {
           null,
           mimetype,
         );
+        await recordStoredFile({
+          workspaceId: task.workspaceId,
+          key: uploadResult.key,
+          bucket: cloudflareService.kanbanBucketName,
+          size: uploadResult.fileSize,
+          category: "kanban",
+        });
 
         // Créer l'objet image
         const newImage = {
@@ -2389,6 +2404,7 @@ const resolvers = {
           message: "Image uploadée avec succès",
         };
       } catch (error) {
+        rethrowStorageError(error);
         logger.error("❌ [PublicShare] Erreur upload image externe:", error);
         return {
           success: false,

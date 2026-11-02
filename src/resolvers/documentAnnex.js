@@ -1,5 +1,9 @@
 import { randomUUID } from "crypto";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+} from "../services/storage/storageService.js";
 import { requireAction, resolveWorkspaceId } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
@@ -51,9 +55,19 @@ const uploadAnnex = async (_, { workspaceId: inputWorkspaceId, file }, context) 
     return { success: false, message: inspection.message };
   }
 
+  await assertStorageAvailable(workspaceId, buffer.length);
+
   const key = buildAnnexKey(String(workspaceId), randomUUID());
   try {
     await cloudflareService.uploadDocumentAnnex(key, buffer, workspaceId);
+    await recordStoredFile({
+      workspaceId,
+      key,
+      bucket: cloudflareService.documentAnnexesBucketName,
+      size: buffer.length,
+      category: "billingDocuments",
+      userId: context.user?.id,
+    });
   } catch (error) {
     logger.error("[documentAnnex] Échec de l'envoi sur R2:", error);
     return {

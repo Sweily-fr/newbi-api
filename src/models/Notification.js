@@ -32,6 +32,8 @@ const notificationSchema = new mongoose.Schema(
         "PURCHASE_INVOICE_RECEIVED", // Facture d'achat reçue via e-invoicing (SuperPDP)
         "DOCUMENT_IMPORTED", // Document arrivé d'une plateforme externe (Qonto…)
         "ACCESS_REQUESTED", // Un membre demande l'accès à une page (rôles)
+        "STORAGE_ALMOST_FULL", // Espace de stockage utilisé à 80 %
+        "STORAGE_FULL", // Espace de stockage plein : nouveaux envois refusés
       ],
       index: true,
     },
