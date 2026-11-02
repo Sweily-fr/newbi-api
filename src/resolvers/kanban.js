@@ -1999,15 +1999,18 @@ const resolvers = {
         });
         if (!board) throw boardNotFoundError();
 
-        const favs = board.favoritedBy || [];
-        const isFav = favs.includes(user.id);
-        if (isFav) {
-          board.favoritedBy = favs.filter((uid) => uid !== user.id);
-        } else {
-          board.favoritedBy = [...favs, user.id];
-        }
-        await board.save();
-        return board;
+        // Ajout ou retrait du seul utilisateur, en une écriture atomique :
+        // relire puis réécrire toute la liste perdait le favori d'un autre
+        // membre enregistré au même moment
+        const isFav = (board.favoritedBy || []).includes(user.id);
+        const updated = await Board.findOneAndUpdate(
+          { _id: board._id, workspaceId: board.workspaceId },
+          isFav
+            ? { $pull: { favoritedBy: user.id } }
+            : { $addToSet: { favoritedBy: user.id } },
+          { new: true },
+        );
+        return updated || board;
       },
     ),
 
