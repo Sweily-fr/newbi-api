@@ -85,7 +85,9 @@ export async function getWorkspaceStorageSubscription(workspaceId) {
     .toArray();
   const now = new Date();
   const live =
-    subscriptions.find((s) => ACTIVE_SUBSCRIPTION_STATUSES.includes(s.status)) ||
+    subscriptions.find((s) =>
+      ACTIVE_SUBSCRIPTION_STATUSES.includes(s.status),
+    ) ||
     subscriptions.find(
       (s) =>
         s.status === "canceled" && s.periodEnd && new Date(s.periodEnd) > now,
@@ -170,6 +172,11 @@ export async function refreshWorkspaceStorage(workspaceId, options = {}) {
   }
 }
 
+/** Attend la fin des recalculs en cours sur cette instance (arrêt, tests). */
+export async function waitForStorageRefreshes() {
+  await Promise.allSettled(Array.from(inFlight.values()));
+}
+
 function withTimeout(promise, ms) {
   let timer;
   return Promise.race([
@@ -252,7 +259,11 @@ export async function getWorkspaceStorageState(workspaceId, options = {}) {
 }
 
 /** Message lisible du refus (affiché tel quel par le site et l'app). */
-export function storageQuotaExceededMessage({ usedBytes, quotaBytes, incomingBytes }) {
+export function storageQuotaExceededMessage({
+  usedBytes,
+  quotaBytes,
+  incomingBytes,
+}) {
   const fileLine =
     incomingBytes > 0
       ? `Ce fichier (${formatBytes(incomingBytes)}) ne peut pas être enregistré.`
@@ -282,7 +293,9 @@ export async function assertStorageAvailable(workspaceId, bytes, options = {}) {
     });
   } catch (error) {
     // Compteur indisponible : on n'empêche pas l'envoi
-    logger.warn(`[storage] Contrôle impossible (${workspaceId}) : ${error.message}`);
+    logger.warn(
+      `[storage] Contrôle impossible (${workspaceId}) : ${error.message}`,
+    );
     return null;
   }
   if (!state.ready) return state;
@@ -340,7 +353,9 @@ async function readPending(workspaceId) {
     if (client) {
       entries = (await client.hgetall(pendingKey(workspaceId))) || {};
     } else {
-      entries = Object.fromEntries(memoryPending.get(String(workspaceId)) || []);
+      entries = Object.fromEntries(
+        memoryPending.get(String(workspaceId)) || [],
+      );
     }
   } catch {
     entries = Object.fromEntries(memoryPending.get(String(workspaceId)) || []);
@@ -394,7 +409,11 @@ export async function releasePendingUploads(workspaceId, uploadIds = []) {
  * Contrôle d'un fichier de transfert : sa taille plus celle des autres
  * fichiers en cours d'envoi dans l'espace doit tenir dans le quota.
  */
-export async function assertTransferStorageAvailable(workspaceId, uploadId, bytes) {
+export async function assertTransferStorageAvailable(
+  workspaceId,
+  uploadId,
+  bytes,
+) {
   if (!isValidWorkspaceId(workspaceId)) return null;
   const pending = await readPending(workspaceId);
   const state = await assertStorageAvailable(
@@ -598,7 +617,10 @@ async function billingRecipients(workspaceId) {
   const recipients = [];
   for (const member of members) {
     try {
-      const levels = await getEffectiveLevelsFor(String(workspaceId), member.role);
+      const levels = await getEffectiveLevelsFor(
+        String(workspaceId),
+        member.role,
+      );
       if (hasPermission(member.role, "billing", "view", levels)) {
         recipients.push(member.userId);
       }
@@ -643,7 +665,8 @@ export async function checkStorageAlerts(workspaceId) {
   const alert = ALERTS[level];
   const url = `${process.env.FRONTEND_URL || ""}/dashboard?parametres=stockage`;
   const recipients = await billingRecipients(workspaceId);
-  const { default: Notification } = await import("../../models/Notification.js");
+  const { default: Notification } =
+    await import("../../models/Notification.js");
   const created = [];
   for (const userId of recipients) {
     try {
@@ -678,7 +701,10 @@ export async function checkStorageAlerts(workspaceId) {
  * Recalcule les espaces dont le compteur est marqué périmé, ou plus vieux
  * que RECONCILE_MAX_AGE_MS, ou d'une ancienne version du calcul.
  */
-export async function reconcileWorkspaceStorage({ limit = 50, now = new Date() } = {}) {
+export async function reconcileWorkspaceStorage({
+  limit = 50,
+  now = new Date(),
+} = {}) {
   const docs = await WorkspaceStorageUsage.find(
     {
       $or: [
@@ -712,4 +738,3 @@ export async function reconcileWorkspaceStorage({ limit = 50, now = new Date() }
   }
   return { candidates: docs.length, refreshed };
 }
-

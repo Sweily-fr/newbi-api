@@ -195,7 +195,12 @@ describe("Stockage : recalcul complet", () => {
       .insertOne({
         workspaceId: ws,
         receiptFiles: [
-          { key, url: `https://receipts-bucket.r2.dev/${key}`, size: 2 * MB, uploadedBy: userId.toString() },
+          {
+            key,
+            url: `https://receipts-bucket.r2.dev/${key}`,
+            size: 2 * MB,
+            uploadedBy: userId.toString(),
+          },
         ],
       });
     await db()
@@ -203,7 +208,13 @@ describe("Stockage : recalcul complet", () => {
       .insertOne({
         workspaceId: organizationId,
         createdBy: otherUserId,
-        files: [{ path: key, url: `https://receipts-bucket.r2.dev/${key}`, size: 2 * MB }],
+        files: [
+          {
+            path: key,
+            url: `https://receipts-bucket.r2.dev/${key}`,
+            size: 2 * MB,
+          },
+        ],
       });
 
     const result = await computeWorkspaceStorage(ws);
@@ -217,7 +228,11 @@ describe("Stockage : recalcul complet", () => {
     r2Objects.set(`invoices-bucket/${key}`, 300_000);
     await db()
       .collection("invoices")
-      .insertOne({ workspaceId: organizationId, archivedPdfKey: key, createdBy: userId });
+      .insertOne({
+        workspaceId: organizationId,
+        archivedPdfKey: key,
+        createdBy: userId,
+      });
 
     const first = await computeWorkspaceStorage(ws);
     expect(first.totalBytes).toBe(300_000);
@@ -259,6 +274,7 @@ describe("Stockage : recalcul complet", () => {
           userId,
           status: "active",
           expiryDate: new Date(Date.now() + 86400000),
+          shareLink: "lien-a",
           files: [{ r2Key: "prod/a", size: 4 * MB }],
         },
         {
@@ -266,6 +282,7 @@ describe("Stockage : recalcul complet", () => {
           userId,
           status: "expired",
           expiryDate: new Date(Date.now() - 86400000),
+          shareLink: "lien-b",
           files: [{ r2Key: "prod/b", size: 40 * MB }],
         },
         {
@@ -273,6 +290,7 @@ describe("Stockage : recalcul complet", () => {
           userId,
           status: "active",
           expiryDate: new Date(Date.now() - 1000),
+          shareLink: "lien-c",
           files: [{ r2Key: "prod/c", size: 40 * MB }],
         },
       ]);
@@ -285,8 +303,16 @@ describe("Stockage : recalcul complet", () => {
       .collection("tasks")
       .insertOne({
         workspaceId: organizationId,
-        images: [{ key: "t/1", fileSize: 3 * MB, uploadedBy: userId.toString() }],
-        comments: [{ images: [{ key: "t/2", fileSize: MB, uploadedBy: "external_a@b.fr" }] }],
+        images: [
+          { key: "t/1", fileSize: 3 * MB, uploadedBy: userId.toString() },
+        ],
+        comments: [
+          {
+            images: [
+              { key: "t/2", fileSize: MB, uploadedBy: "external_a@b.fr" },
+            ],
+          },
+        ],
       });
     const result = await computeWorkspaceStorage(ws);
     expect(result.byCategory.kanban).toBe(4 * MB);
@@ -339,7 +365,10 @@ describe("Stockage : état et quota", () => {
   });
 
   it("ignore les packs d'un abonnement qui n'est plus actif", async () => {
-    await setPlan("freelance", { status: "canceled", periodEnd: new Date(Date.now() - 1000) });
+    await setPlan("freelance", {
+      status: "canceled",
+      periodEnd: new Date(Date.now() - 1000),
+    });
     await seedUsage(GB, { packs: { quantity: 2, interval: "month" } });
     const state = await getWorkspaceStorageState(ws);
     expect(state.quotaBytes).toBe(75 * GB);
@@ -374,7 +403,9 @@ describe("Stockage : refus des nouveaux envois", () => {
     await seedUsage(74 * GB);
     const error = await assertStorageAvailable(ws, 2 * GB).catch((e) => e);
     expect(error.code).toBe("STORAGE_QUOTA_EXCEEDED");
-    expect(error.message).toMatch(/Espace de stockage plein : 74 Go utilisés sur 75 Go/);
+    expect(error.message).toMatch(
+      /Espace de stockage plein : 74 Go utilisés sur 75 Go/,
+    );
     expect(error.message).toMatch(/Vos fichiers existants restent disponibles/);
     // Ni lien ni prix dans le message (affiché tel quel par l'app mobile)
     expect(error.message).not.toMatch(/newbi\.fr|€|http/);
@@ -431,27 +462,50 @@ describe("Stockage : compteur à l'envoi et à la suppression", () => {
       category: "kanban",
       userId: userId.toString(),
     });
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.totalBytes).toBe(GB + 5 * MB);
     expect(usage.byCategory.kanban).toBe(5 * MB);
     expect(usage.byUser[userId.toString()]).toBe(GB + 5 * MB);
-    expect((await WorkspaceStorageObject.findOne({ key: "k/1" })).size).toBe(5 * MB);
+    expect((await WorkspaceStorageObject.findOne({ key: "k/1" })).size).toBe(
+      5 * MB,
+    );
   });
 
   it("ne compte que l'écart quand la même clé est réécrite", async () => {
     await seedUsage(0);
-    await recordStoredFile({ workspaceId: ws, key: "a.pdf", size: 100, category: "billingDocuments" });
-    await recordStoredFile({ workspaceId: ws, key: "a.pdf", size: 150, category: "billingDocuments" });
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    await recordStoredFile({
+      workspaceId: ws,
+      key: "a.pdf",
+      size: 100,
+      category: "billingDocuments",
+    });
+    await recordStoredFile({
+      workspaceId: ws,
+      key: "a.pdf",
+      size: 150,
+      category: "billingDocuments",
+    });
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.totalBytes).toBe(150);
     expect(usage.fileCount).toBe(1);
   });
 
   it("retire une suppression de taille connue", async () => {
     await seedUsage(GB);
-    await recordStoredFile({ workspaceId: ws, key: "x", size: 10 * MB, category: "sharedDocuments" });
+    await recordStoredFile({
+      workspaceId: ws,
+      key: "x",
+      size: 10 * MB,
+      category: "sharedDocuments",
+    });
     await recordStoredFileDeleted({ workspaceId: ws, key: "x" });
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.totalBytes).toBe(GB);
     expect(await WorkspaceStorageObject.countDocuments({ key: "x" })).toBe(0);
   });
@@ -459,14 +513,23 @@ describe("Stockage : compteur à l'envoi et à la suppression", () => {
   it("marque le compteur à recalculer quand la taille supprimée est inconnue", async () => {
     await seedUsage(GB);
     await recordStoredFileDeleted({ workspaceId: ws, key: "inconnu" });
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.stale).toBe(true);
     expect(usage.totalBytes).toBe(GB);
   });
 
   it("ne crée pas de compteur avant le premier calcul", async () => {
-    await recordStoredFile({ workspaceId: ws, key: "y", size: 10, category: "kanban" });
-    expect(await WorkspaceStorageUsage.countDocuments({ workspaceId: ws })).toBe(0);
+    await recordStoredFile({
+      workspaceId: ws,
+      key: "y",
+      size: 10,
+      category: "kanban",
+    });
+    expect(
+      await WorkspaceStorageUsage.countDocuments({ workspaceId: ws }),
+    ).toBe(0);
   });
 });
 
@@ -477,14 +540,18 @@ describe("Stockage : réconciliation", () => {
     await markStorageStale(ws);
     const result = await reconcileWorkspaceStorage();
     expect(result.refreshed).toBe(1);
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.totalBytes).toBe(3 * MB);
     expect(usage.stale).toBe(false);
   });
 
   it("recalcule un compteur de plus de 24 h et laisse les autres", async () => {
     await sharedDoc({ fileSize: 3 * MB });
-    await seedUsage(42 * GB, { computedAt: new Date(Date.now() - 25 * 3600 * 1000) });
+    await seedUsage(42 * GB, {
+      computedAt: new Date(Date.now() - 25 * 3600 * 1000),
+    });
     await WorkspaceStorageUsage.create({
       workspaceId: otherWs,
       totalBytes: 7,
@@ -493,7 +560,9 @@ describe("Stockage : réconciliation", () => {
     });
     const result = await reconcileWorkspaceStorage();
     expect(result.candidates).toBe(1);
-    const other = await WorkspaceStorageUsage.findOne({ workspaceId: otherWs }).lean();
+    const other = await WorkspaceStorageUsage.findOne({
+      workspaceId: otherWs,
+    }).lean();
     expect(other.totalBytes).toBe(7);
   });
 });
@@ -515,7 +584,9 @@ describe("Stockage : alertes", () => {
       "STORAGE_FULL",
     ]);
     // Le membre en lecture seule (viewer) ne gère pas l'abonnement
-    expect(notifications.every((n) => String(n.userId) === userId.toString())).toBe(true);
+    expect(
+      notifications.every((n) => String(n.userId) === userId.toString()),
+    ).toBe(true);
     expect(notifications[0].data.url).toMatch(/parametres=stockage/);
   });
 
@@ -525,7 +596,9 @@ describe("Stockage : alertes", () => {
     await checkStorageAlerts(ws);
     await seedUsage(10 * GB);
     await checkStorageAlerts(ws);
-    const usage = await WorkspaceStorageUsage.findOne({ workspaceId: ws }).lean();
+    const usage = await WorkspaceStorageUsage.findOne({
+      workspaceId: ws,
+    }).lean();
     expect(usage.alertLevel).toBe(0);
   });
 });

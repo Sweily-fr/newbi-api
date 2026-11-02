@@ -70,6 +70,7 @@ import chunkUploadR2Resolvers from "../../src/resolvers/chunkUploadR2.js";
 import documentAnnexResolvers from "../../src/resolvers/documentAnnex.js";
 import eInvoicingResolvers from "../../src/resolvers/eInvoicing.js";
 import { archiveDocumentPdf } from "../../src/utils/documentArchiveHelper.js";
+import { waitForStorageRefreshes } from "../../src/services/storage/storageService.js";
 import Quote from "../../src/models/Quote.js";
 import { Task } from "../../src/models/kanban.js";
 
@@ -131,6 +132,9 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Un recalcul lancé en arrière-plan par le test précédent écraserait le
+  // compteur posé ci-dessous
+  await waitForStorageRefreshes();
   await clearMongo();
   invalidateOrgCache();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
