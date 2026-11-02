@@ -411,7 +411,7 @@ export async function fetchProfile({ account, accessToken }) {
       };
     } catch (error) {
       // Page illisible pour ce rôle (lecture réservée aux administrateurs) :
-      // pas un jeton invalide, le compte publie toujours
+      // pas un jeton invalide (un rôle perdu, la publication le dira)
       if (error?.status === 403) {
         throw new DirectApiError(`linkedin : page ${id} illisible`, {
           network: NETWORK,
