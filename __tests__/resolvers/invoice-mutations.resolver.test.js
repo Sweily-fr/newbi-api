@@ -63,6 +63,9 @@ import { reportPaymentIfNeeded } from "../../src/utils/eInvoiceRoutingHelper.js"
 import documentAutomationService from "../../src/services/documentAutomationService.js";
 import { automationService } from "../../src/resolvers/clientAutomation.js";
 
+// Secret de signature des liens de paiement (voir invoicePaymentLink.js)
+process.env.BETTER_AUTH_SECRET ||= "secret-de-test-liens";
+
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
 
