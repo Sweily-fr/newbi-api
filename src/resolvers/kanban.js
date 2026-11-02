@@ -1,5 +1,6 @@
 // resolvers/kanban.js
 import { Board, Column, Task } from "../models/kanban.js";
+import { markStorageStale } from "../services/storage/storageService.js";
 import { AuthenticationError } from "apollo-server-express";
 import {
   checkSubscriptionActive,
@@ -1984,6 +1985,8 @@ const resolvers = {
           .lean();
         await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
         cleanupDeletedTasksFilesLater(deletedTasks);
+        // Images des tâches : recomptées au prochain passage
+        await markStorageStale(finalWorkspaceId);
 
         // Supprimer les colonnes associées au tableau
         await Column.deleteMany({
@@ -3426,6 +3429,13 @@ const resolvers = {
         _id: id,
         workspaceId: finalWorkspaceId,
       });
+      // Images de la tâche : recomptées au prochain passage
+      if (
+        task?.images?.length ||
+        task?.comments?.some((c) => c.images?.length)
+      ) {
+        await markStorageStale(finalWorkspaceId);
+      }
 
       if (result.deletedCount > 0) {
         // Pièces jointes et état collaboratif de la tâche

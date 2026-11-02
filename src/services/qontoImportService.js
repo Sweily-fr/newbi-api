@@ -9,6 +9,7 @@ import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import qontoService from "./qontoService.js";
 import cloudflareService from "./cloudflareService.js";
+import { recordStoredFile } from "./storage/storageService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import Notification from "../models/Notification.js";
 import { publishNotification } from "../resolvers/notification.js";
@@ -120,6 +121,15 @@ async function fetchAttachmentToR2(
     "ocr",
     workspaceId,
   );
+  // Import automatique : jamais refusé, compté dans l'espace de stockage
+  await recordStoredFile({
+    workspaceId,
+    key: upload?.key,
+    bucket: cloudflareService.ocrBucketName,
+    size: file.buffer.length,
+    category: "importedDocuments",
+    userId,
+  });
   return {
     buffer: file.buffer,
     fileName,

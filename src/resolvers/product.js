@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+} from "../services/storage/storageService.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import { boundedPage } from "../utils/pageBounds.js";
 import { assertCustomFieldValues } from "../utils/customFieldValues.js";
@@ -465,6 +469,7 @@ const productResolvers = {
           };
         }
 
+        await assertStorageAvailable(workspaceId, buffer.length);
         const { key, url, contentType } = await cloudflareService.uploadImage(
           buffer,
           "image.webp",
@@ -472,6 +477,14 @@ const productResolvers = {
           "productImage",
           String(workspaceId),
         );
+        await recordStoredFile({
+          workspaceId: String(workspaceId),
+          key,
+          bucket: cloudflareService.companyImagesBucketName,
+          size: buffer.length,
+          category: "branding",
+          userId: context.user.id,
+        });
         return { success: true, key, url, contentType };
       },
     ),

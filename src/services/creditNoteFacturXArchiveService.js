@@ -1,6 +1,7 @@
 import axios from "axios";
 import CreditNote from "../models/CreditNote.js";
 import cloudflareService from "./cloudflareService.js";
+import { recordReplacedFile } from "./storage/storageService.js";
 import logger from "../utils/logger.js";
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -54,6 +55,17 @@ export async function archiveCreditNoteFacturX(creditNote, workspaceId) {
     creditNoteId,
     { fileName },
   );
+
+  // PDF légal généré automatiquement : jamais refusé, mais compté
+  await recordReplacedFile({
+    workspaceId: String(workspaceId),
+    previousKey: creditNote.archivedPdfKey,
+    key,
+    bucket: cloudflareService.documentBuckets?.creditNote,
+    size: pdfBuffer.length,
+    category: "billingDocuments",
+    userId: creditNote.createdBy,
+  });
 
   // 3. Référencer l'archive sur l'avoir (updateOne pour éviter toute course avec
   //    le document Mongoose encore manipulé par le resolver appelant).

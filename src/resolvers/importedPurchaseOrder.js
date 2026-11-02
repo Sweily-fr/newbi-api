@@ -26,6 +26,12 @@ import invoiceExtractionService from "../services/invoiceExtractionService.js";
 import hybridOcrService from "../services/hybridOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
+import {
   createValidationError,
   createNotFoundError,
   createInternalServerError,
@@ -550,6 +556,7 @@ const importedPurchaseOrderResolvers = {
         // Upload Cloudflare en premier (indispensable, on a toujours besoin
         // de stocker le PDF même si l'OCR n'aboutit pas).
         logger.debug(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
+        await assertStorageAvailable(workspaceId, fileBuffer.length);
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
@@ -557,6 +564,13 @@ const importedPurchaseOrderResolvers = {
           "importedPurchaseOrder",
           organizationId,
         );
+        await recordStoredFile({
+          workspaceId,
+          key: uploadResult.key,
+          size: fileBuffer.length,
+          category: "importedDocuments",
+          userId: user.id,
+        });
 
         // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
         // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition
@@ -685,6 +699,7 @@ const importedPurchaseOrderResolvers = {
           isDuplicate,
         };
       } catch (error) {
+        rethrowStorageError(error);
         console.error("Erreur importPurchaseOrderDirect:", error);
         return {
           success: false,
@@ -803,6 +818,12 @@ const importedPurchaseOrderResolvers = {
               cloudflareKey,
               cloudflareService.importedInvoicesBucketName,
             );
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: cloudflareKey,
+              size: po.file?.fileSize,
+              category: "importedDocuments",
+            });
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
           }
@@ -828,6 +849,12 @@ const importedPurchaseOrderResolvers = {
                 cloudflareKey,
                 cloudflareService.importedInvoicesBucketName,
               );
+              await recordStoredFileDeleted({
+                workspaceId,
+                key: cloudflareKey,
+                size: po.file?.fileSize,
+                category: "importedDocuments",
+              });
             } catch (error) {
               console.error(
                 `⚠️ Erreur suppression Cloudflare: ${error.message}`,

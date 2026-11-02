@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import esignatureService from "./esignatureService.js";
 import { buildProofCertificatePdf } from "./esignatureCertificate.js";
 import logger from "../utils/logger.js";
+import { markStorageStale } from "./storage/storageService.js";
 
 const r2Client = () =>
   new S3Client({
@@ -139,6 +140,11 @@ export async function storeSignedDocuments(signatureRequest) {
     }
 
     await signatureRequest.save();
+    // Documents signés : jamais refusés (preuve de signature), comptés au
+    // prochain recalcul de l'espace
+    await markStorageStale(
+      signatureRequest.workspaceId || signatureRequest.organizationId,
+    );
     return true;
   } catch (error) {
     logger.error(

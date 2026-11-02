@@ -4,6 +4,7 @@ import Supplier from "../models/Supplier.js";
 import Notification from "../models/Notification.js";
 import superPdpService from "./superPdpService.js";
 import cloudflareService from "./cloudflareService.js";
+import { recordStoredFile } from "./storage/storageService.js";
 import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
 import { publishNotification } from "../resolvers/notification.js";
 import { sendNotificationPush } from "./notificationPushService.js";
@@ -96,6 +97,15 @@ export async function fetchSuperPdpPdfFile(
       "ocr",
       workspaceId,
     );
+    // Facture reçue (e-invoicing) : obligation légale, jamais refusée, comptée
+    await recordStoredFile({
+      workspaceId,
+      key: uploadResult?.key,
+      bucket: cloudflareService.ocrBucketName,
+      size: pdfBuffer.length,
+      category: "purchaseInvoices",
+      userId,
+    });
 
     return {
       filename: uploadResult.key || fileName,

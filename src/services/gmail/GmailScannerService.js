@@ -4,6 +4,7 @@ import ImportedInvoice from '../../models/ImportedInvoice.js';
 import GmailOAuthProvider, { translateGmailError } from './GmailOAuthProvider.js';
 import hybridOcrService from '../hybridOcrService.js';
 import cloudflareService from '../cloudflareService.js';
+import { recordStoredFile } from '../storage/storageService.js';
 import logger from '../../utils/logger.js';
 import { detectFileType, storedFileName } from '../../utils/fileSignature.js';
 import { resolveImportedClient } from '../../utils/clientMatching.js';
@@ -432,6 +433,15 @@ async function processGmailMessage(gmail, messageId, connection) {
         logger.warn(`[Gmail Scan] Échec upload Cloudflare pour ${attachment.filename}`);
         continue;
       }
+      // Import automatique : jamais refusé, compté dans l'espace de stockage
+      await recordStoredFile({
+        workspaceId: connection.workspaceId.toString(),
+        key: uploadResult.key,
+        bucket: cloudflareService.importedInvoicesBucketName,
+        size: buffer.length,
+        category: 'importedDocuments',
+        userId: connection.userId.toString(),
+      });
 
       // OCR with hybrid service (fallback: Claude → Mindee → Google → Mistral)
       let ocrResult;

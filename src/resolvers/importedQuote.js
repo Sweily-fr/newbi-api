@@ -25,6 +25,12 @@ import invoiceExtractionService from "../services/invoiceExtractionService.js";
 import hybridOcrService from "../services/hybridOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
+import {
   createValidationError,
   createNotFoundError,
   createInternalServerError,
@@ -552,6 +558,7 @@ const importedQuoteResolvers = {
         }
 
         logger.debug(`☁️ Upload Cloudflare serveur-à-serveur pour ${filename}`);
+        await assertStorageAvailable(workspaceId, fileBuffer.length);
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
@@ -559,6 +566,13 @@ const importedQuoteResolvers = {
           "importedQuote",
           organizationId,
         );
+        await recordStoredFile({
+          workspaceId,
+          key: uploadResult.key,
+          size: fileBuffer.length,
+          category: "importedDocuments",
+          userId: user.id,
+        });
 
         // Chaîne OCR : Claude Vision (quota) → Tesseract (gratuit, fallback).
         // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
@@ -703,6 +717,7 @@ const importedQuoteResolvers = {
           isDuplicate,
         };
       } catch (error) {
+        rethrowStorageError(error);
         console.error("Erreur importQuoteDirect:", error);
         return {
           success: false,
@@ -820,6 +835,12 @@ const importedQuoteResolvers = {
               cloudflareKey,
               cloudflareService.importedInvoicesBucketName,
             );
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: cloudflareKey,
+              size: quote.file?.fileSize,
+              category: "importedDocuments",
+            });
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
           }
@@ -846,6 +867,12 @@ const importedQuoteResolvers = {
                 cloudflareKey,
                 cloudflareService.importedInvoicesBucketName,
               );
+              await recordStoredFileDeleted({
+                workspaceId,
+                key: cloudflareKey,
+                size: quote.file?.fileSize,
+                category: "importedDocuments",
+              });
             } catch (error) {
               console.error(
                 `⚠️ Erreur suppression Cloudflare: ${error.message}`,

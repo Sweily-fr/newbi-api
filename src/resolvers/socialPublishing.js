@@ -36,6 +36,12 @@ import {
 } from "../services/social/socialProviders.js";
 import { isZernioConfigured } from "../services/social/providers/zernioProvider.js";
 import { getXPostQuota } from "../services/social/xPostQuota.js";
+// Médias des posts comptés dans le stockage de l'espace
+import "../services/social/socialStorageUsage.js";
+import {
+  assertStorageAvailable,
+  markStorageStale,
+} from "../services/storage/storageService.js";
 
 /**
  * Publication programmée sur les réseaux sociaux depuis le kanban
@@ -208,9 +214,17 @@ const socialPublishingResolvers = {
       "kanban",
       "create",
     )(
-      withActiveSubscription(async (_, { file }, { workspaceId, user }) =>
-        uploadPostMedia({ workspaceId, userId: user._id || user.id, file }),
-      ),
+      withActiveSubscription(async (_, { file }, { workspaceId, user }) => {
+        // Espace de stockage plein : nouvel envoi refusé
+        await assertStorageAvailable(workspaceId, 0);
+        const media = await uploadPostMedia({
+          workspaceId,
+          userId: user._id || user.id,
+          file,
+        });
+        await markStorageStale(workspaceId);
+        return media;
+      }),
     ),
 
     startSocialVideoUpload: requireWorkspaceAction(
@@ -220,6 +234,7 @@ const socialPublishingResolvers = {
       withActiveSubscription(
         async (_, { fileName, size, contentType }, { workspaceId, user }) => {
           assertSocialPublishingEnabled();
+          await assertStorageAvailable(workspaceId, Number(size) || 0);
           return startVideoUpload({
             workspaceId,
             userId: user._id || user.id,
@@ -249,7 +264,9 @@ const socialPublishingResolvers = {
     )(
       withActiveSubscription(async (_, { mediaId }, { workspaceId }) => {
         assertSocialPublishingEnabled();
-        return completeVideoUpload({ workspaceId, mediaId });
+        const media = await completeVideoUpload({ workspaceId, mediaId });
+        await markStorageStale(workspaceId);
+        return media;
       }),
     ),
 
