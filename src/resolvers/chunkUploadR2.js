@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  RETIRED_TRANSFER_UPLOADS,
+  retireTransferUploads,
+} from "../utils/retiredTransferUploads.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import { requireTransferActionFromInput } from "./fileTransfer.js";
 import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
@@ -1211,5 +1215,8 @@ Object.keys(chunkUploadR2Resolvers.Mutation).forEach((name) => {
     return original(parent, args, context, info);
   };
 });
+
+// Envois hérités sans effet (voir retiredTransferUploads.js)
+retireTransferUploads(chunkUploadR2Resolvers, RETIRED_TRANSFER_UPLOADS.chunkUploadR2);
 
 export default chunkUploadR2Resolvers;

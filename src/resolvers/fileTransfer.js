@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  RETIRED_TRANSFER_UPLOADS,
+  retireTransferUploads,
+} from "../utils/retiredTransferUploads.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
@@ -969,5 +973,8 @@ fileTransferResolvers.Mutation = Object.fromEntries(
     ];
   }),
 );
+
+// Envois hérités sans effet (voir retiredTransferUploads.js)
+retireTransferUploads(fileTransferResolvers, RETIRED_TRANSFER_UPLOADS.fileTransfer);
 
 export default fileTransferResolvers;
