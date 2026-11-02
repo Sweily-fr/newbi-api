@@ -1,5 +1,8 @@
+import SocialAccount from "../../models/SocialAccount.js";
+import SocialConnectState from "../../models/SocialConnectState.js";
 import SocialPost from "../../models/SocialPost.js";
 import SocialPostMedia from "../../models/SocialPostMedia.js";
+import SocialProfile from "../../models/SocialProfile.js";
 import logger from "../../utils/logger.js";
 import storage, {
   imageKeyOf,
@@ -19,14 +22,19 @@ import storage, {
  *   mediaPurgeAt posé à la suppression, médias supprimés au tour suivant
  *   du cron. Jamais pendant une publication en cours (bail, envoi en
  *   cours, adresse TikTok attendue) : repoussé de 10 minutes.
+ * - Même moment, selon purgeAction : carte supprimée (« redact ») : texte,
+ *   réglages, auteur et copies des noms des comptes effacés de la fiche ;
+ *   espace supprimé (« delete ») : fiche supprimée après ses médias. Les
+ *   posts supprimés avant (purgeAction null) ne perdent que leurs médias.
  * - Un média encore présent dans un autre post n'est pas supprimé : seul
  *   ce post le lâche, l'autre post le supprimera à son tour.
  * - Échec du stockage : nouvel essai une heure plus tard ; la suppression
  *   de la carte n'attend jamais le stockage.
  * - Médias jamais utilisés par un post (envoi abandonné, post non créé,
  *   vidéo en échec) ou retirés d'un post modifié : supprimés après 7 jours.
- * Un post supprimé garde son document (statut, cibles, adresses des
- * publications, texte : limite mensuelle X), sans ses médias.
+ * Un post supprimé avec sa carte garde une fiche réduite : dates, statut,
+ * réseaux, identifiants des comptes, identifiants et adresses des
+ * publications (limite mensuelle X : xPostQuota.js).
  */
 
 export const ORPHAN_MEDIA_MS = 7 * 24 * 60 * 60 * 1000;
@@ -80,13 +88,14 @@ async function deleteObjects(keys) {
 
 /**
  * Une cible du post est encore en cours de publication : le réseau peut
- * encore lire ses médias (bail, envoi en cours, adresse TikTok attendue).
- * Une cible restée en attente plus de 7 jours après la date prévue ne
- * compte plus.
+ * encore lire ses médias (bail, envoi en cours, adresse TikTok attendue),
+ * ou le suivi Zernio écrit le post (bail de synchronisation). Une cible
+ * restée en attente plus de 7 jours après la date prévue ne compte plus.
  */
 export function isPostPublishing(post, now = new Date()) {
   const time = now.getTime();
   const after = (date) => Boolean(date) && new Date(date).getTime() > time;
+  if (after(post?.syncLockedUntil)) return true;
   const recent =
     new Date(post?.scheduledFor || 0).getTime() > time - STUCK_TARGET_MS;
   return (post?.targets || []).some(
@@ -97,6 +106,29 @@ export function isPostPublishing(post, now = new Date()) {
         (target.status === "pending" || target.status === "publishing")),
   );
 }
+
+export const PURGE_REDACT = "redact";
+export const PURGE_DELETE = "delete";
+
+/**
+ * Champs effacés de la fiche d'un post supprimé : texte, réglages choisis
+ * (confidentialité TikTok, formats, sons), auteur, copies des noms des
+ * comptes, message d'erreur du réseau et état intermédiaire. Restent les
+ * dates, le statut, les réseaux, les identifiants des comptes et les
+ * identifiants et adresses des publications (limite mensuelle X).
+ */
+export const redactedPostFields = () => ({
+  content: "",
+  tiktokSettings: null,
+  instagramSettings: null,
+  facebookSettings: null,
+  createdBy: null,
+  updatedBy: null,
+  "targets.$[].username": null,
+  "targets.$[].displayName": null,
+  "targets.$[].errorMessage": null,
+  "targets.$[].processingRef": null,
+});
 
 /** Autre post qui utilise encore ce média (médias pas encore supprimés). */
 const usedElsewhere = (post, item) => {
@@ -114,7 +146,8 @@ const usedElsewhere = (post, item) => {
 
 /**
  * Supprime les médias d'un post supprimé (bail, puis fichiers et
- * documents), ou repousse la suppression.
+ * documents), efface ou supprime sa fiche selon purgeAction, ou repousse
+ * le tout pendant une publication en cours.
  * @returns {Promise<"purged"|"deferred"|"failed"|"busy">}
  */
 export async function purgePostMedia(postId, { now = new Date() } = {}) {
@@ -135,7 +168,18 @@ export async function purgePostMedia(postId, { now = new Date() } = {}) {
     await retryAt(IN_FLIGHT_RETRY_MS);
     return "deferred";
   }
+  const action = post.purgeAction;
   try {
+    // Texte et copies effacés tout de suite, sans attendre le stockage
+    if (
+      (action === PURGE_REDACT || action === PURGE_DELETE) &&
+      !post.redactedAt
+    ) {
+      await SocialPost.updateOne(
+        { _id: post._id },
+        { $set: { ...redactedPostFields(), redactedAt: now } },
+      );
+    }
     let removed = 0;
     for (const item of post.media || []) {
       if (await usedElsewhere(post, item)) continue;
@@ -150,10 +194,15 @@ export async function purgePostMedia(postId, { now = new Date() } = {}) {
       if (media) await SocialPostMedia.deleteOne({ _id: media._id });
       removed += 1;
     }
-    await SocialPost.updateOne(
-      { _id: post._id },
-      { $set: { media: [], mediaPurgeAt: null, mediaPurgedAt: now } },
-    );
+    if (action === PURGE_DELETE) {
+      // Espace supprimé : plus rien du post
+      await SocialPost.deleteOne({ _id: post._id });
+    } else {
+      await SocialPost.updateOne(
+        { _id: post._id },
+        { $set: { media: [], mediaPurgeAt: null, mediaPurgedAt: now } },
+      );
+    }
     if (removed > 0) {
       logger.info(
         `[SocialMedia] Post ${post._id} supprimé : ${removed} média(s) effacé(s) du stockage`,
@@ -284,8 +333,11 @@ export async function markMediaDetached(workspaceId, mediaIds, now) {
 /**
  * Espace supprimé (suppression du compte de son dernier membre, rgpd.js) :
  * comptes déconnectés (accès révoqués au mieux, jetons effacés, posts
- * programmés annulés), posts marqués supprimés et leurs médias supprimés
- * par le cron. Au mieux : ne lève jamais d'erreur.
+ * programmés annulés) puis leurs fiches supprimées avec le profil Zernio
+ * et les connexions en cours ; posts confiés au cron, qui supprime leurs
+ * médias puis leurs fiches (après une publication en cours) ; médias
+ * jamais utilisés supprimés au nettoyage horaire suivant. Au mieux : ne
+ * lève jamais d'erreur.
  * @returns {Promise<{accounts: number, posts: number}>}
  */
 export async function purgeWorkspaceSocialData(workspaceId, now = new Date()) {
@@ -294,16 +346,29 @@ export async function purgeWorkspaceSocialData(workspaceId, now = new Date()) {
     const { disconnectAllAccounts } =
       await import("./socialPublishingService.js");
     summary.accounts = await disconnectAllAccounts(workspaceId, now);
+    // Fiches des comptes (le cron n'en a pas besoin pour les médias)
+    await SocialAccount.deleteMany({ workspaceId });
+    await SocialProfile.deleteMany({ workspaceId });
+    await SocialConnectState.deleteMany({ workspaceId });
     await SocialPost.updateMany(
       { workspaceId, taskDeletedAt: null },
       { $set: { taskDeletedAt: now } },
     );
+    // Toutes les fiches de l'espace, même déjà nettoyées : supprimées par
+    // le cron après leurs médias
     const marked = await SocialPost.updateMany(
-      { workspaceId, mediaPurgeAt: null, mediaPurgedAt: null },
-      { $set: { mediaPurgeAt: now } },
+      { workspaceId },
+      { $set: { purgeAction: PURGE_DELETE, mediaPurgeAt: now } },
       { timestamps: false },
     );
     summary.posts = marked.modifiedCount || 0;
+    // Médias de l'espace : sans post, supprimés au nettoyage horaire
+    // suivant (sans attendre 7 jours) ; ceux d'un post partent avec lui
+    await SocialPostMedia.updateMany(
+      { workspaceId },
+      { $set: { attachedAt: null, detachedAt: new Date(0) } },
+      { timestamps: false },
+    );
   } catch (error) {
     logger.warn(
       `[SocialMedia] Données réseaux sociaux de l'espace ${workspaceId} non nettoyées : ${error.message}`,

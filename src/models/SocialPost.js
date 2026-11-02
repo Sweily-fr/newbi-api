@@ -197,6 +197,13 @@ const socialPostSchema = new mongoose.Schema(
     // (socialMediaCleanup.js)
     mediaPurgeAt: { type: Date, default: null },
     mediaPurgedAt: { type: Date, default: null },
+    // Ce que devient la fiche avec ses médias, une fois la publication en
+    // cours terminée : « redact » (carte supprimée : texte, réglages et
+    // copies des noms effacés), « delete » (espace supprimé : fiche
+    // supprimée) ; null : médias seulement (posts supprimés avant)
+    purgeAction: { type: String, default: null },
+    // Texte et réglages effacés à cette date
+    redactedAt: { type: Date, default: null },
     // Nouveaux essais vers X (un par cible X en échec) : chaque envoi à X
     // est facturé et compte dans la limite mensuelle (xPostQuota.js)
     xRetriedAt: { type: [Date], default: [] },

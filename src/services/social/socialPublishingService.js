@@ -44,7 +44,7 @@ import {
   userError,
 } from "./socialPostMessages.js";
 import { normalizeSocialImage } from "./socialPostImage.js";
-import { markMediaDetached } from "./socialMediaCleanup.js";
+import { PURGE_REDACT, markMediaDetached } from "./socialMediaCleanup.js";
 import { notifySocialPostOutcome } from "./socialPostNotifications.js";
 import storage from "./socialMediaStorage.js";
 import {
@@ -2065,9 +2065,10 @@ export async function rescheduleSocialPostForTask({
  * cartes supprimées sont annulés chez le fournisseur AVANT la suppression
  * (une erreur passagère bloque la suppression : sinon le post partirait
  * sans carte). Un post déjà publié reste en ligne. Images et vidéos des
- * posts supprimées du stockage par le cron (mediaPurgeAt,
- * socialMediaCleanup.js), après une publication en cours. Espace sans
- * post : une seule requête, rien d'autre.
+ * posts supprimées du stockage, texte et réglages effacés de la fiche par
+ * le cron (mediaPurgeAt, purgeAction, socialMediaCleanup.js), après une
+ * publication en cours. Espace sans post : une seule requête, rien
+ * d'autre.
  */
 export async function cancelSocialPostsBeforeTaskDeletion({
   workspaceId,
@@ -2110,9 +2111,17 @@ export async function cancelSocialPostsBeforeTaskDeletion({
       cancelled += 1;
     }
   }
+  // Médias, texte et copies des noms effacés par le cron
+  // (socialMediaCleanup.js), après une publication en cours
   await SocialPost.updateMany(
     { _id: { $in: posts.map((post) => post._id) } },
-    { $set: { taskDeletedAt: now, mediaPurgeAt: now } },
+    {
+      $set: {
+        taskDeletedAt: now,
+        mediaPurgeAt: now,
+        purgeAction: PURGE_REDACT,
+      },
+    },
   );
   return cancelled;
 }
