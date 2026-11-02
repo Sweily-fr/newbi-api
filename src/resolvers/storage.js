@@ -14,7 +14,7 @@ import {
 
 // Le résolveur attend au plus ce délai un premier calcul ; au-delà, l'écran
 // affiche « calcul en cours » et redemande
-const QUERY_WAIT_MS = 8000;
+const QUERY_WAIT_MS = 3000;
 
 function canViewDetails(context) {
   return Boolean(context.permissions?.hasPermission?.("billing", "view"));

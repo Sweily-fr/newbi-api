@@ -226,6 +226,7 @@ export function formatBytes(bytes) {
   if (value >= BYTES_PER_GB) return `${fmt(value / BYTES_PER_GB)} Go`;
   if (value >= 1_000_000) return `${fmt(value / 1_000_000)} Mo`;
   if (value >= 1000) return `${fmt(value / 1000)} Ko`;
+  if (value === 0) return "0 Go";
   return `${Math.round(value)} octets`;
 }
 

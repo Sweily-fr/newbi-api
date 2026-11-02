@@ -156,6 +156,7 @@ describe("Stockage : affichage des tailles", () => {
     expect(formatBytes(1000 * GB)).toBe("1 To");
     expect(formatBytes(1.5 * GB)).toBe("1,5 Go");
     expect(formatBytes(12_000_000)).toBe("12 Mo");
-    expect(formatBytes(0)).toBe("0 octets");
+    expect(formatBytes(0)).toBe("0 Go");
+    expect(formatBytes(512)).toBe("512 octets");
   });
 });
