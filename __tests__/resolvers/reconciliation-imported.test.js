@@ -205,6 +205,20 @@ describe("unlinkTransactionFromImportedInvoice", () => {
     expect(freshTx.reconciliationDate).toBeNull();
   });
 
+  it("lien présent seulement côté facture : une transaction ignorée reste ignorée", async () => {
+    const tx = await createCredit({ reconciliationStatus: "ignored" });
+    const inv = await createImported({
+      status: "COMPLETED",
+      linkedTransactionIds: [tx._id],
+    });
+
+    await unlink(tx._id.toString(), inv._id.toString());
+
+    const freshTx = await Transaction.findById(tx._id);
+    expect(freshTx.reconciliationStatus).toBe("ignored");
+    expect((await ImportedInvoice.findById(inv._id)).linkedTransactionIds).toHaveLength(0);
+  });
+
   it("une facture liée à deux virements reste encaissée après une déliaison", async () => {
     const tx1 = await createCredit();
     const tx2 = await createCredit({ amount: 300 });
