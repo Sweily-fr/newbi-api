@@ -3430,7 +3430,10 @@ const resolvers = {
         workspaceId: finalWorkspaceId,
       });
       // Images de la tâche : recomptées au prochain passage
-      if (task?.images?.length || task?.comments?.some((c) => c.images?.length)) {
+      if (
+        task?.images?.length ||
+        task?.comments?.some((c) => c.images?.length)
+      ) {
         await markStorageStale(finalWorkspaceId);
       }
 

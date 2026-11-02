@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import { Readable } from "stream";
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
@@ -13,11 +21,24 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
  */
 
 const cf = vi.hoisted(() => ({
-  uploadImage: vi.fn(async (_b, name) => ({ key: `k/${name}`, url: `https://x.r2.dev/k/${name}` })),
-  uploadTaskImage: vi.fn(async () => ({ key: "t/1", url: "https://x/t/1", fileName: "a.png", fileSize: 10, contentType: "image/png" })),
+  uploadImage: vi.fn(async (_b, name) => ({
+    key: `k/${name}`,
+    url: `https://x.r2.dev/k/${name}`,
+  })),
+  uploadTaskImage: vi.fn(async () => ({
+    key: "t/1",
+    url: "https://x/t/1",
+    fileName: "a.png",
+    fileSize: 10,
+    contentType: "image/png",
+  })),
   uploadDocumentAnnex: vi.fn(async () => ({})),
-  uploadInvoicePdf: vi.fn(async (_b, ws, id) => ({ key: `invoices/${ws}/2026/11/${id}_newbi.pdf` })),
-  uploadDocumentPdf: vi.fn(async (type, _b, ws, id) => ({ key: `${type}s/${ws}/${id}.pdf` })),
+  uploadInvoicePdf: vi.fn(async (_b, ws, id) => ({
+    key: `invoices/${ws}/2026/11/${id}_newbi.pdf`,
+  })),
+  uploadDocumentPdf: vi.fn(async (type, _b, ws, id) => ({
+    key: `${type}s/${ws}/${id}.pdf`,
+  })),
 }));
 
 vi.mock("../../src/services/cloudflareService.js", () => ({
@@ -74,23 +95,25 @@ const ctx = () => buildContext({ userId, organizationId });
 const db = () => mongoose.connection.db;
 
 async function usage(totalBytes) {
-  await db().collection("workspace_storage_usage").updateOne(
-    { workspaceId: ws },
-    {
-      $set: {
-        workspaceId: ws,
-        totalBytes,
-        byCategory: {},
-        byUser: {},
-        computedAt: new Date(),
-        version: 1,
-        stale: false,
-        computingUntil: null,
-        alertLevel: 100,
+  await db()
+    .collection("workspace_storage_usage")
+    .updateOne(
+      { workspaceId: ws },
+      {
+        $set: {
+          workspaceId: ws,
+          totalBytes,
+          byCategory: {},
+          byUser: {},
+          computedAt: new Date(),
+          version: 1,
+          stale: false,
+          computingUntil: null,
+          alertLevel: 100,
+        },
       },
-    },
-    { upsert: true },
-  );
+      { upsert: true },
+    );
 }
 
 const refused = (promise) =>
@@ -142,7 +165,11 @@ describe("Stockage plein : refus sur chaque chemin d'envoi", () => {
     await refused(
       taskImageResolvers.Mutation.uploadTaskImage(
         null,
-        { taskId: task._id.toString(), workspaceId: ws, file: upload(PNG, "a.png", "image/png") },
+        {
+          taskId: task._id.toString(),
+          workspaceId: ws,
+          file: upload(PNG, "a.png", "image/png"),
+        },
         ctx(),
       ),
     );
@@ -186,21 +213,25 @@ describe("Stockage plein : refus sur chaque chemin d'envoi", () => {
     );
   });
 
-  it("transfert de fichiers (URL présignées, taille inconnue)", async () => {
-    await refused(
+  it("transfert de fichiers (URL présignées) : méthode retirée, aucun envoi possible", async () => {
+    await expect(
       chunkUploadR2Resolvers.Mutation.generatePresignedUploadUrls(
         null,
         { fileId: "f2", totalChunks: 1, fileName: "a.zip" },
         ctx(),
       ),
-    );
+    ).rejects.toMatchObject({ extensions: { code: "METHOD_RETIRED" } });
   });
 
   it("annexe PDF d'un document", async () => {
     await refused(
       documentAnnexResolvers.Mutation.uploadDocumentAnnex(
         null,
-        { documentType: "QUOTE", workspaceId: ws, file: upload(PDF, "cgv.pdf", "application/pdf") },
+        {
+          documentType: "QUOTE",
+          workspaceId: ws,
+          file: upload(PDF, "cgv.pdf", "application/pdf"),
+        },
         ctx(),
       ),
     );
@@ -240,16 +271,23 @@ describe("Stockage plein : les PDF légaux passent et sont comptés", () => {
     });
     await eInvoicingResolvers.Mutation.archiveInvoicePdf(
       null,
-      { workspaceId: ws, invoiceId: insertedId.toString(), file: upload(PDF, "f.pdf", "application/pdf") },
+      {
+        workspaceId: ws,
+        invoiceId: insertedId.toString(),
+        file: upload(PDF, "f.pdf", "application/pdf"),
+      },
       ctx(),
     );
     expect(cf.uploadInvoicePdf).toHaveBeenCalled();
-    const counter = await db().collection("workspace_storage_usage").findOne({ workspaceId: ws });
+    const counter = await db()
+      .collection("workspace_storage_usage")
+      .findOne({ workspaceId: ws });
     expect(counter.totalBytes).toBe(400 * GB + PDF.length);
   });
 
   it("avoir archivé (document comptable légal)", async () => {
-    const { default: CreditNote } = await import("../../src/models/CreditNote.js");
+    const { default: CreditNote } =
+      await import("../../src/models/CreditNote.js");
     vi.spyOn(CreditNote.prototype, "save").mockResolvedValue(undefined);
     const note = await CreditNote.collection.insertOne({
       workspaceId: organizationId,
@@ -277,7 +315,9 @@ describe("Espace avec de la place : l'envoi passe et compte", () => {
       ctx(),
     );
     expect(result.success).toBe(true);
-    const counter = await db().collection("workspace_storage_usage").findOne({ workspaceId: ws });
+    const counter = await db()
+      .collection("workspace_storage_usage")
+      .findOne({ workspaceId: ws });
     expect(counter.totalBytes).toBe(GB + PDF.length);
     expect(counter.byCategory.sharedDocuments).toBe(PDF.length);
   });
