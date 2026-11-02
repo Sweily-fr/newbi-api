@@ -90,6 +90,8 @@ const READABLE_WITHOUT_RIGHTS = {
     "usersInfo",
     // Liste vide sans « Voir » sur les projets (minuteur présent partout)
     "activeTimers",
+    // État du stockage de l'espace (détail réservé à « Voir l'abonnement »)
+    "workspaceStorage",
   ],
   // État des intégrations et réglages par défaut des documents
   workspaceSettings: [
