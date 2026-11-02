@@ -1,7 +1,7 @@
 /**
  * Option « Chaque année » des automatisations d'e-mails CRM : enregistrée à
- * la création et à la modification, et renvoyée par l'API (déduite du nom du
- * champ pour une automatisation créée avant l'option, sans rien réécrire).
+ * la création et à la modification, et renvoyée par l'API (fausse pour une
+ * automatisation créée avant l'option, sans rien réécrire).
  */
 import {
   describe,
@@ -119,7 +119,7 @@ describe("Option « Chaque année »", () => {
     expect(saved.timing.sendHour).toBe(10);
   });
 
-  it("automatisation d'avant l'option : valeur déduite du nom du champ, rien n'est réécrit", async () => {
+  it("automatisation d'avant l'option : non annuelle, même sur un champ d'anniversaire, rien n'est réécrit", async () => {
     const birthday = await field("Date d'anniversaire");
     const contract = await field("Fin de contrat");
     const old = await CrmEmailAutomation.create({
@@ -133,7 +133,7 @@ describe("Option « Chaque année »", () => {
       createdBy: userId,
     });
 
-    expect((await AutomationType.timing(old)).repeatYearly).toBe(true);
+    expect((await AutomationType.timing(old)).repeatYearly).toBe(false);
     expect((await AutomationType.timing(other)).repeatYearly).toBe(false);
     const raw = await mongoose.connection.db
       .collection("crmemailautomations")

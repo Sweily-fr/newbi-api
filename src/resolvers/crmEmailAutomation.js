@@ -441,22 +441,13 @@ const crmEmailAutomationResolvers = {
       if (!parent.customFieldId) return null;
       return await ClientCustomField.findById(parent.customFieldId);
     },
-    // Relance annuelle effective (option, sinon déduite du nom du champ)
-    timing: async (parent) => {
+    // Relance annuelle : seulement l'option enregistrée
+    timing: (parent) => {
       const timing =
         (typeof parent.toObject === "function"
           ? parent.toObject().timing
           : parent.timing) || {};
-      let repeatYearly = timing.repeatYearly;
-      if (typeof repeatYearly !== "boolean") {
-        const customField = parent.customFieldId
-          ? await ClientCustomField.findById(parent.customFieldId)
-              .select("name")
-              .lean()
-          : null;
-        repeatYearly = isYearlyAutomation(parent, customField);
-      }
-      return { ...timing, repeatYearly };
+      return { ...timing, repeatYearly: isYearlyAutomation(parent) };
     },
   },
 

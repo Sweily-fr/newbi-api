@@ -119,7 +119,7 @@ async function processAutomation(automation) {
       workspaceId,
       customField.id,
       targetDate,
-      { yearly: isYearlyAutomation(automation, customField) },
+      { yearly: isYearlyAutomation(automation) },
     );
 
     logger.debug(
@@ -186,23 +186,13 @@ function calculateTargetDate(timing, now = new Date()) {
   return new Date(Date.UTC(year, month - 1, day + delta));
 }
 
-// Dates relancées chaque année quand l'automatisation ne le précise pas
-// (automatisations créées avant l'option « Chaque année ») : champ ou
-// automatisation qui parle d'anniversaire ou de naissance.
-const YEARLY_HINT = /anniversaire|naissance|birthday/i;
-
 /**
  * Vrai si l'automatisation relance la date chaque année (anniversaire) :
- * option explicite timing.repeatYearly, sinon déduite du nom du champ ou de
- * l'automatisation.
+ * seulement quand l'option « Chaque année » a été activée. Une
+ * automatisation sans l'option garde son comportement (date exacte).
  */
-function isYearlyAutomation(automation, customField) {
-  const explicit = automation?.timing?.repeatYearly;
-  if (explicit === true || explicit === false) return explicit;
-  return (
-    YEARLY_HINT.test(customField?.name || "") ||
-    YEARLY_HINT.test(automation?.name || "")
-  );
+function isYearlyAutomation(automation) {
+  return automation?.timing?.repeatYearly === true;
 }
 
 const isLeap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;

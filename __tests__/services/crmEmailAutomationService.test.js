@@ -286,31 +286,33 @@ describe("Dates d'anniversaire", () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
-  it("automatisation créée avant l'option sur un champ « Date d'anniversaire » : relancée chaque année", async () => {
+  it("automatisation existante (sans l'option) nommée « anniversaire » sur un champ « Date d'anniversaire » : ne part pas", async () => {
     vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
     field = await birthdayField();
-    const birthday = await contactWithDate("1990-10-31", {
-      email: "anniversaire@test.fr",
+    await contactWithDate("1990-10-31", { email: "anniversaire@test.fr" });
+    const auto = await CrmEmailAutomation.create({
+      name: "Rappel anniversaire client",
+      workspaceId: organizationId,
+      createdBy: userId,
+      customFieldId: field._id,
+      timing: { type: "ON_DATE", daysOffset: 0, sendHour: 9 },
+      email: { subject: "Joyeux anniversaire", body: "Texte" },
     });
-    const auto = await automation();
     expect(auto.timing.repeatYearly).toBeUndefined();
 
-    expect(await processCrmEmailAutomations()).toBe(1);
-    expect(recipients()).toEqual([birthday.email]);
+    expect(await processCrmEmailAutomations()).toBe(0);
+    expect(sendMail).not.toHaveBeenCalled();
   });
 
-  it("le nom d'un champ quelconque ne rend pas la relance annuelle", () => {
+  it("seule l'option rend la relance annuelle", () => {
+    expect(isYearlyAutomation({ name: "Anniversaire", timing: {} })).toBe(
+      false,
+    );
     expect(
-      isYearlyAutomation(
-        { name: "Relance", timing: {} },
-        { name: "Date d'échéance du contrat" },
-      ),
+      isYearlyAutomation({ name: "Relance", timing: { repeatYearly: false } }),
     ).toBe(false);
     expect(
-      isYearlyAutomation(
-        { name: "Relance", timing: { repeatYearly: false } },
-        { name: "Date de naissance" },
-      ),
-    ).toBe(false);
+      isYearlyAutomation({ name: "Relance", timing: { repeatYearly: true } }),
+    ).toBe(true);
   });
 });
