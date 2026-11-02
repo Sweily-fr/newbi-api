@@ -685,3 +685,31 @@ describe("qonto.Mutation.syncAllToQonto", () => {
     });
   });
 });
+
+describe("qonto : messages d'erreur renvoyés au client", () => {
+  it("erreur technique (code, base) : message générique, rien de l'erreur d'origine", async () => {
+    testConnectionMock.mockRejectedValue(
+      new TypeError(
+        "Cannot read properties of undefined (reading 'iban') at /srv/app/x.js",
+      ),
+    );
+    const out = await resolvers.Mutation.connectQonto(
+      null,
+      { login: "l", secretKey: "s" },
+      baseCtx(),
+    );
+    expect(out.success).toBe(false);
+    expect(out.message).not.toMatch(/Cannot read|\/srv\//);
+  });
+
+  it("erreur de Qonto compréhensible : message gardé", async () => {
+    testConnectionMock.mockRejectedValue(new Error("Identifiants Qonto refusés"));
+    const out = await resolvers.Mutation.connectQonto(
+      null,
+      { login: "l", secretKey: "s" },
+      baseCtx(),
+    );
+    expect(out.success).toBe(false);
+    expect(out.message).toMatch(/Identifiants Qonto refusés/);
+  });
+});
