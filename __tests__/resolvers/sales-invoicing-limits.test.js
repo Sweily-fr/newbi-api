@@ -332,6 +332,40 @@ describe("conversion d'un devis par répartition", () => {
     expect(String(quote.convertedToInvoice)).toBe(String(invoice._id));
   });
 
+  it("répartition 50 % et 50 % : chaque facture porte les lignes de sa part", async () => {
+    const quoteId = await insertQuote({
+      items: [
+        { description: "Prestation", quantity: 1, unitPrice: 800, vatRate: 20, unit: "" },
+        { description: "Livre", quantity: 2, unitPrice: 100, vatRate: 5.5, unit: "" },
+      ],
+      totalHT: 1000,
+      totalVAT: 171,
+      totalTTC: 1171,
+      finalTotalHT: 1000,
+      finalTotalVAT: 171,
+      finalTotalTTC: 1171,
+    });
+    await convert(quoteId, [50, 50]);
+    const invoices = await invoicesOf(quoteId);
+    expect(invoices).toHaveLength(2);
+    const linesTTC = (inv) =>
+      Math.round(inv.items.reduce((t, a) => t + a.quantity * a.unitPrice * (1 + a.vatRate / 100), 0) * 100) / 100;
+    for (const inv of invoices) {
+      expect(inv.items.map((a) => a.vatRate).sort()).toEqual([20, 5.5].sort());
+      expect(inv.finalTotalTTC).toBeCloseTo(linesTTC(inv), 2);
+      expect(inv.finalTotalTTC).toBeCloseTo(585.5, 2);
+      expect(inv.discount).toBe(0);
+    }
+    expect(total(invoices)).toBeCloseTo(1171, 2);
+  });
+
+  it("conversion à 100 % : les lignes du devis sont reprises telles quelles", async () => {
+    const quoteId = await insertQuote();
+    const invoice = await convert(quoteId, [100]);
+    expect(invoice.items.map((a) => a.description)).toEqual(["Prestation"]);
+    expect(invoice.finalTotalTTC).toBeCloseTo(1200, 2);
+  });
+
   it("deux conversions simultanées : une seule facture", async () => {
     const quoteId = await insertQuote();
     const results = await Promise.allSettled([convert(quoteId, null), convert(quoteId, null)]);
