@@ -1,0 +1,78 @@
+# Stockage de l'espace : utilisé, quota de l'offre, packs et propositions
+
+type StorageCategoryUsage {
+  category: String!
+  label: String!
+  bytes: Float!
+}
+
+type StorageUserUsage {
+  userId: ID
+  name: String
+  email: String
+  bytes: Float!
+}
+
+type StoragePackOffer {
+  additionalPacks: Int!
+  totalPacks: Int!
+  monthlyCost: Float!
+  extraMonthlyCost: Float!
+  billedPrice: Float!
+  interval: String!
+  addedBytes: Float!
+}
+
+type StorageUpgradeOffer {
+  plan: String!
+  label: String!
+  packs: Int!
+  planMonthlyPrice: Float!
+  monthlyCost: Float!
+  quotaBytes: Float!
+}
+
+type StorageOffer {
+  neededBytes: Float!
+  currentMonthlyCost: Float!
+  packs: StoragePackOffer
+  upgrade: StorageUpgradeOffer
+  recommended: String
+}
+
+type WorkspaceStorage {
+  workspaceId: ID!
+  # false tant que le premier calcul n'est pas terminé
+  ready: Boolean!
+  plan: String!
+  planLabel: String!
+  interval: String!
+  subscriptionActive: Boolean!
+  usedBytes: Float!
+  quotaBytes: Float!
+  baseQuotaBytes: Float!
+  remainingBytes: Float!
+  percent: Float!
+  # ok | warning (80 %) | full (100 %)
+  level: String!
+  packs: Int!
+  packBytes: Float!
+  packSizeBytes: Float!
+  packMonthlyPrice: Float!
+  packYearlyPrice: Float!
+  # Détail et propositions : rôles qui voient l'abonnement seulement
+  canViewDetails: Boolean!
+  byCategory: [StorageCategoryUsage!]
+  byUser: [StorageUserUsage!]
+  offer: StorageOffer
+  computedAt: String
+}
+
+extend type Query {
+  workspaceStorage(workspaceId: ID): WorkspaceStorage
+}
+
+extend type Mutation {
+  # Recalcul complet immédiat (rôles qui voient l'abonnement)
+  refreshWorkspaceStorage(workspaceId: ID): WorkspaceStorage
+}
