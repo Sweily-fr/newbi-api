@@ -61,8 +61,7 @@ import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
 import {
   withBoardAccess,
   hiddenBoardIds,
-  isRestrictedFor,
-  canSeeEveryBoard,
+  skipHiddenBoardEvents,
   boardIdOfTask,
   boardIdOfColumn,
   byBoardArg,
@@ -5373,11 +5372,16 @@ const resolvers = {
         try {
           const pubsub = getPubSub();
           // Utiliser un canal spécifique au workspace pour optimiser les performances
-          return endWhenMemberRemoved(
-            pubsub.asyncIterableIterator([
-              `${BOARD_UPDATED}_${finalWorkspaceId}`,
-            ]),
-            { user, workspaceId: finalWorkspaceId },
+          // Un tableau réservé à une liste de membres n'est transmis qu'à
+          // qui y a accès (événement sauté pour les autres)
+          return skipHiddenBoardEvents(
+            endWhenMemberRemoved(
+              pubsub.asyncIterableIterator([
+                `${BOARD_UPDATED}_${finalWorkspaceId}`,
+              ]),
+              { user, workspaceId: finalWorkspaceId },
+            ),
+            user,
           );
         } catch (error) {
           logger.error("❌ [Kanban] Erreur subscription boardUpdated:", error);
@@ -5629,26 +5633,6 @@ for (const name of ["taskUpdated", "columnUpdated", "taskPresence"]) {
     subscription.subscribe,
   );
 }
-// boardUpdated diffuse les tableaux de tout l'espace : un tableau réservé
-// n'est transmis qu'à qui y a accès
-{
-  const boardUpdated = resolvers.Subscription.boardUpdated;
-  const resolveBoardUpdated = boardUpdated.resolve;
-  boardUpdated.resolve = async (payload, args, context, info) => {
-    const result = resolveBoardUpdated(payload, args, context, info);
-    const board = result?.board;
-    const userId = context?.user?._id || context?.user?.id;
-    if (board && isRestrictedFor(board, userId)) {
-      const allowed = await canSeeEveryBoard(
-        userId,
-        board.workspaceId || result.workspaceId,
-      ).catch(() => false);
-      if (!allowed) return null;
-    }
-    return result;
-  };
-}
-
 // Wrap all mutations with subscription check
 const originalMutations = resolvers.Mutation;
 // setTaskPresence est exclue : simple signal de présence, aucune donnée modifiée.

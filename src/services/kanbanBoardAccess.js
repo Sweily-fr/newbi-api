@@ -168,3 +168,44 @@ export const byColumnList = async (args) => {
     .lean();
   return columns.map((c) => String(c.boardId));
 };
+
+/**
+ * Flux d'événements de tableaux d'un espace (boardUpdated) : les événements
+ * d'un tableau réservé auquel l'utilisateur n'a pas accès sont sautés.
+ */
+export function skipHiddenBoardEvents(iterator, user) {
+  const userId = userIdOf(user);
+  const visible = async (value) => {
+    const board = value?.board;
+    if (!board || !isRestrictedFor(board, userId)) return true;
+    try {
+      return await canSeeEveryBoard(
+        userId,
+        board.workspaceId || value.workspaceId,
+      );
+    } catch {
+      return false;
+    }
+  };
+  return {
+    async next() {
+      for (;;) {
+        const result = await iterator.next();
+        if (result.done || (await visible(result.value))) return result;
+      }
+    },
+    return(value) {
+      return typeof iterator.return === "function"
+        ? iterator.return(value)
+        : Promise.resolve({ value, done: true });
+    },
+    throw(error) {
+      return typeof iterator.throw === "function"
+        ? iterator.throw(error)
+        : Promise.reject(error);
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}

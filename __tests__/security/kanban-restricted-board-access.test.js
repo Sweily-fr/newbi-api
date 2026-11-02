@@ -66,6 +66,7 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import { Board, Column, Task } from "../../src/models/kanban.js";
 import PublicBoardShare from "../../src/models/PublicBoardShare.js";
 import kanbanResolvers from "../../src/resolvers/kanban.js";
+import { skipHiddenBoardEvents } from "../../src/services/kanbanBoardAccess.js";
 import publicBoardShareResolvers from "../../src/resolvers/publicBoardShare.js";
 import userInvitedResolvers from "../../src/resolvers/userInvited.js";
 import kanbanTemplateResolvers from "../../src/resolvers/kanbanTemplate.js";
@@ -261,22 +262,37 @@ describe("Membre absent de la liste : lectures refusées", () => {
     }
   });
 
-  it("boardUpdated ne transmet pas le tableau restreint", async () => {
-    const payload = {
-      type: "UPDATED",
-      board: board.toObject(),
-      workspaceId: org.toString(),
+  it("boardUpdated saute les événements du tableau restreint", async () => {
+    const events = [
+      {
+        type: "UPDATED",
+        board: openBoard.toObject(),
+        workspaceId: org.toString(),
+      },
+      { type: "UPDATED", board: board.toObject(), workspaceId: org.toString() },
+    ];
+    const source = () => {
+      const queue = [...events];
+      return {
+        next: async () =>
+          queue.length
+            ? { value: queue.shift(), done: false }
+            : { value: undefined, done: true },
+        return: async () => ({ done: true }),
+      };
     };
-    const args = { workspaceId: org.toString() };
-    expect(
-      await Subscription.boardUpdated.resolve(payload, args, ctxOf(outsider)),
-    ).toBeNull();
-    expect(
-      await Subscription.boardUpdated.resolve(payload, args, ctxOf(listed)),
-    ).toBe(payload);
-    expect(
-      await Subscription.boardUpdated.resolve(payload, args, ctxOf(admin)),
-    ).toBe(payload);
+    const titles = async (userId) => {
+      const iterator = skipHiddenBoardEvents(source(), { _id: userId });
+      const seen = [];
+      for (;;) {
+        const { value, done } = await iterator.next();
+        if (done) return seen;
+        seen.push(value.board.title);
+      }
+    };
+    expect(await titles(outsider)).toEqual(["Ouvert"]);
+    expect(await titles(listed)).toEqual(["Ouvert", "Projet RH confidentiel"]);
+    expect(await titles(admin)).toEqual(["Ouvert", "Projet RH confidentiel"]);
   });
 });
 
