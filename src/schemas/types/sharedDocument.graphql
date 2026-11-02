@@ -26,7 +26,8 @@ type SharedDocument {
   # Corbeille
   trashedAt: String
   originalFolderId: ID
-  daysUntilPermanentDeletion: Int
+  # Toujours null : la corbeille n'est jamais vidée automatiquement
+  daysUntilPermanentDeletion: Int @deprecated(reason: "Aucune suppression automatique")
 }
 
 type SharedFolder {
@@ -51,7 +52,8 @@ type SharedFolder {
   # Corbeille
   trashedAt: String
   originalParentId: ID
-  daysUntilPermanentDeletion: Int
+  # Toujours null : la corbeille n'est jamais vidée automatiquement
+  daysUntilPermanentDeletion: Int @deprecated(reason: "Aucune suppression automatique")
 }
 
 type DocumentComment {
