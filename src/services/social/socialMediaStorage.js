@@ -73,6 +73,7 @@ const r2 = () => {
 };
 
 const keyOf = (id) => `social/${id}.jpg`;
+export const imageKeyOf = keyOf;
 export const videoKeyOf = (id) => `social/${id}.mp4`;
 export const videoUrlOf = (id) => `${apiBase()}${MEDIA_ROUTE}${id}.mp4`;
 
@@ -367,6 +368,20 @@ async function fetchImage(url) {
   }
 }
 
+/**
+ * Identifiant de la copie TikTok d'une image, tiré de l'adresse de
+ * l'original (même forme qu'un UUID) : une seule copie par image, quel que
+ * soit le nombre de comptes ou d'essais, retrouvée et supprimée avec
+ * l'original (socialMediaCleanup.js).
+ */
+export function tiktokCopyIdOf(url) {
+  const hex = crypto
+    .createHash("sha256")
+    .update(`tiktok:${String(url || "")}`)
+    .digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 const fitsTikTok = (width, height) =>
   Boolean(width && height) &&
   Math.min(width, height) <= TIKTOK_MAX_SHORT_SIDE &&
@@ -375,7 +390,8 @@ const fitsTikTok = (width, height) =>
 /**
  * Adresse d'une image acceptable par TikTok : la nôtre telle quelle si elle
  * est déjà en 1080p au plus, sinon une copie réduite déposée dans le bucket
- * (la normalisation des posts va jusqu'à 2 048 pixels).
+ * (la normalisation des posts va jusqu'à 2 048 pixels), sous un identifiant
+ * tiré de l'original (tiktokCopyIdOf).
  * @returns {Promise<string>}
  */
 async function prepareTikTokImage(media, workspaceId) {
@@ -395,7 +411,11 @@ async function prepareTikTokImage(media, workspaceId) {
     .flatten({ background: "#ffffff" })
     .jpeg({ quality: 85, mozjpeg: true })
     .toBuffer();
-  const stored = await storage.storeImage({ buffer: resized, workspaceId });
+  const stored = await storage.storeImage({
+    buffer: resized,
+    workspaceId,
+    id: tiktokCopyIdOf(media.url),
+  });
   return stored.url;
 }
 

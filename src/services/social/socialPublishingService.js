@@ -44,6 +44,7 @@ import {
   userError,
 } from "./socialPostMessages.js";
 import { normalizeSocialImage } from "./socialPostImage.js";
+import { markMediaDetached } from "./socialMediaCleanup.js";
 import { notifySocialPostOutcome } from "./socialPostNotifications.js";
 import storage from "./socialMediaStorage.js";
 import {
@@ -1720,6 +1721,7 @@ export async function updatePost({
     idempotencyKey,
     updatedBy: toObjectIdOrNull(String(user?.id || "")),
   };
+  const previousMediaIds = post.media.map((item) => item.mediaId);
   if (hasDirectTargets(post) || fields.provider !== "zernio") {
     // Écriture conditionnelle : le cron a pu commencer à publier
     const updated = await SocialPost.findOneAndUpdate(
@@ -1733,6 +1735,13 @@ export async function updatePost({
     Object.assign(post, fields);
     await post.save();
   }
+  // Médias retirés du post : supprimés plus tard s'ils ne servent plus
+  const keptIds = new Set(fields.media.map((item) => String(item.mediaId)));
+  await markMediaDetached(
+    workspaceId,
+    previousMediaIds.filter((id) => id && !keptIds.has(String(id))),
+    now,
+  );
 
   // La carte suit le post (diffusée en temps réel)
   const description = contentToTaskDescription(content);
@@ -2051,8 +2060,10 @@ export async function rescheduleSocialPostForTask({
  * deleteTask, deleteColumn, deleteBoard : les posts pas encore publiés des
  * cartes supprimées sont annulés chez le fournisseur AVANT la suppression
  * (une erreur passagère bloque la suppression : sinon le post partirait
- * sans carte). Un post déjà publié reste en ligne. Espace sans post : une
- * seule requête, rien d'autre.
+ * sans carte). Un post déjà publié reste en ligne. Images et vidéos des
+ * posts supprimées du stockage par le cron (mediaPurgeAt,
+ * socialMediaCleanup.js), après une publication en cours. Espace sans
+ * post : une seule requête, rien d'autre.
  */
 export async function cancelSocialPostsBeforeTaskDeletion({
   workspaceId,
@@ -2097,7 +2108,7 @@ export async function cancelSocialPostsBeforeTaskDeletion({
   }
   await SocialPost.updateMany(
     { _id: { $in: posts.map((post) => post._id) } },
-    { $set: { taskDeletedAt: now } },
+    { $set: { taskDeletedAt: now, mediaPurgeAt: now } },
   );
   return cancelled;
 }

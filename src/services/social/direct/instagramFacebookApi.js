@@ -204,6 +204,31 @@ export async function exchangeCode({ code, redirectUri, now = new Date() }) {
   return { accounts };
 }
 
+/**
+ * Pseudo, nom et photo relus (rafraîchissement régulier du compte) : même
+ * liste des Pages qu'à la connexion, avec le jeton utilisateur du groupe.
+ */
+export async function fetchProfile({ account, accessToken }) {
+  const id = String(account.externalAccountId);
+  const page = (await listPagesWithInstagram(accessToken)).find(
+    (entry) => String(entry.instagram_business_account?.id || "") === id,
+  );
+  const instagram = page?.instagram_business_account;
+  if (!instagram) {
+    // Compte détaché de sa Page ou Page retirée : la publication le dira
+    throw new DirectApiError(
+      "instagram : compte absent des Pages de l'utilisateur",
+      { network: NETWORK, status: 404 },
+    );
+  }
+  return {
+    externalAccountId: id,
+    username: instagram.username || null,
+    displayName: instagram.name || instagram.username || null,
+    avatarUrl: instagram.profile_picture_url || null,
+  };
+}
+
 /** Nouveau jeton longue durée à partir du jeton actuel (au mieux). */
 export async function refreshCredentials({ accessToken, now = new Date() }) {
   const app = metaAppCredentials();
@@ -284,6 +309,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   publish,
   checkPublication,
