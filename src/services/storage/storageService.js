@@ -686,6 +686,11 @@ export async function reconcileWorkspaceStorage({ limit = 50, now = new Date() }
         { computedAt: null },
         { computedAt: { $lt: new Date(now.getTime() - RECONCILE_MAX_AGE_MS) } },
         { version: { $ne: STORAGE_COMPUTE_VERSION } },
+        // Tailles restées inconnues (R2 injoignable) : nouvel essai après 1 h
+        {
+          unknownSizeCount: { $gt: 0 },
+          computedAt: { $lt: new Date(now.getTime() - 60 * 60 * 1000) },
+        },
       ],
     },
     { workspaceId: 1 },
