@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  RETIRED_TRANSFER_UPLOADS,
+  retireTransferUploads,
+} from "../utils/retiredTransferUploads.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import { requireTransferActionFromInput } from "./fileTransfer.js";
 import { userBelongsToWorkspace } from "../utils/workspace-membership.js";
@@ -22,6 +26,8 @@ import {
 } from "../utils/transferEmailInput.js";
 import {
   assertTransferFileSize,
+  assertTransferTotal,
+  TRANSFER_MAX_FILES,
   assertTransferUploadIds,
   normalizeTransferCreationOptions,
 } from "../utils/transferOptions.js";
@@ -912,6 +918,9 @@ const chunkUploadR2Resolvers = {
           if (!fileIds || fileIds.length === 0) {
             throw new UserInputError("Aucun ID de fichier fourni");
           }
+          if (fileIds.length > TRANSFER_MAX_FILES) {
+            assertTransferTotal(fileIds);
+          }
 
           // Destinataire unique et message borné ; e-mails plafonnés par jour
           const { recipientEmail, message } =
@@ -950,6 +959,9 @@ const chunkUploadR2Resolvers = {
               );
             }
           }
+
+          // Taille totale bornée (chaque fichier l'est déjà par l'offre)
+          assertTransferTotal(filesInfo);
 
           const workspaceId = input?.workspaceId || null;
           // 🔐 Appartenance requise si un workspace est fourni.
@@ -1203,5 +1215,8 @@ Object.keys(chunkUploadR2Resolvers.Mutation).forEach((name) => {
     return original(parent, args, context, info);
   };
 });
+
+// Envois hérités sans effet (voir retiredTransferUploads.js)
+retireTransferUploads(chunkUploadR2Resolvers, RETIRED_TRANSFER_UPLOADS.chunkUploadR2);
 
 export default chunkUploadR2Resolvers;

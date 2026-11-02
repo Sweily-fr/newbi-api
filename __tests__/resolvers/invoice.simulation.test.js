@@ -68,6 +68,7 @@ vi.mock("../../src/services/calendar/CalendarSyncService.js", () => ({
 }));
 
 import Invoice from "../../src/models/Invoice.js";
+import DocumentCounter from "../../src/models/DocumentCounter.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
 
 const create = invoiceResolvers.Mutation.createInvoice;
@@ -270,26 +271,18 @@ describe("Simulation numérotation factures — enchaînements réels", () => {
     expect(numbers).toEqual(["0001", "0002", "0003", "0004", "0005"]);
   });
 
-  // Constat : contrairement au devis et au bon de commande (numéro provisoire
-  // DRAFT-<timestamp>, hors séquence), la facture RÉSERVE un numéro
-  // séquentiel dès la création du brouillon (DRAFT-0001, DRAFT-0002…). Deux
-  // conséquences visibles ici :
-  //  - le numéro envoyé par l'éditeur à la finalisation est ignoré au profit
-  //    du numéro réservé ;
-  //  - `nextInvoiceNumber` (hors brouillon) annonce max+1 parmi les factures
-  //    finalisées, donc pas forcément le numéro qui sera réellement attribué.
-  // Un brouillon abandonné ou supprimé laisse alors un trou définitif dans la
-  // séquence, ce que l'article 242 nonies A du CGI n'admet pas.
-  it("constat : la facture réserve son numéro dès le brouillon", async () => {
+  // Un brouillon ne réserve aucun numéro : il affiche le prochain numéro
+  // (DRAFT-0001) sans avancer le compteur. Le numéro légal n'est attribué
+  // qu'à l'émission, donc un brouillon supprimé ou abandonné ne laisse aucun
+  // trou dans la séquence émise (article 242 nonies A du CGI).
+  it("un brouillon ne réserve aucun numéro : la séquence émise reste sans trou", async () => {
     const draftA = await createDraft();
     const draftB = await createDraft();
-    expect(draftA.number).toBe("DRAFT-0001");
-    expect(draftB.number).toBe("DRAFT-0002");
+    expect(draftB.number).toBe("DRAFT-0001");
+    expect(await DocumentCounter.countDocuments({ workspaceId: organizationId.toString() })).toBe(0);
 
-    // L'éditeur propose 0001 (aucune facture finalisée)
     expect(await proposedNumber()).toBe("0001");
 
-    // Mais finaliser le SECOND brouillon donne 0002, pas 0001
     const finalized = await update(
       null,
       {
@@ -298,15 +291,15 @@ describe("Simulation numérotation factures — enchaînements réels", () => {
       },
       ctx(),
     );
-    expect(finalized.number).toBe("0002");
+    expect(finalized.number).toBe("0001");
 
-    // La séquence finalisée démarre donc à 0002 : 0001 reste réservé au
-    // brouillon A et sera perdu si celui-ci est supprimé.
+    // Le brouillon A, supprimé, n'emporte aucun numéro.
+    await Invoice.deleteOne({ _id: draftA._id });
     const numbers = await Invoice.find({
       workspaceId: organizationId,
       status: { $ne: "DRAFT" },
     }).lean();
-    expect(numbers.map((i) => i.number)).toEqual(["0002"]);
+    expect(numbers.map((i) => i.number)).toEqual(["0001"]);
     await invariants("après finalisation du second brouillon");
   });
 

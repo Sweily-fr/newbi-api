@@ -395,6 +395,37 @@ describe("Téléchargement unitaire", () => {
   });
 });
 
+describe("/api/transfers/:id/authorize : journaux et historique sans secret", () => {
+  it("ni lien, ni clé, ni e-mail au journal ; URL signée non conservée", async () => {
+    const logger = (await import("../../src/utils/logger.js")).default;
+    const spies = ["debug", "info", "warn"].map((level) =>
+      vi.spyOn(logger, level),
+    );
+    const DownloadEvent = (await import("../../src/models/DownloadEvent.js"))
+      .default;
+    const transfer = await createTransfer({
+      files: [r2File("photo.jpg")],
+      totalSize: 2048,
+    });
+    const res = buildRes();
+    await authorizeDownload(
+      buildReq({
+        params: { transferId: transfer._id.toString() },
+        body: { link: SHARE_LINK, key: ACCESS_KEY, email: "client@newbi.fr" },
+      }),
+      res,
+    );
+    expect(res.body?.downloads?.[0]?.downloadUrl).toBeTruthy();
+    const logged = JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
+    expect(logged).not.toContain(SHARE_LINK);
+    expect(logged).not.toContain(ACCESS_KEY);
+    expect(logged).not.toContain("client@newbi.fr");
+    const event = await DownloadEvent.findOne({ transferId: transfer._id });
+    expect(event.downloadUrl ?? null).toBeNull();
+    spies.forEach((spy) => spy.mockRestore());
+  });
+});
+
 describe("/api/transfers/verify-password", () => {
   const verify = async (body) => {
     const res = buildRes();

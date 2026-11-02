@@ -67,6 +67,7 @@ vi.mock("../../src/services/gmail/GmailScannerService.js", () => ({
   scanGmailConnection: async () => {},
 }));
 
+import { browserCookieFor } from "../helpers/oauthBrowser.js";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import { seedOrgMembership } from "../helpers/auth.js";
@@ -85,7 +86,8 @@ let baseUrl;
 const callback = async (state) => {
   const res = await fetch(
     `${baseUrl}/gmail-connect/callback?code=code-google&state=${encodeURIComponent(state)}`,
-    { redirect: "manual" },
+    // Même navigateur que /authorize (cookie du parcours)
+    { redirect: "manual", headers: { cookie: browserCookieFor(state) } },
   );
   return res.headers.get("location") || "";
 };

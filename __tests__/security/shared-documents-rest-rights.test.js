@@ -215,6 +215,24 @@ describe("Routes REST des documents partagés", () => {
     expect(selection.status).toBe(200);
   });
 
+  it("document en corbeille : ni téléchargé, ni prévisualisé, ni dans une sélection", async () => {
+    await SharedDocument.collection.updateOne(
+      { _id: documentId },
+      { $set: { trashedAt: new Date() } },
+    );
+    asUser(viewer);
+    for (const name of [
+      "download-file",
+      "preview-file",
+      "download-selection",
+      "selection-info",
+    ]) {
+      const res = await ROUTES[name]();
+      expect(res.status, name).toBe(404);
+      expect(await res.text()).not.toContain("contenu:espace/bilan.pdf");
+    }
+  });
+
   it("un non-membre reste refusé", async () => {
     asUser(buildUserId());
     const res = await ROUTES["download-file"]();

@@ -1,6 +1,8 @@
 /**
- * createFileTransferWithIds (envoi en morceaux historique) : seuls les
- * fichiers de l'utilisateur peuvent entrer dans son transfert.
+ * Création d'un transfert à partir d'identifiants de fichiers : seuls les
+ * fichiers de l'utilisateur peuvent entrer dans son transfert
+ * (createFileTransferWithIdsR2, l'envoi actuel). L'envoi en morceaux
+ * historique (createFileTransferWithIds) est retiré : il ne crée plus rien.
  *
  * getFileInfoByTransferId cherchait le fichier par nom d'origine ou nom de
  * stockage dans TOUS les transferts « chunk », R2 compris. Le nom de stockage
@@ -42,6 +44,7 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import FileTransfer from "../../src/models/FileTransfer.js";
 import { toPublicTransferFiles } from "../../src/utils/transferAccess.js";
 import chunkUploadResolvers from "../../src/resolvers/chunkUpload.js";
+import chunkUploadR2Resolvers from "../../src/resolvers/chunkUploadR2.js";
 
 const { Mutation } = chunkUploadResolvers;
 
@@ -89,7 +92,7 @@ const insertTransfer = async (userId, workspaceId, file, extra = {}) => {
 };
 
 const createWithIds = (fileIds) =>
-  Mutation.createFileTransferWithIds(
+  chunkUploadR2Resolvers.Mutation.createFileTransferWithIdsR2(
     {},
     { fileIds, input: { workspaceId: String(attackerWorkspace) } },
     buildContext({ userId: attackerId, organizationId: attackerWorkspace }),
@@ -144,29 +147,39 @@ describe("fichiers d'un autre utilisateur", () => {
   it("refuse le nom de stockage lu dans le lien public", async () => {
     const [publicFile] = toPublicTransferFiles(victimTransfer);
     const error = await errorOf(() => createWithIds([publicFile.fileName]));
-    expect(codeOf(error)).toBe("FILE_TRANSFER_CREATION_ERROR");
+    expect(codeOf(error)).toBeTruthy();
+    expect(codeOf(error)).not.toBe("METHOD_RETIRED");
     expect(await FileTransfer.countDocuments({ userId: attackerId })).toBe(0);
   });
 
   it("refuse le nom d'origine du fichier", async () => {
     const error = await errorOf(() => createWithIds(["contrat.pdf"]));
-    expect(codeOf(error)).toBe("FILE_TRANSFER_CREATION_ERROR");
+    expect(codeOf(error)).toBeTruthy();
+    expect(codeOf(error)).not.toBe("METHOD_RETIRED");
     expect(await FileTransfer.countDocuments({ userId: attackerId })).toBe(0);
   });
 });
 
-describe("fichiers de l'utilisateur", () => {
-  it("crée le transfert à partir de ses propres fichiers", async () => {
+describe("envoi en morceaux historique", () => {
+  it("createFileTransferWithIds retirée : refusée, rien n'est créé", async () => {
     await insertTransfer(attackerId, attackerWorkspace, {
       originalName: "upload-42",
       displayName: "devis.pdf",
       fileName: "upload-42_devis.pdf",
       filePath: "/uploads/upload-42_devis.pdf",
     });
-
-    const result = await createWithIds(["upload-42"]);
-
-    expect(result.fileTransfer.files[0].fileName).toBe("upload-42_devis.pdf");
-    expect(String(result.fileTransfer.userId)).toBe(String(attackerId));
+    const avant = await FileTransfer.countDocuments({});
+    const error = await errorOf(() =>
+      Mutation.createFileTransferWithIds(
+        {},
+        {
+          fileIds: ["upload-42"],
+          input: { workspaceId: String(attackerWorkspace) },
+        },
+        buildContext({ userId: attackerId, organizationId: attackerWorkspace }),
+      ),
+    );
+    expect(codeOf(error)).toBe("METHOD_RETIRED");
+    expect(await FileTransfer.countDocuments({})).toBe(avant);
   });
 });

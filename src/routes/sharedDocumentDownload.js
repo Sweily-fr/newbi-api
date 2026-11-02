@@ -152,6 +152,7 @@ async function ensureSelectionAccessible(
     const docs = await SharedDocument.find({
       _id: { $in: documentIds },
       workspaceId,
+      trashedAt: null,
     });
     if (
       docs.length !== new Set(documentIds).size ||
@@ -486,9 +487,11 @@ router.get("/download-file/:documentId", async (req, res) => {
     if (!access) return;
     const { workspaceId, canAccess } = access;
 
+    // Document en corbeille : comme introuvable (restauré d'abord)
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
+      trashedAt: null,
     });
 
     // Document d'un dossier privé inaccessible : comme introuvable
@@ -580,9 +583,11 @@ router.get("/preview-file/:documentId", async (req, res) => {
     if (!access) return;
     const { workspaceId, canAccess } = access;
 
+    // Document en corbeille : comme introuvable (restauré d'abord)
     const document = await SharedDocument.findOne({
       _id: documentId,
       workspaceId,
+      trashedAt: null,
     });
 
     // Document d'un dossier privé inaccessible : comme introuvable

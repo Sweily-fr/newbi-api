@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import { buildInvoicePaymentUrl } from "../utils/invoicePaymentLink.js";
 import { assertClientNotBlocked } from "../utils/blockedClient.js";
 import CreditNote from "../models/CreditNote.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
@@ -46,6 +47,7 @@ import {
   validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
+import { boundedPage } from "../utils/pagination.js";
 import {
   createNotFoundError,
   createResourceLockedError,
@@ -404,7 +406,7 @@ const invoiceResolvers = {
         );
         if (isCoveredByCredit(invoice, credited)) return null;
         const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
-        return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
+        return buildInvoicePaymentUrl(baseUrl, invoice._id);
       } catch (error) {
         logger.error("[Invoice.paymentLink] Erreur:", error);
         return null;
@@ -650,6 +652,8 @@ const invoiceResolvers = {
         // Les viewers ont accès en lecture seule à TOUTES les ressources de l'organisation
         // (pas de filtre par createdBy pour les viewers)
 
+        // Page et taille bornées (1 000 factures au plus par page)
+        ({ page, limit } = boundedPage(page, limit));
         const skip = (page - 1) * limit;
         // Comptage et page lus en parallèle (ils étaient enchaînés).
         const [totalCount, invoices] = await Promise.all([
@@ -3471,29 +3475,6 @@ const invoiceResolvers = {
         return await invoice.populate("createdBy");
       },
     ),
-
-    sendInvoice: requireAction(
-      "invoices",
-      "send",
-    )(async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-      const { user } = context;
-      const workspaceId = resolveWorkspaceId(
-        inputWorkspaceId,
-        context.workspaceId,
-      );
-
-      const invoice = await Invoice.findOne({ _id: id, workspaceId });
-
-      if (!invoice) {
-        throw createNotFoundError("Facture");
-      }
-
-      // Ici, vous pourriez implémenter la logique d'envoi d'email
-      // Pour l'instant, nous simulons un succès
-      // TODO: Implémenter l'envoi réel de la facture par email
-
-      return true;
-    }),
 
     // Facture liée (acompte, partielle) depuis un devis : transformation du
     // devis, « Transformer » sur les devis ET « Créer » sur les factures

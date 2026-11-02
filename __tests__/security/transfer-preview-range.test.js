@@ -283,3 +283,84 @@ describe("/api/files/preview : requêtes partielles", () => {
     expect(s3.send).not.toHaveBeenCalled();
   });
 });
+
+describe("Aperçu d'un transfert « filigrane (lecture seule) »", () => {
+  const fileOf = (name, mimeType, size) => ({
+    originalName: name,
+    displayName: name,
+    fileName: `f_1_${name}`,
+    filePath: `https://pub-bucket.r2.dev/prod/t_x/f_1_${name}`,
+    r2Key: `prod/t_x/f_1_${name}`,
+    mimeType,
+    size,
+    storageType: "r2",
+    fileId: `id-${name}`,
+  });
+
+  it("image : servie filigranée et réduite, jamais l'original, sans cache partagé", async () => {
+    const sharp = (await import("sharp")).default;
+    const original = await sharp({
+      create: { width: 2400, height: 1600, channels: 3, background: "#2a6" },
+    })
+      .png()
+      .toBuffer();
+    s3.send.mockImplementation(async () => ({
+      Body: Readable.from([original]),
+      ContentLength: original.length,
+    }));
+    const transfer = await createVideoTransfer({
+      hasWatermark: true,
+      files: [fileOf("photo.png", "image/png", original.length)],
+    });
+    const res = await callPreview(transfer);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("image/jpeg");
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+    const served = Buffer.concat(res.chunks);
+    expect(served.equals(original)).toBe(false);
+    const meta = await sharp(served).metadata();
+    expect(meta.width).toBe(1920);
+  });
+
+  it("PDF : servi avec un filigrane sur chaque page", async () => {
+    const { PDFDocument } = await import("pdf-lib");
+    const doc = await PDFDocument.create();
+    doc.addPage();
+    doc.addPage();
+    const original = Buffer.from(await doc.save());
+    s3.send.mockImplementation(async () => ({
+      Body: Readable.from([original]),
+      ContentLength: original.length,
+    }));
+    const transfer = await createVideoTransfer({
+      hasWatermark: true,
+      files: [fileOf("plan.pdf", "application/pdf", original.length)],
+    });
+    const res = await callPreview(transfer);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toBe("application/pdf");
+    const served = Buffer.concat(res.chunks);
+    expect(served.equals(original)).toBe(false);
+    const relu = await PDFDocument.load(served);
+    expect(relu.getPageCount()).toBe(2);
+  });
+
+  it("archive ZIP (les originaux) : aperçu refusé", async () => {
+    const transfer = await createVideoTransfer({
+      hasWatermark: true,
+      files: [fileOf("photos.zip", "application/zip", 100)],
+    });
+    const res = await callPreview(transfer);
+    expect(res.statusCode).toBe(403);
+    expect(s3.send).not.toHaveBeenCalled();
+  });
+
+  it("sans filigrane : image servie telle quelle", async () => {
+    const transfer = await createVideoTransfer({
+      files: [fileOf("photo.png", "image/png", CONTENT.length)],
+    });
+    const res = await callPreview(transfer);
+    expect(res.statusCode).toBe(200);
+    expect(res.text).toBe(CONTENT.toString());
+  });
+});

@@ -273,10 +273,14 @@ class SuperPdpService {
 
   /**
    * Transformer une facture Newbi en format SuperPDP EN16931
-   * @param {Object} invoice - Facture Newbi
+   * @param {Object} invoice - Facture Newbi (ou avoir, via options.documentType)
+   * @param {Object} [options] - { documentType: "creditNote" } pour un avoir :
+   *   type_code 381, montants en valeur absolue (EN16931 : le sens est porté par
+   *   le type_code, pas par le signe) et note de référence à la facture d'origine.
    * @returns {Object} - Données formatées pour SuperPDP (format EN16931)
    */
-  transformInvoiceForSuperPdp(invoice) {
+  transformInvoiceForSuperPdp(invoice, options = {}) {
+    const isCreditNote = options.documentType === "creditNote";
     // Formater la date au format ISO (YYYY-MM-DD)
     const formatDate = (date) => {
       if (!date) return null;
@@ -392,11 +396,12 @@ class SuperPdpService {
       en_invoice: {
         number: `${invoice.prefix || ""}${invoice.number}`,
         issue_date: formatDate(invoice.issueDate),
-        payment_due_date: formatDate(invoice.dueDate),
-        // UNTDID 1001 : 380 facture, 386 facture d'acompte.
-        // NB : les avoirs (381) sont un modèle CreditNote distinct, non routé par
-        // ce service — ils ne transitent donc pas par cette transformation.
-        type_code: invoice.isDeposit ? 386 : 380,
+        // Les avoirs n'ont pas d'échéance : omettre le champ plutôt que null.
+        ...(formatDate(invoice.dueDate)
+          ? { payment_due_date: formatDate(invoice.dueDate) }
+          : {}),
+        // UNTDID 1001 : 380 facture, 386 facture d'acompte, 381 avoir.
+        type_code: isCreditNote ? 381 : invoice.isDeposit ? 386 : 380,
         currency_code: "EUR",
 
         // Nature de l'opération (réforme 2026)
@@ -419,6 +424,15 @@ class SuperPdpService {
           // TVA sur les débits (mention conditionnelle)
           ...(invoice.companyInfo?.vatPaymentCondition === "DEBITS"
             ? [{ subject_code: "REG", note: "TVA acquittée sur les débits" }]
+            : []),
+          // Avoir : référence obligatoire à la facture d'origine
+          ...(isCreditNote && invoice.originalInvoiceNumber
+            ? [
+                {
+                  subject_code: "AAI",
+                  note: `Avoir émis en référence à la facture ${invoice.originalInvoiceNumber}`,
+                },
+              ]
             : []),
         ],
 
@@ -486,14 +500,36 @@ class SuperPdpService {
           : {}),
 
         totals: {
-          sum_invoice_lines_amount: formatAmount(invoice.finalTotalHT || 0),
-          total_without_vat: formatAmount(invoice.finalTotalHT || 0),
+          // Avoir : les montants Newbi sont stockés en négatif, EN16931 attend
+          // des montants positifs (le type_code 381 porte le sens).
+          sum_invoice_lines_amount: formatAmount(
+            isCreditNote
+              ? Math.abs(invoice.finalTotalHT || 0)
+              : invoice.finalTotalHT || 0,
+          ),
+          total_without_vat: formatAmount(
+            isCreditNote
+              ? Math.abs(invoice.finalTotalHT || 0)
+              : invoice.finalTotalHT || 0,
+          ),
           total_vat_amount: {
-            value: formatAmount(invoice.finalTotalVAT || 0),
+            value: formatAmount(
+              isCreditNote
+                ? Math.abs(invoice.finalTotalVAT || 0)
+                : invoice.finalTotalVAT || 0,
+            ),
             currency_code: "EUR",
           },
-          total_with_vat: formatAmount(invoice.finalTotalTTC || 0),
-          amount_due_for_payment: formatAmount(invoice.finalTotalTTC || 0),
+          total_with_vat: formatAmount(
+            isCreditNote
+              ? Math.abs(invoice.finalTotalTTC || 0)
+              : invoice.finalTotalTTC || 0,
+          ),
+          amount_due_for_payment: formatAmount(
+            isCreditNote
+              ? Math.abs(invoice.finalTotalTTC || 0)
+              : invoice.finalTotalTTC || 0,
+          ),
         },
 
         vat_break_down: vatBreakDown,
@@ -627,10 +663,12 @@ class SuperPdpService {
    * @param {Object} invoice - Facture Newbi
    * @returns {Promise<Object>} - Réponse de SuperPDP avec l'ID de la facture
    */
-  async sendInvoice(organizationId, invoice) {
+  async sendInvoice(organizationId, invoice, options = {}) {
+    const docLabel =
+      options.documentType === "creditNote" ? "l'avoir" : "la facture";
     try {
       logger.info(
-        `📤 Envoi de la facture ${invoice.prefix}${invoice.number} à SuperPDP...`,
+        `📤 Envoi de ${docLabel} ${invoice.prefix}${invoice.number} à SuperPDP...`,
       );
 
       // Vérifier que l'e-invoicing est activé
@@ -642,8 +680,15 @@ class SuperPdpService {
         );
       }
 
+      // Compte SuperPDP connecté ? Vérifié avant tout appel réseau : sans
+      // jeton, rien ne part (pas même la conversion publique).
+      await this.getAccessToken(organizationId);
+
       // Transformer la facture au format SuperPDP
-      const superPdpInvoice = this.transformInvoiceForSuperPdp(invoice);
+      const superPdpInvoice = this.transformInvoiceForSuperPdp(
+        invoice,
+        options,
+      );
 
       // Log de la facture transformée pour debug
       logger.debug("📋 Facture transformée pour SuperPDP:", {
@@ -725,7 +770,7 @@ class SuperPdpService {
       };
     } catch (error) {
       logger.error(
-        "❌ Erreur lors de l'envoi de la facture à SuperPDP:",
+        `❌ Erreur lors de l'envoi de ${docLabel} à SuperPDP:`,
         error,
       );
 
@@ -736,6 +781,19 @@ class SuperPdpService {
         status: "ERROR",
       };
     }
+  }
+
+  /**
+   * Envoyer un avoir (credit note, UNTDID 381) à SuperPDP.
+   * Même pipeline que sendInvoice (EN16931 → UBL → POST /invoices), avec les
+   * montants en valeur absolue et la référence à la facture d'origine.
+   * @param {string} organizationId
+   * @param {Object} creditNote - Document CreditNote Newbi
+   */
+  async sendCreditNote(organizationId, creditNote) {
+    return this.sendInvoice(organizationId, creditNote, {
+      documentType: "creditNote",
+    });
   }
 
   /**
@@ -1034,10 +1092,17 @@ class SuperPdpService {
    * @param {Object} invoice - Facture Newbi (flux E_REPORTING_TRANSACTION)
    * @returns {Promise<{success, id?, status?, error?}>}
    */
-  async submitB2cTransaction(organizationId, invoice) {
+  async submitB2cTransaction(organizationId, invoice, options = {}) {
     try {
+      // sign = -1 : déclaration en négatif (avoir B2C, ou correction après
+      // annulation d'une facture déjà déclarée). Les montants sont normalisés
+      // en valeur absolue avant application du signe, car les avoirs Newbi
+      // stockent des totaux négatifs alors que les groupes TVA (calculés
+      // depuis les items) sont positifs.
+      const sign = options.sign === -1 ? -1 : 1;
       const fmt = (n) =>
         (Math.round((parseFloat(n) || 0) * 100) / 100).toFixed(2);
+      const signedAbs = (n) => sign * Math.abs(parseFloat(n) || 0);
       const date = invoice.issueDate
         ? new Date(invoice.issueDate).toISOString().split("T")[0]
         : new Date().toISOString().split("T")[0];
@@ -1045,8 +1110,8 @@ class SuperPdpService {
       const groups = this._computeVatGroups(invoice);
       const taxSubtotals = groups.map((g) => ({
         tax_percent: fmt(g.rate),
-        tax_total: fmt(g.taxAmount),
-        taxable_amount: fmt(g.taxableAmount),
+        tax_total: fmt(signedAbs(g.taxAmount)),
+        taxable_amount: fmt(signedAbs(g.taxableAmount)),
       }));
 
       // ⚠️ category_code n'a pas d'énum documenté dans la spec : valeur par défaut
@@ -1058,8 +1123,8 @@ class SuperPdpService {
         currency: "EUR",
         date,
         role_code: "SE",
-        tax_exclusive_amount: fmt(invoice.finalTotalHT),
-        tax_total: fmt(invoice.finalTotalVAT),
+        tax_exclusive_amount: fmt(signedAbs(invoice.finalTotalHT)),
+        tax_total: fmt(signedAbs(invoice.finalTotalVAT)),
         tax_subtotals: taxSubtotals,
       };
 

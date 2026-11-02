@@ -54,6 +54,24 @@ import {
   isClaudeCodingStartComment,
 } from "../services/claudeDevTriggerService.js";
 import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
+import {
+  withBoardAccess,
+  hiddenBoardIds,
+  skipHiddenBoardEvents,
+  boardIdOfTask,
+  boardIdOfColumn,
+  byBoardArg,
+  byInputBoard,
+  byInputId,
+  byTaskArg,
+  byColumnArg,
+  byInputColumn,
+  byColumnList,
+} from "../services/kanbanBoardAccess.js";
+import {
+  TASK_FILE_FIELDS,
+  cleanupDeletedTasksFilesLater,
+} from "../services/kanbanTaskFilesCleanup.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1469,9 +1487,9 @@ const resolvers = {
       async (
         _,
         { search, boardId, columnId, excludeTaskId, limit, workspaceId },
-        { workspaceId: contextWorkspaceId },
+        context,
       ) => {
-        const finalWorkspaceId = workspaceId || contextWorkspaceId;
+        const finalWorkspaceId = workspaceId || context.workspaceId;
         return searchLinkableTasks({
           workspaceId: finalWorkspaceId,
           search,
@@ -1479,6 +1497,12 @@ const resolvers = {
           columnId,
           excludeTaskId,
           limit,
+          // Tableaux réservés à une liste dont l'utilisateur ne fait pas partie
+          excludeBoardIds: await hiddenBoardIds(
+            finalWorkspaceId,
+            context.user,
+            context,
+          ),
         });
       },
     ),
@@ -1487,11 +1511,8 @@ const resolvers = {
     // les pages : sans accès aux projets on renvoie une liste vide plutôt
     // qu'une erreur (qui s'afficherait en boucle), aucune donnée n'est exposée.
     activeTimers: withRBAC(
-      async (
-        _,
-        { workspaceId },
-        { user, workspaceId: contextWorkspaceId, permissions },
-      ) => {
+      async (_, { workspaceId }, context) => {
+        const { user, workspaceId: contextWorkspaceId, permissions } = context;
         if (!permissions?.canRead("kanban")) return [];
         const finalWorkspaceId = workspaceId || contextWorkspaceId;
         const db = mongoose.connection.db;
@@ -1506,11 +1527,17 @@ const resolvers = {
           .limit(100);
 
         // Filtrer les tâches pertinentes pour l'utilisateur connecté :
-        // celles qu'il a lui-même lancées OU dont il est membre assigné.
-        let filteredTasks = tasks;
+        // celles qu'il a lui-même lancées OU dont il est membre assigné,
+        // hors tableaux réservés à une liste dont il ne fait pas partie.
+        const hidden = new Set(
+          await hiddenBoardIds(finalWorkspaceId, user, context),
+        );
+        let filteredTasks = tasks.filter(
+          (task) => !hidden.has(String(task.boardId)),
+        );
         if (user?.id) {
           const userId = user.id.toString();
-          filteredTasks = tasks.filter((task) => {
+          filteredTasks = filteredTasks.filter((task) => {
             // Timer démarré par l'utilisateur
             const startedById = task.timeTracking?.startedBy?.userId;
             if (startedById && startedById.toString() === userId) return true;
@@ -1763,8 +1790,15 @@ const resolvers = {
       const finalWorkspaceId = workspaceId || contextWorkspaceId;
 
       try {
-        // Supprimer les tâches associées au tableau
+        // Supprimer les tâches associées au tableau (puis leurs fichiers)
+        const deletedTasks = await Task.find({
+          boardId: id,
+          workspaceId: finalWorkspaceId,
+        })
+          .select(TASK_FILE_FIELDS)
+          .lean();
         await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
+        cleanupDeletedTasksFilesLater(deletedTasks);
 
         // Supprimer les colonnes associées au tableau
         await Column.deleteMany({
@@ -1814,15 +1848,18 @@ const resolvers = {
         });
         if (!board) throw boardNotFoundError();
 
-        const favs = board.favoritedBy || [];
-        const isFav = favs.includes(user.id);
-        if (isFav) {
-          board.favoritedBy = favs.filter((uid) => uid !== user.id);
-        } else {
-          board.favoritedBy = [...favs, user.id];
-        }
-        await board.save();
-        return board;
+        // Ajout ou retrait du seul utilisateur, en une écriture atomique :
+        // relire puis réécrire toute la liste perdait le favori d'un autre
+        // membre enregistré au même moment
+        const isFav = (board.favoritedBy || []).includes(user.id);
+        const updated = await Board.findOneAndUpdate(
+          { _id: board._id, workspaceId: board.workspaceId },
+          isFav
+            ? { $pull: { favoritedBy: user.id } }
+            : { $addToSet: { favoritedBy: user.id } },
+          { new: true },
+        );
+        return updated || board;
       },
     ),
 
@@ -1911,11 +1948,18 @@ const resolvers = {
         });
         if (!column) throw new Error("Column not found");
 
-        // Supprimer les tâches associées à la colonne
+        // Supprimer les tâches associées à la colonne (puis leurs fichiers)
+        const deletedTasks = await Task.find({
+          columnId: id,
+          workspaceId: finalWorkspaceId,
+        })
+          .select(TASK_FILE_FIELDS)
+          .lean();
         await Task.deleteMany({
           columnId: id,
           workspaceId: finalWorkspaceId,
         });
+        cleanupDeletedTasksFilesLater(deletedTasks);
 
         // Supprimer la colonne
         const result = await Column.deleteOne({
@@ -3324,6 +3368,9 @@ const resolvers = {
       });
 
       if (result.deletedCount > 0) {
+        // Pièces jointes et état collaboratif de la tâche
+        cleanupDeletedTasksFilesLater([task.toObject()]);
+
         // Retirer la tâche supprimée des tâches qui lui étaient liées et
         // diffuser leur mise à jour (le lien disparaît en temps réel)
         const affected = await detachTaskLinks(id, finalWorkspaceId);
@@ -5091,7 +5138,17 @@ const resolvers = {
       if (!Array.isArray(task.linkedTasks) || task.linkedTasks.length === 0) {
         return [];
       }
-      return loadLinkedTaskInfos(context, task.linkedTasks, task.workspaceId);
+      const infos = await loadLinkedTaskInfos(
+        context,
+        task.linkedTasks,
+        task.workspaceId,
+      );
+      // Tâche liée sur un tableau réservé dont l'utilisateur ne fait pas partie
+      if (!context?.user || infos.length === 0) return infos;
+      const hidden = new Set(
+        await hiddenBoardIds(String(task.workspaceId), context.user, context),
+      );
+      return infos.filter((info) => !hidden.has(String(info.boardId)));
     },
 
     // Résoudre le client assigné à la tâche
@@ -5258,11 +5315,16 @@ const resolvers = {
         try {
           const pubsub = getPubSub();
           // Utiliser un canal spécifique au workspace pour optimiser les performances
-          return endWhenMemberRemoved(
-            pubsub.asyncIterableIterator([
-              `${BOARD_UPDATED}_${finalWorkspaceId}`,
-            ]),
-            { user, workspaceId: finalWorkspaceId },
+          // Un tableau réservé à une liste de membres n'est transmis qu'à
+          // qui y a accès (événement sauté pour les autres)
+          return skipHiddenBoardEvents(
+            endWhenMemberRemoved(
+              pubsub.asyncIterableIterator([
+                `${BOARD_UPDATED}_${finalWorkspaceId}`,
+              ]),
+              { user, workspaceId: finalWorkspaceId },
+            ),
+            user,
           );
         } catch (error) {
           logger.error("❌ [Kanban] Erreur subscription boardUpdated:", error);
@@ -5438,6 +5500,82 @@ const resolvers = {
   },
 };
 
+// Tableau réservé à une liste de membres : la restriction appliquée par
+// boards et board vaut pour toute opération qui lit ou modifie le tableau,
+// ses colonnes ou ses tâches (voir services/kanbanBoardAccess.js).
+const byTaskAndColumn = (taskArg, columnArg) => async (args) => [
+  await boardIdOfTask(taskArg(args)),
+  await boardIdOfColumn(columnArg(args)),
+];
+const BOARD_ACCESS_GUARDS = {
+  Query: {
+    columns: byBoardArg(),
+    column: byColumnArg("id"),
+    tasks: byBoardArg(),
+    task: byTaskArg("id"),
+    taskPresence: byBoardArg(),
+  },
+  Mutation: {
+    setTaskPresence: async (args) => [
+      args.boardId,
+      await boardIdOfTask(args.taskId),
+    ],
+    updateBoard: byInputId,
+    deleteBoard: byBoardArg("id"),
+    toggleBoardFavorite: byBoardArg(),
+    createColumn: byInputBoard,
+    updateColumn: byInputColumn,
+    deleteColumn: byColumnArg("id"),
+    reorderColumns: byColumnList,
+    createTask: async (args) => [
+      args.input?.boardId,
+      await boardIdOfColumn(args.input?.columnId),
+    ],
+    updateTask: byTaskAndColumn(
+      (a) => a.input?.id,
+      (a) => a.input?.columnId,
+    ),
+    assignTaskMember: byTaskArg(),
+    unassignTaskMember: byTaskArg(),
+    addTaskTag: byTaskArg(),
+    removeTaskTag: byTaskArg(),
+    addChecklistItem: byTaskArg(),
+    updateChecklistItem: byTaskArg(),
+    removeChecklistItem: byTaskArg(),
+    deleteTask: byTaskArg("id"),
+    moveTask: byTaskAndColumn(
+      (a) => a.id,
+      (a) => a.columnId,
+    ),
+    linkTask: async (args) => [
+      await boardIdOfTask(args.taskId),
+      await boardIdOfTask(args.linkedTaskId),
+    ],
+    unlinkTask: byTaskArg(),
+    addComment: byTaskArg(),
+    updateComment: byTaskArg(),
+    deleteComment: byTaskArg(),
+    startTimer: byTaskArg(),
+    stopTimer: byTaskArg(),
+    resetTimer: byTaskArg(),
+    updateTimerSettings: byTaskArg(),
+    addManualTime: byTaskArg(),
+  },
+};
+for (const [type, guards] of Object.entries(BOARD_ACCESS_GUARDS)) {
+  for (const [name, locate] of Object.entries(guards)) {
+    if (!resolvers[type][name]) {
+      throw new Error(`[Kanban] Resolver ${type}.${name} introuvable`);
+    }
+    resolvers[type][name] = withBoardAccess(locate)(resolvers[type][name]);
+  }
+}
+for (const name of ["taskUpdated", "columnUpdated", "taskPresence"]) {
+  const subscription = resolvers.Subscription[name];
+  subscription.subscribe = withBoardAccess(byBoardArg())(
+    subscription.subscribe,
+  );
+}
 // Wrap all mutations with subscription check
 const originalMutations = resolvers.Mutation;
 // setTaskPresence est exclue : simple signal de présence, aucune donnée modifiée.

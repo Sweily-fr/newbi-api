@@ -3,11 +3,8 @@ import esignatureService from "./esignatureService.js";
 import { buildProofCertificatePdf } from "./esignatureCertificate.js";
 import logger from "../utils/logger.js";
 
-/**
- * Upload un fichier vers R2 (bucket OCR, réutilisé pour les documents signés/cachetés)
- */
-export async function uploadFileToR2(fileBuffer, key, contentType) {
-  const client = new S3Client({
+const r2Client = () =>
+  new S3Client({
     region: "auto",
     endpoint: process.env.R2_API_URL,
     credentials: {
@@ -16,20 +13,34 @@ export async function uploadFileToR2(fileBuffer, key, contentType) {
     },
   });
 
-  const command = new PutObjectCommand({
-    Bucket: process.env.OCR_BUCKET,
-    Key: key,
-    Body: fileBuffer,
-    ContentType: contentType,
-  });
+/**
+ * Bucket PRIVÉ des documents d'une signature terminée (devis signé,
+ * certificat de preuve, piste d'audit) : ESIGNATURE_BUCKET s'il est défini,
+ * sinon le bucket privé des devis archivés. Jamais le bucket public de l'OCR.
+ */
+export function signedDocumentsBucket() {
+  return (
+    process.env.ESIGNATURE_BUCKET ||
+    process.env.QUOTES_BUCKET ||
+    "app-quotes-prod"
+  );
+}
 
-  await client.send(command);
-
-  const publicUrl = process.env.OCR_URL;
-  const cleanUrl = publicUrl?.endsWith("/")
-    ? publicUrl.slice(0, -1)
-    : publicUrl;
-  return `${cleanUrl}/${key}`;
+/**
+ * Upload un document de signature dans le bucket privé. Renvoie sa clé : le
+ * document n'a pas d'adresse publique, il est servi par une URL présignée
+ * courte (esignatureFileUrls.js) à une personne qui peut voir le devis.
+ */
+async function uploadPrivateFile(fileBuffer, key, contentType) {
+  await r2Client().send(
+    new PutObjectCommand({
+      Bucket: signedDocumentsBucket(),
+      Key: key,
+      Body: fileBuffer,
+      ContentType: contentType,
+    }),
+  );
+  return key;
 }
 
 /**
@@ -50,8 +61,8 @@ export async function storeSignedDocuments(signatureRequest) {
   ) {
     return false;
   }
-  // Déjà récupéré → ne rien refaire
-  if (signatureRequest.signedDocumentUrl) {
+  // Déjà récupéré (adresse d'avant le bucket privé, ou clé) → ne rien refaire
+  if (signatureRequest.signedDocumentUrl || signatureRequest.signedDocumentKey) {
     return false;
   }
 
@@ -62,7 +73,8 @@ export async function storeSignedDocuments(signatureRequest) {
 
     if (signedDocBuffer && Buffer.isBuffer(signedDocBuffer)) {
       const key = `esignature/${signatureRequest.organizationId}/${signatureRequest._id}/signed-${signatureRequest.documentNumber || signatureRequest.documentId}.pdf`;
-      signatureRequest.signedDocumentUrl = await uploadFileToR2(
+      signatureRequest.documentsBucket = signedDocumentsBucket();
+      signatureRequest.signedDocumentKey = await uploadPrivateFile(
         signedDocBuffer,
         key,
         "application/pdf",
@@ -79,7 +91,8 @@ export async function storeSignedDocuments(signatureRequest) {
 
         if (Buffer.isBuffer(auditTrail)) {
           // Le provider a déjà renvoyé un PDF : on le stocke tel quel.
-          signatureRequest.auditTrailUrl = await uploadFileToR2(
+          signatureRequest.documentsBucket = signedDocumentsBucket();
+          signatureRequest.auditTrailKey = await uploadPrivateFile(
             auditTrail,
             `${baseKey}/audit-trail.pdf`,
             "application/pdf",
@@ -87,7 +100,8 @@ export async function storeSignedDocuments(signatureRequest) {
         } else {
           // L'audit est un JSON (preuve technique). On archive le JSON brut ET on
           // génère un certificat PDF lisible, présentable au client.
-          await uploadFileToR2(
+          signatureRequest.documentsBucket = signedDocumentsBucket();
+          await uploadPrivateFile(
             Buffer.from(JSON.stringify(auditTrail)),
             `${baseKey}/audit-trail.json`,
             "application/json",
@@ -98,7 +112,7 @@ export async function storeSignedDocuments(signatureRequest) {
               documentNumber: signatureRequest.documentNumber,
               companyName: auditTrail?.data?.creatorData?.name,
             });
-            signatureRequest.auditTrailUrl = await uploadFileToR2(
+            signatureRequest.auditTrailKey = await uploadPrivateFile(
               certificatePdf,
               `${baseKey}/certificat-signature.pdf`,
               "application/pdf",
@@ -134,4 +148,4 @@ export async function storeSignedDocuments(signatureRequest) {
   }
 }
 
-export default { uploadFileToR2, storeSignedDocuments };
+export default { storeSignedDocuments };

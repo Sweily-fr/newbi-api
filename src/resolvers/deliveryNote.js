@@ -1655,16 +1655,6 @@ const deliveryNoteResolvers = {
       },
     ),
 
-    sendDeliveryNote: requireAction("deliveryNotes", "send")(
-      async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-        const { workspaceId } = context;
-        const dn = await DeliveryNote.findOne({ _id: id, workspaceId });
-        if (!dn) throw createNotFoundError("Bon de livraison");
-        // L'envoi réel passe par sendDeliveryNoteEmail (documentEmail),
-        // comme pour les autres documents.
-        return true;
-      },
-    ),
   },
 };
 

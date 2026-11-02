@@ -115,6 +115,7 @@ describe("authentification par JWT (better-auth-jwt.js, aussi utilisé par les W
   for (const { label, extra, accepted } of CASES) {
     it(`${label} : ${accepted ? "accepté" : "refusé"}`, async () => {
       const { _id, email } = await seedUser(extra);
+      await seedSession(_id);
       jwt.decoded = { sub: _id.toString(), email };
       const user = await betterAuthJWTMiddleware(jwtReq());
       if (accepted) {
@@ -130,6 +131,7 @@ describe("authentification par JWT (better-auth-jwt.js, aussi utilisé par les W
 
   it("un compte désactivé n'est pas mis en cache puis servi à la requête suivante", async () => {
     const { _id, email } = await seedUser({ isActive: false });
+    await seedSession(_id);
     jwt.decoded = { sub: _id.toString(), email };
     expect(await betterAuthJWTMiddleware(jwtReq())).toBeNull();
     expect(await betterAuthJWTMiddleware(jwtReq())).toBeNull();

@@ -145,7 +145,10 @@ const creer = async (input) => {
     run: () =>
       Mutation.createFileTransferWithIdsR2(
         {},
-        { fileIds: [fileId], input: { workspaceId: workspace.toString(), ...input } },
+        {
+          fileIds: [fileId],
+          input: { workspaceId: workspace.toString(), ...input },
+        },
         ctx,
       ),
   };
@@ -154,7 +157,9 @@ const creer = async (input) => {
 describe("startMultipartUpload : taille bornée par l'offre", () => {
   it("offre Freelance : fichier de 6 Go refusé avec message, sans appel à R2", async () => {
     await setPlan("freelance");
-    const error = await errorOf(() => start({ fileSize: 6 * GO, totalParts: 600 }));
+    const error = await errorOf(() =>
+      start({ fileSize: 6 * GO, totalParts: 600 }),
+    );
     expect(error?.message).toMatch(/taille maximale de votre offre \(5 Go/);
     expect(r2.startMultipartUpload).not.toHaveBeenCalled();
   });
@@ -167,14 +172,20 @@ describe("startMultipartUpload : taille bornée par l'offre", () => {
 
   it("offre TPE : 15 Go accepté, 16 Go refusé", async () => {
     await setPlan("pme");
-    expect((await start({ fileSize: 15 * GO, totalParts: 1500 })).uploadId).toBeTruthy();
-    const error = await errorOf(() => start({ fileSize: 16 * GO, totalParts: 1600 }));
+    expect(
+      (await start({ fileSize: 15 * GO, totalParts: 1500 })).uploadId,
+    ).toBeTruthy();
+    const error = await errorOf(() =>
+      start({ fileSize: 16 * GO, totalParts: 1600 }),
+    );
     expect(error?.message).toMatch(/15 Go/);
   });
 
   it("offre Entreprise : 50 Go accepté", async () => {
     await setPlan("entreprise");
-    expect((await start({ fileSize: 50 * GO, totalParts: 5000 })).uploadId).toBeTruthy();
+    expect(
+      (await start({ fileSize: 50 * GO, totalParts: 5000 })).uploadId,
+    ).toBeTruthy();
   });
 
   it("taille négative refusée", async () => {
@@ -232,15 +243,16 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
     expect(Math.round(jours)).toBe(7);
   });
 
-  it.each([["", "vide"], ["   ", "espaces"], [null, "absent"]])(
-    "protégé par un mot de passe %j (%s) : refusé",
-    async (password) => {
-      const { run } = await creer({ passwordProtected: true, password });
-      const error = await errorOf(run);
-      expect(error?.message).toMatch(/Saisissez un mot de passe/);
-      expect(await FileTransfer.countDocuments()).toBe(0);
-    },
-  );
+  it.each([
+    ["", "vide"],
+    ["   ", "espaces"],
+    [null, "absent"],
+  ])("protégé par un mot de passe %j (%s) : refusé", async (password) => {
+    const { run } = await creer({ passwordProtected: true, password });
+    const error = await errorOf(run);
+    expect(error?.message).toMatch(/Saisissez un mot de passe/);
+    expect(await FileTransfer.countDocuments()).toBe(0);
+  });
 
   it("titre de 300 caractères refusé", async () => {
     const { run } = await creer({ title: "a".repeat(300) });
@@ -260,7 +272,10 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
     [{ paymentAmount: -5 }, /Montant du paiement invalide/],
     [{ isPaymentRequired: true, paymentAmount: 0 }, /entre 0,50 et 100 000/],
     [{ paymentAmount: 1e9 }, /entre 0,50 et 100 000/],
-    [{ paymentAmount: 10, paymentCurrency: "XYZ" }, /Devise non prise en charge/],
+    [
+      { paymentAmount: 10, paymentCurrency: "XYZ" },
+      /Devise non prise en charge/,
+    ],
   ])("paiement %j refusé", async (input, message) => {
     const { run } = await creer(input);
     const error = await errorOf(run);
@@ -269,7 +284,10 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
   });
 
   it("paiement de 19,99 € enregistré au centime", async () => {
-    const { run } = await creer({ paymentAmount: 19.99, paymentCurrency: "eur" });
+    const { run } = await creer({
+      paymentAmount: 19.99,
+      paymentCurrency: "eur",
+    });
     const { fileTransfer } = await run();
     expect(fileTransfer.isPaymentRequired).toBe(true);
     expect(fileTransfer.paymentAmount).toBe(19.99);
@@ -305,5 +323,50 @@ describe("Abonnement échu : création refusée même sans en-tête d'espace", (
     );
     expect(codeOf(e2)).toBe("SUBSCRIPTION_READ_ONLY");
     expect(await FileTransfer.countDocuments()).toBe(0);
+  });
+});
+
+describe("createFileTransferWithIdsR2 : taille totale bornée", () => {
+  // Fichier finalisé de la taille donnée (taille relevée par R2)
+  const envoyerTaille = async (size) => {
+    r2.completeMultipartUpload.mockImplementationOnce(async (_id, key) => ({
+      key,
+      url: `https://r2/${key}`,
+      size,
+      etag: "etag",
+    }));
+    return envoyer();
+  };
+  const creerAvec = (fileIds) =>
+    Mutation.createFileTransferWithIdsR2(
+      {},
+      { fileIds, input: { workspaceId: workspace.toString() } },
+      ctx,
+    );
+
+  it("10 fichiers de 5 Go (application mobile) : accepté", async () => {
+    const ids = [];
+    for (let i = 0; i < 10; i += 1) ids.push(await envoyerTaille(5 * GO));
+    const { fileTransfer } = await creerAvec(ids);
+    expect(fileTransfer.totalSize).toBe(50 * GO);
+  });
+
+  it("plus de 50 Go au total : refusé avec message, rien n'est créé", async () => {
+    const ids = [];
+    for (let i = 0; i < 11; i += 1) ids.push(await envoyerTaille(5 * GO));
+    const error = await errorOf(() => creerAvec(ids));
+    expect(error?.message).toMatch(/50 Go au total/);
+    expect(
+      await FileTransfer.countDocuments({
+        status: "active",
+        "files.1": { $exists: true },
+      }),
+    ).toBe(0);
+  });
+
+  it("plus de 5 000 fichiers : refusé avant toute lecture", async () => {
+    const ids = Array.from({ length: 5001 }, (_, i) => `f-${i}`);
+    const error = await errorOf(() => creerAvec(ids));
+    expect(error?.message).toMatch(/au plus 5000 fichiers/);
   });
 });

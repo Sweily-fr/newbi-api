@@ -356,6 +356,37 @@ describe("Product Resolver - produits liés", () => {
     ).rejects.toThrow(/Arrondi/);
   });
 
+  it("refuse une base ou une quantité hors de 0,01 à 1 000 000 (« 1 pour 0,0001 »)", async () => {
+    const peinture = await insertProduct({ name: "Peinture" });
+    const enduit = await insertProduct({ name: "Enduit" });
+    const link = (quantity, per) =>
+      update(
+        null,
+        {
+          id: peinture._id.toString(),
+          input: {
+            linkedProducts: [
+              { productId: enduit._id.toString(), quantity, per },
+            ],
+          },
+        },
+        ctx(),
+      );
+
+    for (const [quantity, per] of [
+      [1, 0.0001],
+      [0.001, 1],
+      [1, 2e6],
+      [5e6, 1],
+    ]) {
+      await expect(link(quantity, per)).rejects.toThrow(
+        "Les quantités d'un produit lié vont de 0,01 à 1 000 000",
+      );
+    }
+    const saved = await link(0.01, 1000000);
+    expect(saved.linkedProducts[0].per).toBe(1000000);
+  });
+
   it("rejects a self link, a non-positive quantity and a product from another workspace", async () => {
     const peinture = await insertProduct({ name: "Peinture" });
     const enduit = await insertProduct({ name: "Enduit" });
