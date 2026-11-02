@@ -205,21 +205,42 @@ async function tokenRequest(path, fields, now) {
   };
 }
 
-/** Profil du compte (au mieux : le pseudo exige user.info.username). */
+/** Profil du compte (business/get). */
+async function getBusinessProfile(accessToken, openId) {
+  const { data } = await api("GET", "business/get/", {
+    token: accessToken,
+    query: {
+      business_id: openId,
+      fields: JSON.stringify(["username", "display_name", "profile_image"]),
+    },
+  });
+  return data?.data || {};
+}
+
+/** Profil à la connexion (au mieux : le pseudo exige user.info.username). */
 async function readProfile(accessToken, openId) {
   try {
-    const { data } = await api("GET", "business/get/", {
-      token: accessToken,
-      query: {
-        business_id: openId,
-        fields: JSON.stringify(["username", "display_name", "profile_image"]),
-      },
-    });
-    return data?.data || {};
+    return await getBusinessProfile(accessToken, openId);
   } catch (error) {
     if (error?.authInvalid) throw error;
     return {};
   }
+}
+
+/**
+ * Pseudo, nom et photo relus (rafraîchissement régulier du compte) : un
+ * champ absent de la réponse reste tel quel.
+ */
+export async function fetchProfile({ account, accessToken }) {
+  const profile = await getBusinessProfile(
+    accessToken,
+    String(account.externalAccountId),
+  );
+  return {
+    username: profile.username || undefined,
+    displayName: profile.display_name || profile.username || undefined,
+    avatarUrl: profile.profile_image || undefined,
+  };
 }
 
 /** Code de retour → le compte TikTok Business connecté. */
@@ -614,6 +635,7 @@ export default {
   redirectUri,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   getCreatorInfo,
   publish,

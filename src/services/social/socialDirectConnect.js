@@ -137,6 +137,9 @@ export async function saveDirectAccounts(
       avatarUrl: remote.avatarUrl || null,
       status: "active",
       lastSyncedAt: now,
+      // Nom et photo tout juste lus : prochaine relecture dans 28 jours
+      profileRefreshedAt: now,
+      profileRefreshAttemptedAt: null,
       deletedAt: null,
       credentialGroup: remote.credentialGroup || null,
       platformData: remote.platformData || null,

@@ -288,6 +288,15 @@ async function readMember(token, app) {
 const organizationUrnOf = (element) =>
   element?.organization || element?.organizationTarget || null;
 
+/** Nom et nom d'usage d'une page (lecture réservée aux administrateurs). */
+async function readOrganization(token, id) {
+  const { data } = await rest("GET", `organizations/${id}`, { token });
+  return {
+    name: data?.localizedName || null,
+    vanityName: data?.vanityName || null,
+  };
+}
+
 /** Pages où le membre a un rôle qui permet de publier. */
 async function listOrganizations(token) {
   const { data } = await rest("GET", "organizationAcls", {
@@ -311,11 +320,7 @@ async function listOrganizations(token) {
     let name = null;
     let vanityName = null;
     try {
-      const { data: organization } = await rest("GET", `organizations/${id}`, {
-        token,
-      });
-      name = organization?.localizedName || null;
-      vanityName = organization?.vanityName || null;
+      ({ name, vanityName } = await readOrganization(token, id));
     } catch {
       // Lecture réservée aux administrateurs : nom de repli
     }
@@ -385,6 +390,43 @@ export async function exchangeCode({
     }
   }
   return { accounts };
+}
+
+/**
+ * Nom et photo relus (rafraîchissement régulier du compte, mêmes lectures
+ * qu'à la connexion) : profil du membre, ou nom de la page
+ * (organizations/{id}). Le logo d'une page n'est ni lu ni gardé.
+ * @returns {Promise<{externalAccountId?: string, username?: string|null, displayName?: string|null, avatarUrl?: string|null}>}
+ */
+export async function fetchProfile({ account, accessToken }) {
+  if (account?.platformData?.kind === "organization") {
+    const id = String(account.externalAccountId || "")
+      .split(":")
+      .pop();
+    try {
+      const organization = await readOrganization(accessToken, id);
+      return {
+        username: organization.vanityName,
+        displayName: organization.name,
+      };
+    } catch (error) {
+      // Page illisible pour ce rôle (lecture réservée aux administrateurs) :
+      // pas un jeton invalide, le compte publie toujours
+      if (error?.status === 403) {
+        throw new DirectApiError(`linkedin : page ${id} illisible`, {
+          network: NETWORK,
+          status: 403,
+        });
+      }
+      throw error;
+    }
+  }
+  const member = await readMember(accessToken, accountApp(account));
+  return {
+    externalAccountId: member?.id ? `urn:li:person:${member.id}` : undefined,
+    displayName: member?.name || null,
+    avatarUrl: member?.picture || null,
+  };
 }
 
 export async function refreshCredentials({
@@ -670,6 +712,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   publish,
   checkPublication,

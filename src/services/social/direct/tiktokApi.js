@@ -254,6 +254,37 @@ export async function getCreatorInfo({ accessToken }) {
   };
 }
 
+/** Utilisateur connecté (user.info.basic) : identifiant, nom et photo. */
+async function readUser(accessToken) {
+  const { data } = await api("GET", "user/info/", {
+    token: accessToken,
+    query: { fields: "open_id,union_id,avatar_url,display_name" },
+  });
+  return data?.data?.user || {};
+}
+
+/** Pseudo (creator_info), au mieux : undefined s'il est illisible. */
+async function readUsername(accessToken) {
+  try {
+    return (await getCreatorInfo({ accessToken })).username || undefined;
+  } catch {
+    // Pseudo facultatif ici (relu à chaque publication)
+    return undefined;
+  }
+}
+
+/** Pseudo, nom et photo relus (rafraîchissement régulier du compte). */
+export async function fetchProfile({ accessToken }) {
+  const user = await readUser(accessToken);
+  const username = await readUsername(accessToken);
+  return {
+    externalAccountId: user.open_id ? String(user.open_id) : undefined,
+    username,
+    displayName: user.display_name || username || null,
+    avatarUrl: user.avatar_url || null,
+  };
+}
+
 export async function exchangeCode({ code, redirectUri, now = new Date() }) {
   if (!isConfigured()) throw configError(NETWORK, "TIKTOK_CLIENT_KEY absente");
   const credentials = await tokenRequest(
@@ -264,18 +295,8 @@ export async function exchangeCode({ code, redirectUri, now = new Date() }) {
     },
     now,
   );
-  const { data } = await api("GET", "user/info/", {
-    token: credentials.accessToken,
-    query: { fields: "open_id,union_id,avatar_url,display_name" },
-  });
-  const user = data?.data?.user || {};
-  let username = null;
-  try {
-    username = (await getCreatorInfo({ accessToken: credentials.accessToken }))
-      .username;
-  } catch {
-    // Pseudo facultatif ici (relu à chaque publication)
-  }
+  const user = await readUser(credentials.accessToken);
+  const username = (await readUsername(credentials.accessToken)) || null;
   const openId = user.open_id || credentials.openId;
   if (!openId) {
     throw new DirectApiError("tiktok : compte sans identifiant", {
@@ -584,6 +605,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   getCreatorInfo,
   publish,

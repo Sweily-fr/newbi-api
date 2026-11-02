@@ -269,6 +269,22 @@ export async function exchangeCode({ code, redirectUri }) {
   return { accounts };
 }
 
+/**
+ * Nom et photo de la page relus avec son jeton (rafraîchissement régulier
+ * du compte ; mêmes champs qu'à la connexion, pages_show_list).
+ */
+export async function fetchProfile({ account, accessToken }) {
+  const { data } = await graph("GET", String(account.externalAccountId), {
+    token: accessToken,
+    query: { fields: "id,name,picture{url}" },
+  });
+  return {
+    externalAccountId: data?.id ? String(data.id) : undefined,
+    displayName: data?.name || null,
+    avatarUrl: data?.picture?.data?.url || null,
+  };
+}
+
 /** Les jetons de page n'expirent pas : rien à rafraîchir. */
 export async function refreshCredentials() {
   throw new DirectApiError("meta : jeton de page non rafraîchissable", {
@@ -536,6 +552,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   publish,
 };

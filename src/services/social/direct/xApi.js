@@ -174,6 +174,29 @@ async function tokenRequest(form, now) {
   };
 }
 
+/** Compte connecté (GET /2/users/me, users.read). */
+async function readMe(accessToken) {
+  const { data } = await directRequest({
+    network: NETWORK,
+    url: `${API_URL}/users/me`,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    query: { "user.fields": "profile_image_url" },
+    check: classifyXError,
+  });
+  return data?.data;
+}
+
+/** Pseudo, nom et photo relus (rafraîchissement régulier du compte). */
+export async function fetchProfile({ accessToken }) {
+  const user = await readMe(accessToken);
+  return {
+    externalAccountId: user?.id ? String(user.id) : undefined,
+    username: user?.username || null,
+    displayName: user?.name || user?.username || null,
+    avatarUrl: user?.profile_image_url || null,
+  };
+}
+
 export async function exchangeCode({
   code,
   redirectUri,
@@ -190,14 +213,7 @@ export async function exchangeCode({
     },
     now,
   );
-  const { data } = await directRequest({
-    network: NETWORK,
-    url: `${API_URL}/users/me`,
-    headers: { Authorization: `Bearer ${credentials.accessToken}` },
-    query: { "user.fields": "profile_image_url" },
-    check: classifyXError,
-  });
-  const user = data?.data;
+  const user = await readMe(credentials.accessToken);
   if (!user?.id) {
     throw new DirectApiError("x : compte sans identifiant", {
       network: NETWORK,
@@ -461,6 +477,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   publish,
   checkPublication,

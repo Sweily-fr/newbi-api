@@ -46,6 +46,11 @@ const socialAccountSchema = new mongoose.Schema(
     },
     lastSyncedAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
+    // Nom, pseudo et photo relus chez le réseau (comptes « direct » : à la
+    // connexion, puis au moins tous les 28 jours, socialAccountProfiles.js)
+    profileRefreshedAt: { type: Date, default: null },
+    // Dernier essai de relecture (un par jour au plus, même en échec)
+    profileRefreshAttemptedAt: { type: Date, default: null },
 
     // ── Comptes « direct » seulement ──
     // Jetons chiffrés au repos (AES-256-GCM, DATA_ENCRYPTION_KEY)

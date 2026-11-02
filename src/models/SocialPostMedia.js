@@ -65,12 +65,20 @@ const socialPostMediaSchema = new mongoose.Schema(
     processingLockedUntil: { type: Date, default: null },
     processingAttempts: { type: Number, default: 0 },
     processedAt: { type: Date, default: null },
+
+    // ── Nettoyage (socialMediaCleanup.js) ──
+    // Vu dans un post : exclu du nettoyage des médias jamais utilisés
+    attachedAt: { type: Date, default: null },
+    // Retiré d'un post modifié : supprimé 7 jours après s'il ne sert plus
+    detachedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
 
 // Reprise des préparations interrompues et nettoyage des envois abandonnés
 socialPostMediaSchema.index({ kind: 1, status: 1, processingLockedUntil: 1 });
+// Médias jamais rattachés à un post (ou retirés), supprimés après 7 jours
+socialPostMediaSchema.index({ attachedAt: 1, createdAt: 1 });
 
 const SocialPostMedia =
   mongoose.models.SocialPostMedia ||

@@ -191,6 +191,12 @@ const socialPostSchema = new mongoose.Schema(
     notifiedStatus: { type: String, default: null },
     // Carte supprimée : le post n'est plus affiché sur le tableau
     taskDeletedAt: { type: Date, default: null },
+    // Images et vidéos à supprimer du stockage à partir de cette date
+    // (carte supprimée ; repoussée pendant une publication en cours ou
+    // après un échec), puis date de leur suppression
+    // (socialMediaCleanup.js)
+    mediaPurgeAt: { type: Date, default: null },
+    mediaPurgedAt: { type: Date, default: null },
     // Nouveaux essais vers X (un par cible X en échec) : chaque envoi à X
     // est facturé et compte dans la limite mensuelle (xPostQuota.js)
     xRetriedAt: { type: [Date], default: [] },
@@ -202,6 +208,12 @@ socialPostSchema.index({ workspaceId: 1, boardId: 1, taskDeletedAt: 1 });
 socialPostSchema.index({ status: 1, scheduledFor: 1 });
 socialPostSchema.index({ workspaceId: 1, "targets.socialAccountId": 1 });
 socialPostSchema.index({ workspaceId: 1, scheduledFor: 1 });
+// Médias à supprimer, et médias encore utilisés par un post
+socialPostSchema.index(
+  { mediaPurgeAt: 1 },
+  { partialFilterExpression: { mediaPurgeAt: { $type: "date" } } },
+);
+socialPostSchema.index({ workspaceId: 1, "media.mediaId": 1 });
 
 const SocialPost =
   mongoose.models.SocialPost || mongoose.model("SocialPost", socialPostSchema);

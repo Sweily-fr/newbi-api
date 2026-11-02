@@ -94,6 +94,26 @@ export function buildAuthorizeUrl({ state, redirectUri }) {
 const expiresAt = (seconds, now = new Date()) =>
   Number(seconds) > 0 ? new Date(now.getTime() + Number(seconds) * 1000) : null;
 
+/** Compte connecté (GET /me), à la connexion et au rafraîchissement. */
+async function readMe(accessToken) {
+  const { data } = await graph("GET", "me", {
+    token: accessToken,
+    query: { fields: "user_id,username,name,profile_picture_url,account_type" },
+  });
+  return data;
+}
+
+/** Pseudo, nom et photo relus (rafraîchissement régulier du compte). */
+export async function fetchProfile({ accessToken }) {
+  const me = await readMe(accessToken);
+  return {
+    externalAccountId: me?.user_id ? String(me.user_id) : undefined,
+    username: me?.username || null,
+    displayName: me?.name || me?.username || null,
+    avatarUrl: me?.profile_picture_url || null,
+  };
+}
+
 /** Code de retour → le compte Instagram professionnel connecté. */
 export async function exchangeCode({ code, redirectUri, now = new Date() }) {
   if (!isConfigured()) throw configError(NETWORK, "INSTAGRAM_APP_ID absente");
@@ -132,10 +152,7 @@ export async function exchangeCode({ code, redirectUri, now = new Date() }) {
     check: classifyInstagramError,
   });
   const accessToken = long?.access_token || short.access_token;
-  const { data: me } = await graph("GET", "me", {
-    token: accessToken,
-    query: { fields: "user_id,username,name,profile_picture_url,account_type" },
-  });
+  const me = await readMe(accessToken);
   // user_id : identifiant du compte professionnel (celui des publications)
   const accountId = me?.user_id || short.user_id || me?.id;
   if (!accountId) {
@@ -206,6 +223,7 @@ export default {
   isConfigured,
   buildAuthorizeUrl,
   exchangeCode,
+  fetchProfile,
   refreshCredentials,
   publish,
   checkPublication,

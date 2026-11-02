@@ -607,6 +607,25 @@ export async function deleteUserAccount(userId, organizationId) {
       await deleteTransferStorage(transfer);
     }
 
+    // Réseaux sociaux de l'espace supprimé : comptes déconnectés (accès
+    // révoqués au mieux, jetons effacés), posts programmés annulés, images
+    // et vidéos des posts supprimées du stockage par le cron. Au mieux : ne
+    // lève jamais d'erreur
+    if (summary.organizationDeleted) {
+      try {
+        const { purgeWorkspaceSocialData } =
+          await import("./social/socialMediaCleanup.js");
+        const social = await purgeWorkspaceSocialData(orgObjectId);
+        logger.info(
+          `[RGPD] Réseaux sociaux de l'espace ${organizationId} : ${social.accounts} compte(s) déconnecté(s), médias de ${social.posts} post(s) à supprimer`,
+        );
+      } catch (error) {
+        logger.warn(
+          `[RGPD] Réseaux sociaux de l'espace ${organizationId} non nettoyés : ${error.message}`,
+        );
+      }
+    }
+
     // Images de signature (photo, logo, bannière) : supprimées maintenant,
     // un échec n'annule pas la suppression déjà validée
     const signatureImagesDeleted = await purgeSignatureImages(
