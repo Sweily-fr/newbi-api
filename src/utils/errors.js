@@ -127,6 +127,45 @@ const requireAuth = (context) => {
   return context.user;
 };
 
+/**
+ * Erreurs techniques (base de données, identifiant mal formé, bug) : leur
+ * message cite des modèles, des chemins ou des valeurs de clés. Il reste
+ * dans les journaux, le client reçoit un message générique.
+ */
+const TECHNICAL_ERROR_NAMES = new Set([
+  "CastError",
+  "MongoError",
+  "MongoServerError",
+  "MongoNetworkError",
+  "MongoServerSelectionError",
+  "MongooseServerSelectionError",
+  "MongoBulkWriteError",
+  "BSONError",
+  "BSONTypeError",
+  "StrictModeError",
+  "VersionError",
+  "ParallelSaveError",
+  "DocumentNotFoundError",
+  "TypeError",
+  "ReferenceError",
+  "SyntaxError",
+  "RangeError",
+]);
+
+const INTERNAL_ERROR_MESSAGE = "Une erreur interne est survenue. Réessayez.";
+
+const isTechnicalError = (error) =>
+  Boolean(error) &&
+  (TECHNICAL_ERROR_NAMES.has(error.name) ||
+    error.code === 11000 ||
+    error.code === 11001);
+
+/** Message montré au client pour une erreur qui n'est pas une AppError. */
+const publicErrorMessage = (error) =>
+  isTechnicalError(error)
+    ? INTERNAL_ERROR_MESSAGE
+    : error?.message || INTERNAL_ERROR_MESSAGE;
+
 export {
   ERROR_CODES,
   AppError,
@@ -139,4 +178,7 @@ export {
   createInternalServerError,
   createDatabaseError,
   requireAuth,
+  isTechnicalError,
+  publicErrorMessage,
+  INTERNAL_ERROR_MESSAGE,
 };

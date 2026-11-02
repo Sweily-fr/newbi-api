@@ -9,6 +9,7 @@
 import FileTransfer from "../models/FileTransfer.js";
 import { deleteFile } from "../utils/fileTransferUtils.js";
 import { deleteFileFromR2 } from "../utils/chunkUploadR2Utils.js";
+import { transferPreviewKey } from "../utils/transferStorage.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -47,6 +48,8 @@ async function markExpiredTransfersAndDeleteR2() {
         if (file.storageType === "r2" && file.r2Key) {
           try {
             const r2DeleteResult = await deleteFileFromR2(file.r2Key);
+            // Aperçu JPEG persisté à côté du fichier (gros fichiers images)
+            await deleteFileFromR2(transferPreviewKey(file.r2Key));
             if (r2DeleteResult) {
               deletedR2FilesCount++;
               freedBytes += file.size || 0;

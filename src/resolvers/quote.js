@@ -1,4 +1,6 @@
 import logger from "../utils/logger.js";
+import { assertClientNotBlocked } from "../utils/blockedClient.js";
+import { automationService } from "./clientAutomation.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
@@ -12,6 +14,7 @@ import {
   loadWorkspaceInvoices,
   quoteHasInvoicedPurchaseOrder,
 } from "../utils/workspaceDocumentLoaders.js";
+import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -56,6 +59,10 @@ import {
 } from "../middlewares/company-info-guard.js";
 import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
+import {
+  assertCreationStatusAllowed,
+  normalizeInputPrefix,
+} from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
@@ -64,6 +71,7 @@ import {
   cancelActiveQuoteSignatures,
   findActiveClientQuoteSignature,
 } from "../services/quoteSignatureSync.js";
+import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 // Fonction utilitaire pour calculer les totaux avec remise et livraison
 // (règles communes aux documents de vente : voir utils/documentTotals.js,
@@ -197,8 +205,13 @@ const quoteResolvers = {
     },
     // Documents liés lus via les DataLoaders de la requête : une requête
     // pour toute la liste au lieu d'une par devis (workspaceDocumentLoaders).
+    // Chacun suit « Voir » de sa page (factures, bons de commande, bons de
+    // livraison) : un rôle limité aux devis ne lit pas leurs montants.
     convertedToInvoice: async (quote, _args, context) => {
       if (!quote.convertedToInvoice) return null;
+      if (!(await canViewLinkedPage(context, quote.workspaceId, "invoices"))) {
+        return null;
+      }
       return loadWorkspaceInvoice(
         context,
         quote.convertedToInvoice,
@@ -206,6 +219,9 @@ const quoteResolvers = {
       );
     },
     linkedInvoices: async (quote, _args, context) => {
+      if (!(await canViewLinkedPage(context, quote.workspaceId, "invoices"))) {
+        return [];
+      }
       if (quote.linkedInvoices && quote.linkedInvoices.length > 0) {
         return loadWorkspaceInvoices(
           context,
@@ -224,7 +240,12 @@ const quoteResolvers = {
     },
     // Bons de commande créés depuis ce devis — résolus à l'inverse via
     // PurchaseOrder.sourceQuoteId (le devis ne stocke pas de référence vers les BC)
-    linkedPurchaseOrders: async (quote) => {
+    linkedPurchaseOrders: async (quote, _args, context) => {
+      if (
+        !(await canViewLinkedPage(context, quote.workspaceId, "purchaseOrders"))
+      ) {
+        return [];
+      }
       return await PurchaseOrder.find({
         sourceQuoteId: quote._id,
         workspaceId: quote.workspaceId,
@@ -234,8 +255,14 @@ const quoteResolvers = {
     // Sert au front à masquer/désactiver les boutons de conversion pour éviter
     // les doublons devis→facture vs devis→BC→facture.
     // Bons de livraison créés à partir de ce devis (DeliveryNote.sourceQuote)
-    linkedDeliveryNotes: async (quote, _args, context) =>
-      loadQuoteDeliveryNotes(context, quote),
+    linkedDeliveryNotes: async (quote, _args, context) => {
+      if (
+        !(await canViewLinkedPage(context, quote.workspaceId, "deliveryNotes"))
+      ) {
+        return [];
+      }
+      return loadQuoteDeliveryNotes(context, quote);
+    },
     hasPurchaseOrderInvoices: async (quote, _args, context) =>
       quoteHasInvoicedPurchaseOrder(context, quote),
     // Calculer le total des factures de situation liées à ce devis
@@ -251,6 +278,8 @@ const quoteResolvers = {
             workspaceId: quote.workspaceId,
             invoiceType: "situation",
             purchaseOrderNumber: quoteRef,
+            // Une situation annulée n'est plus facturée
+            status: { $ne: "CANCELED" },
           },
         },
         { $limit: 1000 },
@@ -318,6 +347,7 @@ const quoteResolvers = {
           search,
           page = 1,
           limit = 10,
+          clientId,
         },
         context,
       ) => {
@@ -332,6 +362,9 @@ const quoteResolvers = {
           if (startDate) query.createdAt.$gte = new Date(startDate);
           if (endDate) query.createdAt.$lte = new Date(endDate);
         }
+
+        // Documents d'un contact (onglets de sa fiche) : filtrés en base
+        if (clientId) query["client.id"] = String(clientId);
 
         if (status) query.status = status;
 
@@ -690,6 +723,7 @@ const quoteResolvers = {
           Model: Quote,
           docType: "quote",
           draftStatus: "DRAFT",
+          lockedStatuses: ["COMPLETED"],
           workspaceId,
           docId: quoteId,
           file,
@@ -699,6 +733,7 @@ const quoteResolvers = {
     createQuote: requireCompanyInfo(
       requireAction("quotes", "create")(
         async (_, { workspaceId: inputWorkspaceId, input }, context) => {
+          assertDocumentAppearance(input?.appearance);
           const { user } = context;
           const workspaceId = resolveWorkspaceId(
             inputWorkspaceId,
@@ -711,6 +746,17 @@ const quoteResolvers = {
               ERROR_CODES.BAD_REQUEST,
             );
           }
+
+          // Contact bloqué : exclu de la création de documents
+          await assertClientNotBlocked(workspaceId, input.client?.id);
+
+          // Accepté, refusé : changement de statut (« Accepter, refuser ») ;
+          // importé : réservé à l'import des devis
+          assertCreationStatusAllowed(context, "quotes", input.status, {
+            issuedStatus: "PENDING",
+            reserved: { IMPORTED: "importé" },
+          });
+          normalizeInputPrefix(input);
 
           logger.debug("🔍 [createQuote] Input received:", {
             prefix: input.prefix,
@@ -1074,6 +1120,7 @@ const quoteResolvers = {
         if (!quote) {
           throw createNotFoundError("Devis");
         }
+        assertDocumentAppearance(input?.appearance, quote.appearance);
 
         if (quote.status === "COMPLETED") {
           throw createResourceLockedError(
@@ -1089,12 +1136,24 @@ const quoteResolvers = {
           );
         }
 
+        // Comme un bon de livraison annulé, et comme l'écran qui ne propose
+        // plus « Éditer » : un devis refusé reste tel qu'il a été refusé
+        if (quote.status === "CANCELED") {
+          throw new AppError(
+            "Un devis refusé ne peut pas être modifié.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "quote", reason: "CANCELED" },
+          );
+        }
+
         if (quote.convertedToInvoice) {
           throw createResourceLockedError(
             "Devis",
             "un devis converti en facture ne peut pas être modifié",
           );
         }
+
+        normalizeInputPrefix(input);
 
         // Devis envoyé en signature : le client signe la version envoyée.
         // Le modifier exige d'annuler d'abord la demande en cours.
@@ -1480,10 +1539,17 @@ const quoteResolvers = {
         // que soit leur statut, y compris une fois acceptés (COMPLETED).
         const isImportedOrigin = !quote.prefix && Boolean(quote.number);
 
-        if (quote.status === "COMPLETED" && !isImportedOrigin) {
-          throw createResourceLockedError(
-            "Devis",
-            "un devis terminé ne peut pas être supprimé",
+        // Comme l'écran : hors import, seul un brouillon se supprime. Un devis
+        // émis porte un numéro de la séquence et a pu partir chez le client.
+        if (
+          quote.status !== "DRAFT" &&
+          quote.status !== "IMPORTED" &&
+          !isImportedOrigin
+        ) {
+          throw new AppError(
+            "Seuls les brouillons peuvent être supprimés : ce devis est numéroté.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "quote", reason: "NUMBERED_DOCUMENT" },
           );
         }
 
@@ -1790,6 +1856,11 @@ const quoteResolvers = {
           }
         }
 
+        // Automatisations de listes de contacts « Devis accepté »
+        if (status === "COMPLETED") {
+          await automationService.onQuoteAccepted(quote, workspaceId);
+        }
+
         // Automatisations documents partagés (fire-and-forget, ne bloque pas la réponse)
         const triggerMap = {
           PENDING: "QUOTE_SENT",
@@ -1867,6 +1938,27 @@ const quoteResolvers = {
               currentStatus: quote.status,
             },
           );
+        }
+
+        // Répartition : chaque part est un pourcentage du devis, strictement
+        // positif et au plus 100 %
+        if (distribution !== undefined && distribution !== null) {
+          const valid =
+            Array.isArray(distribution) &&
+            distribution.length > 0 &&
+            distribution.every(
+              (percent) =>
+                typeof percent === "number" &&
+                Number.isFinite(percent) &&
+                percent > 0 &&
+                percent <= 100,
+            );
+          if (!valid) {
+            throw createValidationError(
+              "Chaque part de la répartition doit être un pourcentage supérieur à 0 et au plus égal à 100 %",
+              { distribution: "Répartition invalide" },
+            );
+          }
         }
 
         // Montant total du devis
@@ -1948,8 +2040,10 @@ const quoteResolvers = {
         const totalPercentage =
           existingInvoicesPercentage + newInvoicesPercentage;
 
-        // Si skipValidation est true (pour les factures d'acompte), on ignore cette vérification
-        if (!skipValidation && Math.abs(totalPercentage - 100) > 0.01) {
+        // Une répartition ne dépasse jamais 100 % du devis, même avec
+        // skipValidation (factures d'acompte) : celui-ci autorise seulement
+        // une répartition inférieure à 100 %
+        if (Math.abs(totalPercentage - 100) > 0.01) {
           // Tolérance pour les erreurs d'arrondi
           // Ne pas ajuster automatiquement, respecter le choix de l'utilisateur
           // Vérifier simplement que le total ne dépasse pas 100%
@@ -2056,6 +2150,50 @@ const quoteResolvers = {
 
         // Montant restant disponible pour de nouvelles factures: ${remainingAmount.toFixed(2)}€
 
+        // Réservation atomique du devis avant de créer les factures : ses
+        // factures liées sont encore celles lues pour le reste à facturer.
+        // Deux conversions simultanées : la seconde est refusée.
+        const invoiceIds = invoiceDistribution.map(
+          () => new mongoose.Types.ObjectId(),
+        );
+        const previousConvertedToInvoice = quote.convertedToInvoice || null;
+        const claim = await Quote.updateOne(
+          {
+            _id: quote._id,
+            workspaceId: quote.workspaceId,
+            ...(quote.linkedInvoices?.length
+              ? { linkedInvoices: [...quote.linkedInvoices] }
+              : { "linkedInvoices.0": { $exists: false } }),
+          },
+          {
+            $push: { linkedInvoices: { $each: invoiceIds } },
+            $set: { convertedToInvoice: invoiceIds[0] },
+          },
+        );
+        if (claim.modifiedCount !== 1) {
+          throw new AppError(
+            "Ce devis vient d'être facturé par ailleurs : vérifiez son reste à facturer puis réessayez.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "Devis" },
+          );
+        }
+        // Annule la réservation et les factures déjà créées (aucune facture
+        // orpheline liée au devis)
+        const rollback = async () => {
+          await Invoice.deleteMany({
+            _id: { $in: invoiceIds },
+            workspaceId: quote.workspaceId,
+          });
+          await Quote.updateOne(
+            { _id: quote._id, workspaceId: quote.workspaceId },
+            {
+              $pull: { linkedInvoices: { $in: invoiceIds } },
+              $set: { convertedToInvoice: previousConvertedToInvoice },
+            },
+          );
+        };
+
+        try {
         for (let i = 0; i < invoiceCount; i++) {
           // Générer un nouveau numéro de facture avec ce préfixe au moment de la création
           // Cela garantit que le numéro est séquentiel par rapport aux autres factures déjà créées
@@ -2086,6 +2224,7 @@ const quoteResolvers = {
 
           // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
           const invoice = new Invoice({
+            _id: invoiceIds[i],
             number,
             prefix,
             client: quoteObj.client,
@@ -2151,13 +2290,16 @@ const quoteResolvers = {
           }
         }
 
+        } catch (error) {
+          await rollback();
+          throw error;
+        }
+
         // Vérifier que le montant total des nouvelles factures ne dépasse pas le montant restant
         if (newInvoicesTotalAmount > remainingAmount + 0.01) {
           // Tolérance pour les erreurs d'arrondi
           // Supprimer les factures créées car elles dépassent le montant disponible
-          for (const invoice of createdInvoices) {
-            await Invoice.deleteOne({ _id: invoice._id });
-          }
+          await rollback();
 
           throw new AppError(
             `Le montant total des nouvelles factures (${newInvoicesTotalAmount.toFixed(
@@ -2178,19 +2320,7 @@ const quoteResolvers = {
         // Montant total des nouvelles factures: ${newInvoicesTotalAmount.toFixed(2)}€
         // Montant total de toutes les factures: ${(existingInvoicesTotalAmount + newInvoicesTotalAmount).toFixed(2)}€ / ${quoteAmount.toFixed(2)}€
 
-        // Mettre à jour le devis avec la référence à la facture principale créée
-        quote.convertedToInvoice = mainInvoice._id;
-
-        // Ajouter toutes les factures à la liste des factures liées
-        if (!quote.linkedInvoices) {
-          quote.linkedInvoices = [];
-        }
-
-        for (const invoice of createdInvoices) {
-          quote.linkedInvoices.push(invoice._id);
-        }
-
-        await quote.save();
+        // Le devis connaît déjà ses nouvelles factures (réservation ci-dessus)
 
         // Retourner la facture principale
         return await mainInvoice.populate("createdBy");

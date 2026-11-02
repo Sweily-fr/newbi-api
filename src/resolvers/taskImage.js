@@ -1,6 +1,6 @@
 // resolvers/taskImage.js
 import { GraphQLUpload } from "graphql-upload";
-import { Task } from "../models/kanban.js";
+import { Board, Task } from "../models/kanban.js";
 import cloudflareService from "../services/cloudflareService.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
@@ -92,6 +92,21 @@ const deleteOwnTaskImage = async (task, image) => {
  * Structure Cloudflare: kanban/{taskId}/{userId}/description/{uniqueId}.{ext}
  *                   ou: kanban/{taskId}/{userId}/comments/{commentId}/{uniqueId}.{ext}
  */
+
+/**
+ * Images d'un commentaire : seul son auteur en ajoute ; son auteur ou le
+ * propriétaire du tableau en retire (même règle que deleteComment).
+ */
+const COMMENT_IMAGE_FORBIDDEN =
+  "Seul l'auteur du commentaire peut modifier ses pièces jointes.";
+
+async function canEditCommentImages(task, comment, user, { allowBoardOwner }) {
+  const userId = String(user?.id || user?._id || "");
+  if (userId && String(comment.userId || "") === userId) return true;
+  if (!allowBoardOwner) return false;
+  const board = await Board.findById(task.boardId).select("userId").lean();
+  return Boolean(board && String(board.userId || "") === userId);
+}
 
 const taskImageResolvers = {
   // Type scalar pour l'upload de fichiers
@@ -460,6 +475,17 @@ const taskImageResolvers = {
             message: "Commentaire non trouvé",
           };
         }
+        if (
+          !(await canEditCommentImages(task, comment, user, {
+            allowBoardOwner: false,
+          }))
+        ) {
+          return {
+            success: false,
+            image: null,
+            message: COMMENT_IMAGE_FORBIDDEN,
+          };
+        }
 
         // Traiter le fichier uploadé
         const { createReadStream, filename, mimetype } = await file;
@@ -593,6 +619,13 @@ const taskImageResolvers = {
         );
         if (!comment) {
           throw new Error("Commentaire non trouvé");
+        }
+        if (
+          !(await canEditCommentImages(task, comment, user, {
+            allowBoardOwner: true,
+          }))
+        ) {
+          throw new Error(COMMENT_IMAGE_FORBIDDEN);
         }
 
         // Trouver l'image

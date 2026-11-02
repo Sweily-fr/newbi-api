@@ -285,6 +285,90 @@ describe("journal de l'envoi", () => {
   });
 });
 
+describe("contrôles de l'envoi", () => {
+  const sentCount = () => mailer.resend.emails.send.mock.calls.length;
+
+  for (const [cas, overrides] of [
+    ["destinataire", { recipientEmail: "pas-une-adresse" }],
+    ["copie", { ccEmails: ["compta@test.fr", "client@@test"] }],
+    ["copie cachée", { bccEmails: ["archive test.fr"] }],
+  ]) {
+    it(`adresse ${cas} invalide : refus avec un message, rien n'est envoyé ni journalisé`, async () => {
+      const id = await insertInvoice();
+
+      await expect(sendByEmail(id, overrides)).rejects.toThrow(
+        /Adresse e-mail invalide/,
+      );
+
+      expect(sentCount()).toBe(0);
+      expect(await DocumentEmailLog.countDocuments({ documentId: id })).toBe(0);
+    });
+  }
+
+  it("un objet sur plusieurs lignes part sur une seule ligne", async () => {
+    const id = await insertInvoice();
+
+    await sendByEmail(id, {
+      emailSubject: "Facture {documentNumber}\r\nBcc: autre@test.fr",
+    });
+
+    const sent = mailer.resend.emails.send.mock.calls[0][0];
+    expect(sent.subject).not.toMatch(/[\r\n]/);
+    expect(sent.subject).toBe("Facture F-2026-000042 Bcc: autre@test.fr");
+  });
+
+  it("un « PDF » joint qui n'en est pas un : refus, rien n'est envoyé", async () => {
+    const id = await insertInvoice();
+
+    await expect(
+      sendByEmail(id, {
+        pdfBase64: Buffer.from("<html>autre IBAN</html>").toString("base64"),
+      }),
+    ).rejects.toThrow(/n'est pas un PDF valide/);
+
+    expect(sentCount()).toBe(0);
+  });
+
+  it("le PDF joint par l'éditeur n'est jamais gardé comme copie du document", async () => {
+    const id = await insertInvoice();
+
+    await sendByEmail(id);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(storage.uploadImage).not.toHaveBeenCalled();
+    const saved = await Invoice.collection.findOne({ _id: id });
+    expect(saved.cachedPdf ?? null).toBeNull();
+  });
+
+  it("un nom de client piégé reste du texte dans l'e-mail et son journal", async () => {
+    const { insertedId: id } = await Invoice.collection.insertOne({
+      workspaceId: orgId,
+      prefix: "F-2026",
+      number: "000043",
+      status: "PENDING",
+      issueDate: new Date("2026-09-01"),
+      dueDate: new Date("2026-09-15"),
+      client: {
+        name: "<img src=x onerror=alert(1)>",
+        email: CLIENT_EMAIL,
+        type: "COMPANY",
+      },
+      items: [],
+      finalTotalHT: 100,
+      finalTotalTTC: 120,
+      finalTotalVAT: 20,
+      companyInfo: { name: "Société A", email: "a@test.fr" },
+      createdBy: userId,
+    });
+
+    await sendByEmail(id, { emailBody: "Bonjour {clientName}" });
+
+    const [log] = await DocumentEmailLog.find({ documentId: id }).lean();
+    expect(log.html).not.toContain("<img src=x");
+    expect(log.html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+});
+
 describe("lecture des envois (GraphQL)", () => {
   async function sentLog() {
     const id = await insertInvoice();

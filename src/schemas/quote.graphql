@@ -137,7 +137,7 @@ input UpdateQuoteInput {
 
 extend type Query {
   quote(workspaceId: ID!, id: ID!): Quote!
-  quotes(workspaceId: ID!, startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int): QuotePagination!
+  quotes(workspaceId: ID!, startDate: String, endDate: String, status: QuoteStatus, search: String, page: Int, limit: Int, clientId: ID): QuotePagination!
   quoteStats(workspaceId: ID!): QuoteStats!
   quoteBalances(workspaceId: ID!): QuoteBalances!
   nextQuoteNumber(workspaceId: ID!, prefix: String, autoNumbering: Boolean): String!

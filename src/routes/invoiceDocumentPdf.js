@@ -1,4 +1,5 @@
 import express from "express";
+import mongoose from "mongoose";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import Invoice from "../models/Invoice.js";
 import cloudflareService from "../services/cloudflareService.js";
@@ -20,7 +21,10 @@ router.get("/:id/document-pdf", validateJWT, async (req, res) => {
     const userId = req.user;
     if (!userId) return res.status(401).json({ error: "Non authentifié" });
 
-    const invoice = await Invoice.findById(req.params.id);
+    // Identifiant malformé : introuvable (findById lèverait une CastError)
+    const invoice = mongoose.isValidObjectId(req.params.id)
+      ? await Invoice.findById(req.params.id)
+      : null;
     if (!invoice) {
       return res.status(404).json({ error: "Facture introuvable" });
     }

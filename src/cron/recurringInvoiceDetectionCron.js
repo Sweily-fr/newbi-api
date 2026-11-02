@@ -305,36 +305,42 @@ export const detectForSource = async (workspaceId, source) => {
       );
     } else if (prev) {
       // No valid streak now — decrement and deactivate when stale.
-      const newCount = Math.max(0, (prev.consecutiveMonths || 0) - 1);
-      await DetectedRecurrence.updateOne(
-        { _id: prev._id },
-        {
-          $set: {
-            consecutiveMonths: newCount,
-            isActive: newCount > 0 && !prev.isMuted,
-            lastDetectedAt: new Date(),
-          },
-        },
-      );
+      await ageRecurrence(prev);
     }
   }
 
   // Existing recurrences whose group vanished entirely → decrement.
   for (const [groupKey, prev] of existingMap) {
     if (seenGroupKeys.has(groupKey)) continue;
-    const newCount = Math.max(0, (prev.consecutiveMonths || 0) - 1);
-    await DetectedRecurrence.updateOne(
-      { _id: prev._id },
-      {
-        $set: {
-          consecutiveMonths: newCount,
-          isActive: newCount > 0 && !prev.isMuted,
-          lastDetectedAt: new Date(),
-        },
-      },
-    );
+    await ageRecurrence(prev);
   }
 };
+
+/**
+ * Récurrence sans série valide : un mois de moins, désactivée à zéro. Au
+ * plus une fois par mois calendaire : l'analyse lancée à la main
+ * (« Analyser ») passe aussi par ici, et trois clics le même jour la
+ * désactivaient comme si trois mois s'étaient écoulés.
+ */
+async function ageRecurrence(prev) {
+  if (
+    prev.lastDetectedAt &&
+    monthKey(prev.lastDetectedAt) === monthKey(new Date())
+  ) {
+    return;
+  }
+  const newCount = Math.max(0, (prev.consecutiveMonths || 0) - 1);
+  await DetectedRecurrence.updateOne(
+    { _id: prev._id },
+    {
+      $set: {
+        consecutiveMonths: newCount,
+        isActive: newCount > 0 && !prev.isMuted,
+        lastDetectedAt: new Date(),
+      },
+    },
+  );
+}
 
 export const runRecurringInvoiceDetectionForWorkspace = async (workspaceId) => {
   // TRANSACTION runs last: its dedup reads the invoice-based recurrences

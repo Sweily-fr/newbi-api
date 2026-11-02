@@ -20,6 +20,11 @@ import {
   normalizeTransferEmailInput,
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
+import {
+  assertTransferFileSize,
+  assertTransferUploadIds,
+  normalizeTransferCreationOptions,
+} from "../utils/transferOptions.js";
 
 // 🔐 Envoi des fichiers et création du transfert : même droit que
 // createFileTransfer (« Créer » du module Transferts dans l'espace du
@@ -238,6 +243,11 @@ const chunkUploadR2Resolvers = {
               "Le nombre de parts doit être entre 1 et 10000",
             );
           }
+
+          // Identifiants repris dans la clé R2 et le nom affiché ; taille
+          // bornée par l'offre de l'espace, avant tout appel à R2
+          assertTransferUploadIds({ transferId, fileId });
+          await assertTransferFileSize(workspaceId, fileSize);
 
           // Déterminer le type MIME si non fourni
           const ext = fileName.split(".").pop()?.toLowerCase();
@@ -886,6 +896,17 @@ const chunkUploadR2Resolvers = {
     createFileTransferWithIdsR2: requireTransferCreate(
       async (_, { fileIds, input }, { user }) => {
         let transferSaved = false;
+        // Options validées avant tout : refusées, elles laissent les
+        // fichiers envoyés en place pour réessayer avec d'autres options
+        const {
+          expiryDays,
+          title,
+          passwordProtected,
+          password,
+          paymentAmount,
+          paymentCurrency,
+          isPaymentRequired,
+        } = normalizeTransferCreationOptions(input);
         try {
           // Vérifier que les IDs de fichiers sont fournis
           if (!fileIds || fileIds.length === 0) {
@@ -930,8 +951,6 @@ const chunkUploadR2Resolvers = {
             }
           }
 
-          // Définir les options du transfert de fichier
-          const expiryDays = input?.expiryDays || 7;
           const workspaceId = input?.workspaceId || null;
           // 🔐 Appartenance requise si un workspace est fourni.
           if (
@@ -945,21 +964,8 @@ const chunkUploadR2Resolvers = {
               "Accès non autorisé à cet espace de travail",
             );
           }
-          const paymentAmount = input?.paymentAmount || 0;
-          const paymentCurrency =
-            input?.paymentCurrency || input?.currency || "EUR";
-          // isPaymentRequired doit être true si paymentAmount > 0 OU si explicitement défini à true
-          const isPaymentRequired =
-            paymentAmount > 0 ||
-            input?.isPaymentRequired ||
-            input?.requirePayment ||
-            false;
-          const title = input?.title?.trim() || null;
-
           // Nouvelles options
           const notifyOnDownload = input?.notifyOnDownload || false;
-          const passwordProtected = input?.passwordProtected || false;
-          const password = input?.password || null;
           const allowPreview = input?.allowPreview !== false; // true par défaut
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
           const hasWatermark = input?.hasWatermark || false;

@@ -1,5 +1,8 @@
 import TreasuryForecast, { MONTH_REGEX } from "../models/TreasuryForecast.js";
-import ManualCashflowEntry from "../models/ManualCashflowEntry.js";
+import ManualCashflowEntry, {
+  MAX_FORECAST_AMOUNT,
+  MAX_FORECAST_PERCENT_DELTA,
+} from "../models/ManualCashflowEntry.js";
 import DetectedRecurrence from "../models/DetectedRecurrence.js";
 import ForecastScenario from "../models/ForecastScenario.js";
 import {
@@ -94,14 +97,75 @@ const getMonthRange = (startDate, endDate) => {
 // Amount of the nth occurrence (0-based, counted from startDate): the
 // "Augmenter ou diminuer de" delta applies at each repetition — fixed EUR
 // step or compounding percent. Never goes below 0.
+// Plafonné à MAX_FORECAST_AMOUNT : une progression composée (ou une saisie
+// ancienne hors bornes) donnait Infinity, que GraphQL ne sait pas renvoyer :
+// toute la prévision de l'espace tombait en erreur.
 const occurrenceAmount = (entry, index) => {
+  const capped = (value) =>
+    Number.isFinite(value)
+      ? Math.min(MAX_FORECAST_AMOUNT, Math.max(0, value))
+      : value > 0
+        ? MAX_FORECAST_AMOUNT
+        : 0;
   const delta = entry.amountDelta || 0;
-  if (!delta || index === 0) return entry.amount;
+  if (!delta || index === 0) return capped(entry.amount);
   const amount =
     entry.amountDeltaType === "PERCENT"
       ? entry.amount * Math.pow(1 + delta / 100, index)
       : entry.amount + delta * index;
-  return Math.max(0, Math.round(amount * 100) / 100);
+  return capped(Math.round(amount * 100) / 100);
+};
+
+// Pas des périodicités, en mois (calendaires) ou en jours.
+const MONTH_STEP = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+const DAY_STEP = { WEEKLY: 7, BIWEEKLY: 14 };
+
+// `months` mois après `date`, au même jour, ramené au dernier jour du mois
+// quand il n'existe pas : une échéance du 31/01 tombe le 28 (ou 29) février,
+// puis le 31/03. setMonth seul débordait sur le mois suivant (31/01 → 03/03 :
+// février sans occurrence, puis une dérive au 3 de chaque mois).
+export const addMonthsClamped = (date, months) => {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return d;
+};
+
+// n-ième occurrence (0 = l'ancre) d'une périodicité, toujours calculée depuis
+// l'ancre : aucune dérive d'une occurrence à l'autre.
+export const nthOccurrence = (anchor, frequency, n) => {
+  if (DAY_STEP[frequency]) {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() + DAY_STEP[frequency] * n);
+    return d;
+  }
+  return addMonthsClamped(anchor, (MONTH_STEP[frequency] || 1) * n);
+};
+
+// Rang de la première occurrence qui peut tomber à partir de `from` (un
+// rang plus tôt par prudence : changement d'heure, fins de mois). Permet de
+// sauter les années d'occurrences antérieures à la plage sans les parcourir.
+const firstIndexFrom = (anchor, frequency, from) => {
+  const start = new Date(anchor);
+  if (from <= start) return 0;
+  if (DAY_STEP[frequency]) {
+    const days = Math.floor((from - start) / 86400000);
+    return Math.max(0, Math.floor(days / DAY_STEP[frequency]) - 1);
+  }
+  const months =
+    (from.getFullYear() - start.getFullYear()) * 12 +
+    (from.getMonth() - start.getMonth());
+  return Math.max(0, Math.floor(months / (MONTH_STEP[frequency] || 1)) - 1);
+};
+
+// Mois « AAAA-MM » situé `months` mois après le mois de `date` (heure locale).
+export const monthKeyAfter = (date, months) => {
+  const total = date.getFullYear() * 12 + date.getMonth() + months;
+  const year = Math.floor(total / 12);
+  return `${year}-${String((total % 12) + 1).padStart(2, "0")}`;
 };
 
 // Expand a manual entry into { date, amount } occurrences within
@@ -123,36 +187,27 @@ export const expandManualEntry = (entry, rangeStart, rangeEnd) => {
     return occurrences;
   }
 
-  const current = new Date(start);
-  // Safety cap to avoid runaway loops on malformed data.
-  let guard = 0;
-  while (current < upperBound && guard < 600) {
+  if (!DAY_STEP[entry.frequency] && !MONTH_STEP[entry.frequency]) {
+    return occurrences;
+  }
+  // Chaque occurrence est calculée depuis la date de début (fins de mois
+  // sans dérive) et la boucle commence à la plage : une saisie démarrée il y
+  // a des années reste projetée. Le rang garde la progression du montant
+  // ancrée sur la date de début. Garde-fou : 600 occurrences dans la plage.
+  let index = firstIndexFrom(start, entry.frequency, rangeStart);
+  let inRange = 0;
+  for (
+    let current = nthOccurrence(start, entry.frequency, index);
+    current < upperBound && inRange < 600;
+    index += 1, current = nthOccurrence(start, entry.frequency, index)
+  ) {
     if (current >= rangeStart) {
       occurrences.push({
-        date: new Date(current),
-        amount: occurrenceAmount(entry, guard),
+        date: current,
+        amount: occurrenceAmount(entry, index),
       });
+      inRange += 1;
     }
-    switch (entry.frequency) {
-      case "WEEKLY":
-        current.setDate(current.getDate() + 7);
-        break;
-      case "MONTHLY":
-        current.setMonth(current.getMonth() + 1);
-        break;
-      case "QUARTERLY":
-        current.setMonth(current.getMonth() + 3);
-        break;
-      case "SEMIANNUAL":
-        current.setMonth(current.getMonth() + 6);
-        break;
-      case "ANNUAL":
-        current.setFullYear(current.getFullYear() + 1);
-        break;
-      default:
-        return occurrences;
-    }
-    guard += 1;
   }
   return occurrences;
 };
@@ -267,14 +322,6 @@ export const projectForecastOccurrences = async (
         .filter((r) => r.source !== "TRANSACTION")
         .map((r) => `${r.partyKey}::${r.type}`),
     );
-    const monthStep = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
-    const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
-    const advance = (date, freq) => {
-      const d = new Date(date);
-      if (dayStep[freq]) d.setDate(d.getDate() + dayStep[freq]);
-      else d.setMonth(d.getMonth() + (monthStep[freq] || 1));
-      return d;
-    };
 
     for (const rec of activeRecurrences) {
       if (
@@ -286,12 +333,16 @@ export const projectForecastOccurrences = async (
       const anchor = rec.lastSeenDate
         ? new Date(rec.lastSeenDate)
         : new Date((rec.lastSeenMonth || currentMonth) + "-01");
-      let occ = advance(anchor, freq);
+      // Occurrences calculées depuis la dernière vue (fins de mois sans
+      // dérive), à partir de la plage.
+      let k = Math.max(1, firstIndexFrom(anchor, freq, rangeStart));
       let guard = 0;
-      while (occ < rangeEnd && guard++ < 1000) {
-        const occDate = new Date(occ);
+      for (
+        let occDate = nthOccurrence(anchor, freq, k);
+        occDate < rangeEnd && guard++ < 1000;
+        k += 1, occDate = nthOccurrence(anchor, freq, k)
+      ) {
         const month = mk(occDate);
-        occ = advance(occ, freq);
         if (occDate < rangeStart) continue;
         if (!includePast && month < currentMonth) continue;
         if (rec.excludedMonths?.includes(month)) continue;
@@ -325,6 +376,54 @@ export const projectForecastOccurrences = async (
 
   occurrences.sort((a, b) => a.date - b.date);
   return occurrences;
+};
+
+const validationError = (message) =>
+  new AppError(message, ERROR_CODES.VALIDATION_ERROR);
+
+// Bornes d'une saisie, vérifiées avant tout enregistrement (création et
+// modification) : dates réelles et dans l'ordre, montant et progression
+// finis et plafonnés. Une seule saisie démesurée rendait la prévision de
+// tout l'espace illisible (Infinity).
+export const assertValidManualEntry = (payload) => {
+  if (Number.isNaN(payload.startDate.getTime())) {
+    throw validationError("Date de début invalide");
+  }
+  if (payload.endDate && Number.isNaN(payload.endDate.getTime())) {
+    throw validationError("Date de fin invalide");
+  }
+  if (payload.endDate && payload.endDate < payload.startDate) {
+    throw validationError(
+      "La date de fin doit être postérieure à la date de début",
+    );
+  }
+  if (
+    typeof payload.amount !== "number" ||
+    !Number.isFinite(payload.amount) ||
+    payload.amount > MAX_FORECAST_AMOUNT
+  ) {
+    throw validationError("Le montant ne peut pas dépasser 1 000 000 000 €");
+  }
+  const delta = payload.amountDelta;
+  if (!Number.isFinite(delta)) {
+    throw validationError("Progression invalide");
+  }
+  if (
+    payload.amountDeltaType === "PERCENT" &&
+    (delta < -100 || delta > MAX_FORECAST_PERCENT_DELTA)
+  ) {
+    throw validationError(
+      "La progression doit être comprise entre -100 % et +1 000 % par occurrence",
+    );
+  }
+  if (
+    payload.amountDeltaType !== "PERCENT" &&
+    Math.abs(delta) > MAX_FORECAST_AMOUNT
+  ) {
+    throw validationError(
+      "La progression ne peut pas dépasser 1 000 000 000 € par occurrence",
+    );
+  }
 };
 
 // Vue d'une récurrence depuis un scénario : isMuted / isActive effectifs et
@@ -389,8 +488,25 @@ const treasuryForecastResolvers = {
         // Requêtes du calcul : modèles, compte(s) bancaire(s) et bornes de dates
         const AccountBanking = mongoose.model("AccountBanking");
         const accountQuery = { workspaceId: wId, status: "active" };
+        // Compte choisi (« De … ») : son solde ET ses seuls mouvements. Les
+        // transactions portent l'identifiant du compte chez la banque
+        // (externalId) ; filtrer le solde seul ancrait la courbe sur ce
+        // compte avec les flux de tous les comptes.
+        let accountTxFilter = null;
         if (accountId) {
+          if (!/^[0-9a-f]{24}$/i.test(String(accountId))) {
+            throw validationError("Compte bancaire invalide");
+          }
           accountQuery._id = new mongoose.Types.ObjectId(accountId);
+          const account = await AccountBanking.findOne({
+            _id: accountQuery._id,
+            workspaceId: wId,
+          })
+            .select("_id externalId")
+            .lean();
+          const values = [String(accountId)];
+          if (account?.externalId) values.push(String(account.externalId));
+          accountTxFilter = { $in: values };
         }
 
         const Invoice = mongoose.model("Invoice");
@@ -411,6 +527,7 @@ const treasuryForecastResolvers = {
           workspaceId: workspaceId,
           status: "completed",
           deletedAt: null,
+          ...(accountTxFilter ? { fromAccount: accountTxFilter } : {}),
         };
 
         // Lectures indépendantes lancées ensemble (elles étaient faites l'une
@@ -426,6 +543,7 @@ const treasuryForecastResolvers = {
           signedQuotes,
           recurrenceDocs,
           manualEntries,
+          cashBalanceAgg,
         ] = await Promise.all([
           AccountBanking.find(accountQuery).lean(),
           Invoice.aggregate([
@@ -502,9 +620,26 @@ const treasuryForecastResolvers = {
             startDate: { $lt: txEndDate },
             ...overlay.manualEntryFilter(),
           }).lean(),
+          // Espèces (transactions saisies à la main, sans compte) : comptées
+          // dans les flux, donc dans le solde, comme sur l'accueil. Pas pour
+          // un compte choisi.
+          accountTxFilter
+            ? Promise.resolve([])
+            : Transaction.aggregate([
+                {
+                  $match: {
+                    workspaceId: workspaceId,
+                    provider: "manual",
+                    status: "completed",
+                    deletedAt: null,
+                  },
+                },
+                { $group: { _id: null, total: { $sum: "$amount" } } },
+              ]),
         ]);
 
-        // 1. Current bank balance
+        // 1. Current bank balance (comptes actifs, plus les espèces)
+        const cashBalance = cashBalanceAgg[0]?.total || 0;
         const currentBalance = accounts.reduce((sum, a) => {
           // Use same logic as GraphQL resolver: balance is stored as Number in MongoDB
           const bal =
@@ -512,7 +647,7 @@ const treasuryForecastResolvers = {
               ? a.balance
               : (a.balance?.current ?? a.balance?.available ?? 0);
           return sum + bal;
-        }, 0);
+        }, cashBalance);
 
         // 2. Pending receivables (unpaid client invoices)
         const pendingReceivables = pendingReceivablesAgg[0]?.total || 0;
@@ -675,19 +810,6 @@ const treasuryForecastResolvers = {
           // periodicity. Weekly/biweekly advance by days (several land in a
           // month → naturally summed); the rest advance by calendar months so
           // quarterly/yearly charges only hit their actual month.
-          const monthStep = {
-            MONTHLY: 1,
-            QUARTERLY: 3,
-            SEMIANNUAL: 6,
-            ANNUAL: 12,
-          };
-          const dayStep = { WEEKLY: 7, BIWEEKLY: 14 };
-          const advance = (date, freq) => {
-            const d = new Date(date);
-            if (dayStep[freq]) d.setDate(d.getDate() + dayStep[freq]);
-            else d.setMonth(d.getMonth() + (monthStep[freq] || 1));
-            return d;
-          };
           const monthSet = new Set(monthRange);
 
           for (const rec of activeRecurrences) {
@@ -702,11 +824,16 @@ const treasuryForecastResolvers = {
               : new Date((rec.lastSeenMonth || currentMonth) + "-01");
             // Project each occurrence strictly after the last observed one,
             // so a past streak doesn't pollute earlier months.
-            let occ = advance(anchor, freq);
+            // (calculée depuis l'ancre : un 31 tombe le dernier jour des
+            // mois plus courts, sans dérive).
+            let k = Math.max(1, firstIndexFrom(anchor, freq, txStartDate));
             let guard = 0;
-            while (occ < txEndDate && guard++ < 1000) {
+            for (
+              let occ = nthOccurrence(anchor, freq, k);
+              occ < txEndDate && guard++ < 1000;
+              k += 1, occ = nthOccurrence(anchor, freq, k)
+            ) {
               const month = mk(occ);
-              occ = advance(occ, freq);
               if (month < currentMonth || !monthSet.has(month)) continue;
               // Occurrence supprimée individuellement pour ce mois (en Base
               // ou dans ce scénario).
@@ -1033,9 +1160,8 @@ const treasuryForecastResolvers = {
         }
 
         // 8. Calculate projected balance at 3 months
-        const threeMonthsLater = new Date(now);
-        threeMonthsLater.setMonth(threeMonthsLater.getMonth() + 3);
-        const targetMonth = `${threeMonthsLater.getFullYear()}-${String(threeMonthsLater.getMonth() + 1).padStart(2, "0")}`;
+        // Mois calendaire (et non date + 3 mois : le 30/11 visait mars).
+        const targetMonth = monthKeyAfter(now, 3);
         const targetMonthData = monthsData.find((m) => m.month === targetMonth);
         const projectedBalance3Months = targetMonthData
           ? targetMonthData.closingBalance
@@ -1201,6 +1327,8 @@ const treasuryForecastResolvers = {
                     $match: {
                       workspaceId: workspaceId,
                       status: "completed",
+                      // Comme le tableau : une transaction supprimée n'y est plus
+                      deletedAt: null,
                     },
                   },
                   {
@@ -1366,11 +1494,11 @@ const treasuryForecastResolvers = {
             ERROR_CODES.VALIDATION_ERROR,
           );
         }
-        const scenarioExists = await ForecastScenario.exists(
-          input.id
-            ? { _id: input.id, workspaceId: wId }
-            : { workspaceId: wId, name: input.name },
-        );
+        // Sans identifiant, c'est une création (un nom déjà pris est refusé
+        // plus bas, jamais pris pour une modification)
+        const scenarioExists = input.id
+          ? await ForecastScenario.exists({ _id: input.id, workspaceId: wId })
+          : false;
         assertPermissionAction(
           context,
           "forecast",
@@ -1381,6 +1509,21 @@ const treasuryForecastResolvers = {
         // rien (l'upsert le créerait sous cet identifiant, hors plafond)
         if (input.id && !scenarioExists) {
           throw new AppError("Scénario non trouvé", ERROR_CODES.NOT_FOUND);
+        }
+
+        // Nom déjà pris : « Nouveau scénario » modifiait en silence le
+        // scénario existant (upsert par nom) en annonçant une création, et
+        // renommer renvoyait l'erreur brute de l'index unique.
+        const homonym = await ForecastScenario.exists({
+          workspaceId: wId,
+          name: input.name,
+          ...(input.id ? { _id: { $ne: input.id } } : {}),
+        });
+        if (homonym) {
+          throw new AppError(
+            "Un scénario porte déjà ce nom",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
         }
 
         // Enforce 5-scenario limit for new scenarios
@@ -1544,6 +1687,7 @@ const treasuryForecastResolvers = {
           frequency: input.frequency,
           notes: input.notes || "",
         };
+        assertValidManualEntry(payload);
 
         if (input.id) {
           // runValidators : mêmes bornes qu'à la création (montant positif,
@@ -1858,7 +2002,8 @@ const treasuryForecastResolvers = {
     excludeForecastOccurrence: requireWrite("forecast")(
       async (_, { kind, id, month, scenarioId }, context) => {
         const workspaceId = context.workspaceId;
-        if (!/^\d{4}-\d{2}$/.test(month)) {
+        // Mois réel (01 à 12), comme les prévisions mensuelles
+        if (!MONTH_REGEX.test(String(month))) {
           throw new AppError(
             "Format de mois invalide (attendu YYYY-MM)",
             ERROR_CODES.VALIDATION_ERROR,

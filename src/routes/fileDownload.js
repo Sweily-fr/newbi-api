@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import express from "express";
 import crypto from "crypto";
 import { pipeline } from "stream";
@@ -165,6 +166,11 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
 
     logger.info("📥 Demande de téléchargement proxy", { transferId, fileId });
 
+    // Identifiant mal formé : introuvable (findById levait une CastError → 500)
+    if (!mongoose.isValidObjectId(transferId)) {
+      return res.status(404).json({ error: "Transfert non trouvé" });
+    }
+
     // Vérifier que le transfert existe et récupérer le fichier
     const fileTransfer =
       await FileTransfer.findById(transferId).populate("files");
@@ -242,6 +248,10 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
     const { transferId, fileId } = req.params;
 
     logger.info("👁️ Demande de prévisualisation", { transferId, fileId });
+
+    if (!mongoose.isValidObjectId(transferId)) {
+      return res.status(404).json({ error: "Transfert non trouvé" });
+    }
 
     // Vérifier que le transfert existe
     const fileTransfer = await FileTransfer.findById(transferId);

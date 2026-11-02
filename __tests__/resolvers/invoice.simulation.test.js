@@ -310,6 +310,63 @@ describe("Simulation numérotation factures — enchaînements réels", () => {
     await invariants("après finalisation du second brouillon");
   });
 
+  it("valider depuis le panneau garde le préfixe personnalisé du brouillon (comme l'éditeur)", async () => {
+    await createFinalized(await proposedNumber());
+    const draft = await create(
+      null,
+      { input: buildInvoiceInput({ prefix: "ACOMPTE", status: "DRAFT" }) },
+      ctx(),
+    );
+
+    const validated = await changeStatus(
+      null,
+      { id: draft._id.toString(), status: "PENDING" },
+      ctx(),
+    );
+
+    expect(validated.prefix).toBe("ACOMPTE");
+    expect(validated.number).toMatch(/^\d{4}$/);
+    await invariants("validation d'un brouillon au préfixe personnalisé");
+  });
+
+  it("deux brouillons finalisés au même instant depuis l'éditeur : numéros distincts et consécutifs, sans TEMP- ni message E11000", async () => {
+    await createFinalized(await proposedNumber());
+    const a = await createDraft();
+    const b = await createDraft();
+
+    const results = await Promise.allSettled([
+      update(
+        null,
+        { id: a._id.toString(), input: { status: "PENDING" } },
+        ctx(),
+      ),
+      update(
+        null,
+        { id: b._id.toString(), input: { status: "PENDING" } },
+        ctx(),
+      ),
+    ]);
+
+    for (const r of results.filter((x) => x.status === "rejected")) {
+      expect(r.reason.message).not.toMatch(/E11000|duplicate key/);
+    }
+    const restes = await Invoice.find({
+      workspaceId: organizationId,
+      number: /^TEMP-/,
+    }).lean();
+    expect(restes).toEqual([]);
+    const numeros = (
+      await Invoice.find({
+        workspaceId: organizationId,
+        status: { $ne: "DRAFT" },
+      }).lean()
+    )
+      .map((i) => Number(i.number))
+      .sort((x, y) => x - y);
+    expect(numeros).toEqual(numeros.map((_, i) => numeros[0] + i));
+    await invariants("finalisations concurrentes depuis l'éditeur");
+  });
+
   it("deux créations concurrentes sur le même numéro : une seule passe", async () => {
     await createFinalized(await proposedNumber());
     const proposed = await proposedNumber();

@@ -14,6 +14,13 @@ const CASHFLOW_FREQUENCY = {
   ANNUAL: "ANNUAL",
 };
 
+// Plafond d'un montant de prévision (saisie, progression, prévision
+// mensuelle) : au-delà, les sommes de la prévision deviennent Infinity et la
+// page de tout l'espace tombe en erreur.
+export const MAX_FORECAST_AMOUNT = 1_000_000_000;
+// Progression en pourcentage, par occurrence : de -100 % à +1 000 %.
+export const MAX_FORECAST_PERCENT_DELTA = 1000;
+
 const CASHFLOW_CATEGORY = [
   "SALES",
   "REFUNDS_RECEIVED",
@@ -78,6 +85,10 @@ const manualCashflowEntrySchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: [0, "Le montant doit être positif"],
+      max: [
+        MAX_FORECAST_AMOUNT,
+        "Le montant ne peut pas dépasser 1 000 000 000 €",
+      ],
     },
     // « Augmenter ou diminuer de » : évolution appliquée à chaque occurrence
     // de la récurrence — montant fixe en EUR ou pourcentage composé.

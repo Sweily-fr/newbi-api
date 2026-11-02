@@ -23,6 +23,9 @@ export const isNotificationForSubscriber = (payload, context) => {
   return !!recipientId && !!userId && String(recipientId) === userId;
 };
 
+/** Notifications renvoyées au plus par page (le site et l'app en lisent 50). */
+const MAX_NOTIFICATIONS_PAGE = 100;
+
 const notificationResolvers = {
   Query: {
     getNotifications: isAuthenticated(
@@ -41,11 +44,19 @@ const notificationResolvers = {
             query.read = false;
           }
 
+          // Page bornée : un décalage négatif faisait échouer la requête et
+          // une limite démesurée lisait toutes les notifications d'un coup.
+          const pageSize = Math.min(
+            MAX_NOTIFICATIONS_PAGE,
+            Math.max(1, Math.trunc(Number(limit)) || 50),
+          );
+          const skip = Math.max(0, Math.trunc(Number(offset)) || 0);
+
           const [notifications, totalCount, unreadCount] = await Promise.all([
             Notification.find(query)
               .sort({ createdAt: -1 })
-              .skip(offset)
-              .limit(limit)
+              .skip(skip)
+              .limit(pageSize)
               .lean(),
             Notification.countDocuments({ userId: user._id, workspaceId }),
             Notification.countDocuments({

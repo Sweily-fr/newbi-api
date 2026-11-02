@@ -503,9 +503,14 @@ class CloudflareService {
               "Organization ID requis pour les logos d'entreprise",
             );
           }
-          // Garder le nom original du fichier (nettoyé)
-          const sanitizedName = fileName.replace(/[^a-zA-Z0-9.-]/g, "_");
-          key = `${organizationId}/${sanitizedName}`;
+          // Nom d'origine (nettoyé) suivi d'un identifiant unique : un
+          // nouvel envoi ne remplace jamais un fichier existant, quel que
+          // soit le nom choisi
+          const baseName = path
+            .basename(fileName, path.extname(fileName))
+            .replace(/[^a-zA-Z0-9.-]/g, "_")
+            .slice(0, 100);
+          key = `${organizationId}/${baseName}-${uniqueId}${fileExtension}`;
           break;
         }
         case "productImage": {

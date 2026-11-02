@@ -2,6 +2,7 @@ import Quote from "../models/Quote.js";
 import SignatureRequest from "../models/SignatureRequest.js";
 import logger from "../utils/logger.js";
 import documentAutomationService from "./documentAutomationService.js";
+import { automationService } from "../resolvers/clientAutomation.js";
 import { syncQuoteIfNeeded } from "./pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "./qontoSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "./abbySyncHelper.js";
@@ -135,6 +136,9 @@ export async function acceptQuoteOnSignature(signatureRequest) {
   // Rejouer les mêmes effets de bord qu'une acceptation manuelle (fire-and-forget).
   const workspaceId = signatureRequest.workspaceId || quote.workspaceId;
   const userId = quote.createdBy ? quote.createdBy.toString() : null;
+
+  // Automatisations de listes de contacts « Devis accepté »
+  await automationService.onQuoteAccepted(quote, workspaceId);
 
   documentAutomationService
     .executeAutomations(

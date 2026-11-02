@@ -2,10 +2,14 @@ import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import cloudflareService from "../services/cloudflareService.js";
 import { buildSearchRegExp } from "../utils/searchRegex.js";
+import { boundedPage } from "../utils/pageBounds.js";
+import { assertCustomFieldValues } from "../utils/customFieldValues.js";
+import ProductCustomField from "../models/ProductCustomField.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   isAcceptedProductImage,
   processProductImage,
+  isWorkspaceProductImageUrl,
 } from "../utils/productImage.js";
 // ✅ Import des wrappers RBAC
 import {
@@ -24,6 +28,43 @@ import {
 } from "../utils/errors.js";
 
 const LINKED_ROUNDINGS = ["UP", "DOWN", "NONE"];
+
+// Bornes d'un produit : prix lisibles sur un document, textes de taille
+// raisonnable (le formulaire n'en a pas, l'API les tient)
+const PRODUCT_PRICE_MAX = 1e9;
+const PRODUCT_TEXT_LIMITS = {
+  unit: 50,
+  reference: 100,
+  category: 100,
+  description: 10000,
+};
+
+/** Refuse un prix démesuré ou un texte trop long, avec un message. */
+function assertProductBounds(input) {
+  if (input.unitPrice !== undefined && input.unitPrice !== null) {
+    const price = Number(input.unitPrice);
+    if (!Number.isFinite(price) || Math.abs(price) > PRODUCT_PRICE_MAX) {
+      throw createValidationError(
+        "Le prix unitaire ne peut pas dépasser 1 000 000 000 €",
+        { unitPrice: input.unitPrice },
+      );
+    }
+  }
+  const labels = {
+    unit: "L'unité",
+    reference: "La référence",
+    category: "La catégorie",
+    description: "La description",
+  };
+  for (const [key, max] of Object.entries(PRODUCT_TEXT_LIMITS)) {
+    if (typeof input[key] === "string" && input[key].length > max) {
+      throw createValidationError(
+        `${labels[key]} ne peut pas dépasser ${max.toLocaleString("fr-FR").replace(/\s/g, " ")} caractères`,
+        { [key]: "trop long" },
+      );
+    }
+  }
+}
 
 /**
  * Normalise et valide la liste des produits liés envoyée par le client.
@@ -209,11 +250,17 @@ const productResolvers = {
           query.category = category;
         }
 
-        const skip = (page - 1) * limit;
+        // Page et taille bornées : le catalogue charge tous ses produits
+        // d'un coup (taille = nombre total), d'où une borne haute large
+        const bounds = boundedPage(page, limit, {
+          defaultLimit: 20,
+          maxLimit: 10000,
+        });
+        const skip = bounds.skip;
         let sortOptions = { name: 1 };
 
         const [products, totalCount] = await Promise.all([
-          Product.find(query).sort(sortOptions).skip(skip).limit(limit),
+          Product.find(query).sort(sortOptions).skip(skip).limit(bounds.limit),
           Product.countDocuments(query),
         ]);
 
@@ -252,10 +299,24 @@ const productResolvers = {
         throw createAlreadyExistsError("produit", "nom", input.name);
       }
 
+      assertProductBounds(input);
+      // Image d'un autre espace (ou d'un autre compte) : non enregistrée
+      if (input.imageUrl && !isWorkspaceProductImageUrl(input.imageUrl, workspaceId)) {
+        input = { ...input, imageUrl: null };
+      }
+
       const linkedProducts = await normalizeLinkedProducts(
         input.linkedProducts,
         { workspaceId },
       );
+
+      // Valeurs des champs personnalisés : champs de l'espace, bon format
+      if (input.customFields?.length) {
+        assertCustomFieldValues(
+          input.customFields,
+          await ProductCustomField.find({ workspaceId }).lean(),
+        );
+      }
 
       const product = new Product({
         ...input,
@@ -295,6 +356,28 @@ const productResolvers = {
           if (existingProduct) {
             throw createAlreadyExistsError("produit", "nom", input.name);
           }
+        }
+
+        assertProductBounds(input);
+        // Nouvelle image d'un autre espace (ou d'un autre compte) : retirée
+        if (
+          input.imageUrl &&
+          input.imageUrl !== product.imageUrl &&
+          !isWorkspaceProductImageUrl(input.imageUrl, contextWorkspaceId)
+        ) {
+          input = { ...input, imageUrl: null };
+        }
+
+        // Valeurs des champs personnalisés modifiées : champs de l'espace,
+        // bon format
+        if (input.customFields?.length) {
+          assertCustomFieldValues(
+            input.customFields,
+            await ProductCustomField.find({
+              workspaceId: contextWorkspaceId,
+            }).lean(),
+            product.customFields,
+          );
         }
 
         if (input.linkedProducts !== undefined) {

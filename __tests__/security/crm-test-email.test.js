@@ -180,14 +180,79 @@ describe("expéditeur saisi", () => {
     expect(error?.extensions?.code || error?.code).toBe("VALIDATION_ERROR");
   });
 
-  it("accepte un expéditeur valide ou vide", async () => {
+  it("accepte l'adresse de l'entreprise, celle du compte ou un expéditeur vide", async () => {
+    // contact@test.fr : e-mail de l'entreprise (seedOrgMembership)
     const created = await create({
       fromName: "Studio Exemple",
-      fromEmail: "contact@exemple.fr",
+      fromEmail: "contact@test.fr",
       replyTo: "",
     });
-    expect(created.email.fromEmail).toBe("contact@exemple.fr");
+    expect(created.email.fromEmail).toBe("contact@test.fr");
+    expect(await create({ fromEmail: "test@test.com" })).toBeTruthy();
     expect(await create({})).toBeTruthy();
+  });
+
+  it("refuse une adresse d'expéditeur étrangère à l'espace, à la création comme à la modification", async () => {
+    const before = await CrmEmailAutomation.countDocuments();
+    const error = await errorOf(() =>
+      create({ fromEmail: "direction@banque-exemple.fr" }),
+    );
+    expect(error?.extensions?.code || error?.code).toBe("VALIDATION_ERROR");
+    expect(error.message).toMatch(/Adresse de l'expéditeur refusée/);
+    expect(await CrmEmailAutomation.countDocuments()).toBe(before);
+
+    const updateError = await errorOf(() =>
+      Mutation.updateCrmEmailAutomation(
+        {},
+        {
+          workspaceId,
+          id: automationId,
+          input: {
+            email: {
+              subject: "Objet",
+              body: "Texte",
+              fromEmail: "direction@banque-exemple.fr",
+            },
+          },
+        },
+        ctx(),
+      ),
+    );
+    expect(updateError?.extensions?.code || updateError?.code).toBe(
+      "VALIDATION_ERROR",
+    );
+    expect(
+      (await CrmEmailAutomation.findById(automationId)).email.fromEmail,
+    ).toBe("");
+  });
+
+  it("réactiver ou modifier une automatisation active est refusé sur l'offre d'entrée, la couper reste possible", async () => {
+    await setPlan("freelance");
+    const toggleOff = await Mutation.toggleCrmEmailAutomation(
+      {},
+      { workspaceId, id: automationId },
+      ctx(),
+    );
+    expect(toggleOff.isActive).toBe(false);
+    const toggleOn = await errorOf(() =>
+      Mutation.toggleCrmEmailAutomation(
+        {},
+        { workspaceId, id: automationId },
+        ctx(),
+      ),
+    );
+    expect(toggleOn?.extensions?.code || toggleOn?.code).toBe("FORBIDDEN");
+    const activate = await errorOf(() =>
+      Mutation.updateCrmEmailAutomation(
+        {},
+        { workspaceId, id: automationId, input: { isActive: true } },
+        ctx(),
+      ),
+    );
+    expect(activate?.extensions?.code || activate?.code).toBe("FORBIDDEN");
+    expect((await CrmEmailAutomation.findById(automationId)).isActive).toBe(
+      false,
+    );
   });
 
   it("refuse une adresse invalide à la modification", async () => {

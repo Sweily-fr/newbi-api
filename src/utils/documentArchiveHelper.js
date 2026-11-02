@@ -1,5 +1,9 @@
 import cloudflareService from "../services/cloudflareService.js";
 import { AppError, ERROR_CODES } from "./errors.js";
+import {
+  assertArchiveReplaceable,
+  readUploadedPdf,
+} from "./archivePdfGuard.js";
 
 /**
  * Helpers partagés d'archivage PDF des documents (devis, avoirs, bons de commande)
@@ -24,12 +28,24 @@ export function buildDocumentUrl(docType, docId) {
   return `${base}/documents/${docType}/${docId}/document-pdf`;
 }
 
+/** Le contenu commence par l'en-tête d'un PDF (« %PDF- », dans le premier Ko). */
+export function isPdfContent(buffer) {
+  return (
+    Buffer.isBuffer(buffer) &&
+    buffer.length > 0 &&
+    buffer.subarray(0, 1024).indexOf("%PDF-") !== -1
+  );
+}
+
 /**
  * Archive le PDF (uploadé par le frontend) d'un document sur R2.
  * @param {Object} params
  * @param {import("mongoose").Model} params.Model
  * @param {string} params.docType - "quote" | "creditNote" | "purchaseOrder"
  * @param {string|null} params.draftStatus - statut brouillon non archivable (null si aucun)
+ * @param {string[]} [params.lockedStatuses] - statuts définitifs (devis
+ *   accepté, bon de livraison livré…) : une archive déjà enregistrée n'est
+ *   plus remplacée
  * @param {string} params.workspaceId
  * @param {string} params.docId
  * @param {Promise} params.file - Upload graphql-upload
@@ -39,6 +55,7 @@ export async function archiveDocumentPdf({
   Model,
   docType,
   draftStatus,
+  lockedStatuses = [],
   workspaceId,
   docId,
   file,
@@ -53,22 +70,26 @@ export async function archiveDocumentPdf({
       ERROR_CODES.VALIDATION_ERROR,
     );
   }
+  // Archive d'un document définitif : c'est la version envoyée, acceptée ou
+  // signée à la livraison. Elle n'est écrite qu'une fois (une réception, qui
+  // change le document, efface l'ancienne archive avant d'en écrire une).
+  if (doc.archivedPdfKey && lockedStatuses.includes(doc.status)) {
+    throw new AppError(
+      "L'archive de ce document est définitive : elle ne peut plus être remplacée.",
+      ERROR_CODES.RESOURCE_LOCKED,
+      { reason: "ARCHIVE_LOCKED" },
+    );
+  }
 
-  const { createReadStream, mimetype } = await file;
-  if (mimetype && mimetype !== "application/pdf") {
+  assertArchiveReplaceable(doc, docType);
+  const pdfBuffer = await readUploadedPdf(file);
+  // Le contenu doit commencer comme un PDF (une page HTML envoyée « en PDF »
+  // serait servie aux clients)
+  if (!isPdfContent(pdfBuffer)) {
     throw new AppError(
       "Le document à archiver doit être un PDF",
       ERROR_CODES.VALIDATION_ERROR,
     );
-  }
-
-  const chunks = [];
-  for await (const chunk of createReadStream()) {
-    chunks.push(chunk);
-  }
-  const pdfBuffer = Buffer.concat(chunks);
-  if (pdfBuffer.length > 20 * 1024 * 1024) {
-    throw new AppError("PDF trop volumineux", ERROR_CODES.VALIDATION_ERROR);
   }
 
   const fileName = `${docType}_${doc.prefix || ""}${doc.number || docId}.pdf`;

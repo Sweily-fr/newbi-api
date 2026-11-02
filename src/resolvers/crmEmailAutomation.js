@@ -7,6 +7,7 @@ import {
   requireWrite,
   requireRead,
   requireDelete,
+  assertPermissionAction,
 } from "../middlewares/rbac.js";
 import emailReminderService from "../services/emailReminderService.js";
 import { assertPlanFeature } from "../services/planLimits.js";
@@ -14,6 +15,7 @@ import { createValidationError } from "../utils/errors.js";
 import { isValidEmail } from "../utils/validators.js";
 import { escapeHtml } from "../utils/trialEmails.js";
 import { recordAttempt } from "../utils/attemptLimiter.js";
+import { workspaceSenderEmails } from "../utils/crmEmailSender.js";
 
 // E-mails de test : envoyés à l'adresse du compte connecté seulement,
 // TEST_EMAIL_MAX envois par fenêtre de TEST_EMAIL_WINDOW_SECONDS
@@ -50,6 +52,23 @@ function assertEmailSender(email) {
   }
 }
 
+/**
+ * Adresse d'expéditeur : vide, ou une adresse de l'espace (paramètres
+ * d'e-mail, e-mail de l'entreprise) ou celle du compte connecté. Une adresse
+ * libre servirait à se faire passer pour quelqu'un d'autre.
+ */
+async function assertSenderBelongsToWorkspace(email, workspaceId, user) {
+  const fromEmail = email?.fromEmail?.trim().toLowerCase();
+  if (!fromEmail) return;
+  const allowed = await workspaceSenderEmails(workspaceId);
+  if (user?.email) allowed.push(String(user.email).toLowerCase());
+  if (!allowed.includes(fromEmail)) {
+    throw createValidationError(
+      "Adresse de l'expéditeur refusée : utilisez l'adresse e-mail de votre entreprise ou celle de votre compte.",
+    );
+  }
+}
+
 // preferArgsWorkspace : les resolvers lisent args.workspaceId, le rôle est
 // vérifié sur ce même espace
 const crmEmailAutomationResolvers = {
@@ -77,7 +96,7 @@ const crmEmailAutomationResolvers = {
 
     crmEmailAutomationLogs: requireRead("automations", {
       preferArgsWorkspace: true,
-    })(async (_, { workspaceId, automationId, limit = 50 }) => {
+    })(async (_, { workspaceId, automationId, limit = 50 }, context) => {
       const query = { workspaceId };
       if (automationId) {
         query.automationId = automationId;
@@ -88,7 +107,19 @@ const crmEmailAutomationResolvers = {
         .sort({ sentAt: -1 })
         .limit(limit);
 
-      return logs;
+      // Fiche du contact seulement avec « Mes clients : voir »
+      let canReadClients = true;
+      try {
+        assertPermissionAction(context, "clients", "view");
+      } catch {
+        canReadClients = false;
+      }
+      if (canReadClients) return logs;
+      return logs.map((log) => ({
+        ...log.toObject(),
+        clientId: null,
+        hideClient: true,
+      }));
     }),
   },
 
@@ -118,6 +149,11 @@ const crmEmailAutomationResolvers = {
       }
 
       assertEmailSender(input.email);
+      await assertSenderBelongsToWorkspace(
+        input.email,
+        workspaceId,
+        context.user,
+      );
 
       const automation = new CrmEmailAutomation({
         ...input,
@@ -126,7 +162,7 @@ const crmEmailAutomationResolvers = {
         timing: {
           type: input.timing.type,
           daysOffset: input.timing.daysOffset || 0,
-          sendHour: input.timing.sendHour || 9,
+          sendHour: input.timing.sendHour ?? 9,
         },
         email: {
           fromName: input.email.fromName || "",
@@ -144,7 +180,7 @@ const crmEmailAutomationResolvers = {
 
     updateCrmEmailAutomation: requireWrite("automations", {
       preferArgsWorkspace: true,
-    })(async (_, { workspaceId, id, input }) => {
+    })(async (_, { workspaceId, id, input }, context) => {
       const automation = await CrmEmailAutomation.findOne({
         _id: id,
         workspaceId,
@@ -152,6 +188,18 @@ const crmEmailAutomationResolvers = {
 
       if (!automation) {
         throw new Error("Automatisation non trouvée");
+      }
+
+      // Une automatisation qui reste ou devient active : l'offre doit
+      // comprendre les automatisations d'e-mails (la couper reste possible)
+      const willBeActive =
+        input.isActive !== undefined ? input.isActive : automation.isActive;
+      if (willBeActive) {
+        await assertPlanFeature(
+          workspaceId,
+          "crmEmailAutomations",
+          "les automatisations d'e-mails",
+        );
       }
 
       // Si le champ personnalisé change, vérifier qu'il est de type DATE
@@ -197,6 +245,16 @@ const crmEmailAutomationResolvers = {
 
       if (input.email) {
         assertEmailSender(input.email);
+        if (
+          input.email.fromEmail !== undefined &&
+          input.email.fromEmail !== automation.email.fromEmail
+        ) {
+          await assertSenderBelongsToWorkspace(
+            input.email,
+            workspaceId,
+            context.user,
+          );
+        }
         automation.email = {
           fromName:
             input.email.fromName !== undefined
@@ -256,6 +314,15 @@ const crmEmailAutomationResolvers = {
 
       if (!automation) {
         throw new Error("Automatisation non trouvée");
+      }
+
+      // Réactiver : l'offre doit comprendre les automatisations d'e-mails
+      if (!automation.isActive) {
+        await assertPlanFeature(
+          workspaceId,
+          "crmEmailAutomations",
+          "les automatisations d'e-mails",
+        );
       }
 
       automation.isActive = !automation.isActive;
@@ -371,7 +438,7 @@ const crmEmailAutomationResolvers = {
   CrmEmailAutomationLog: {
     id: (parent) => parent._id?.toString() || parent.id,
     client: async (parent) => {
-      if (!parent.clientId) return null;
+      if (!parent.clientId || parent.hideClient) return null;
       return await Client.findById(parent.clientId);
     },
   },

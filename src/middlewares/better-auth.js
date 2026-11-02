@@ -3,7 +3,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import User from "../models/User.js";
 import mongoose from "mongoose";
-import { loadCachedUser } from "./user-cache.js";
+import { loadCachedUser, isUserAccessDenied } from "./user-cache.js";
 
 /**
  * Extrait le token de session depuis les cookies
@@ -138,7 +138,7 @@ const betterAuthMiddleware = async (req) => {
       User.findById(session.userId),
     );
 
-    if (!user || user.isDisabled) {
+    if (isUserAccessDenied(user)) {
       logger.warn(`Utilisateur ${session.userId} non trouvé ou désactivé`);
       return null;
     }

@@ -31,6 +31,8 @@ import {
   normalizeTransferEmailInput,
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
+import { normalizeTransferCreationOptions } from "../utils/transferOptions.js";
+import { deleteTransferStorage } from "../utils/transferStorage.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -474,10 +476,13 @@ const fileTransferResolvers = {
           fileTransfer.status = "deleted";
           await fileTransfer.save();
 
-          // Supprimer les fichiers physiquement (optionnel, peut être fait par un job de nettoyage)
+          // Fichiers et aperçus effacés tout de suite : le job d'expiration
+          // ne repasse pas sur un transfert supprimé. Fichiers locaux
+          // (anciens envois) par leur chemin, fichiers R2 par leur clé.
           for (const file of fileTransfer.files) {
-            deleteFile(file.filePath);
+            if (file.storageType !== "r2") deleteFile(file.filePath);
           }
+          await deleteTransferStorage(fileTransfer);
 
           return true;
         } catch (error) {
@@ -624,6 +629,16 @@ const fileTransferResolvers = {
               "Veuillez sélectionner au moins un document ou dossier",
             );
           }
+
+          // Durée, mot de passe et paiement validés avant de lire les fichiers
+          const {
+            expiryDays,
+            passwordProtected,
+            password,
+            paymentAmount,
+            paymentCurrency,
+            isPaymentRequired,
+          } = normalizeTransferCreationOptions(input);
 
           // Destinataire unique et message borné ; e-mails plafonnés par jour
           const { recipientEmail, message } =
@@ -810,20 +825,9 @@ const fileTransferResolvers = {
           ];
 
           // 6. Options du transfert (allowPreview toujours false pour les ZIP depuis docs partagés)
-          const expiryDays = input?.expiryDays || 7;
           const notifyOnDownload = input?.notifyOnDownload || false;
-          const passwordProtected = input?.passwordProtected || false;
-          const password = input?.password || null;
           const expiryReminderEnabled = input?.expiryReminderEnabled || false;
           const hasWatermark = input?.hasWatermark || false;
-          const paymentAmount = input?.paymentAmount || 0;
-          const paymentCurrency =
-            input?.paymentCurrency || input?.currency || "EUR";
-          const isPaymentRequired =
-            paymentAmount > 0 ||
-            input?.isPaymentRequired ||
-            input?.requirePayment ||
-            false;
 
           // 7. Créer le FileTransfer avec un seul fichier (le ZIP)
           const fileTransfer = new FileTransfer({

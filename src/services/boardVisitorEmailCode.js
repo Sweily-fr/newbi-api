@@ -100,13 +100,21 @@ export async function consumeVisitorEmailCode(share, rawEmail, rawCode) {
   const code = String(rawCode || "").replace(/\s/g, "");
   if (!/^\d{6}$/.test(code)) return false;
 
-  const entry = await BoardVisitorCode.findOne({ email, shareId: share._id });
-  if (!entry) return false;
-  if (
-    entry.expiresAt < new Date() ||
-    entry.attempts >= VISITOR_CODE_MAX_ATTEMPTS
-  ) {
-    await entry.deleteOne();
+  // Un essai est réservé avant la comparaison, en une seule écriture : des
+  // requêtes simultanées ne peuvent pas tester plus de codes que la limite
+  const entry = await BoardVisitorCode.findOneAndUpdate(
+    {
+      email,
+      shareId: share._id,
+      attempts: { $lt: VISITOR_CODE_MAX_ATTEMPTS },
+      expiresAt: { $gt: new Date() },
+    },
+    { $inc: { attempts: 1 } },
+    { new: true },
+  );
+  if (!entry) {
+    // Absent, expiré ou essais épuisés : le code est invalidé
+    await BoardVisitorCode.deleteOne({ email, shareId: share._id });
     return false;
   }
 
@@ -116,13 +124,7 @@ export async function consumeVisitorEmailCode(share, rawEmail, rawCode) {
     expected.length === provided.length &&
     crypto.timingSafeEqual(expected, provided);
 
-  if (!matches) {
-    await BoardVisitorCode.updateOne(
-      { _id: entry._id },
-      { $inc: { attempts: 1 } },
-    );
-    return false;
-  }
+  if (!matches) return false;
 
   // Usage unique : seule la suppression effective valide le code (deux
   // requêtes simultanées avec le même code n'en valident qu'une)

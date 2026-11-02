@@ -59,6 +59,9 @@ import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
 import Invoice from "../../src/models/Invoice.js";
 import invoiceResolvers from "../../src/resolvers/invoice.js";
 import { triggerInvoiceFacturXArchive } from "../../src/services/invoiceFacturXArchiveService.js";
+import { reportPaymentIfNeeded } from "../../src/utils/eInvoiceRoutingHelper.js";
+import documentAutomationService from "../../src/services/documentAutomationService.js";
+import { automationService } from "../../src/resolvers/clientAutomation.js";
 
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
@@ -186,6 +189,61 @@ describe("Invoice Resolver - Query.invoiceStats", () => {
 
     expect(result.totalCount).toBe(0);
     expect(result.totalAmount).toBe(0);
+  });
+});
+
+describe("Invoice Resolver - Query.invoiceBalances (avoirs déduits)", () => {
+  const balances = () =>
+    invoiceResolvers.Query.invoiceBalances(
+      null,
+      { workspaceId: organizationId.toString() },
+      ctx(),
+    );
+  const credit = (invoiceId, ht) =>
+    mongoose.connection.db.collection("creditnotes").insertOne({
+      workspaceId: organizationId,
+      originalInvoice: invoiceId,
+      number: `AV-${Math.random().toString(36).slice(2, 7)}`,
+      finalTotalHT: -ht,
+      finalTotalTTC: -ht * 1.2,
+    });
+  const echue = { dueDate: new Date(Date.now() - 10 * 86_400_000) };
+
+  it("facture échue de 1 000 € HT et avoir de 400 € : 600 € facturés et en retard", async () => {
+    const { insertedId } = await insertInvoice(echue);
+    await credit(insertedId, 400);
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(600, 2);
+    expect(result.overdueAmount).toBeCloseTo(600, 2);
+    expect(result.overdueCount).toBe(1);
+  });
+
+  it("facture échue entièrement créditée : plus en retard", async () => {
+    const { insertedId } = await insertInvoice(echue);
+    await credit(insertedId, 1000);
+    await insertInvoice({ ...echue, number: "0002" });
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(1000, 2);
+    expect(result.overdueAmount).toBeCloseTo(1000, 2);
+    expect(result.overdueCount).toBe(1);
+  });
+
+  it("facture payée créditée en partie : facturé et encaissé nets de l'avoir", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: new Date(),
+    });
+    await credit(insertedId, 250);
+
+    const result = await balances();
+
+    expect(result.totalBilled).toBeCloseTo(750, 2);
+    expect(result.totalPaid).toBeCloseTo(750, 2);
+    expect(result.overdueAmount).toBe(0);
   });
 });
 
@@ -344,6 +402,59 @@ describe("Invoice Resolver - Mutation.markInvoiceAsPaid", () => {
     expect(result.status).toBe("COMPLETED");
   });
 
+  it("facture déjà payée : changer la date ne rejoue ni déclaration, ni notification, ni automatisations", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: new Date("2026-10-01T00:00:00.000Z"),
+      eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+      eReportingPaymentStatus: "REPORTED",
+    });
+    reportPaymentIfNeeded.mockClear();
+    documentAutomationService.executeAutomations.mockClear();
+    automationService.executeAutomations.mockClear();
+
+    await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        paymentDate: "2026-10-02",
+      },
+      ctx(),
+    );
+
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate.toISOString().slice(0, 10)).toBe("2026-10-02");
+    expect(reportPaymentIfNeeded).not.toHaveBeenCalled();
+    expect(documentAutomationService.executeAutomations).not.toHaveBeenCalled();
+    expect(automationService.executeAutomations).not.toHaveBeenCalled();
+  });
+
+  it("facture payée par carte en ligne : sa date de paiement ne se modifie pas", async () => {
+    const paidAt = new Date("2026-10-01T10:00:00.000Z");
+    const { insertedId } = await insertInvoice({
+      status: "COMPLETED",
+      paymentDate: paidAt,
+      paymentMethod: "CARD",
+      stripePaymentStatus: "paid",
+    });
+
+    await expect(
+      resolver(
+        null,
+        {
+          id: insertedId.toString(),
+          workspaceId: organizationId.toString(),
+          paymentDate: "2026-09-15",
+        },
+        ctx(),
+      ),
+    ).rejects.toThrow(/payée par carte/);
+
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate.toISOString()).toBe(paidAt.toISOString());
+  });
+
   it("blocks marking a DRAFT invoice as paid", async () => {
     const { insertedId } = await insertInvoice({ status: "DRAFT" });
 
@@ -409,10 +520,106 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     );
 
     expect(result.status).toBe("COMPLETED");
+    // Même chemin que « Marquer comme payée » : la date de paiement est posée
+    const saved = await Invoice.collection.findOne({ _id: insertedId });
+    expect(saved.paymentDate).toBeInstanceOf(Date);
   });
+
+  for (const target of ["COMPLETED", "CANCELED"]) {
+    it(`refuse de passer un brouillon à ${target} : il reste brouillon, sans numéro légal`, async () => {
+      const { insertedId } = await insertInvoice({
+        status: "DRAFT",
+        number: "DRAFT-0006",
+      });
+
+      await expect(
+        resolver(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            status: target,
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow(/brouillon doit d'abord être validé/);
+
+      const untouched = await Invoice.collection.findOne({ _id: insertedId });
+      expect(untouched.status).toBe("DRAFT");
+      expect(untouched.number).toBe("DRAFT-0006");
+      expect(untouched.paymentDate ?? null).toBeNull();
+    });
+  }
 
   it("transitions PENDING to CANCELED", async () => {
     const { insertedId } = await insertInvoice({ status: "PENDING" });
+
+    const result = await resolver(
+      null,
+      {
+        id: insertedId.toString(),
+        workspaceId: organizationId.toString(),
+        status: "CANCELED",
+      },
+      ctx(),
+    );
+
+    expect(result.status).toBe("CANCELED");
+  });
+
+  for (const [cas, fields, message] of [
+    [
+      "transmise en facturation électronique",
+      {
+        superPdpInvoiceId: "spdp-123",
+        eInvoiceStatus: "VALIDATED",
+        eInvoiceFlowType: "E_INVOICING",
+      },
+      /transmise en facturation électronique.*Créez un avoir/,
+    ],
+    [
+      "déposée sans identifiant mais au statut transmis",
+      { eInvoiceStatus: "SENT_TO_RECIPIENT" },
+      /transmise en facturation électronique.*Créez un avoir/,
+    ],
+    [
+      "déclarée en e-reporting",
+      {
+        eInvoiceFlowType: "E_REPORTING_TRANSACTION",
+        eReportingStatus: "REPORTED",
+      },
+      /déclarée à l'administration.*Créez un avoir/,
+    ],
+  ]) {
+    it(`refuse d'annuler une facture ${cas} : elle s'annule par un avoir`, async () => {
+      const { insertedId } = await insertInvoice({
+        status: "PENDING",
+        ...fields,
+      });
+
+      await expect(
+        resolver(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            status: "CANCELED",
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow(message);
+
+      const untouched = await Invoice.collection.findOne({ _id: insertedId });
+      expect(untouched.status).toBe("PENDING");
+    });
+  }
+
+  it("laisse annuler une facture dont l'envoi e-invoicing a échoué avant dépôt", async () => {
+    const { insertedId } = await insertInvoice({
+      status: "PENDING",
+      eInvoiceStatus: "ERROR",
+      eReportingStatus: "ERROR",
+    });
 
     const result = await resolver(
       null,
@@ -460,6 +667,125 @@ describe("Invoice Resolver - Mutation.changeInvoiceStatus", () => {
     const untouched = await Invoice.collection.findOne({ _id: insertedId });
     expect(untouched.status).toBe("PENDING");
   });
+});
+
+describe("Invoice Resolver - Query.nextInvoiceNumber (lecture seule)", () => {
+  it("l'aperçu d'un numéro de brouillon ne change ni le compteur ni les brouillons", async () => {
+    await insertInvoice({ status: "PENDING", number: "0001" });
+    await insertInvoice({
+      _id: new mongoose.Types.ObjectId(),
+      status: "DRAFT",
+      number: "DRAFT-0002",
+    });
+    const db = mongoose.connection.db;
+    await db.collection("documentcounters").insertOne({
+      documentType: "invoice",
+      prefix: "F-202604",
+      workspaceId: organizationId.toString(),
+      lastNumber: 1,
+    });
+    const photo = async () =>
+      JSON.stringify([
+        await db.collection("documentcounters").find().toArray(),
+        await db.collection("invoices").find().sort({ _id: 1 }).toArray(),
+      ]);
+    const avant = await photo();
+
+    const read = () =>
+      invoiceResolvers.Query.nextInvoiceNumber(
+        null,
+        {
+          workspaceId: organizationId.toString(),
+          prefix: "F-202604",
+          isDraft: true,
+        },
+        ctx(),
+      );
+    const lectures = [await read(), await read(), await read()];
+
+    expect(lectures).toEqual(["DRAFT-0002", "DRAFT-0002", "DRAFT-0002"]);
+    expect(await photo()).toBe(avant);
+  });
+});
+
+describe("Invoice Resolver - Mutation.updateInvoice (validateurs du modèle)", () => {
+  it("une mise à jour refusée par la base remet en place les validateurs des coordonnées bancaires", async () => {
+    // updateInvoice retire le temps de l'écriture les validateurs (partagés
+    // par tout le processus) des coordonnées bancaires de l'émetteur : un
+    // validateur témoin vérifie qu'ils reviennent même après une erreur.
+    const path = Invoice.schema.path("companyInfo.bankDetails.iban");
+    const temoin = { validator: () => true, message: "témoin", type: "temoin" };
+    path.validators.push(temoin);
+    try {
+      const { insertedId } = await insertInvoice({
+        status: "DRAFT",
+        number: "DRAFT-0009",
+      });
+
+      await expect(
+        invoiceResolvers.Mutation.updateInvoice(
+          null,
+          {
+            id: insertedId.toString(),
+            workspaceId: organizationId.toString(),
+            input: { footerNotes: "Bas de page \u0001 invalide" },
+          },
+          ctx(),
+        ),
+      ).rejects.toThrow();
+
+      expect(
+        Invoice.schema.path("companyInfo.bankDetails.iban").validators,
+      ).toContain(temoin);
+    } finally {
+      const current = Invoice.schema.path("companyInfo.bankDetails.iban");
+      current.validators = current.validators.filter((v) => v !== temoin);
+    }
+  });
+});
+
+describe("Invoice Resolver - Mutation.createInvoice (statut de création)", () => {
+  const resolver = invoiceResolvers.Mutation.createInvoice;
+  const input = (status) => ({
+    status,
+    issueDate: new Date().toISOString().slice(0, 10),
+    dueDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+    client: {
+      name: "Acme",
+      email: "client@test.fr",
+      type: "COMPANY",
+      address: {
+        street: "1 rue Test",
+        city: "Paris",
+        postalCode: "75001",
+        country: "France",
+      },
+    },
+    items: [
+      { description: "Service", quantity: 1, unitPrice: 100, vatRate: 20 },
+    ],
+  });
+
+  for (const status of ["COMPLETED", "CANCELED", "OVERDUE"]) {
+    it(`refuse une facture créée au statut ${status} : rien n'est enregistré`, async () => {
+      await expect(
+        resolver(
+          null,
+          { workspaceId: organizationId.toString(), input: input(status) },
+          ctx(),
+        ),
+      ).rejects.toThrow(/se crée en brouillon ou en attente/);
+
+      expect(
+        await Invoice.countDocuments({ workspaceId: organizationId }),
+      ).toBe(0);
+      const counters = await mongoose.connection.db
+        .collection("documentcounters")
+        .find({ workspaceId: organizationId.toString() })
+        .toArray();
+      expect(counters.every((c) => c.lastNumber === 0)).toBe(true);
+    });
+  }
 });
 
 // Brouillon : entièrement modifiable (articles, remise, client)

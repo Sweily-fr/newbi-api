@@ -151,7 +151,7 @@ router.post("/log", async (req, res) => {
  *   - PAS de pseudonymisation (étape 3)
  *   - PAS de streaming (étape 4)
  *   - PAS de prompt caching (étape 5)
- *   - PAS de rate limit double 30/h + 100/jour (étape 4)
+ *   - même plafond que /chat/stream (30/h + 100/jour par espace)
  *
  * On valide UNIQUEMENT que la chaîne fonctionne :
  *   client → auth JWT → membership workspace → SDK Anthropic → réponse.
@@ -192,6 +192,18 @@ router.post("/chat", async (req, res) => {
         `assistant/chat: cross-tenant attempt — user ${userId} → workspace ${workspaceId}`,
       );
       return res.status(403).json({ error: "Workspace non autorisé" });
+    }
+
+    // Même plafond que /chat/stream : chaque appel est payé au modèle
+    const rl = checkAndConsume(workspaceId);
+    if (!rl.allowed) {
+      return res.status(429).json({
+        error: `Limite atteinte (${rl.limit}/${rl.scope === "hour" ? "h" : "jour"})`,
+        scope: rl.scope,
+        limit: rl.limit,
+        used: rl.used,
+        retryAfterSec: rl.retryAfterSec,
+      });
     }
 
     const message = (req.body?.message || "").trim();
