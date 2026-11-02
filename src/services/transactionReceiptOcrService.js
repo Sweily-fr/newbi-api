@@ -5,6 +5,7 @@ import hybridOcrService from "./hybridOcrService.js";
 import mistralIntelligentAnalysisService from "./mistralIntelligentAnalysisService.js";
 import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import UserOcrQuota from "../models/UserOcrQuota.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
@@ -991,6 +992,33 @@ async function finalizeReceiptInvoiceLink({
 }
 
 /**
+ * Quota d'analyses OCR de l'utilisateur dans l'espace : analyses restantes
+ * ce mois, et plan pour enregistrer l'usage. null sans utilisateur (aucun
+ * quota à décompter).
+ */
+async function receiptOcrQuota(userId, workspaceId) {
+  if (!userId) return null;
+  // Import différé : le module des factures importées charge des services
+  // qui chargent celui-ci
+  const { getUserPlan } = await import("../resolvers/importedInvoice.js");
+  const plan = await getUserPlan(userId, workspaceId);
+  const info = await UserOcrQuota.checkQuotaAvailable(
+    userId,
+    workspaceId,
+    plan,
+  );
+  return { plan, remaining: Math.max(0, info.remaining) };
+}
+
+async function recordReceiptOcrUsage(userId, workspaceId, plan, info) {
+  try {
+    await UserOcrQuota.recordUsage(userId, workspaceId, plan, info);
+  } catch (error) {
+    logger.warn(`⚠️ [RECEIPT OCR] Usage OCR non enregistré: ${error.message}`);
+  }
+}
+
+/**
  * Point d'entrée : traite les justificatifs non encore traités d'une
  * transaction dépense et crée les factures d'achat correspondantes.
  *
@@ -1079,12 +1107,30 @@ async function processReceiptsForTransaction({
     return [];
   }
 
-  // 2) OCR de tous les justificatifs en parallèle (étape longue).
-  const ocrResults = await runOcrForFiles(
-    claimedFiles,
-    buffersByKey,
-    workspaceId,
-  );
+  // 2) OCR des justificatifs en parallèle (étape longue), dans la limite du
+  //    quota d'analyses du plan. Au-delà, pas d'analyse : la proposition de
+  //    facture d'achat reprend les données de la transaction, comme après un
+  //    échec de lecture.
+  const quota = await receiptOcrQuota(userId, workspaceId);
+  const analyzed =
+    quota === null ? claimedFiles : claimedFiles.slice(0, quota.remaining);
+  const ocrResults = await runOcrForFiles(analyzed, buffersByKey, workspaceId);
+  if (quota !== null) {
+    if (analyzed.length < claimedFiles.length) {
+      logger.info(
+        `ℹ️ [RECEIPT OCR] Quota OCR atteint : ${claimedFiles.length - analyzed.length} justificatif(s) sans analyse (transaction ${transaction._id})`,
+      );
+    }
+    for (const receiptFile of analyzed) {
+      const result = ocrResults.get(String(receiptFile._id));
+      if (!result?.ocrSucceeded) continue;
+      await recordReceiptOcrUsage(userId, workspaceId, quota.plan, {
+        fileName: receiptFile.filename,
+        provider: result.ocrProvider || "receipt",
+        success: true,
+      });
+    }
+  }
   const ocrElapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 
   // 3) Déduplication, création et liaison : séquentiel à dessein, chaque
@@ -1902,6 +1948,7 @@ export {
 export default {
   resolveReceiptAmounts,
   processReceiptsForTransaction,
+  receiptOcrQuota,
   confirmReceiptInvoiceProposal,
   isExpenseTransaction,
   analyzePurchaseInvoiceFile,

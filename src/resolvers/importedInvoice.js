@@ -134,9 +134,29 @@ async function getUserPlan(userId, workspaceId) {
       });
     }
 
-    const plan = subscription?.plan
+    let plan = subscription?.plan
       ? PLAN_NAME_MAP[subscription.plan] || defaultPlan
       : defaultPlan;
+
+    // Essai gratuit géré par l'application (sans abonnement Stripe) : quota
+    // de l'offre Freelance, pas celui d'un espace sans abonnement. Les
+    // analyses des factures d'achat et des justificatifs comptent dans le
+    // quota : l'essai ne doit pas s'arrêter à 5 analyses.
+    if (!subscription && mongoose.Types.ObjectId.isValid(cacheKey)) {
+      const org = await db
+        .collection("organization")
+        .findOne(
+          { _id: new mongoose.Types.ObjectId(cacheKey) },
+          { projection: { isTrialActive: 1, trialEndDate: 1 } },
+        );
+      if (
+        org?.isTrialActive &&
+        org.trialEndDate &&
+        new Date(org.trialEndDate) > new Date()
+      ) {
+        plan = "FREELANCE";
+      }
+    }
 
     logger.debug(
       `📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`,
@@ -2085,4 +2105,5 @@ export {
   fillClientFromVendor,
   checkUserOcrQuota,
   recordOcrUsage,
+  getUserPlan,
 };
