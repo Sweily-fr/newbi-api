@@ -1162,36 +1162,9 @@ const importedInvoiceResolvers = {
           throw createValidationError("Fichier trop volumineux (max 10MB)");
         }
 
-        // Récupérer organizationId pour l'upload Cloudflare
-        let organizationId = null;
-        const rawOrgId =
-          user.organizationId ||
-          user.organization?.id ||
-          user.organization?._id ||
-          user.currentOrganizationId;
-
-        if (rawOrgId) {
-          organizationId =
-            typeof rawOrgId === "object"
-              ? rawOrgId._id?.toString() ||
-                rawOrgId.id?.toString() ||
-                rawOrgId.toString()
-              : rawOrgId.toString();
-        } else {
-          try {
-            const memberRecord = await mongoose.connection.db
-              .collection("member")
-              .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
-            if (memberRecord?.organizationId) {
-              organizationId = memberRecord.organizationId.toString();
-            }
-          } catch (err) {
-            console.warn(
-              "⚠️ Impossible de récupérer organizationId:",
-              err.message,
-            );
-          }
-        }
+        // Fichier rangé dans l'espace de l'import (pas celui de la session :
+        // un membre de plusieurs espaces importait dans un autre)
+        const organizationId = String(workspaceId);
 
         // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
         // on doit garder le PDF stocké pour saisie manuelle).

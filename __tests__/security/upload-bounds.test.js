@@ -21,6 +21,7 @@ vi.mock("../../src/services/cloudflareService.js", async (importOriginal) => {
   service.uploadImage = async (buffer, name, userId, type, orgId) => {
     if (state.failOn === name) throw new Error("R2 indisponible");
     state.uploads.push(name);
+    state.uploadOrgs = [...(state.uploadOrgs || []), String(orgId)];
     return { key: `${orgId}/${name}`, url: `https://r2.test/${orgId}/${name}` };
   };
   service.deleteImage = async (key) => {
@@ -103,6 +104,7 @@ beforeEach(async () => {
   await clearMongo();
   invalidateOrgCache();
   state.uploads = [];
+  state.uploadOrgs = [];
   state.deleted = [];
   state.failOn = null;
   await seedOrgMembership({ userId, organizationId: org, role: "owner" });
@@ -298,5 +300,21 @@ describe("importInvoiceDirect", () => {
     expect(JSON.stringify(result)).toMatch(/trop volumineux/);
     expect(file.read.chunks).toBeLessThanOrEqual(11);
     expect(state.uploads).toHaveLength(0);
+  });
+});
+
+describe("importInvoiceDirect : espace du fichier", () => {
+  it("membre de deux espaces : le fichier est rangé dans l'espace de l'import", async () => {
+    const other = buildOrganizationId();
+    await seedOrgMembership({ userId, organizationId: other, role: "owner" });
+    // Espace actif de la session : le premier ; import dans le second
+    const context = buildContext({ userId, organizationId: other });
+    context.user.organizationId = ws;
+    await importedInvoiceResolvers.Mutation.importInvoiceDirect(
+      null,
+      { file: upload(PDF, "facture.pdf"), workspaceId: String(other) },
+      context,
+    );
+    expect(state.uploadOrgs[0]).toBe(String(other));
   });
 });
