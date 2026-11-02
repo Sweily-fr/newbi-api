@@ -1,10 +1,6 @@
 import mongoose from "mongoose";
 import { withRBAC } from "../middlewares/rbac.js";
-import { AppError, ERROR_CODES } from "../utils/errors.js";
-import {
-  getWorkspaceStorageState,
-  refreshWorkspaceStorage,
-} from "../services/storage/storageService.js";
+import { getWorkspaceStorageState } from "../services/storage/storageService.js";
 import {
   PLAN_LABELS,
   recommendStorageOptions,
@@ -14,7 +10,7 @@ import {
 import {
   STORAGE_CATEGORIES,
   UNATTRIBUTED,
-} from "../services/storage/storageUsageCompute.js";
+} from "../services/storage/storageCategories.js";
 
 // Le résolveur attend au plus ce délai un premier calcul ; au-delà, l'écran
 // affiche « calcul en cours » et redemande
@@ -129,24 +125,6 @@ const storageResolvers = {
         return presentWorkspaceStorage(state, {
           details: canViewDetails(context),
         });
-      },
-      { preferArgsWorkspace: true },
-    ),
-  },
-  Mutation: {
-    refreshWorkspaceStorage: withRBAC(
-      async (_, __, context) => {
-        if (!canViewDetails(context)) {
-          throw new AppError(
-            "Vous n'avez pas la permission d'effectuer cette action.",
-            ERROR_CODES.FORBIDDEN,
-          );
-        }
-        await refreshWorkspaceStorage(context.workspaceId);
-        const state = await getWorkspaceStorageState(context.workspaceId, {
-          waitMs: 0,
-        });
-        return presentWorkspaceStorage(state, { details: true });
       },
       { preferArgsWorkspace: true },
     ),

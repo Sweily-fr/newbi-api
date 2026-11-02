@@ -36,23 +36,13 @@ import "../../models/EmailSignature.js";
 import "../../models/EmailSignatureV2.js";
 import "../../models/FileTransfer.js";
 
-// Version du calcul : l'augmenter force un recalcul de tous les espaces
-export const STORAGE_COMPUTE_VERSION = 1;
+import {
+  STORAGE_CATEGORIES,
+  STORAGE_COMPUTE_VERSION,
+  UNATTRIBUTED,
+} from "./storageCategories.js";
 
-export const STORAGE_CATEGORIES = {
-  billingDocuments: "Documents de facturation",
-  sharedDocuments: "Documents partagés",
-  kanban: "Projets (pièces jointes et images)",
-  receipts: "Justificatifs de transaction",
-  purchaseInvoices: "Factures d'achat et documents scannés",
-  importedDocuments: "Documents importés",
-  branding: "Logos, images et signatures de mail",
-  transfers: "Transferts de fichiers",
-  social: "Réseaux sociaux",
-  other: "Autres fichiers",
-};
-
-export const UNATTRIBUTED = "unattributed";
+export { STORAGE_CATEGORIES, STORAGE_COMPUTE_VERSION, UNATTRIBUTED };
 
 const HEAD_CONCURRENCY = 8;
 // Au-delà, on liste le préfixe de l'espace plutôt que de lire chaque objet
@@ -605,7 +595,12 @@ async function resolveMissingSizes(entries, workspaceId, { deadline }) {
 
   // 1. Registre des tailles déjà connues
   const known = await WorkspaceStorageObject.find(
-    { key: { $in: missing.map((e) => e.key) } },
+    {
+      key: { $in: missing.map((e) => e.key) },
+      // Un objet absent de R2 lu par HEAD garde 0 octet ; un envoi à 0 octet
+      // n'apprend rien
+      $or: [{ size: { $gt: 0 } }, { source: "head" }],
+    },
     { key: 1, size: 1 },
   ).lean();
   const knownSizes = new Map(known.map((o) => [o.key, o.size]));

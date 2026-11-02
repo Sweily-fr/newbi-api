@@ -28,11 +28,18 @@ import {
   STORAGE_WARNING_RATIO,
 } from "./storageConfig.js";
 import {
-  computeWorkspaceStorage,
   STORAGE_CATEGORIES,
   STORAGE_COMPUTE_VERSION,
   UNATTRIBUTED,
-} from "./storageUsageCompute.js";
+} from "./storageCategories.js";
+
+// Le recalcul lit R2 (cloudflareService) : chargé seulement quand il sert,
+// pour que les modules qui comptent un envoi n'en dépendent pas au chargement
+async function computeWorkspaceStorage(workspaceId, options) {
+  const { computeWorkspaceStorage: compute } =
+    await import("./storageUsageCompute.js");
+  return compute(workspaceId, options);
+}
 
 export const STORAGE_QUOTA_EXCEEDED = ERROR_CODES.STORAGE_QUOTA_EXCEEDED;
 
@@ -313,6 +320,98 @@ export async function assertStorageAvailable(workspaceId, bytes, options = {}) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Envois en plusieurs temps (transferts) : tailles annoncées en attente
+// ---------------------------------------------------------------------------
+
+const PENDING_TTL_MS = 6 * 60 * 60 * 1000;
+const memoryPending = new Map();
+
+function pendingKey(workspaceId) {
+  return `storage:pending:${workspaceId}`;
+}
+
+async function readPending(workspaceId) {
+  const now = Date.now();
+  let entries = {};
+  try {
+    const { getCacheClient } = await import("../../config/redis.js");
+    const client = getCacheClient();
+    if (client) {
+      entries = (await client.hgetall(pendingKey(workspaceId))) || {};
+    } else {
+      entries = Object.fromEntries(memoryPending.get(String(workspaceId)) || []);
+    }
+  } catch {
+    entries = Object.fromEntries(memoryPending.get(String(workspaceId)) || []);
+  }
+  let total = 0;
+  for (const raw of Object.values(entries)) {
+    const [bytes, at] = String(raw).split("@").map(Number);
+    if (now - (at || 0) < PENDING_TTL_MS) total += bytes || 0;
+  }
+  return total;
+}
+
+/**
+ * Fichier d'un transfert en cours d'envoi : sa taille annoncée compte dans
+ * le contrôle des fichiers suivants, jusqu'à la création du transfert.
+ */
+export async function reservePendingUpload(workspaceId, uploadId, bytes) {
+  if (!isValidWorkspaceId(workspaceId) || !uploadId) return;
+  const value = `${Math.max(0, Number(bytes) || 0)}@${Date.now()}`;
+  try {
+    const { getCacheClient } = await import("../../config/redis.js");
+    const client = getCacheClient();
+    if (client) {
+      await client.hset(pendingKey(workspaceId), String(uploadId), value);
+      await client.pexpire(pendingKey(workspaceId), PENDING_TTL_MS);
+      return;
+    }
+  } catch {
+    // repli en mémoire
+  }
+  const map = memoryPending.get(String(workspaceId)) || new Map();
+  map.set(String(uploadId), value);
+  memoryPending.set(String(workspaceId), map);
+}
+
+export async function releasePendingUploads(workspaceId, uploadIds = []) {
+  if (!isValidWorkspaceId(workspaceId) || uploadIds.length === 0) return;
+  const ids = uploadIds.map(String);
+  try {
+    const { getCacheClient } = await import("../../config/redis.js");
+    const client = getCacheClient();
+    if (client) await client.hdel(pendingKey(workspaceId), ...ids);
+  } catch {
+    // sans effet
+  }
+  const map = memoryPending.get(String(workspaceId));
+  if (map) for (const id of ids) map.delete(id);
+}
+
+/**
+ * Contrôle d'un fichier de transfert : sa taille plus celle des autres
+ * fichiers en cours d'envoi dans l'espace doit tenir dans le quota.
+ */
+export async function assertTransferStorageAvailable(workspaceId, uploadId, bytes) {
+  if (!isValidWorkspaceId(workspaceId)) return null;
+  const pending = await readPending(workspaceId);
+  const state = await assertStorageAvailable(
+    workspaceId,
+    Math.max(0, Number(bytes) || 0) + pending,
+  );
+  if (uploadId && Number(bytes) > 0) {
+    await reservePendingUpload(workspaceId, uploadId, bytes);
+  }
+  return state;
+}
+
+/** Relance un refus de stockage pris dans un catch qui renvoie success:false. */
+export function rethrowStorageError(error) {
+  if (error?.code === STORAGE_QUOTA_EXCEEDED) throw error;
+}
+
 /** Variante booléenne, pour les envois automatiques qui passent leur tour. */
 export async function hasStorageAvailable(workspaceId, bytes) {
   try {
@@ -351,6 +450,11 @@ export async function recordStoredFile(file) {
   const { workspaceId, key, bucket, category, userId } = file || {};
   if (!isValidWorkspaceId(workspaceId) || !key) return;
   const size = Math.max(0, Number(file.size) || 0);
+  // Taille inconnue (copie serveur à serveur) : lue au prochain recalcul
+  if (size === 0) {
+    await markStorageStale(workspaceId);
+    return;
+  }
   try {
     const previous = await WorkspaceStorageObject.findOneAndUpdate(
       { key },
@@ -410,6 +514,35 @@ export async function recordStoredFileDeleted(file) {
   } catch (error) {
     logger.warn(`[storage] Suppression non comptée : ${error.message}`);
     await markStorageStale(workspaceId);
+  }
+}
+
+/**
+ * Fichier qui en remplace un autre dans un document (archive PDF refaite) :
+ * l'ancien ne compte plus, le nouveau compte.
+ */
+export async function recordReplacedFile({ previousKey, ...file }) {
+  if (previousKey && previousKey !== file.key) {
+    await recordStoredFileDeleted({
+      workspaceId: file.workspaceId,
+      key: previousKey,
+      category: file.category,
+    });
+  }
+  await recordStoredFile(file);
+}
+
+/** Transfert expiré ou supprimé : ses fichiers ne comptent plus. */
+export async function recordTransferRemoved(transfer) {
+  if (!transfer?.workspaceId) return;
+  for (const file of transfer.files || []) {
+    if (file?.storageType !== "r2" || !file.r2Key) continue;
+    await recordStoredFileDeleted({
+      workspaceId: transfer.workspaceId,
+      key: file.r2Key,
+      size: file.size,
+      category: "transfers",
+    });
   }
 }
 

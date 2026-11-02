@@ -71,8 +71,3 @@ type WorkspaceStorage {
 extend type Query {
   workspaceStorage(workspaceId: ID): WorkspaceStorage
 }
-
-extend type Mutation {
-  # Recalcul complet immédiat (rôles qui voient l'abonnement)
-  refreshWorkspaceStorage(workspaceId: ID): WorkspaceStorage
-}
