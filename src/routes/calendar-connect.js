@@ -13,6 +13,10 @@ import {
   createSignedState,
   verifySignedState,
 } from "../utils/signedOAuthState.js";
+import {
+  bindOAuthToBrowser,
+  isOAuthBoundToBrowser,
+} from "../utils/oauthBrowserBinding.js";
 import logger from "../utils/logger.js";
 
 const router = express.Router();
@@ -67,7 +71,18 @@ async function stateAllowsCalendarEdit(stateData) {
  * « Modifier » du calendrier toujours présent dans l'espace d'origine.
  * Renvoie { stateData } ou { error } (code transmis au site).
  */
-async function checkCalendarCallback(provider, state, req) {
+// Cookie qui lie le retour OAuth au navigateur (voir oauthBrowserBinding.js)
+const CALENDAR_COOKIE_PATH = "/calendar-connect";
+
+function bindCalendarToBrowser(res, provider, state) {
+  bindOAuthToBrowser(res, {
+    nonce: verifySignedState(calendarStatePurpose(provider), state).data.nonce,
+    path: CALENDAR_COOKIE_PATH,
+    ttlMs: CALENDAR_STATE_TTL_MS,
+  });
+}
+
+async function checkCalendarCallback(provider, state, req, res) {
   const label = provider === "google" ? "Google" : "Microsoft";
 
   const verified = verifySignedState(calendarStatePurpose(provider), state);
@@ -82,6 +97,20 @@ async function checkCalendarCallback(provider, state, req) {
     return { error: "invalid_state" };
   }
   const stateData = verified.data;
+
+  // Terminé dans le navigateur qui a lancé la connexion : une adresse
+  // d'autorisation transmise à quelqu'un d'autre ne rattache pas son agenda
+  if (
+    !isOAuthBoundToBrowser(req, res, {
+      nonce: stateData.nonce,
+      path: CALENDAR_COOKIE_PATH,
+    })
+  ) {
+    logger.warn(
+      `[${label} OAuth] Retour dans un autre navigateur que celui de userId ${stateData.userId}`,
+    );
+    return { error: "other_browser" };
+  }
 
   // Usage unique, atomique (Redis partagé entre instances ; sans Redis,
   // refus : voir consumeSignedStateOnce)
@@ -149,6 +178,8 @@ router.get("/google/authorize", requireCalendarEdit, async (req, res) => {
 
     // State signé : utilisateur et espace retrouvés au retour
     const state = createCalendarState("google", user, req.workspaceId);
+    // Seul ce navigateur pourra terminer la connexion
+    bindCalendarToBrowser(res, "google", state);
 
     const authUrl = provider.getAuthUrl(state);
     res.json({ authUrl });
@@ -186,6 +217,7 @@ router.get("/google/callback", async (req, res) => {
       "google",
       state,
       req,
+      res,
     );
     if (stateError) {
       return res.redirect(
@@ -288,6 +320,8 @@ router.get("/microsoft/authorize", requireCalendarEdit, async (req, res) => {
 
     // State signé : utilisateur et espace retrouvés au retour
     const state = createCalendarState("microsoft", user, req.workspaceId);
+    // Seul ce navigateur pourra terminer la connexion
+    bindCalendarToBrowser(res, "microsoft", state);
 
     const authUrl = await provider.getAuthUrl(state);
     res.json({ authUrl });
@@ -325,6 +359,7 @@ router.get("/microsoft/callback", async (req, res) => {
       "microsoft",
       state,
       req,
+      res,
     );
     if (stateError) {
       return res.redirect(

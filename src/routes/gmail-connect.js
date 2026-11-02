@@ -13,12 +13,18 @@ import {
   createSignedState,
   verifySignedState,
 } from "../utils/signedOAuthState.js";
+import {
+  bindOAuthToBrowser,
+  isOAuthBoundToBrowser,
+} from "../utils/oauthBrowserBinding.js";
 
 // 🔐 State OAuth signé (HMAC, secret serveur), lié à l'utilisateur et à
 // l'espace, valable 10 minutes et à usage unique : voir signedOAuthState.js
 export const GMAIL_STATE_PURPOSE = "gmail-connect";
 export const GMAIL_STATE_TTL_MS = 10 * 60 * 1000;
 const usedStateKey = (nonce) => `gmail-connect:state-used:${nonce}`;
+// Cookie qui lie le retour OAuth au navigateur (voir oauthBrowserBinding.js)
+const GMAIL_COOKIE_PATH = "/gmail-connect";
 
 const router = express.Router();
 
@@ -55,6 +61,13 @@ router.get(
         },
         GMAIL_STATE_TTL_MS,
       );
+
+      // Seul ce navigateur pourra terminer la connexion
+      bindOAuthToBrowser(res, {
+        nonce: verifySignedState(GMAIL_STATE_PURPOSE, state).data.nonce,
+        path: GMAIL_COOKIE_PATH,
+        ttlMs: GMAIL_STATE_TTL_MS,
+      });
 
       const authUrl = provider.getAuthUrl(state);
       res.json({ authUrl });
@@ -103,6 +116,22 @@ router.get("/callback", async (req, res) => {
       );
     }
     const stateData = verified.data;
+
+    // Terminé dans le navigateur qui a lancé la connexion : une adresse
+    // d'autorisation transmise à quelqu'un d'autre ne rattache pas sa boîte
+    if (
+      !isOAuthBoundToBrowser(req, res, {
+        nonce: stateData.nonce,
+        path: GMAIL_COOKIE_PATH,
+      })
+    ) {
+      logger.warn(
+        `[Gmail OAuth] Retour dans un autre navigateur que celui de userId ${stateData.userId}`,
+      );
+      return res.redirect(
+        `${process.env.FRONTEND_URL}/dashboard/outils/factures-achat?gmail_error=${encodeURIComponent("Connexion à terminer dans le navigateur qui l'a lancée")}`,
+      );
+    }
 
     // Usage unique, atomique (Redis partagé entre instances ; sans Redis,
     // refus : voir consumeSignedStateOnce)
