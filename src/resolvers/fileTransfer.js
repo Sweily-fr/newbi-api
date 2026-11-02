@@ -95,6 +95,32 @@ const requireTransferLevel = (level) =>
 const requireTransferAction = (action) =>
   requireWorkspaceAction("fileTransfers", action);
 
+// Transfert existant (lecture, renommage, suppression) : le rôle contrôlé est
+// celui de l'espace où le transfert est enregistré, pas celui de l'en-tête
+// choisi par le client. Ancien transfert sans espace : l'en-tête fait foi.
+const onTransferWorkspace = (guard) => (fn) => {
+  const guarded = guard(fn);
+  return async (parent, args, context, info) => {
+    const userId = context?.user?.id || context?.user?._id;
+    let workspaceId = null;
+    if (userId && mongoose.isValidObjectId(args?.id)) {
+      const transfer = await FileTransfer.findOne({
+        _id: args.id,
+        userId,
+      })
+        .select("workspaceId")
+        .lean();
+      if (transfer?.workspaceId) workspaceId = String(transfer.workspaceId);
+    }
+    return guarded(
+      parent,
+      workspaceId ? { ...args, workspaceId } : args,
+      context,
+      info,
+    );
+  };
+};
+
 // Création classique : l'espace du transfert arrive dans input.workspaceId.
 // On le présente comme args.workspaceId pour que le rôle contrôlé soit celui
 // de l'espace où le transfert est enregistré. Sans espace dans l'input,
@@ -130,24 +156,13 @@ const fileTransferResolvers = {
             status: { $ne: "deleted" },
           };
 
-          // Isolation par workspace: si un workspaceId est fourni, on ne retourne
-          // que les transferts de ce workspace. Pour garantir la compatibilité
-          // avec les transferts créés avant l'ajout du multi-workspace (sans
-          // workspaceId), on les rattache automatiquement au workspace courant
-          // lors de la première requête, puis on applique le filtre strict.
+          // Isolation par workspace : les transferts de cet espace, plus ceux
+          // de l'utilisateur créés sans espace (avant le multi-espace, ou
+          // depuis l'application sans espace actif), listés sans être
+          // modifiés. Ils étaient rattachés en base au premier espace dont la
+          // liste était ouverte.
           if (workspaceId) {
-            await FileTransfer.updateMany(
-              {
-                userId: user.id,
-                status: { $ne: "deleted" },
-                $or: [
-                  { workspaceId: null },
-                  { workspaceId: { $exists: false } },
-                ],
-              },
-              { $set: { workspaceId } },
-            );
-            baseFilter.workspaceId = workspaceId;
+            baseFilter.workspaceId = { $in: [workspaceId, null] };
           }
 
           // Compter le nombre total d'éléments pour la pagination
@@ -186,7 +201,7 @@ const fileTransferResolvers = {
     ),
 
     // Obtenir les informations d'un transfert de fichiers par son ID
-    fileTransferById: requireTransferLevel("read")(
+    fileTransferById: onTransferWorkspace(requireTransferLevel("read"))(
       async (_, { id }, { user }) => {
         try {
           const fileTransfer = await FileTransfer.findOne({
@@ -420,7 +435,7 @@ const fileTransferResolvers = {
 
     // Supprimer un transfert de fichiers
     // Renommer un transfert (titre personnalisé)
-    renameFileTransfer: requireTransferAction("edit")(
+    renameFileTransfer: onTransferWorkspace(requireTransferAction("edit"))(
       async (_, { id, title }, { user }) => {
         try {
           const trimmed = (title || "").trim();
@@ -462,7 +477,7 @@ const fileTransferResolvers = {
       },
     ),
 
-    deleteFileTransfer: requireTransferLevel("delete")(
+    deleteFileTransfer: onTransferWorkspace(requireTransferLevel("delete"))(
       async (_, { id }, { user }) => {
         try {
           const fileTransfer = await FileTransfer.findOne({
