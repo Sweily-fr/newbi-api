@@ -73,6 +73,10 @@ import {
   byInputColumn,
   byColumnList,
 } from "../services/kanbanBoardAccess.js";
+import {
+  TASK_FILE_FIELDS,
+  cleanupDeletedTasksFilesLater,
+} from "../services/kanbanTaskFilesCleanup.js";
 
 // Événements de subscription
 const BOARD_UPDATED = "BOARD_UPDATED";
@@ -1972,8 +1976,15 @@ const resolvers = {
       });
 
       try {
-        // Supprimer les tâches associées au tableau
+        // Supprimer les tâches associées au tableau (puis leurs fichiers)
+        const deletedTasks = await Task.find({
+          boardId: id,
+          workspaceId: finalWorkspaceId,
+        })
+          .select(TASK_FILE_FIELDS)
+          .lean();
         await Task.deleteMany({ boardId: id, workspaceId: finalWorkspaceId });
+        cleanupDeletedTasksFilesLater(deletedTasks);
 
         // Supprimer les colonnes associées au tableau
         await Column.deleteMany({
@@ -2125,11 +2136,18 @@ const resolvers = {
         });
         if (!column) throw new Error("Column not found");
 
-        // Supprimer les tâches associées à la colonne
+        // Supprimer les tâches associées à la colonne (puis leurs fichiers)
+        const deletedTasks = await Task.find({
+          columnId: id,
+          workspaceId: finalWorkspaceId,
+        })
+          .select(TASK_FILE_FIELDS)
+          .lean();
         await Task.deleteMany({
           columnId: id,
           workspaceId: finalWorkspaceId,
         });
+        cleanupDeletedTasksFilesLater(deletedTasks);
 
         // Supprimer la colonne
         const result = await Column.deleteOne({
@@ -3408,6 +3426,9 @@ const resolvers = {
       });
 
       if (result.deletedCount > 0) {
+        // Pièces jointes et état collaboratif de la tâche
+        cleanupDeletedTasksFilesLater([task.toObject()]);
+
         // Retirer la tâche supprimée des tâches qui lui étaient liées et
         // diffuser leur mise à jour (le lien disparaît en temps réel)
         const affected = await detachTaskLinks(id, finalWorkspaceId);
