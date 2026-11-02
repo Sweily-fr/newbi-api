@@ -517,11 +517,14 @@ describe("refreshAccountProfiles", () => {
       lastSyncedAt: at(-40 * DAY),
     });
     // Connecté il y a 10 jours (createdAt réel plus ancien, sans effet)
-    await directAccount({ externalAccountId: "43", lastSyncedAt: at(-10 * DAY) });
+    await directAccount({
+      externalAccountId: "43",
+      lastSyncedAt: at(-10 * DAY),
+    });
     // Ni relu ni date de connexion : date de création (60 jours avant NOW)
     const legacy = await directAccount({ externalAccountId: "44" });
-    vi.spyOn(xApi, "fetchProfile").mockImplementation(
-      async ({ account }) => xProfile({ externalAccountId: account.externalAccountId }),
+    vi.spyOn(xApi, "fetchProfile").mockImplementation(async ({ account }) =>
+      xProfile({ externalAccountId: account.externalAccountId }),
     );
     expect((await refreshAccountProfiles({ now: NOW })).refreshed).toBe(2);
     expect((await reload(connectedLongAgo)).profileRefreshedAt).toEqual(NOW);
@@ -608,13 +611,11 @@ describe("refreshAccountProfiles", () => {
 
   it("jeton refusé : rafraîchi puis relu ; refusé encore : à reconnecter (comme à la publication)", async () => {
     const saved = await directAccount({ lastSyncedAt: at(-40 * DAY) });
-    const refresh = vi
-      .spyOn(xApi, "refreshCredentials")
-      .mockResolvedValue({
-        accessToken: "x_new",
-        refreshToken: "x_refresh_2",
-        tokenExpiresAt: at(2 * HOUR),
-      });
+    const refresh = vi.spyOn(xApi, "refreshCredentials").mockResolvedValue({
+      accessToken: "x_new",
+      refreshToken: "x_refresh_2",
+      tokenExpiresAt: at(2 * HOUR),
+    });
     const authError = () =>
       new DirectApiError("x : 401", { network: "x", authInvalid: true });
     const fetchProfile = vi
