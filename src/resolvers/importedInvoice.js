@@ -22,6 +22,12 @@ import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import invoiceExtractionService from "../services/invoiceExtractionService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 import {
   createValidationError,
@@ -1179,6 +1185,7 @@ const importedInvoiceResolvers = {
         logger.debug(
           `☁️ importInvoiceDirect: Upload Cloudflare pour ${filename}`,
         );
+        await assertStorageAvailable(workspaceId, fileBuffer.length);
         const uploadResult = await cloudflareService.uploadImage(
           fileBuffer,
           filename,
@@ -1186,6 +1193,13 @@ const importedInvoiceResolvers = {
           "importedInvoice",
           organizationId,
         );
+        await recordStoredFile({
+          workspaceId,
+          key: uploadResult.key,
+          size: fileBuffer.length,
+          category: "importedDocuments",
+          userId: user.id,
+        });
 
         // Chaîne OCR : Claude Vision (quota) → OCR hybride (fallback).
         // Toujours en PENDING_REVIEW à la sortie : la sidebar permet l'édition.
@@ -1273,6 +1287,7 @@ const importedInvoiceResolvers = {
           isDuplicate,
         };
       } catch (error) {
+        rethrowStorageError(error);
         console.error("Erreur importInvoiceDirect:", error);
         return {
           success: false,
@@ -1759,6 +1774,12 @@ const importedInvoiceResolvers = {
               cloudflareKey,
               cloudflareService.importedInvoicesBucketName,
             );
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: cloudflareKey,
+              size: invoice.file?.fileSize,
+              category: "importedDocuments",
+            });
             logger.debug(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
           } catch (error) {
             console.error(`⚠️ Erreur suppression Cloudflare: ${error.message}`);
@@ -1808,6 +1829,12 @@ const importedInvoiceResolvers = {
                 cloudflareKey,
                 cloudflareService.importedInvoicesBucketName,
               );
+              await recordStoredFileDeleted({
+                workspaceId,
+                key: cloudflareKey,
+                size: invoice.file?.fileSize,
+                category: "importedDocuments",
+              });
               logger.debug(`🗑️ Fichier Cloudflare supprimé: ${cloudflareKey}`);
             } catch (error) {
               console.error(

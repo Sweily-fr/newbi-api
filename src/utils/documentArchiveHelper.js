@@ -1,4 +1,8 @@
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordReplacedFile,
+} from "../services/storage/storageService.js";
 import { AppError, ERROR_CODES } from "./errors.js";
 import {
   assertArchiveReplaceable,
@@ -92,6 +96,11 @@ export async function archiveDocumentPdf({
     );
   }
 
+  // Avoir : document comptable légal, jamais refusé (mais compté). Devis,
+  // bons de commande et de livraison : refusés si l'espace est plein.
+  const legal = docType === "creditNote";
+  await assertStorageAvailable(workspaceId, pdfBuffer.length, { legal });
+
   const fileName = `${docType}_${doc.prefix || ""}${doc.number || docId}.pdf`;
   const { key } = await cloudflareService.uploadDocumentPdf(
     docType,
@@ -100,6 +109,16 @@ export async function archiveDocumentPdf({
     String(docId),
     { fileName },
   );
+
+  await recordReplacedFile({
+    workspaceId,
+    previousKey: doc.archivedPdfKey,
+    key,
+    bucket: cloudflareService.documentBuckets?.[docType],
+    size: pdfBuffer.length,
+    category: "billingDocuments",
+    userId: doc.createdBy,
+  });
 
   doc.archivedPdfKey = key;
   doc.archivedPdfStoredAt = new Date();

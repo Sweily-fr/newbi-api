@@ -10,6 +10,12 @@ import ApiMetric from "../models/ApiMetric.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { GraphQLUpload } from "graphql-upload";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { isStoredFileReferenced } from "../utils/storedFileReferences.js";
 import {
   MAX_RECEIPT_FILE_BYTES,
@@ -568,6 +574,12 @@ const bankingResolvers = {
             validated.push({ filename, fileBuffer, detected });
           }
 
+          // Espace de stockage : tous les fichiers de l'envoi doivent tenir
+          await assertStorageAvailable(
+            workspaceId,
+            validated.reduce((sum, v) => sum + v.fileBuffer.length, 0),
+          );
+
           // 2. Envoi sur R2 ; en cas d'échec, les fichiers déjà envoyés
           // sont retirés.
           const uploadedReceiptFiles = [];
@@ -601,6 +613,16 @@ const bankingResolvers = {
                 .catch(() => {});
             }
             throw uploadError;
+          }
+          for (const uploaded of uploadedReceiptFiles) {
+            await recordStoredFile({
+              workspaceId,
+              key: uploaded.key,
+              bucket: cloudflareService.receiptsBucketName,
+              size: uploaded.size,
+              category: "receipts",
+              userId: uploaded.uploadedBy,
+            });
           }
 
           const updatedTransaction = await Transaction.findOneAndUpdate(
@@ -661,6 +683,7 @@ const bankingResolvers = {
             transaction: updatedTransaction,
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ [UPLOAD RECEIPT] Error:", error);
           return {
             success: false,
@@ -854,6 +877,12 @@ const bankingResolvers = {
                   cloudflareService.receiptsBucketName,
                 );
               }
+              await recordStoredFileDeleted({
+                workspaceId,
+                key: fileToRemove.key,
+                size: fileToRemove.size,
+                category: "receipts",
+              });
             } catch (err) {
               console.warn(
                 "⚠️ [REMOVE RECEIPT] Suppression R2 échouée:",

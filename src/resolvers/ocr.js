@@ -13,6 +13,10 @@ import mongoose from "mongoose";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+} from "../services/storage/storageService.js";
 import ocrCacheService from "../services/ocrCacheService.js";
 import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
@@ -77,6 +81,12 @@ const ocrResolvers = {
           if (tooLarge) {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
+
+          // Le fichier est conservé dans l'espace : il doit y tenir
+          await assertStorageAvailable(
+            workspaceId || contextOrgId,
+            fileBuffer.length,
+          );
 
           // Hash du contenu pour le cache
           const contentHash = crypto
@@ -149,6 +159,14 @@ const ocrResolvers = {
                   "ocr",
                   fallbackOrgId,
                 );
+                await recordStoredFile({
+                  workspaceId: fallbackOrgId,
+                  key: uploadResult?.key,
+                  bucket: cloudflareService.ocrBucketName,
+                  size: fileBuffer.length,
+                  category: "purchaseInvoices",
+                  userId: user.id,
+                });
 
                 if (!uploadResult?.url) {
                   throw new Error("Échec upload Cloudflare");
@@ -236,6 +254,14 @@ const ocrResolvers = {
               );
               documentUrl = uploadResult.url;
               cloudflareKey = uploadResult.key;
+              await recordStoredFile({
+                workspaceId: workspaceId || contextOrgId,
+                key: uploadResult.key,
+                bucket: cloudflareService.ocrBucketName,
+                size: fileBuffer.length,
+                category: "purchaseInvoices",
+                userId: user.id,
+              });
             } catch (uploadErr) {
               console.error(
                 "❌ Erreur upload Cloudflare (OCR) :",

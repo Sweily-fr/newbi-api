@@ -9,6 +9,11 @@ import { buildSearchRegex } from "../utils/searchRegex.js";
 import { ocrMetadataFromOcrData } from "../utils/purchaseInvoiceOcrMetadata.js";
 import mongoose from "mongoose";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+} from "../services/storage/storageService.js";
 import superPdpService from "../services/superPdpService.js";
 import EInvoicingSettingsService from "../services/eInvoicingSettingsService.js";
 import logger from "../utils/logger.js";
@@ -147,6 +152,12 @@ const deletePurchaseInvoiceFilesFromR2 = async (
       if (stillUsed) continue;
 
       await cloudflareService.deleteImage(resolved.key, resolved.bucket);
+      await recordStoredFileDeleted({
+        workspaceId,
+        key: resolved.key,
+        size: file.size,
+        category: "purchaseInvoices",
+      });
     } catch (err) {
       console.warn("⚠️ Impossible de supprimer le fichier:", err.message);
     }
@@ -1465,6 +1476,8 @@ const purchaseInvoiceResolvers = {
             );
           }
 
+          await assertStorageAvailable(workspaceId, buffer.length);
+
           // Bucket OCR : même destination que les fichiers issus du flux
           // processDocumentOcr (cohérence des justificatifs de factures
           // d'achat)
@@ -1475,6 +1488,14 @@ const purchaseInvoiceResolvers = {
             "ocr",
             workspaceId,
           );
+          await recordStoredFile({
+            workspaceId,
+            key: uploadResult.key,
+            bucket: cloudflareService.ocrBucketName,
+            size: buffer.length,
+            category: "purchaseInvoices",
+            userId: context.user.id,
+          });
 
           fileData = {
             filename: uploadResult.key || filename,

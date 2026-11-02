@@ -455,6 +455,8 @@ export async function storeSignatureImage({
     key: result.key,
     width: processed.width,
     height: processed.height,
+    // Taille enregistrée, pour le compteur de stockage (non gardée en base)
+    size: processed.buffer.length,
   };
 }
 

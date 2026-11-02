@@ -8,6 +8,12 @@ import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import SharedTag, { getDefaultTagColor } from "../models/SharedTag.js";
 import cloudflareService from "../services/cloudflareService.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   requireAction,
@@ -884,6 +890,9 @@ const sharedDocumentResolvers = {
             );
           }
 
+          // Espace de stockage de l'espace : refus si l'envoi le dépasse
+          await assertStorageAvailable(workspaceId, fileSize);
+
           // Upload vers Cloudflare R2
           const uploadResult = await cloudflareService.uploadImage(
             fileBuffer,
@@ -892,6 +901,14 @@ const sharedDocumentResolvers = {
             "sharedDocuments",
             workspaceId,
           );
+          await recordStoredFile({
+            workspaceId,
+            key: uploadResult.key,
+            bucket: cloudflareService.sharedDocumentsBucketName,
+            size: fileSize,
+            category: "sharedDocuments",
+            userId: user.id,
+          });
 
           // Extraire l'extension
           const fileExtension = path.extname(filename).toLowerCase().slice(1);
@@ -937,6 +954,7 @@ const sharedDocumentResolvers = {
             },
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur upload document partagé:", error);
           return {
             success: false,
@@ -2050,6 +2068,13 @@ const sharedDocumentResolvers = {
                 cloudflareError.message,
               );
             }
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: doc.fileKey,
+              size: doc.fileSize,
+              category: "sharedDocuments",
+              userId: doc.uploadedBy,
+            });
           }
 
           // Supprimer définitivement les documents
@@ -2112,6 +2137,13 @@ const sharedDocumentResolvers = {
                 cloudflareError.message,
               );
             }
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: doc.fileKey,
+              size: doc.fileSize,
+              category: "sharedDocuments",
+              userId: doc.uploadedBy,
+            });
           }
 
           // Supprimer de la base (ceux retrouvés ci-dessus seulement)
@@ -2175,6 +2207,13 @@ const sharedDocumentResolvers = {
                 cloudflareError.message,
               );
             }
+            await recordStoredFileDeleted({
+              workspaceId,
+              key: doc.fileKey,
+              size: doc.fileSize,
+              category: "sharedDocuments",
+              userId: doc.uploadedBy,
+            });
           }
 
           // Supprimer les documents
