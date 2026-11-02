@@ -37,6 +37,15 @@ const SOURCE_MODULES = {
 // expose aussi téléphone, coordonnées bancaires, code de parrainage)
 const CREATED_BY_FIELDS = "name email";
 
+// Lignes du journal renvoyées en une fois
+const LOG_LIMIT_DEFAULT = 50;
+const LOG_LIMIT_MAX = 200;
+const boundedLogLimit = (limit) => {
+  const n = Number.parseInt(limit, 10);
+  if (!Number.isFinite(n) || n < 1) return LOG_LIMIT_DEFAULT;
+  return Math.min(n, LOG_LIMIT_MAX);
+};
+
 /**
  * Une automatisation copie les PDF de sa page source dans un dossier
  * partagé : la créer, la modifier, l'activer ou la lancer exige aussi de
@@ -113,16 +122,38 @@ const documentAutomationResolvers = {
       return automation;
     }),
 
+    // Journal : seulement les documents des pages que le rôle voit, et
+    // rien des dossiers privés qui lui sont fermés (numéros, clients et
+    // noms de dossiers restent dans leur page)
     documentAutomationLogs: scopedQuery(
-      async (_, { workspaceId, automationId, limit }) => {
+      async (_, { workspaceId, automationId, limit }, context) => {
         const filter = { workspaceId };
         if (automationId) {
           filter.automationId = automationId;
         }
 
+        // « expense » : ancien type des justificatifs d'achat
+        const readableTypes = Object.entries({
+          ...SOURCE_MODULES,
+          expense: "purchaseInvoices",
+        })
+          .filter(([, moduleKey]) =>
+            context?.permissions?.hasPermission?.(moduleKey, "view"),
+          )
+          .map(([docType]) => docType);
+        filter.sourceDocumentType = { $in: readableTypes };
+
+        const { inaccessibleFolderIds } = await sharedFolderAccessFor(
+          context,
+          String(workspaceId),
+        );
+        if (inaccessibleFolderIds.length > 0) {
+          filter.targetFolderId = { $nin: inaccessibleFolderIds };
+        }
+
         const logs = await DocumentAutomationLog.find(filter)
           .sort({ createdAt: -1 })
-          .limit(limit || 50);
+          .limit(boundedLogLimit(limit));
 
         return logs;
       },
