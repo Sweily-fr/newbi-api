@@ -1044,7 +1044,7 @@ const sharedDocumentResolvers = {
             };
           }
 
-          // Soft-delete : mettre en corbeille (suppression définitive dans 30 jours)
+          // Soft-delete : mettre en corbeille (jusqu'à suppression définitive par l'utilisateur)
           await SharedDocument.updateOne(
             { _id: id },
             {
@@ -1763,7 +1763,7 @@ const sharedDocumentResolvers = {
 
           return {
             success: true,
-            message: `Dossier et ${subfolderIds.length} sous-dossier(s) déplacés vers la corbeille. Suppression définitive dans 30 jours.`,
+            message: `Dossier et ${subfolderIds.length} sous-dossier(s) déplacés vers la corbeille.`,
           };
         } catch (error) {
           console.error("❌ Erreur mise en corbeille dossier:", error);
@@ -2219,17 +2219,8 @@ const sharedDocumentResolvers = {
     },
     trashedAt: (parent) =>
       parent.trashedAt?.toISOString?.() || parent.trashedAt,
-    daysUntilPermanentDeletion: (parent) => {
-      if (!parent.trashedAt) return null;
-      const trashedDate = new Date(parent.trashedAt);
-      const deletionDate = new Date(
-        trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000,
-      ); // +30 jours
-      const now = new Date();
-      const diffMs = deletionDate - now;
-      const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
-      return Math.max(0, diffDays);
-    },
+    // Aucune suppression automatique de la corbeille : pas de décompte
+    daysUntilPermanentDeletion: () => null,
   },
 
   SharedFolder: {
@@ -2252,17 +2243,8 @@ const sharedDocumentResolvers = {
     },
     trashedAt: (parent) =>
       parent.trashedAt?.toISOString?.() || parent.trashedAt,
-    daysUntilPermanentDeletion: (parent) => {
-      if (!parent.trashedAt) return null;
-      const trashedDate = new Date(parent.trashedAt);
-      const deletionDate = new Date(
-        trashedDate.getTime() + 30 * 24 * 60 * 60 * 1000,
-      ); // +30 jours
-      const now = new Date();
-      const diffMs = deletionDate - now;
-      const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
-      return Math.max(0, diffDays);
-    },
+    // Aucune suppression automatique de la corbeille : pas de décompte
+    daysUntilPermanentDeletion: () => null,
     canManageVisibility: async (parent, _, context) => {
       if (!context.user) return false;
       const userId =

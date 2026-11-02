@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import logger from "../utils/logger.js";
+import stripe from "../utils/stripe.js";
+import { AppError, ERROR_CODES } from "../utils/errors.js";
 import cloudflareService from "./cloudflareService.js";
 
 // Models
@@ -173,6 +175,117 @@ async function purgeSignatureImages(userId, keepFolders = []) {
  * @param {string} organizationId - ID de l'organisation
  * @returns {Object} Résumé de la suppression
  */
+
+// Statuts d'un abonnement Stripe encore facturable
+const BILLABLE_SUBSCRIPTION_STATUSES = [
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "incomplete",
+];
+
+const OWNER_ROLE = /owner/i;
+
+/**
+ * Espaces qui perdraient leur seul super admin : l'utilisateur en est
+ * propriétaire, d'autres membres y restent et aucun autre n'est
+ * propriétaire. La suppression du compte est alors refusée tant que la
+ * propriété n'est pas transférée.
+ */
+export async function findOrganizationsNeedingOwnerTransfer(
+  userId,
+  { session = null } = {},
+) {
+  const db = mongoose.connection.db;
+  const userObjectId = new mongoose.Types.ObjectId(String(userId));
+  const owned = await db
+    .collection("member")
+    .find({ userId: userObjectId, role: OWNER_ROLE }, { session })
+    .toArray();
+  const blocking = [];
+  for (const membership of owned) {
+    const orgId = membership.organizationId;
+    const others = await db
+      .collection("member")
+      .countDocuments(
+        { organizationId: orgId, userId: { $ne: userObjectId } },
+        { session, limit: 1 },
+      );
+    if (!others) continue;
+    const otherOwners = await db.collection("member").countDocuments(
+      {
+        organizationId: orgId,
+        userId: { $ne: userObjectId },
+        role: OWNER_ROLE,
+      },
+      { session, limit: 1 },
+    );
+    if (otherOwners) continue;
+    const org = await db
+      .collection("organization")
+      .findOne({ _id: orgId }, { projection: { name: 1 }, session });
+    blocking.push({ id: String(orgId), name: org?.name || "" });
+  }
+  return blocking;
+}
+
+export function ownerTransferRequiredError(organizations) {
+  const names = organizations
+    .map((o) => (o.name ? `« ${o.name} »` : "un espace"))
+    .join(", ");
+  return new AppError(
+    `Vous êtes le super admin de ${names}, qui a d'autres membres. Transférez la propriété à un autre membre avant de supprimer votre compte.`,
+    ERROR_CODES.VALIDATION_ERROR,
+    { reason: "OWNER_TRANSFER_REQUIRED", organizations },
+  );
+}
+
+/**
+ * Espaces dont l'utilisateur est le seul membre : ils disparaissent avec
+ * lui, leur abonnement ne doit plus être facturé.
+ */
+async function findSoleMemberOrganizations(userObjectId, session) {
+  const db = mongoose.connection.db;
+  const memberships = await db
+    .collection("member")
+    .find({ userId: userObjectId }, { session })
+    .toArray();
+  const sole = [];
+  for (const membership of memberships) {
+    const others = await db
+      .collection("member")
+      .countDocuments(
+        {
+          organizationId: membership.organizationId,
+          userId: { $ne: userObjectId },
+        },
+        { session, limit: 1 },
+      );
+    if (!others) sole.push(membership.organizationId);
+  }
+  return sole;
+}
+
+async function cancelStripeSubscriptions(subscriptions) {
+  let cancelled = 0;
+  for (const sub of subscriptions) {
+    if (!sub.stripeSubscriptionId) continue;
+    if (!BILLABLE_SUBSCRIPTION_STATUSES.includes(sub.status)) continue;
+    try {
+      await stripe.subscriptions.cancel(sub.stripeSubscriptionId);
+      cancelled++;
+    } catch (error) {
+      // Déjà résilié chez Stripe : rien à faire
+      if (error?.code === "resource_missing") continue;
+      logger.error(
+        `[RGPD] Résiliation Stripe impossible pour ${sub.stripeSubscriptionId} (espace ${sub.referenceId}) : ${error?.message}`,
+      );
+    }
+  }
+  return cancelled;
+}
+
 export async function deleteUserAccount(userId, organizationId) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -188,7 +301,12 @@ export async function deleteUserAccount(userId, organizationId) {
     kanbanProjectsDeleted: 0,
     fileTransfersDeleted: 0,
     organizationDeleted: false,
+    subscriptionsCancelled: 0,
   };
+
+  // Abonnements des espaces supprimés avec ce compte : résiliés chez Stripe
+  // une fois la suppression validée
+  let subscriptionsToCancel = [];
 
   // Transferts supprimés : leurs fichiers R2 sont effacés après validation
   let transfersToPurge = [];
@@ -221,6 +339,38 @@ export async function deleteUserAccount(userId, organizationId) {
         { session, limit: 1 },
       );
     const isLastMember = isMember && otherMembers === 0;
+
+    // Aucun espace ne doit garder pour seul super admin un compte supprimé
+    const needOwnerTransfer = await findOrganizationsNeedingOwnerTransfer(
+      userId,
+      { session },
+    );
+    if (needOwnerTransfer.length) {
+      throw ownerTransferRequiredError(needOwnerTransfer);
+    }
+
+    // Espaces dont il est le seul membre (l'espace traité et les autres) :
+    // leur abonnement n'est plus facturé
+    const soleOrgIds = await findSoleMemberOrganizations(
+      userObjectId,
+      session,
+    );
+    if (
+      isLastMember &&
+      !soleOrgIds.some((id) => String(id) === String(orgObjectId))
+    ) {
+      soleOrgIds.push(orgObjectId);
+    }
+    if (soleOrgIds.length) {
+      const referenceIds = soleOrgIds.map(String);
+      subscriptionsToCancel = await db
+        .collection("subscription")
+        .find({ referenceId: { $in: referenceIds } }, { session })
+        .toArray();
+      await db
+        .collection("subscription")
+        .deleteMany({ referenceId: { $in: referenceIds } }, { session });
+    }
     if (!isLastMember) {
       logger.info(
         `[RGPD] Données de l'espace ${organizationId} conservées : ${isMember ? "d'autres membres y restent" : "l'utilisateur n'en est pas membre"}`,
@@ -487,13 +637,10 @@ export async function deleteUserAccount(userId, organizationId) {
       .collection("account")
       .deleteMany({ userId: userObjectId }, { session });
 
-    // --- Supprimer l'adhésion de l'utilisateur ---
+    // --- Supprimer les adhésions de l'utilisateur (tous ses espaces) ---
     await db
       .collection("member")
-      .deleteMany(
-        { userId: userObjectId, organizationId: orgObjectId },
-        { session },
-      );
+      .deleteMany({ userId: userObjectId }, { session });
 
     // Dernier membre : l'organisation et ses invitations partent avec lui
     if (isLastMember) {
@@ -588,6 +735,12 @@ export async function deleteUserAccount(userId, organizationId) {
     }
 
     await session.commitTransaction();
+
+    // Abonnements des espaces supprimés : plus de prélèvement
+    summary.subscriptionsCancelled = await cancelStripeSubscriptions(
+      subscriptionsToCancel,
+    );
+
     logger.info(
       `[RGPD] Suppression du compte ${userId} terminée avec succès`,
       summary,

@@ -148,6 +148,100 @@ class CloudflareTransferService {
   }
 
   /**
+   * Envoie un flux (ZIP construit à la volée) vers R2 en multipart, sans le
+   * garder en mémoire : seules une ou deux parts de `partSize` octets sont
+   * tenues à la fois. R2 exige des parts de même taille, sauf la dernière.
+   * Envoi annulé (parts effacées) à la moindre erreur.
+   * @param {AsyncIterable<Buffer>} stream
+   * @returns {Promise<{key: string, url: string, size: number, contentType: string}>}
+   */
+  async uploadStream(
+    stream,
+    transferId,
+    fileId,
+    originalName,
+    mimeType,
+    { partSize = 16 * 1024 * 1024 } = {},
+  ) {
+    const key = this.generateR2Path(transferId, fileId, originalName);
+    const contentType =
+      mimeType || this.getContentType(path.extname(originalName));
+    const created = await this.client.send(
+      new CreateMultipartUploadCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        ContentType: contentType,
+        Metadata: {
+          transferId,
+          fileId,
+          originalName: this.sanitizeFileName(originalName),
+          uploadedAt: new Date().toISOString(),
+        },
+      }),
+    );
+    const uploadId = created.UploadId;
+    const parts = [];
+    let size = 0;
+    let pending = [];
+    let pendingLength = 0;
+
+    const sendPart = async (body) => {
+      const partNumber = parts.length + 1;
+      const response = await this.client.send(
+        new UploadPartCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+          Body: body,
+        }),
+      );
+      parts.push({ PartNumber: partNumber, ETag: response.ETag });
+    };
+
+    try {
+      for await (const chunk of stream) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        pending.push(buffer);
+        pendingLength += buffer.length;
+        while (pendingLength >= partSize) {
+          const joined = Buffer.concat(pending, pendingLength);
+          await sendPart(joined.subarray(0, partSize));
+          const rest = joined.subarray(partSize);
+          pending = rest.length ? [Buffer.from(rest)] : [];
+          pendingLength = rest.length;
+        }
+      }
+      if (pendingLength > 0 || parts.length === 0) {
+        await sendPart(Buffer.concat(pending, pendingLength));
+      }
+      await this.client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+        }),
+      );
+    } catch (error) {
+      await this.abortMultipartUpload(uploadId, key).catch(() => {});
+      throw error;
+    }
+
+    let fileUrl;
+    if (
+      this.publicUrl &&
+      this.publicUrl !== "https://your_transfer_bucket_public_url"
+    ) {
+      fileUrl = `${this.publicUrl}/${key}`;
+    } else {
+      fileUrl = await this.getSignedUrl(key, 86400);
+    }
+    return { key, url: fileUrl, size, contentType };
+  }
+
+  /**
    * Génère une URL signée pour upload direct d'un chunk vers R2
    * @param {string} transferId - ID du transfert
    * @param {string} fileId - ID du fichier

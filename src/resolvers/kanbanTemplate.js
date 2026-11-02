@@ -9,6 +9,10 @@ import {
 import { getPubSub } from "../config/redis.js";
 import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import {
+  withBoardAccess,
+  byInputBoard,
+} from "../services/kanbanBoardAccess.js";
 
 const BOARD_UPDATED = "BOARD_UPDATED";
 
@@ -225,6 +229,11 @@ const kanbanTemplateResolvers = {
     }),
   },
 };
+
+// Tableau réservé à une liste de membres (voir kanbanBoardAccess.js)
+kanbanTemplateResolvers.Mutation.saveBoardAsTemplate = withBoardAccess(
+  byInputBoard,
+)(kanbanTemplateResolvers.Mutation.saveBoardAsTemplate);
 
 // ✅ Phase A.2 — Subscription check sur toutes les mutations template kanban
 const originalKanbanTemplateMutations = kanbanTemplateResolvers.Mutation;

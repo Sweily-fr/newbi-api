@@ -16,6 +16,10 @@ import cloudflareService from "../services/cloudflareService.js";
 import ocrCacheService from "../services/ocrCacheService.js";
 import mistralIntelligentAnalysisService from "../services/mistralIntelligentAnalysisService.js";
 import OcrDocument from "../models/OcrDocument.js";
+import {
+  checkUserOcrQuota,
+  recordOcrUsage,
+} from "./importedInvoice.js";
 import crypto from "crypto";
 import {
   MAX_RECEIPT_FILE_BYTES,
@@ -68,6 +72,15 @@ const ocrResolvers = {
                 "Formats supportés: JPG, PNG, GIF, WebP, PDF, TIFF, BMP",
             );
           }
+
+          // Quota d'analyses OCR du plan : une analyse de facture d'achat
+          // compte comme un import, refusée quand le quota est épuisé
+          const quotaWorkspaceId = workspaceId || contextOrgId;
+          const { plan: ocrPlan } = await checkUserOcrQuota(
+            user.id,
+            quotaWorkspaceId,
+            1,
+          );
 
           // Lecture du fichier en mémoire, interrompue au-delà de 10 Mo
           const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
@@ -268,6 +281,13 @@ const ocrResolvers = {
             message: `Document traité avec succès via ${rawResult.provider || "claude-vision"}`,
           };
 
+          await recordOcrUsage(user.id, quotaWorkspaceId, ocrPlan, {
+            fileName: filename,
+            provider: rawResult.provider || "claude-vision",
+            success: true,
+            documentId: documentId.toString(),
+          });
+
           // Sauvegarde MongoDB + cache Redis en fire & forget — pas critique
           // pour le client (les data OCR sont déjà dans la réponse).
           (async () => {
@@ -394,6 +414,13 @@ const ocrResolvers = {
             );
           }
 
+          // Quota d'analyses OCR du plan (même règle que processDocumentOcr)
+          const { plan: ocrPlan } = await checkUserOcrQuota(
+            user.id,
+            workspaceId,
+            1,
+          );
+
           // Étape 0: Vérifier le cache Redis basé sur l'URL
           const urlHash = crypto
             .createHash("sha256")
@@ -403,6 +430,11 @@ const ocrResolvers = {
 
           if (cached) {
             logger.debug(`💾 OCR Cache HIT pour ${fileName} — retour immédiat`);
+            await recordOcrUsage(user.id, workspaceId, ocrPlan, {
+              fileName,
+              provider: "cache",
+              success: true,
+            });
             return cached;
           }
 
@@ -524,6 +556,13 @@ const ocrResolvers = {
             },
             message: `Document traité avec succès via ${ocrResult.provider || "hybrid"}`,
           };
+
+          await recordOcrUsage(user.id, workspaceId, ocrPlan, {
+            fileName,
+            provider: ocrResult.provider || "hybrid",
+            success: true,
+            documentId: documentId.toString(),
+          });
 
           // Étape 4: Sauvegarder dans le cache Redis (fire & forget)
           ocrCacheService.set(urlHash, response).catch((err) => {

@@ -154,8 +154,11 @@ export async function searchLinkableTasks({
   columnId = null,
   excludeTaskId = null,
   limit = 20,
+  excludeBoardIds = [],
 }) {
   if (!workspaceId) return [];
+  const hidden = (excludeBoardIds || []).map(String);
+  if (boardId && hidden.includes(String(boardId))) return [];
   const trimmed = (search || "").trim();
   const hasColumn = columnId && isValidObjectId(String(columnId));
   // Une colonne est bornée par nature : on remonte toute son étape (plafond
@@ -179,6 +182,10 @@ export async function searchLinkableTasks({
   } else if (!trimmed) {
     if (!boardId || !isValidObjectId(String(boardId))) return [];
     query.boardId = boardId;
+  }
+
+  if (hidden.length > 0 && !query.boardId) {
+    query.boardId = { $nin: hidden.filter((id) => isValidObjectId(id)) };
   }
 
   const tasks = await Task.find(query)

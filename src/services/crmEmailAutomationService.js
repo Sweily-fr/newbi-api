@@ -114,10 +114,12 @@ async function processAutomation(automation) {
     );
 
     // Trouver les clients avec cette date dans le champ personnalisé
+    // (chaque année à la même date pour une automatisation annuelle)
     const clients = await findClientsWithDateField(
       workspaceId,
       customField.id,
       targetDate,
+      { yearly: isYearlyAutomation(automation) },
     );
 
     logger.debug(
@@ -185,24 +187,72 @@ function calculateTargetDate(timing, now = new Date()) {
 }
 
 /**
- * Trouve les clients avec une date spécifique dans un champ personnalisé
+ * Vrai si l'automatisation relance la date chaque année (anniversaire) :
+ * seulement quand l'option « Chaque année » a été activée. Une
+ * automatisation sans l'option garde son comportement (date exacte).
+ */
+function isYearlyAutomation(automation) {
+  return automation?.timing?.repeatYearly === true;
+}
+
+const isLeap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+
+/**
+ * Valeur d'un champ date (AAAA-MM-JJ) qui tombe à la date cible : la date
+ * exacte, ou pour une relance annuelle le même jour et le même mois d'une
+ * année passée (un 29 février est fêté le 28 février d'une année non
+ * bissextile). Une date future n'est jamais relancée en avance.
+ */
+function matchesTargetDate(value, targetDate, { yearly = false } = {}) {
+  if (typeof value !== "string") return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!m) return false;
+  const targetString = targetDate.toISOString().slice(0, 10);
+  if (!yearly) return value.slice(0, 10) === targetString;
+
+  const year = Number(m[1]);
+  const targetYear = targetDate.getUTCFullYear();
+  if (year > targetYear) return false;
+  const monthDay = `${m[2]}-${m[3]}`;
+  const targetMonthDay = targetString.slice(5);
+  if (monthDay === targetMonthDay) return true;
+  return (
+    monthDay === "02-29" && targetMonthDay === "02-28" && !isLeap(targetYear)
+  );
+}
+
+/**
+ * Trouve les clients avec une date spécifique dans un champ personnalisé.
+ * Relance annuelle : la date du jour et du mois de la cible, toutes années
+ * passées (jamais les autres jours : aucune rafale des anniversaires déjà
+ * passés).
  */
 async function findClientsWithDateField(
   workspaceId,
   customFieldId,
   targetDate,
+  { yearly = false } = {},
 ) {
   // Format de date stocké: YYYY-MM-DD (targetDate : minuit UTC du jour)
   const dateString = targetDate.toISOString().split("T")[0];
+  const monthDay = dateString.slice(5);
+  const year = targetDate.getUTCFullYear();
+  const monthDays =
+    monthDay === "02-28" && !isLeap(year) ? ["02-28", "02-29"] : [monthDay];
 
-  // Rechercher les clients avec ce champ personnalisé à cette date
   // customFields est un tableau de {fieldId, value} — utiliser $elemMatch
+  const valueFilter = yearly
+    ? {
+        $regex: new RegExp(`^\\d{4}-(${monthDays.join("|")})`),
+      }
+    : dateString;
+
   const clients = await Client.find({
     workspaceId,
     customFields: {
       $elemMatch: {
         fieldId: customFieldId,
-        value: dateString,
+        value: valueFilter,
       },
     },
     email: { $exists: true, $ne: "" },
@@ -210,7 +260,15 @@ async function findClientsWithDateField(
     isBlocked: { $ne: true },
   });
 
-  return clients;
+  if (!yearly) return clients;
+  // Année de la date au plus celle de la cible
+  return clients.filter((client) =>
+    (client.customFields || []).some(
+      (cf) =>
+        String(cf.fieldId) === String(customFieldId) &&
+        matchesTargetDate(cf.value, targetDate, { yearly: true }),
+    ),
+  );
 }
 
 /**
@@ -441,4 +499,6 @@ export {
   processAutomation,
   processWorkspaceCrmEmails,
   calculateTargetDate,
+  isYearlyAutomation,
+  matchesTargetDate,
 };

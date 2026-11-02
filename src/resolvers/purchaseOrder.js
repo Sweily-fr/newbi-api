@@ -1440,6 +1440,25 @@ const purchaseOrderResolvers = {
           );
         }
 
+        // Un bon de commande se facture une fois (comme à l'écran, qui
+        // retire « Convertir en facture » dès qu'une facture est liée). Une
+        // facture liée annulée ou supprimée ne compte plus.
+        const poInvoiceIds = (po.linkedInvoices || []).map(String);
+        if (poInvoiceIds.length > 0) {
+          const alreadyInvoiced = await Invoice.exists({
+            _id: { $in: poInvoiceIds },
+            workspaceId,
+            status: { $ne: "CANCELED" },
+          });
+          if (alreadyInvoiced) {
+            throw new AppError(
+              "Ce bon de commande est déjà facturé.",
+              ERROR_CODES.RESOURCE_LOCKED,
+              { resource: "Bon de commande" },
+            );
+          }
+        }
+
         // Si le BC provient d'un devis, garantir qu'on ne facture pas au-delà
         // du montant du devis, tous chemins confondus (devis→facture directe
         // OU devis→BC→facture). On charge le devis source pour contrôler et
@@ -1528,10 +1547,70 @@ const purchaseOrderResolvers = {
           userId: user.id,
         });
 
+        // Réservation atomique avant de créer la facture : le bon de
+        // commande (et son devis) ont encore les factures liées lues pour les
+        // contrôles. Deux conversions simultanées : la seconde est refusée.
+        const invoiceId = new mongoose.Types.ObjectId();
+        const snapshot = (ids) =>
+          ids?.length
+            ? { linkedInvoices: [...ids] }
+            : { "linkedInvoices.0": { $exists: false } };
+        const poClaim = await PurchaseOrder.updateOne(
+          { _id: po._id, workspaceId: po.workspaceId, ...snapshot(po.linkedInvoices) },
+          { $push: { linkedInvoices: invoiceId } },
+        );
+        const busy = () =>
+          new AppError(
+            "Ce bon de commande vient d'être facturé par ailleurs : vérifiez ses factures puis réessayez.",
+            ERROR_CODES.RESOURCE_LOCKED,
+            { resource: "Bon de commande" },
+          );
+        if (poClaim.modifiedCount !== 1) throw busy();
+        const previousConvertedToInvoice =
+          sourceQuote?.convertedToInvoice || null;
+        if (sourceQuote) {
+          const quoteClaim = await Quote.updateOne(
+            {
+              _id: sourceQuote._id,
+              workspaceId: sourceQuote.workspaceId,
+              ...snapshot(sourceQuote.linkedInvoices),
+            },
+            {
+              $push: { linkedInvoices: invoiceId },
+              ...(previousConvertedToInvoice
+                ? {}
+                : { $set: { convertedToInvoice: invoiceId } }),
+            },
+          );
+          if (quoteClaim.modifiedCount !== 1) {
+            await PurchaseOrder.updateOne(
+              { _id: po._id, workspaceId: po.workspaceId },
+              { $pull: { linkedInvoices: invoiceId } },
+            );
+            throw busy();
+          }
+        }
+        const releaseClaims = async () => {
+          await PurchaseOrder.updateOne(
+            { _id: po._id, workspaceId: po.workspaceId },
+            { $pull: { linkedInvoices: invoiceId } },
+          );
+          if (sourceQuote) {
+            await Quote.updateOne(
+              { _id: sourceQuote._id, workspaceId: sourceQuote.workspaceId },
+              {
+                $pull: { linkedInvoices: invoiceId },
+                $set: { convertedToInvoice: previousConvertedToInvoice },
+              },
+            );
+          }
+        };
+
         // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
         const poObj = po.toObject();
 
         const invoice = new Invoice({
+          _id: invoiceId,
           number: invoiceNumber,
           prefix: invoicePrefix,
           client: poObj.client,
@@ -1594,45 +1673,20 @@ const purchaseOrderResolvers = {
           escompte: po.escompte || 0,
         });
 
-        await invoice.save();
-
-        // Lier la facture au bon de commande
-        if (!po.linkedInvoices) {
-          po.linkedInvoices = [];
-        }
-        po.linkedInvoices.push(invoice._id);
-        await po.save();
-
-        // Synchroniser le devis source : sans cela, le devis paraît « vierge »
-        // et pourrait être reconverti directement en facture → doublon.
-        if (sourceQuote) {
-          if (!sourceQuote.linkedInvoices) {
-            sourceQuote.linkedInvoices = [];
-          }
-          sourceQuote.linkedInvoices.push(invoice._id);
-          if (!sourceQuote.convertedToInvoice) {
-            sourceQuote.convertedToInvoice = invoice._id;
-          }
-          await sourceQuote.save();
+        // Facture liée au bon de commande et au devis source par la
+        // réservation (sans cela, le devis paraissait « vierge » et pouvait
+        // être reconverti directement en facture : doublon)
+        try {
+          await invoice.save();
+        } catch (error) {
+          await releaseClaims();
+          throw error;
         }
 
         return await invoice.populate("createdBy");
       },
     ),
 
-    sendPurchaseOrder: requireAction("purchaseOrders", "send")(
-      async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
-
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
-
-        // TODO: Implémenter l'envoi réel par email
-        return true;
-      },
-    ),
   },
 };
 

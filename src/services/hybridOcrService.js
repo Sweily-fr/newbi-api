@@ -75,11 +75,13 @@ class HybridOcrService {
   async initProviders(workspaceId = null) {
     // Réinitialiser si le workspace change (pour vérifier les quotas)
     if (this.initialized && this.lastWorkspaceId === workspaceId) {
-      return;
+      return this.providers;
     }
 
-    this.providers = [];
-    this.lastWorkspaceId = workspaceId;
+    // Liste construite à part puis publiée d'un coup : une analyse en cours
+    // pour un autre espace parcourt sa propre liste, jamais une liste vidée
+    // ou à moitié reconstruite pendant les vérifications de quota (await).
+    const providers = [];
 
     // Déterminer les priorités selon le provider par défaut configuré
     const getPriority = (providerName) => {
@@ -97,7 +99,7 @@ class HybridOcrService {
     // Claude Vision (priorité 0 par défaut) - API Anthropic
     const claudeDisabled = process.env.OCR_DISABLE_CLAUDE === "true";
     if (!claudeDisabled && claudeVisionOcrService.isAvailable()) {
-      this.providers.push({
+      providers.push({
         name: "claude-vision",
         service: claudeVisionOcrService,
         priority: getPriority("claude-vision"),
@@ -126,7 +128,7 @@ class HybridOcrService {
       }
 
       if (mindeeAvailable) {
-        this.providers.push({
+        providers.push({
           name: "mindee",
           service: mindeeOcrService,
           priority: getPriority("mindee"),
@@ -143,7 +145,7 @@ class HybridOcrService {
 
     // Google Document AI - Gratuit 1000/mois
     if (googleDocumentAI.isAvailable()) {
-      this.providers.push({
+      providers.push({
         name: "google-document-ai",
         service: googleDocumentAI,
         priority: getPriority("google-document-ai"),
@@ -155,7 +157,7 @@ class HybridOcrService {
 
     // Mistral OCR - Fallback
     if (process.env.MISTRAL_API_KEY) {
-      this.providers.push({
+      providers.push({
         name: "mistral-ocr",
         service: mistralOcrService,
         priority: getPriority("mistral-ocr"),
@@ -167,7 +169,7 @@ class HybridOcrService {
 
     // Tesseract - Dernier recours gratuit et local (toujours disponible)
     if (tesseractOcrService.isAvailable()) {
-      this.providers.push({
+      providers.push({
         name: "tesseract",
         service: tesseractOcrService,
         priority: getPriority("tesseract"),
@@ -180,13 +182,16 @@ class HybridOcrService {
     }
 
     // Trier par priorité
-    this.providers.sort((a, b) => a.priority - b.priority);
+    providers.sort((a, b) => a.priority - b.priority);
 
     logger.debug(
-      `🔧 OCR Hybride: ${this.providers.length} provider(s) - Ordre: ${this.providers.map((p) => p.name).join(" → ")} (défaut: ${this.defaultProvider})`,
+      `🔧 OCR Hybride: ${providers.length} provider(s) - Ordre: ${providers.map((p) => p.name).join(" → ")} (défaut: ${this.defaultProvider})`,
     );
 
+    this.providers = providers;
+    this.lastWorkspaceId = workspaceId;
     this.initialized = true;
+    return providers;
   }
 
   /**
@@ -207,12 +212,13 @@ class HybridOcrService {
     // téléchargement serveur, quel que soit le provider OCR retenu.
     assertSafeDownloadUrl(documentUrl);
 
-    // Initialiser les providers au premier appel (avec vérification quota)
-    await this.initProviders(workspaceId);
+    // Initialiser les providers au premier appel (avec vérification quota) :
+    // liste propre à cet appel
+    const providers = await this.initProviders(workspaceId);
 
     const errors = [];
 
-    for (const provider of this.providers) {
+    for (const provider of providers) {
       try {
         logger.debug(`📄 OCR: Tentative avec ${provider.name}...`);
 
@@ -390,10 +396,10 @@ class HybridOcrService {
    * @returns {Promise<Array>}
    */
   async batchProcessDocuments(files, workspaceId = null) {
-    await this.initProviders(workspaceId);
+    const providers = await this.initProviders(workspaceId);
 
     // Vérifier si Claude Vision est le provider principal
-    const primaryProvider = this.providers[0];
+    const primaryProvider = providers[0];
 
     if (primaryProvider?.name === "claude-vision") {
       logger.debug(

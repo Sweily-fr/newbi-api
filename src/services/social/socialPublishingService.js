@@ -473,6 +473,7 @@ export async function createConnectUrl({
   connector = null,
   returnTo,
   now = new Date(),
+  onState = null,
 }) {
   assertSocialPublishingEnabled();
   if (!isSupportedPlatform(platform)) {
@@ -498,6 +499,7 @@ export async function createConnectUrl({
         connector: entry.key,
         returnTo,
         now,
+        onState,
       });
     } catch (error) {
       throw toUserError(error, "connect");
@@ -506,6 +508,8 @@ export async function createConnectUrl({
   try {
     const profile = await ensureProfile(workspaceId, userId);
     const token = crypto.randomBytes(24).toString("base64url");
+    // Lien du parcours au navigateur qui le lance (voir oauthBrowserBinding.js)
+    onState?.(token);
     await SocialConnectState.create({
       token,
       workspaceId,

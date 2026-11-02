@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  kanbanFileType,
+  KANBAN_UNSUPPORTED_FILE_MESSAGE,
+} from "../utils/kanbanFileTypes.js";
 /**
  * Service Cloudflare R2 pour la gestion des images
  */
@@ -1930,11 +1934,19 @@ class CloudflareService {
     userId,
     imageType = "description",
     commentId = null,
+    declaredMimeType = null,
   ) {
     try {
       logger.debug(
         `🚀 [KANBAN] Upload image - taskId: ${taskId}, userId: ${userId}, type: ${imageType}`,
       );
+
+      // Format accepté : type servi et extension de la clé d'après le type
+      // déclaré (jamais SVG ni HTML : bucket public)
+      const fileType = kanbanFileType(fileName, declaredMimeType);
+      if (!fileType) {
+        throw new Error(KANBAN_UNSUPPORTED_FILE_MESSAGE);
+      }
 
       // Validation des paramètres
       if (!taskId || !userId) {
@@ -1951,7 +1963,7 @@ class CloudflareService {
 
       // Générer une clé unique pour l'image
       const uniqueId = crypto.randomUUID();
-      const fileExtension = path.extname(fileName).toLowerCase();
+      const fileExtension = fileType.extension;
 
       // Structure de la clé selon le type
       let key;
@@ -1964,7 +1976,7 @@ class CloudflareService {
       }
 
       // Déterminer le content-type
-      const contentType = this.getContentType(fileExtension);
+      const contentType = fileType.contentType;
 
       // Nettoyer le nom de fichier pour les headers HTTP
       const sanitizedFileName = this.sanitizeFileName(fileName);

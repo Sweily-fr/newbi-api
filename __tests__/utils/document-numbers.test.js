@@ -40,6 +40,7 @@ vi.mock("../../src/models/PurchaseOrder.js", () => ({
 vi.mock("../../src/models/DocumentCounter.js", () => ({
   default: {
     getNextNumber: vi.fn(),
+    peekNextNumber: vi.fn(),
   },
 }));
 
@@ -89,8 +90,9 @@ describe("generateInvoiceNumber", () => {
     expect(result).toBe("42");
   });
 
-  it("should generate DRAFT- prefixed number for draft invoices", async () => {
-    DocumentCounter.getNextNumber.mockResolvedValue(5);
+  it("should generate DRAFT- prefixed number for draft invoices without reserving it", async () => {
+    DocumentCounter.peekNextNumber.mockResolvedValue(5);
+    DocumentCounter.getNextNumber.mockClear();
     Invoice.findOne.mockResolvedValue(null);
 
     const result = await generateInvoiceNumber("F-202601", {
@@ -100,6 +102,7 @@ describe("generateInvoiceNumber", () => {
     });
 
     expect(result).toBe("DRAFT-0005");
+    expect(DocumentCounter.getNextNumber).not.toHaveBeenCalled();
   });
 
   it("should generate DRAFT- with manual number for drafts", async () => {

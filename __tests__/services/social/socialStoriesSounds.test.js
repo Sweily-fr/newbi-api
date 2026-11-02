@@ -10,6 +10,7 @@ import {
 } from "vitest";
 import crypto from "crypto";
 import express from "express";
+import { oauthBindingCookieName } from "../../../src/utils/oauthBrowserBinding.js";
 import mongoose from "mongoose";
 
 import { startMongo, stopMongo, clearMongo } from "../../helpers/mongo.js";
@@ -505,6 +506,27 @@ describe("connecteurs et capacités", () => {
     ).toContain("social_error=invalid_state");
   });
 
+  it("connectSocialAccount pose le cookie qui lie le retour au navigateur", async () => {
+    const cookie = vi.fn();
+    const url = new URL(
+      await Mutation.connectSocialAccount(
+        null,
+        { platform: "tiktok", connector: "tiktok_business" },
+        { ...ctx, req: { res: { cookie } } },
+      ),
+    );
+    const state = url.searchParams.get("state");
+    expect(cookie).toHaveBeenCalledWith(
+      oauthBindingCookieName(state),
+      state,
+      expect.objectContaining({
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/social-connect",
+      }),
+    );
+  });
+
   it("TikTok Business : route avec « / » final, code reçu dans auth_code, compte « business »", async () => {
     const url = new URL(
       await Mutation.connectSocialAccount(
@@ -537,9 +559,23 @@ describe("connecteurs et capacités", () => {
     });
     try {
       const base = `http://127.0.0.1:${server.address().port}`;
-      const response = await fetch(
-        `${base}/social-connect/tiktok_business/callback/?auth_code=code_biz&state=${url.searchParams.get("state")}`,
+      const state = url.searchParams.get("state");
+      // Autre navigateur (sans le cookie du parcours) : refusé, state gardé
+      const elsewhere = await fetch(
+        `${base}/social-connect/tiktok_business/callback/?auth_code=code_biz&state=${state}`,
         { redirect: "manual" },
+      );
+      expect(elsewhere.headers.get("location")).toContain(
+        "social_error=other_browser",
+      );
+      expect(exchange).not.toHaveBeenCalled();
+      // Navigateur qui a lancé la connexion
+      const response = await fetch(
+        `${base}/social-connect/tiktok_business/callback/?auth_code=code_biz&state=${state}`,
+        {
+          redirect: "manual",
+          headers: { cookie: `${oauthBindingCookieName(state)}=${state}` },
+        },
       );
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toContain(

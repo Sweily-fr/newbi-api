@@ -5,9 +5,9 @@
  * ni être exposés par une adresse publique permanente. Ils restent dans un
  * bucket privé, servis seulement à une personne qui peut voir les devis.
  *
- * Défaut connu (audit) : ils sont envoyés dans le bucket OCR, dont l'adresse
- * publique (OCR_URL) est enregistrée sur la demande, à des clés déductibles
- * (esignature/<organisation>/<demande>/...).
+ * Ils allaient dans le bucket OCR, dont l'adresse publique (OCR_URL) était
+ * enregistrée sur la demande. Les demandes plus anciennes gardent cette
+ * adresse (aucune migration) ; les nouvelles ne gardent qu'une clé.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 
@@ -100,9 +100,7 @@ describe("documents d'une signature terminée", () => {
     expect(request.save).toHaveBeenCalled();
   });
 
-  // Défaut connu, en attente d'une décision : passe tant qu'il existe,
-  // échoue le jour où il est corrigé (remettre alors `it`).
-  it.fails("aucun de ces fichiers ne va dans le bucket public de l'OCR", async () => {
+  it("aucun de ces fichiers ne va dans le bucket public de l'OCR", async () => {
     await storeSignedDocuments(doneRequest());
 
     expect(puts.length).toBeGreaterThan(0);
@@ -115,9 +113,7 @@ describe("documents d'une signature terminée", () => {
     }
   });
 
-  // Défaut connu, en attente d'une décision : passe tant qu'il existe,
-  // échoue le jour où il est corrigé (remettre alors `it`).
-  it.fails("la demande n'enregistre aucune adresse publique permanente des documents", async () => {
+  it("la demande n'enregistre aucune adresse publique permanente des documents", async () => {
     const request = doneRequest();
     await storeSignedDocuments(request);
 

@@ -73,6 +73,7 @@ vi.mock(
 );
 
 import express from "express";
+import { browserCookieFor } from "../helpers/oauthBrowser.js";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
@@ -100,17 +101,18 @@ const authorize = (provider, headers = {}) =>
 
 // State signé comme celui de /authorize (voir calendar-oauth-state.test.js
 // pour les states fabriqués, modifiés, expirés ou rejoués)
-const callback = (provider, stateData) =>
-  fetch(
-    `${baseUrl}/calendar-connect/${provider}/callback?code=code-test&state=${encodeURIComponent(
-      createSignedState(
-        calendarStatePurpose(provider),
-        stateData,
-        CALENDAR_STATE_TTL_MS,
-      ),
-    )}`,
-    { redirect: "manual" },
+const callback = (provider, stateData) => {
+  const state = createSignedState(
+    calendarStatePurpose(provider),
+    stateData,
+    CALENDAR_STATE_TTL_MS,
   );
+  return fetch(
+    `${baseUrl}/calendar-connect/${provider}/callback?code=code-test&state=${encodeURIComponent(state)}`,
+    // Même navigateur que /authorize (cookie du parcours)
+    { redirect: "manual", headers: { cookie: browserCookieFor(state) } },
+  );
+};
 
 beforeAll(async () => {
   await startMongo();

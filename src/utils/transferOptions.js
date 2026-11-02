@@ -24,6 +24,31 @@ export const TRANSFER_FILE_MAX_GB = {
   entreprise: 50,
 };
 
+// Taille totale d'un transfert : l'offre la plus large (50 Go), qui couvre
+// aussi l'application mobile (jusqu'à 10 fichiers de 5 Go). Nombre de
+// fichiers plafonné pour borner le document du transfert.
+export const TRANSFER_TOTAL_MAX_GB = 50;
+export const TRANSFER_MAX_FILES = 5000;
+
+/**
+ * Refuse un transfert dont le total ou le nombre de fichiers dépasse les
+ * plafonds ci-dessus.
+ */
+export function assertTransferTotal(files = []) {
+  if (files.length > TRANSFER_MAX_FILES) {
+    throw new UserInputError(
+      `Un transfert contient au plus ${TRANSFER_MAX_FILES} fichiers.`,
+    );
+  }
+  const total = files.reduce((sum, file) => sum + (Number(file?.size) || 0), 0);
+  if (total > TRANSFER_TOTAL_MAX_GB * 1024 * 1024 * 1024) {
+    throw new UserInputError(
+      `Un transfert ne doit pas dépasser ${TRANSFER_TOTAL_MAX_GB} Go au total.`,
+    );
+  }
+  return total;
+}
+
 // Identifiants d'envoi générés par le site et l'application (UUID) : ils
 // entrent dans la clé R2 et dans le nom affiché du fichier
 const UPLOAD_ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;

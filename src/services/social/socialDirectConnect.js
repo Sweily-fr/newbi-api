@@ -60,10 +60,13 @@ export async function createDirectConnectUrl({
   connector = null,
   returnTo,
   now = new Date(),
+  onState = null,
 }) {
   const entry = connectorByKey(connector || platform);
   const network = entry.module;
   const token = crypto.randomBytes(24).toString("base64url");
+  // Lien du parcours au navigateur qui le lance (voir oauthBrowserBinding.js)
+  onState?.(token);
   const codeVerifier = network.usesPkce
     ? crypto.randomBytes(48).toString("base64url")
     : null;

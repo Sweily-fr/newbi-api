@@ -173,7 +173,6 @@ extend type Mutation {
   changeDeliveryNoteStatus(id: ID!, workspaceId: ID!, status: DeliveryNoteStatus!): DeliveryNote!
   # Marque le BL comme livré en enregistrant la réception (réceptionnaire, date, signature)
   recordDeliveryNoteReception(id: ID!, workspaceId: ID!, input: DeliveryNoteReceptionInput!): DeliveryNote!
-  sendDeliveryNote(id: ID!, workspaceId: ID!, email: String!): Boolean!
   archiveDeliveryNotePdf(workspaceId: ID!, deliveryNoteId: ID!, file: Upload!): DeliveryNote!
   # Génération croisée
   createDeliveryNoteFromQuote(quoteId: ID!, workspaceId: ID!): DeliveryNote!

@@ -295,13 +295,29 @@ describe("processAccountDeletions (demande différée)", () => {
     expect(request.deletionSummary.organizationDeleted).toBe(false);
   });
 
-  it("garde l'espace rejoint par un autre membre depuis la demande", async () => {
+  it("super admin d'un espace rejoint par un autre membre depuis la demande : compte gardé, transfert demandé", async () => {
     await seedOrgMembership({ userId: leaver, organizationId: org });
     await seedOrgMembership({
       userId: colleague,
       organizationId: org,
       role: "admin",
     });
+    await seedWorkspaceData();
+    await schedulePastRequest();
+
+    const result = await processAccountDeletions();
+
+    expect(result).toEqual({ processed: 0, failed: 1 });
+    await expectWorkspaceKept();
+    expect(await User.collection.countDocuments({ _id: leaver })).toBe(1);
+    const request = await DeletionRequest.findOne({ userId: leaver }).lean();
+    expect(request.status).toBe("failed");
+    expect(request.error).toMatch(/Transférez la propriété/);
+  });
+
+  it("garde l'espace d'un membre (non super admin) qui part", async () => {
+    await seedOrgMembership({ userId: leaver, organizationId: org, role: "admin" });
+    await seedOrgMembership({ userId: colleague, organizationId: org });
     await seedWorkspaceData();
     await schedulePastRequest();
 

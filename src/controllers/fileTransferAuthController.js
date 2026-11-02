@@ -56,8 +56,10 @@ const s3Client = new S3Client({
 // Autoriser le téléchargement après vérification du paiement
 export const authorizeDownload = async (req, res) => {
   try {
-    logger.debug("🔐 Route authorize appelée avec params:", req.params);
-    logger.debug("🔐 Route authorize appelée avec body:", req.body);
+    // Ni le corps (lien, clé, jeton d'accès) ni l'adresse ne vont au journal
+    logger.debug("🔐 Route authorize appelée", {
+      transferId: req.params?.transferId,
+    });
 
     const { transferId } = req.params;
     const { fileId, email } = req.body;
@@ -79,8 +81,6 @@ export const authorizeDownload = async (req, res) => {
     logger.info("🔐 Demande d'autorisation de téléchargement", {
       transferId,
       fileId,
-      email,
-      buyerIp,
     });
 
     logger.debug("🔍 Recherche du transfert avec ID:", transferId);
@@ -179,7 +179,7 @@ export const authorizeDownload = async (req, res) => {
     logger.debug("🔍 Activité suspecte détectée:", isSuspicious);
 
     if (isSuspicious) {
-      logger.warn("🚨 Activité suspecte détectée", { buyerIp, email });
+      logger.warn("🚨 Activité suspecte détectée", { transferId });
       return res.status(429).json({
         success: false,
         error: "Trop de téléchargements récents. Veuillez réessayer plus tard.",
@@ -283,7 +283,9 @@ async function generateDownloadUrls(
         buyerEmail: email,
         buyerIp,
         buyerUserAgent,
-        downloadUrl,
+        // URL signée jamais conservée : elle vaut téléchargement jusqu'à
+        // son expiration
+        downloadUrl: null,
         urlExpiresAt,
       });
 
@@ -305,7 +307,6 @@ async function generateDownloadUrls(
     logger.info("✅ URLs de téléchargement générées", {
       transferId: fileTransfer._id,
       filesCount: downloadUrls.length,
-      email,
       expiresAt: urlExpiresAt,
     });
 

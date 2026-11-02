@@ -1,7 +1,12 @@
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import { withOrganization } from "../middlewares/rbac.js";
 import DeletionRequest from "../models/DeletionRequest.js";
-import { deleteUserAccount, exportUserData } from "../services/rgpd.js";
+import {
+  deleteUserAccount,
+  exportUserData,
+  findOrganizationsNeedingOwnerTransfer,
+  ownerTransferRequiredError,
+} from "../services/rgpd.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 
@@ -53,6 +58,14 @@ const rgpdResolvers = {
             "Une demande de suppression est déjà en cours. Vous pouvez l'annuler ou attendre son exécution.",
             ERROR_CODES.VALIDATION_ERROR
           );
+        }
+
+        // Super admin d'un espace qui a d'autres membres : transfert d'abord
+        const needOwnerTransfer = await findOrganizationsNeedingOwnerTransfer(
+          user._id
+        );
+        if (needOwnerTransfer.length) {
+          throw ownerTransferRequiredError(needOwnerTransfer);
         }
 
         const scheduledAt = new Date();
@@ -120,6 +133,14 @@ const rgpdResolvers = {
           `[RGPD] Confirmation de suppression immédiate par l'utilisateur ${user._id}`
         );
 
+        // Super admin d'un espace qui a d'autres membres : transfert d'abord
+        const needOwnerTransfer = await findOrganizationsNeedingOwnerTransfer(
+          user._id
+        );
+        if (needOwnerTransfer.length) {
+          throw ownerTransferRequiredError(needOwnerTransfer);
+        }
+
         // Annuler toute demande en attente (car l'utilisateur confirme immédiatement)
         await DeletionRequest.updateMany(
           { userId: user._id, status: "pending" },
@@ -168,6 +189,9 @@ const rgpdResolvers = {
           }
 
           logger.error(`[RGPD] Échec de la suppression pour ${user._id}:`, error);
+          if (error?.details?.reason === "OWNER_TRANSFER_REQUIRED") {
+            throw error;
+          }
           throw new AppError(
             "Une erreur est survenue lors de la suppression du compte. Notre équipe a été notifiée.",
             ERROR_CODES.INTERNAL_ERROR
