@@ -32,17 +32,18 @@ const internalIdOf = (value) =>
 const verifyWebhookSecret = (req) => {
   const webhookSecret = process.env.ESIGNATURE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    // En production/staging, un webhook non authentifié est refusé : le secret
-    // DOIT être configuré (ESIGNATURE_WEBHOOK_SECRET) côté API et callback.
+    // Sans secret, seuls le développement local et les tests acceptent le
+    // webhook. Tout autre environnement (production, staging, ou NODE_ENV
+    // absent sur un serveur) le refuse : le secret DOIT être configuré
+    // (ESIGNATURE_WEBHOOK_SECRET) côté API et callback.
     const env = process.env.NODE_ENV;
-    if (env === "production" || env === "staging") {
+    if (env !== "development" && env !== "test") {
       logger.error(
-        "Webhook eSignature: ESIGNATURE_WEBHOOK_SECRET non configuré en " +
-          `${env} — callback refusé. Définissez le secret pour activer le webhook.`,
+        "Webhook eSignature: ESIGNATURE_WEBHOOK_SECRET non configuré " +
+          `(NODE_ENV=${env || "absent"}), callback refusé. Définissez le secret pour activer le webhook.`,
       );
       return false;
     }
-    // Dev/sandbox uniquement : on accepte sans secret.
     return true;
   }
 

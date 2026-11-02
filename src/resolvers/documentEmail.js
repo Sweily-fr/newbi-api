@@ -14,6 +14,8 @@ import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { isAuthenticated } from "../middlewares/better-auth-jwt.js";
 import DocumentEmailLog from "../models/DocumentEmailLog.js";
+import Quote from "../models/Quote.js";
+import quoteResolvers from "./quote.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub } from "../config/redis.js";
 
@@ -92,6 +94,26 @@ function serializeEmailLog(log, workspaceName = null) {
     deliveryFailureReason: log.deliveryFailureReason || null,
     openedAt: toIso(log.openedAt),
   };
+}
+
+/**
+ * Devis en brouillon envoyé par e-mail (l'application mobile propose
+ * « Envoyer » sur un brouillon) : il est d'abord validé comme par « Finaliser »
+ * (numéro définitif, date d'émission, coordonnées figées), avec les mêmes
+ * droits et contrôles. Le client ne reçoit jamais un numéro provisoire.
+ */
+async function finalizeDraftQuoteBeforeSending(documentId, workspaceId, context) {
+  if (!mongoose.Types.ObjectId.isValid(documentId)) return;
+  const quote = await Quote.findOne(
+    { _id: documentId, workspaceId },
+    { status: 1 },
+  ).lean();
+  if (quote?.status !== "DRAFT") return;
+  await quoteResolvers.Mutation.changeQuoteStatus(
+    null,
+    { id: documentId, status: "PENDING", workspaceId },
+    context,
+  );
 }
 
 const documentEmailResolvers = {
@@ -197,6 +219,11 @@ const documentEmailResolvers = {
       "quotes",
       "send",
     )(async (_, { workspaceId, input }, context) => {
+      await finalizeDraftQuoteBeforeSending(
+        input.documentId,
+        resolveWorkspaceId(workspaceId, context.workspaceId),
+        context,
+      );
       const result = await sendDocumentEmail({
         documentId: input.documentId,
         documentType: DOCUMENT_TYPES.QUOTE,

@@ -276,7 +276,6 @@ extend type Mutation {
   createInvoice(workspaceId: ID!, input: CreateInvoiceInput!): Invoice!
   updateInvoice(id: ID!, workspaceId: ID!, input: UpdateInvoiceInput!): Invoice!
   deleteInvoice(id: ID!, workspaceId: ID!): Boolean!
-  sendInvoice(id: ID!, workspaceId: ID!, email: String!): Boolean!
   markInvoiceAsPaid(id: ID!, workspaceId: ID!, paymentDate: String!): Invoice!
   changeInvoiceStatus(
     id: ID!

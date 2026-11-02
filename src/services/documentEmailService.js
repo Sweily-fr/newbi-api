@@ -812,6 +812,21 @@ async function sendDocumentEmail({
   // Récupérer le document
   const document = await getDocument(documentId, documentType, workspaceId);
 
+  // Bon de commande ou de livraison en brouillon : numéro provisoire, il ne
+  // part pas chez le client. Il est validé d'abord.
+  const DRAFT_SEND_REFUSALS = {
+    [DOCUMENT_TYPES.PURCHASE_ORDER]:
+      "Ce bon de commande est un brouillon : validez-le avant de l'envoyer.",
+    [DOCUMENT_TYPES.DELIVERY_NOTE]:
+      "Ce bon de livraison est un brouillon : validez-le avant de l'envoyer.",
+  };
+  if (document.status === "DRAFT" && DRAFT_SEND_REFUSALS[documentType]) {
+    throw new AppError(
+      DRAFT_SEND_REFUSALS[documentType],
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+
   // Vérifier l'email du destinataire
   if (!recipientEmail) {
     throw new Error("Email du destinataire requis");

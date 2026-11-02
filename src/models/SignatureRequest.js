@@ -98,6 +98,18 @@ const signatureRequestSchema = new mongoose.Schema(
     auditTrailUrl: {
       type: String,
     },
+    // Documents d'une signature terminée, rangés dans un bucket privé : clés
+    // R2 (servies par URL présignée). Les demandes plus anciennes gardent
+    // leur adresse dans signedDocumentUrl / auditTrailUrl.
+    documentsBucket: {
+      type: String,
+    },
+    signedDocumentKey: {
+      type: String,
+    },
+    auditTrailKey: {
+      type: String,
+    },
     errorMessage: {
       type: String,
     },

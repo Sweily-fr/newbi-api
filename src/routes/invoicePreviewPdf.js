@@ -1,9 +1,11 @@
 import logger from "../utils/logger.js";
 import express from "express";
+import mongoose from "mongoose";
 import fetch from "node-fetch";
 import rateLimit from "express-rate-limit";
 import { validateJWT } from "../middlewares/better-auth-jwt.js";
 import { isSafeDocumentColor } from "../utils/documentAppearance.js";
+import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 
 const router = express.Router();
 
@@ -18,13 +20,16 @@ const previewLimiter = rateLimit({
   message: { error: "Trop de demandes d'aperçu. Réessayez dans une minute." },
 });
 
+/** Corps accepté par l'aperçu : les données d'un document, pas des fichiers. */
+export const PREVIEW_BODY_LIMIT = "5mb";
+
 /**
  * POST /api/invoice-preview-pdf
  *
- * Proxy endpoint for mobile app to generate a preview PDF.
- * Authenticates via JWT (Better Auth), then forwards to
- * the Next.js /api/invoices/preview-pdf endpoint with
- * X-Internal-Secret to bypass session check.
+ * Aperçu PDF d'une facture en cours de saisie (aucun client actuel : ni le
+ * site ni l'application mobile ne l'appellent). Authentification JWT, membre
+ * de l'espace avec « Voir » sur les factures (en-tête x-organization-id ou
+ * workspaceId du corps), puis rendu par le site avec le secret interne.
  */
 router.post(
   "/invoice-preview-pdf",
@@ -37,6 +42,22 @@ router.post(
 
       if (!invoiceData) {
         return res.status(400).json({ error: "invoiceData est requis" });
+      }
+
+      // Membre de l'espace avec « Voir » sur les factures
+      const workspaceId =
+        req.headers["x-organization-id"] || req.body.workspaceId || null;
+      if (
+        !workspaceId ||
+        !mongoose.Types.ObjectId.isValid(String(workspaceId)) ||
+        !(await userHasWorkspaceLevel(
+          req.user,
+          String(workspaceId),
+          "invoices",
+          "read",
+        ))
+      ) {
+        return res.status(403).json({ error: "Accès refusé" });
       }
 
       // Couleurs reprises dans les styles du document rendu

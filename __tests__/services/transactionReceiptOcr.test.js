@@ -41,6 +41,7 @@ import { buildOrganizationId, buildUserId } from "../factories/index.js";
 import Transaction from "../../src/models/Transaction.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Supplier from "../../src/models/Supplier.js";
+import UserOcrQuota from "../../src/models/UserOcrQuota.js";
 import transactionReceiptOcrService from "../../src/services/transactionReceiptOcrService.js";
 
 const workspaceId = buildOrganizationId().toString();
@@ -1200,6 +1201,61 @@ describe("confirmation : nom du fournisseur corrigé et TVA de l'organisation", 
 
     expect(invoice.supplierName).toBe("Hostinger");
     expect(String(invoice.supplierId)).toBe(String(hostinger._id));
+  });
+});
+
+describe("processReceiptsForTransaction : quota d'analyses OCR", () => {
+  const month = () => new Date().toISOString().slice(0, 7);
+  const params = (tx) => ({
+    transactionId: tx._id.toString(),
+    workspaceId,
+    userId,
+    buffersByKey: { "receipts/receipt-1.pdf": Buffer.from("fake-pdf") },
+  });
+  const quota = () =>
+    UserOcrQuota.findOne({ userId, workspaceId, month: month() }).lean();
+
+  it("analyse décomptée dans le quota du plan", async () => {
+    mockClaudeSuccess();
+    const tx = await createExpenseTransaction();
+    await transactionReceiptOcrService.processReceiptsForTransaction(params(tx));
+    expect(processFromBase64).toHaveBeenCalledTimes(1);
+    expect((await quota()).usedQuota).toBe(1);
+  });
+
+  it("quota épuisé : aucune analyse, proposition tirée de la transaction, compteur inchangé", async () => {
+    mockClaudeSuccess();
+    await UserOcrQuota.create({
+      userId,
+      workspaceId,
+      plan: "FREE",
+      month: month(),
+      usedQuota: 5,
+      resetDate: new Date(Date.now() + 86_400_000),
+    });
+    const tx = await createExpenseTransaction();
+
+    const proposals =
+      await transactionReceiptOcrService.processReceiptsForTransaction(
+        params(tx),
+      );
+
+    expect(processFromBase64).not.toHaveBeenCalled();
+    expect(processDocumentFromUrl).not.toHaveBeenCalled();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].proposal.values.amountTTC).toBe(120.5);
+    expect((await quota()).usedQuota).toBe(5);
+    // Le justificatif reste joint à la transaction
+    expect((await Transaction.findById(tx._id)).receiptFiles).toHaveLength(1);
+  });
+
+  it("receiptOcrQuota : analyses restantes du plan", async () => {
+    expect(
+      await transactionReceiptOcrService.receiptOcrQuota(userId, workspaceId),
+    ).toMatchObject({ plan: "FREE", remaining: 5 });
+    expect(
+      await transactionReceiptOcrService.receiptOcrQuota(null, workspaceId),
+    ).toBeNull();
   });
 });
 
