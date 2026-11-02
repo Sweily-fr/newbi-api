@@ -635,6 +635,28 @@ const bankingResolvers = {
               );
             });
 
+          // Quota d'analyses OCR : au-delà, le justificatif est joint sans
+          // être analysé (la facture d'achat reprend les données de la
+          // transaction) et la réponse le dit
+          let quotaNotice = "";
+          try {
+            if (
+              transactionReceiptOcrService.isExpenseTransaction(transaction) &&
+              transaction.reconciliationStatus !== "ignored"
+            ) {
+              const quota = await transactionReceiptOcrService.receiptOcrQuota(
+                user._id || user.id,
+                workspaceId,
+              );
+              if (quota && quota.remaining < uploadedReceiptFiles.length) {
+                quotaNotice =
+                  " Quota OCR du mois atteint : le justificatif est joint sans être analysé, la facture d'achat proposée reprend les données de la transaction.";
+              }
+            }
+          } catch (quotaError) {
+            console.warn(`⚠️ [UPLOAD RECEIPT] Quota OCR non lu: ${quotaError.message}`);
+          }
+
           // Création automatique de factures d'achat par OCR pour les
           // transactions de type dépense (fire-and-forget, non bloquant)
           transactionReceiptOcrService
@@ -654,9 +676,10 @@ const bankingResolvers = {
           return {
             success: true,
             message:
-              uploadedReceiptFiles.length === 1
+              (uploadedReceiptFiles.length === 1
                 ? "Justificatif ajouté avec succès"
-                : `${uploadedReceiptFiles.length} justificatifs ajoutés avec succès`,
+                : `${uploadedReceiptFiles.length} justificatifs ajoutés avec succès`) +
+              (quotaNotice ? `.${quotaNotice}` : ""),
             receiptFiles: updatedTransaction?.receiptFiles || [],
             transaction: updatedTransaction,
           };

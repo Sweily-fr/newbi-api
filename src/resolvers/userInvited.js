@@ -5,6 +5,7 @@ import logger from "../utils/logger.js";
 import { GraphQLError } from "graphql";
 import mongoose from "mongoose";
 import { Board } from "../models/kanban.js";
+import { withBoardAccess, byBoardArg } from "../services/kanbanBoardAccess.js";
 import {
   requireWorkspaceAction,
   requireWorkspaceLevel,
@@ -853,6 +854,16 @@ async function updateAllPublicBoardShareVisitors(userInvited) {
       error,
     );
   }
+}
+
+// Tableau réservé à une liste de membres (voir kanbanBoardAccess.js)
+userInvitedResolvers.Query.getInvitedUsersForBoard = withBoardAccess(
+  byBoardArg(),
+)(userInvitedResolvers.Query.getInvitedUsersForBoard);
+for (const name of ["banInvitedUserFromBoard", "unbanInvitedUserFromBoard"]) {
+  userInvitedResolvers.Mutation[name] = withBoardAccess(byBoardArg())(
+    userInvitedResolvers.Mutation[name],
+  );
 }
 
 export default userInvitedResolvers;

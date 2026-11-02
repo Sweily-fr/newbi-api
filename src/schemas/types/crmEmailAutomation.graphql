@@ -8,6 +8,8 @@ type CrmEmailTiming {
   type: CrmEmailTimingType!
   daysOffset: Int!
   sendHour: Int!
+  # Relance chaque année à la même date (anniversaire)
+  repeatYearly: Boolean!
 }
 
 type CrmEmailConfig {
@@ -44,6 +46,7 @@ input CrmEmailTimingInput {
   type: CrmEmailTimingType!
   daysOffset: Int
   sendHour: Int
+  repeatYearly: Boolean
 }
 
 input CrmEmailConfigInput {

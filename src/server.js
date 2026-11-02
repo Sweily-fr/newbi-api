@@ -1,4 +1,5 @@
 // Doit rester le premier import : charge le .env avant tout autre module
+import { ensurePaymentLinkTokensSince } from "./utils/invoicePaymentLink.js";
 import { envFile } from "./config/env.js";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -105,7 +106,9 @@ import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
-import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
+import invoicePreviewPdfRoutes, {
+  PREVIEW_BODY_LIMIT,
+} from "./routes/invoicePreviewPdf.js";
 import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
 import documentPdfRoutes from "./routes/documentPdf.js";
 import documentAnnexRoutes from "./routes/documentAnnex.js";
@@ -179,6 +182,13 @@ mongoose
       // utilisateur dans un autre workspace (E11000 cross-workspace)
       { collection: "clients", index: "email_1_createdBy_1" },
     ];
+
+    // Liens de paiement signés : date de mise en service, posée une fois
+    try {
+      await ensurePaymentLinkTokensSince();
+    } catch (err) {
+      logger.error("Liens de paiement signés :", err.message);
+    }
 
     for (const { collection, index } of legacyIndexes) {
       try {
@@ -355,13 +365,32 @@ async function startServer() {
   app.use("/webhook/resend", resendWebhookRoutes);
 
   // Middleware pour les uploads
+  // Aperçu PDF : données d'un document seulement, corps borné avant le
+  // plafond général
+  app.use(
+    "/api/invoice-preview-pdf",
+    express.json({ limit: PREVIEW_BODY_LIMIT }),
+  );
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
   // Même nettoyage pour les corps JSON et formulaires, une fois analysés
   app.use(stripMongoOperators);
 
   // Redirection publique de paiement d'une facture vers Stripe Checkout
-  app.get("/pay/invoice/:invoiceId", redirectToInvoicePayment);
+  // Lien public de paiement : chaque appel crée une session Stripe, débit
+  // limité par adresse IP
+  const invoicePaymentLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: plafond("RATE_LIMIT_PAY_MAX", 30),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: "Trop de tentatives de paiement, réessayez dans quelques minutes.",
+  });
+  app.get(
+    "/pay/invoice/:invoiceId",
+    invoicePaymentLimiter,
+    redirectToInvoicePayment,
+  );
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);

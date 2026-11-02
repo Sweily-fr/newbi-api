@@ -4,6 +4,7 @@ dotenv.config();
 import Stripe from "stripe";
 import logger from "../utils/logger.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
+import { creditedTTC } from "../utils/invoiceCredit.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -323,7 +324,14 @@ const stripeConnectService = {
         };
       }
 
-      const amount = Math.round((invoice.finalTotalTTC || 0) * 100); // centimes
+      // Reste à payer : le TTC moins les avoirs émis sur la facture (un
+      // avoir partiel ne laisse payer que la différence)
+      const credited = await creditedTTC(invoice);
+      const amount = Math.max(
+        0,
+        Math.round((invoice.finalTotalTTC || 0) * 100) -
+          Math.round(credited * 100),
+      ); // centimes
       if (!amount || amount <= 0) {
         return {
           success: false,
@@ -346,9 +354,15 @@ const stripeConnectService = {
               currency: "eur",
               product_data: {
                 name: `Facture ${invoiceLabel}`,
-                description: invoice.client?.name
-                  ? `Paiement pour ${invoice.client.name}`
-                  : undefined,
+                description:
+                  [
+                    invoice.client?.name
+                      ? `Paiement pour ${invoice.client.name}`
+                      : null,
+                    credited > 0 ? "reste à payer après avoir" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ") || undefined,
               },
               unit_amount: amount,
             },

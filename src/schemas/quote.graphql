@@ -152,6 +152,5 @@ extend type Mutation {
   deleteQuote(id: ID!): Boolean!
   convertQuoteToInvoice(id: ID!, distribution: [Float], isDeposit: Boolean, skipValidation: Boolean): Invoice!
   changeQuoteStatus(id: ID!, status: QuoteStatus!): Quote!
-  sendQuote(id: ID!, email: String!): Boolean!
   archiveQuotePdf(workspaceId: ID!, quoteId: ID!, file: Upload!): Quote!
 }

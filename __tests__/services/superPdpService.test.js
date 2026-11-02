@@ -200,3 +200,83 @@ describe("superPdpService.transformReceivedInvoiceToPurchaseInvoice : taux", () 
     expect(pi.vatRate).toBe(0);
   });
 });
+
+describe("superPdpService.transformInvoiceForSuperPdp — avoirs (381)", () => {
+  const buildCreditNote = () => ({
+    prefix: "AV-202608",
+    number: "0001",
+    originalInvoiceNumber: "0042",
+    issueDate: new Date("2026-08-27"),
+    companyInfo: {
+      name: "Sweily",
+      siret: "98157654900012",
+      address: { country: "France" },
+    },
+    client: {
+      name: "Client SAS",
+      siret: "12345678900011",
+      address: { country: "France" },
+    },
+    items: [{ quantity: 1, unitPrice: 100, vatRate: 20 }],
+    // Totaux négatifs, comme stockés par le modèle CreditNote
+    totalHT: -100,
+    totalVAT: -20,
+    totalTTC: -120,
+    finalTotalHT: -100,
+    finalTotalVAT: -20,
+    finalTotalTTC: -120,
+  });
+
+  it("émet un type_code 381 avec des montants en valeur absolue", () => {
+    const result = superPdpService.transformInvoiceForSuperPdp(
+      buildCreditNote(),
+      { documentType: "creditNote" },
+    );
+
+    expect(result.en_invoice.type_code).toBe(381);
+    expect(result.en_invoice.totals.total_without_vat).toBe("100.00");
+    expect(result.en_invoice.totals.total_vat_amount.value).toBe("20.00");
+    expect(result.en_invoice.totals.total_with_vat).toBe("120.00");
+    expect(result.en_invoice.totals.amount_due_for_payment).toBe("120.00");
+  });
+
+  it("référence la facture d'origine dans les notes", () => {
+    const result = superPdpService.transformInvoiceForSuperPdp(
+      buildCreditNote(),
+      { documentType: "creditNote" },
+    );
+
+    const refNote = result.en_invoice.notes.find(
+      (n) => n.subject_code === "AAI",
+    );
+    expect(refNote).toBeDefined();
+    expect(refNote.note).toContain("0042");
+  });
+
+  it("omet payment_due_date quand le document n'a pas d'échéance", () => {
+    const result = superPdpService.transformInvoiceForSuperPdp(
+      buildCreditNote(),
+      { documentType: "creditNote" },
+    );
+    expect(result.en_invoice).not.toHaveProperty("payment_due_date");
+  });
+
+  it("ne change pas le comportement des factures (380, montants signés tels quels)", () => {
+    const invoice = {
+      ...buildCreditNote(),
+      finalTotalHT: 100,
+      finalTotalVAT: 20,
+      finalTotalTTC: 120,
+      dueDate: new Date("2026-09-27"),
+    };
+    const result = superPdpService.transformInvoiceForSuperPdp(invoice);
+
+    expect(result.en_invoice.type_code).toBe(380);
+    expect(result.en_invoice.payment_due_date).toBe("2026-09-27");
+    expect(result.en_invoice.totals.total_with_vat).toBe("120.00");
+    const refNote = result.en_invoice.notes.find(
+      (n) => n.subject_code === "AAI",
+    );
+    expect(refNote).toBeUndefined();
+  });
+});

@@ -5,6 +5,10 @@ import { buildSearchRegex } from "../utils/searchRegex.js";
  */
 
 import mongoose from "mongoose";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
 import {
@@ -134,9 +138,29 @@ async function getUserPlan(userId, workspaceId) {
       });
     }
 
-    const plan = subscription?.plan
+    let plan = subscription?.plan
       ? PLAN_NAME_MAP[subscription.plan] || defaultPlan
       : defaultPlan;
+
+    // Essai gratuit géré par l'application (sans abonnement Stripe) : quota
+    // de l'offre Freelance, pas celui d'un espace sans abonnement. Les
+    // analyses des factures d'achat et des justificatifs comptent dans le
+    // quota : l'essai ne doit pas s'arrêter à 5 analyses.
+    if (!subscription && mongoose.Types.ObjectId.isValid(cacheKey)) {
+      const org = await db
+        .collection("organization")
+        .findOne(
+          { _id: new mongoose.Types.ObjectId(cacheKey) },
+          { projection: { isTrialActive: 1, trialEndDate: 1 } },
+        );
+      if (
+        org?.isTrialActive &&
+        org.trialEndDate &&
+        new Date(org.trialEndDate) > new Date()
+      ) {
+        plan = "FREELANCE";
+      }
+    }
 
     logger.debug(
       `📋 getUserPlan: workspace=${cacheKey}, subscription=${subscription?.plan || "none"}, plan=${plan}`,
@@ -1129,50 +1153,18 @@ const importedInvoiceResolvers = {
           throw createValidationError("Nom de fichier requis");
         }
 
-        // Lecture du fichier en mémoire
-        const stream = createReadStream();
-        const chunks = [];
-        for await (const chunk of stream) {
-          chunks.push(chunk);
-        }
-        const fileBuffer = Buffer.concat(chunks);
-
-        // Validation de la taille (max 10MB)
-        const maxSize = 10 * 1024 * 1024;
-        if (fileBuffer.length > maxSize) {
+        // Lecture du fichier en mémoire, interrompue au-delà de 10 Mo
+        const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
+          createReadStream,
+          MAX_RECEIPT_FILE_BYTES,
+        );
+        if (tooLarge) {
           throw createValidationError("Fichier trop volumineux (max 10MB)");
         }
 
-        // Récupérer organizationId pour l'upload Cloudflare
-        let organizationId = null;
-        const rawOrgId =
-          user.organizationId ||
-          user.organization?.id ||
-          user.organization?._id ||
-          user.currentOrganizationId;
-
-        if (rawOrgId) {
-          organizationId =
-            typeof rawOrgId === "object"
-              ? rawOrgId._id?.toString() ||
-                rawOrgId.id?.toString() ||
-                rawOrgId.toString()
-              : rawOrgId.toString();
-        } else {
-          try {
-            const memberRecord = await mongoose.connection.db
-              .collection("member")
-              .findOne({ userId: new mongoose.Types.ObjectId(user.id) });
-            if (memberRecord?.organizationId) {
-              organizationId = memberRecord.organizationId.toString();
-            }
-          } catch (err) {
-            console.warn(
-              "⚠️ Impossible de récupérer organizationId:",
-              err.message,
-            );
-          }
-        }
+        // Fichier rangé dans l'espace de l'import (pas celui de la session :
+        // un membre de plusieurs espaces importait dans un autre)
+        const organizationId = String(workspaceId);
 
         // Upload Cloudflare en premier (indispensable, même si l'OCR échoue
         // on doit garder le PDF stocké pour saisie manuelle).
@@ -2085,4 +2077,5 @@ export {
   fillClientFromVendor,
   checkUserOcrQuota,
   recordOcrUsage,
+  getUserPlan,
 };

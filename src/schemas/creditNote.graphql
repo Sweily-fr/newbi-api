@@ -43,6 +43,17 @@ type CreditNote {
   archivedPdfKey: String
   archivedPdfStoredAt: String
   archivedPdfSource: String
+  # E-invoicing / e-reporting (SuperPDP) - un avoir suit le même routage que les factures
+  superPdpInvoiceId: String
+  eInvoiceStatus: String
+  eInvoiceSentAt: String
+  eInvoiceLastCode: String
+  eInvoiceEvents: [EInvoiceEvent!]
+  eInvoiceError: String
+  eInvoiceFlowType: String
+  eInvoiceFlowReason: String
+  eReportingStatus: String
+  eReportingError: String
 }
 
 type CreditNotePagination {

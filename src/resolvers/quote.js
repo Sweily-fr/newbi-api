@@ -15,6 +15,7 @@ import {
   quoteHasInvoicedPurchaseOrder,
 } from "../utils/workspaceDocumentLoaders.js";
 import { canViewLinkedPage } from "../utils/linkedDocumentAccess.js";
+import { buildLinkedInvoiceItems } from "../utils/linkedInvoiceItems.js";
 import {
   buildClientDocumentFields,
   buildDocumentFieldsForClientId,
@@ -2204,23 +2205,65 @@ const quoteResolvers = {
             userId: user.id,
           });
 
+          // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
+          const quoteObj = quote.toObject();
+
+          // Part du devis : 100 % reprend ses lignes telles quelles. Une part
+          // inférieure porte son montant en lignes (une par taux de TVA, comme
+          // une facture liée) : les totaux de la facture sont ceux de ses
+          // lignes, et la rouvrir dans l'éditeur ne la ramène pas à 100 %.
+          const share = invoiceDistribution[i];
+          const isFullShare = share >= 100 - 0.0001;
+          const quoteRef = `${quote.prefix}-${quote.number}`;
+          const shareLabel = String(Math.round(share * 100) / 100).replace(
+            ".",
+            ",",
+          );
+          const shareItems = isFullShare
+            ? quoteObj.items
+            : buildLinkedInvoiceItems({
+                quote: quoteObj,
+                amountTTC:
+                  Math.round(quote.finalTotalTTC * (share / 100) * 100) / 100,
+                description:
+                  isDeposit === true
+                    ? `Acompte de ${shareLabel} % sur devis ${quoteRef}`
+                    : `Facture partielle ${i + 1}/${invoiceCount} : ${shareLabel} % du devis ${quoteRef}`,
+              });
+          const shareTotals = isFullShare
+            ? null
+            : computeDocumentTotals({
+                items: shareItems,
+                isReverseCharge: quote.isReverseCharge || false,
+              });
+          const cents = (value) => Math.round(value * 100) / 100;
+
           // Calculer les montants en fonction du pourcentage
-          const percentage = invoiceDistribution[i] / 100;
-          const totalHT = quote.totalHT * percentage;
-          const totalVAT = quote.totalVAT * percentage;
-          const totalTTC = quote.totalTTC * percentage;
-          const finalTotalHT = quote.finalTotalHT * percentage;
-          const finalTotalTTC = quote.finalTotalTTC * percentage;
-          const discountAmount = quote.discountAmount * percentage;
+          const percentage = share / 100;
+          const totalHT = shareTotals
+            ? cents(shareTotals.totalHT)
+            : quote.totalHT * percentage;
+          const totalVAT = shareTotals
+            ? cents(shareTotals.totalVAT)
+            : quote.totalVAT * percentage;
+          const totalTTC = shareTotals
+            ? cents(shareTotals.totalTTC)
+            : quote.totalTTC * percentage;
+          const finalTotalHT = shareTotals
+            ? cents(shareTotals.finalTotalHT)
+            : quote.finalTotalHT * percentage;
+          const finalTotalTTC = shareTotals
+            ? cents(shareTotals.finalTotalTTC)
+            : quote.finalTotalTTC * percentage;
+          const discountAmount = shareTotals
+            ? 0
+            : quote.discountAmount * percentage;
 
           // Ajouter au montant total des nouvelles factures
           newInvoicesTotalAmount += finalTotalTTC;
 
           // Déterminer s'il s'agit d'une facture d'acompte
           const isInvoiceDeposit = isDeposit === true;
-
-          // Convertir les sous-documents Mongoose en objets simples pour une copie correcte
-          const quoteObj = quote.toObject();
 
           // Créer la facture à partir du devis (en DRAFT, pas de companyInfo embarqué)
           const invoice = new Invoice({
@@ -2229,7 +2272,7 @@ const quoteResolvers = {
             prefix,
             client: quoteObj.client,
             companyInfo: undefined, // Draft - résolu dynamiquement via le field resolver
-            items: quoteObj.items, // Note: les items ne sont pas répartis, ils sont tous inclus dans chaque facture
+            items: shareItems,
             status: "DRAFT", // Toujours créer en brouillon pour permettre les modifications
             issueDate: new Date(),
             dueDate: new Date(new Date().setDate(new Date().getDate() + 30)), // Date d'échéance par défaut à 30 jours
@@ -2240,9 +2283,13 @@ const quoteResolvers = {
             termsAndConditionsLinkTitle: quote.termsAndConditionsLinkTitle,
             termsAndConditionsLink: quote.termsAndConditionsLink,
             purchaseOrderNumber: `${quote.prefix}-${quote.number}`, // Définir le numéro de bon de commande avec le préfixe et le numéro du devis
-            discount: quote.discount,
-            discountType: quote.discountType,
+            // Part du devis : la remise et le port sont déjà dans ses lignes
+            discount: isFullShare ? quote.discount : 0,
+            discountType: isFullShare ? quote.discountType : "FIXED",
             customFields: quoteObj.customFields,
+            ...(isFullShare
+              ? {}
+              : { finalTotalVAT: cents(shareTotals.finalTotalVAT) }),
             totalHT,
             totalVAT,
             totalTTC,
@@ -2255,7 +2302,8 @@ const quoteResolvers = {
             isDeposit: isInvoiceDeposit, // Marquer comme facture d'acompte si spécifié
             isReverseCharge: quote.isReverseCharge || false, // Copier l'auto-liquidation depuis le devis
             isVatExempt: quote.isVatExempt || false, // Copier l'exonération de TVA globale depuis le devis
-            shipping: quoteObj.shipping, // Copier les informations de livraison depuis le devis
+            // Port du devis (déjà dans les lignes d'une part)
+            shipping: isFullShare ? quoteObj.shipping : undefined,
             appearance: quoteObj.appearance, // Copier l'apparence du document
             clientPositionRight: quote.clientPositionRight || false,
             showBankDetails: quote.showBankDetails || false,
@@ -2327,26 +2375,6 @@ const quoteResolvers = {
       },
     ),
 
-    sendQuote: requireAction("quotes", "send")(
-      async (_, { id /* email */ }, context) => {
-        const { user, workspaceId } = context;
-        // ✅ FIX: Utiliser workspaceId au lieu de createdBy
-        const quote = await Quote.findOne({
-          _id: id,
-          workspaceId: workspaceId,
-        });
-
-        if (!quote) {
-          throw createNotFoundError("Devis");
-        }
-
-        // Ici, vous pourriez implémenter la logique d'envoi d'email
-        // Pour l'instant, nous simulons un succès
-        // TODO: Implémenter l'envoi réel du devis par email
-
-        return true;
-      },
-    ),
   },
 };
 

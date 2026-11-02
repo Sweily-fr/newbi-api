@@ -2,9 +2,11 @@
 import { GraphQLUpload } from "graphql-upload";
 import { Board, Task } from "../models/kanban.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { kanbanFileType } from "../utils/kanbanFileTypes.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
+import { withBoardAccess, byTaskArg } from "../services/kanbanBoardAccess.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -157,7 +159,12 @@ const taskImageResolvers = {
           const fileBuffer = Buffer.concat(chunks);
 
           // Valider le type de fichier
-          if (!VALID_MIME_TYPES.includes(mimetype)) {
+          // Type déclaré accepté : il décide du type servi et de l'extension
+          // de la clé (jamais de SVG ni de HTML dans le bucket public)
+          if (
+            !VALID_MIME_TYPES.includes(mimetype) ||
+            !kanbanFileType(filename, mimetype)
+          ) {
             return {
               success: false,
               image: null,
@@ -195,6 +202,8 @@ const taskImageResolvers = {
             taskId,
             user.id,
             imageType,
+            null,
+            mimetype,
           );
 
           // Créer l'objet image
@@ -498,7 +507,12 @@ const taskImageResolvers = {
         const fileBuffer = Buffer.concat(chunks);
 
         // Valider le type de fichier
-        if (!VALID_MIME_TYPES.includes(mimetype)) {
+        // Type déclaré ET extension (le type servi vient de l'extension :
+        // jamais de SVG ni de HTML dans le bucket public)
+        if (
+          !VALID_MIME_TYPES.includes(mimetype) ||
+          !kanbanFileType(filename, mimetype)
+        ) {
           return {
             success: false,
             image: null,
@@ -524,6 +538,7 @@ const taskImageResolvers = {
           user.id,
           "comment",
           commentId,
+          mimetype,
         );
 
         // Créer l'objet image
@@ -660,8 +675,11 @@ const taskImageResolvers = {
 };
 
 // ✅ Phase A.4 — Subscription check on all task image mutations
+// (et tableau réservé à une liste de membres : voir kanbanBoardAccess.js)
 Object.keys(taskImageResolvers.Mutation).forEach((name) => {
-  const original = taskImageResolvers.Mutation[name];
+  const original = withBoardAccess(byTaskArg())(
+    taskImageResolvers.Mutation[name],
+  );
   taskImageResolvers.Mutation[name] = async (parent, args, context, info) => {
     await checkSubscriptionActive(context);
     return original(parent, args, context, info);

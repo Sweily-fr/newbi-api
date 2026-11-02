@@ -591,9 +591,19 @@ const reconciliationResolvers = {
             },
             { new: true },
           );
-          if (transaction && transactionHasNoLinks(transaction)) {
+          // Une transaction ignorée par l'utilisateur le reste (lien présent
+          // seulement côté facture)
+          if (
+            transaction &&
+            transactionHasNoLinks(transaction) &&
+            transaction.reconciliationStatus !== "ignored"
+          ) {
             await Transaction.updateOne(
-              { _id: transactionId, workspaceId },
+              {
+                _id: transactionId,
+                workspaceId,
+                reconciliationStatus: { $ne: "ignored" },
+              },
               {
                 $set: {
                   reconciliationStatus: "unmatched",

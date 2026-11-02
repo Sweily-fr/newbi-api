@@ -170,21 +170,21 @@ userOcrQuotaSchema.statics.getOrCreateCurrentQuota = async function (
   nextMonth.setDate(1);
   nextMonth.setHours(0, 0, 0, 0);
 
-  let quota = await this.findOne({
-    userId,
-    workspaceId,
-    month: currentMonth,
-  });
+  // Création atomique (upsert) : plusieurs analyses simultanées du premier
+  // fichier du mois ne créent pas deux fiches (index unique, E11000)
+  let quota;
+  try {
+    quota = await this.findOneAndUpdate(
+      { userId, workspaceId, month: currentMonth },
+      { $setOnInsert: { plan, resetDate: nextMonth } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    quota = await this.findOne({ userId, workspaceId, month: currentMonth });
+  }
 
-  if (!quota) {
-    quota = await this.create({
-      userId,
-      workspaceId,
-      plan,
-      month: currentMonth,
-      resetDate: nextMonth,
-    });
-  } else if (quota.plan !== plan) {
+  if (quota.plan !== plan) {
     // Mettre à jour le plan si changé
     quota.plan = plan;
     await quota.save();
@@ -239,22 +239,7 @@ userOcrQuotaSchema.statics.recordUsage = async function (
   const quota = await this.getOrCreateCurrentQuota(userId, workspaceId, plan);
   const planConfig = PLAN_QUOTAS[plan] || PLAN_QUOTAS.FREE;
 
-  // Déterminer si on utilise le quota du plan ou les extras
-  const remainingFromPlan = Math.max(
-    0,
-    planConfig.monthlyQuota - quota.usedQuota,
-  );
-  const isExtra = remainingFromPlan <= 0;
-
-  // Mettre à jour les compteurs
-  if (isExtra) {
-    quota.extraImportsUsed += 1;
-  } else {
-    quota.usedQuota += 1;
-  }
-
-  // Ajouter à l'historique
-  quota.importHistory.push({
+  const entry = (isExtra) => ({
     timestamp: new Date(),
     documentId: documentInfo.documentId,
     fileName: documentInfo.fileName,
@@ -263,18 +248,31 @@ userOcrQuotaSchema.statics.recordUsage = async function (
     tokensUsed: documentInfo.tokensUsed,
     isExtra,
   });
+  // Historique limité aux 200 dernières entrées
+  const pushEntry = (isExtra) => ({
+    importHistory: { $each: [entry(isExtra)], $slice: -200 },
+  });
 
-  // Limiter l'historique à 200 entrées
-  if (quota.importHistory.length > 200) {
-    quota.importHistory = quota.importHistory.slice(-200);
-  }
-
-  await quota.save();
+  // Incréments atomiques : plusieurs analyses en parallèle (envoi de
+  // plusieurs fichiers) sont toutes comptées. D'abord le quota du plan tant
+  // qu'il en reste, sinon les imports supplémentaires.
+  const fromPlan = await this.findOneAndUpdate(
+    { _id: quota._id, usedQuota: { $lt: planConfig.monthlyQuota } },
+    { $inc: { usedQuota: 1 }, $push: pushEntry(false) },
+    { new: true },
+  );
+  const updated =
+    fromPlan ||
+    (await this.findOneAndUpdate(
+      { _id: quota._id },
+      { $inc: { extraImportsUsed: 1 }, $push: pushEntry(true) },
+      { new: true },
+    ));
 
   return {
-    isExtra,
-    usedQuota: quota.usedQuota,
-    extraImportsUsed: quota.extraImportsUsed,
+    isExtra: !fromPlan,
+    usedQuota: updated.usedQuota,
+    extraImportsUsed: updated.extraImportsUsed,
   };
 };
 

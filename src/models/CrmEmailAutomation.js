@@ -58,6 +58,13 @@ const crmEmailAutomationSchema = new mongoose.Schema({
       default: 9,
       min: 0,
       max: 23
+    },
+    // Relance chaque année à la même date (anniversaire). Absent sur les
+    // automatisations créées avant l'option : déduit du nom du champ
+    // (voir isYearlyAutomation)
+    repeatYearly: {
+      type: Boolean,
+      default: undefined
     }
   },
   // Configuration de l'email

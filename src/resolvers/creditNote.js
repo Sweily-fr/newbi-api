@@ -1,4 +1,6 @@
 import logger from "../utils/logger.js";
+import DocumentCounter from "../models/DocumentCounter.js";
+import { boundedPage } from "../utils/pagination.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
@@ -30,6 +32,7 @@ import { assertNotEInvoiceTransmitted } from "../utils/eInvoiceLock.js";
 import { creditNoteDeletionRefused } from "../utils/issuedInvoiceLock.js";
 import { withDocumentLock } from "../utils/documentLock.js";
 import { parisDay } from "../utils/invoiceRecurrenceSchedule.js";
+import { evaluateAndRouteCreditNote } from "../utils/eInvoiceRoutingHelper.js";
 import {
   generateCreditNoteNumber,
   previewCreditNoteNumber,
@@ -146,6 +149,66 @@ const plainObject = (value) =>
     ? value.toObject()
     : value || null;
 
+/** Longueur maximale du motif d'un avoir (texte imprimé sur le document). */
+export const CREDIT_NOTE_REASON_MAX_LENGTH = 2000;
+
+/** Motif saisi : borné (les avoirs déjà enregistrés ne sont pas touchés). */
+const assertCreditNoteReason = (reason) => {
+  if (
+    typeof reason === "string" &&
+    reason.trim().length > CREDIT_NOTE_REASON_MAX_LENGTH
+  ) {
+    throw createValidationError(
+      `Le motif de l'avoir ne peut pas dépasser ${CREDIT_NOTE_REASON_MAX_LENGTH} caractères.`,
+      { reason: `${CREDIT_NOTE_REASON_MAX_LENGTH} caractères au plus` },
+    );
+  }
+};
+
+/**
+ * Routage e-invoicing / e-reporting d'un avoir AVANT son enregistrement. Un
+ * avoir est une facture au sens de la réforme (UNTDID 381) : il suit le même
+ * routage que les factures. Avoir B2B domestique (E_INVOICING) que la
+ * plateforme refuse ou n'a pas pu recevoir : il n'est pas enregistré, son
+ * numéro est rendu et l'utilisateur reçoit le motif. Un avoir ne se supprime
+ * jamais : il ne doit donc pas exister localement sans avoir été transmis.
+ */
+const routeCreditNoteBeforeSave = async (creditNote, workspaceId, prefix) => {
+  let routingResult = null;
+  try {
+    routingResult = await evaluateAndRouteCreditNote(creditNote, workspaceId);
+  } catch (eInvoicingError) {
+    logger.error("Erreur routing e-invoicing (avoir):", eInvoicingError);
+    routingResult = {
+      flowType: "E_INVOICING",
+      sendFailed: true,
+      error: eInvoicingError.message,
+    };
+  }
+
+  if (routingResult?.flowType === "E_INVOICING" && routingResult.sendFailed) {
+    await DocumentCounter.releaseNumber(
+      "creditNote",
+      prefix,
+      workspaceId,
+      creditNote.number,
+    ).catch((releaseError) =>
+      logger.error("[E-INVOICE] Numéro d'avoir non rendu:", releaseError),
+    );
+    throw new AppError(
+      `Cet avoir doit être transmis en facturation électronique et la plateforme ne l'a pas accepté : il n'a pas été créé. Motif : ${routingResult.error || "erreur inconnue"}`,
+      ERROR_CODES.VALIDATION_ERROR,
+    );
+  }
+
+  if (routingResult) {
+    logger.info(
+      `[E-INVOICE-ROUTING] Avoir ${creditNote.prefix}${creditNote.number}: ${routingResult.flowType} - ${routingResult.reason}`,
+    );
+  }
+  return routingResult;
+};
+
 const creditNoteResolvers = {
   Query: {
     // URL d'aperçu de l'avoir archivé (R2) — null si pas encore archivé
@@ -174,7 +237,9 @@ const creditNoteResolvers = {
     }),
 
     creditNotes: readCreditNotes(async (parent, args, context) => {
-      const { startDate, endDate, status, search, page = 1, limit = 10 } = args;
+      const { startDate, endDate, status, search } = args;
+      // Page et taille bornées (1 000 avoirs au plus par page)
+      const { page, limit } = boundedPage(args.page ?? 1, args.limit ?? 10);
       const { workspaceId } = context;
 
       const query = {
@@ -292,6 +357,7 @@ const creditNoteResolvers = {
         "create",
       )(async (parent, { input }, context) => {
         assertDocumentAppearance(input?.appearance);
+        assertCreditNoteReason(input?.reason);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
@@ -479,15 +545,29 @@ const creditNoteResolvers = {
               // Avoir validé AVANT de consommer un numéro : un avoir refusé
               // (champ invalide) ne laisse pas de trou dans la séquence.
               await newCreditNote.validate();
-              newCreditNote.number = await generateCreditNoteNumber(
-                effectivePrefix,
-                {
-                  workspaceId: new mongoose.Types.ObjectId(workspaceId),
-                  isDraft: false,
-                  manualNumber,
+              // Numérotation, transmission et enregistrement d'un seul avoir à
+              // la fois dans l'espace : un avoir refusé par la plateforme rend
+              // son numéro, aucun autre n'a pu le suivre entre-temps.
+              await withDocumentLock(
+                `creditNoteNumbers:${workspaceId}`,
+                async () => {
+                  newCreditNote.number = await generateCreditNoteNumber(
+                    effectivePrefix,
+                    {
+                      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+                      isDraft: false,
+                      manualNumber,
+                    },
+                  );
+                  await routeCreditNoteBeforeSave(
+                    newCreditNote,
+                    workspaceId,
+                    effectivePrefix,
+                  );
+                  await newCreditNote.save();
                 },
+                { ttlMs: 90_000, waitMs: 60_000 },
               );
-              await newCreditNote.save();
               return newCreditNote;
             },
           );
@@ -584,6 +664,7 @@ const creditNoteResolvers = {
 
     updateCreditNote: requireCompanyInfo(
       requireWrite("creditNotes")(async (parent, { id, input }, context) => {
+        assertCreditNoteReason(input?.reason);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {

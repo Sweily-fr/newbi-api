@@ -139,6 +139,129 @@ export async function evaluateAndRouteInvoice(invoice, workspaceId) {
 }
 
 /**
+ * Évalue le routage e-invoicing d'un AVOIR et l'envoie à SuperPDP si E_INVOICING.
+ *
+ * Un avoir est une facture au sens de la réforme (UNTDID 381) : il suit les mêmes
+ * critères de routage que sa facture (B2B domestique → e-invoicing, B2C/international/
+ * exonéré → e-reporting en négatif). L'avoir porte les mêmes snapshots companyInfo/
+ * client que les factures, donc determineFlowType s'applique tel quel.
+ *
+ * NOTE: Le caller est responsable du save() final de l'avoir (ou de son rollback
+ * si sendFailed est true — un avoir E_INVOICING non transmis ne doit pas exister).
+ *
+ * @param {Object} creditNote - Document Mongoose CreditNote
+ * @param {string} workspaceId - ID du workspace
+ * @returns {Object|null} Le routingResult ({ flowType, reason, details, sendFailed?,
+ *   error? }), ou null si e-invoicing non activé.
+ */
+export async function evaluateAndRouteCreditNote(creditNote, workspaceId) {
+  const isEnabled =
+    await EInvoicingSettingsService.isEInvoicingEnabled(workspaceId);
+
+  if (!isEnabled) {
+    return null;
+  }
+
+  const organization =
+    await EInvoicingSettingsService.getOrganizationById(workspaceId);
+
+  if (!organization) {
+    logger.warn(
+      `[E-INVOICE-ROUTING] Organisation non trouvée pour workspace ${workspaceId}`,
+    );
+    return null;
+  }
+
+  const routingResult = eInvoiceRoutingService.determineFlowType(
+    creditNote,
+    organization,
+  );
+
+  creditNote.eInvoiceFlowType = routingResult.flowType;
+  creditNote.eInvoiceFlowReason = routingResult.reason;
+  creditNote.eInvoiceRoutingDetails = routingResult.details;
+
+  if (routingResult.flowType === "E_INVOICING") {
+    try {
+      logger.info(
+        `[E-INVOICE-ROUTING] Envoi e-invoicing (avoir): ${creditNote.prefix}${creditNote.number} → SuperPDP`,
+      );
+
+      const superPdpResult = await superPdpService.sendCreditNote(
+        workspaceId,
+        creditNote,
+      );
+
+      if (superPdpResult.success) {
+        creditNote.superPdpInvoiceId = superPdpResult.superPdpInvoiceId;
+        creditNote.eInvoiceStatus = superPdpResult.status;
+        creditNote.eInvoiceLastCode = superPdpResult.lastCode || null;
+        creditNote.eInvoiceEvents = superPdpResult.events || [];
+        creditNote.eInvoiceSentAt = new Date();
+
+        logger.info(
+          `[E-INVOICE-ROUTING] Avoir envoyé à SuperPDP: ${superPdpResult.superPdpInvoiceId}`,
+        );
+      } else {
+        creditNote.eInvoiceStatus = "ERROR";
+        creditNote.eInvoiceError = superPdpResult.error;
+        routingResult.sendFailed = true;
+        routingResult.error = superPdpResult.error;
+        logger.error(
+          `[E-INVOICE-ROUTING] Erreur envoi avoir SuperPDP: ${superPdpResult.error}`,
+        );
+      }
+    } catch (sendError) {
+      creditNote.eInvoiceStatus = "ERROR";
+      creditNote.eInvoiceError = sendError.message;
+      routingResult.sendFailed = true;
+      routingResult.error = sendError.message;
+      logger.error(
+        "[E-INVOICE-ROUTING] Erreur lors de l'envoi de l'avoir à SuperPDP:",
+        sendError,
+      );
+    }
+  } else if (routingResult.flowType === "E_REPORTING_TRANSACTION") {
+    // Avoir B2C/international/exonéré → déclaration e-reporting en NÉGATIF
+    // (correction des montants déjà déclarés pour la facture d'origine).
+    // Comme pour les factures, l'e-reporting est déclaratif et non bloquant :
+    // un échec est relancé par le cron ereporting-retry.
+    try {
+      logger.info(
+        `[E-INVOICE-ROUTING] E-reporting transaction (avoir): ${creditNote.prefix}${creditNote.number} → SuperPDP`,
+      );
+      const result = await superPdpService.submitB2cTransaction(
+        workspaceId,
+        creditNote,
+        { sign: -1 },
+      );
+      if (result.success) {
+        creditNote.eReportingStatus = "REPORTED";
+        creditNote.eReportingTransactionId = result.id
+          ? String(result.id)
+          : null;
+        creditNote.eReportingError = null;
+      } else {
+        creditNote.eReportingStatus = "ERROR";
+        creditNote.eReportingError = result.error;
+      }
+    } catch (reportError) {
+      creditNote.eReportingStatus = "ERROR";
+      creditNote.eReportingError = reportError.message;
+      logger.error(
+        "[E-INVOICE-ROUTING] Erreur e-reporting transaction (avoir):",
+        reportError,
+      );
+    }
+    creditNote.eInvoiceStatus = "NOT_SENT";
+  } else {
+    creditNote.eInvoiceStatus = "NOT_SENT";
+  }
+
+  return routingResult;
+}
+
+/**
  * Déclare le paiement d'une facture e-reporting (TVA sur encaissements) à SuperPDP.
  *
  * Conditions : la facture relève du e-reporting transaction, la TVA est sur les

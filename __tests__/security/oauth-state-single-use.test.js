@@ -111,6 +111,7 @@ vi.mock(
   () => ({ translateMicrosoftError: (error) => error?.message || "erreur" }),
 );
 
+import { browserCookieFor } from "../helpers/oauthBrowser.js";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
@@ -163,7 +164,8 @@ const authorize = async (flow) => {
 const callback = async (flow, state) => {
   const res = await fetch(
     `${baseUrl}${flow.base}/callback?code=code-oauth&state=${encodeURIComponent(state)}`,
-    { redirect: "manual" },
+    // Même navigateur que /authorize (cookie du parcours)
+    { redirect: "manual", headers: { cookie: browserCookieFor(state) } },
   );
   return res.headers.get("location") || "";
 };

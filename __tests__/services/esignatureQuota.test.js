@@ -254,3 +254,49 @@ describe("Resolvers e-signature et quota", () => {
     );
   });
 });
+
+describe("requestDocumentSignature : envois simultanés", () => {
+  const ctx = () => buildContext({ userId, organizationId });
+
+  it("une seule signature restante : deux envois en même temps, un seul part", async () => {
+    await setPlan("freelance");
+    await seedSignatures(9);
+    const quotes = [new ObjectId(), new ObjectId()];
+    for (const [i, _id] of quotes.entries()) {
+      await Quote.collection.insertOne({
+        _id,
+        workspaceId: organizationId,
+        status: "PENDING",
+        number: `00010${i}`,
+      });
+    }
+    let n = 0;
+    esignatureService.createSESSignature.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      n += 1;
+      return { data: { id: `ext-concurrent-${n}`, state: "WAIT_SIGN", signers: [] } };
+    });
+
+    const send = (quoteId) =>
+      esignatureResolvers.Mutation.requestDocumentSignature(
+        null,
+        {
+          input: {
+            documentType: "quote",
+            documentId: quoteId.toString(),
+            signers: [{ name: "Jean", surname: "Client", email: "jean@client.fr" }],
+            documentBase64: "JVBERi0=",
+          },
+        },
+        ctx(),
+      );
+    const results = await Promise.allSettled(quotes.map(send));
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(String(results.find((r) => r.status === "rejected").reason)).toMatch(
+      /10 signatures électroniques de ce mois/,
+    );
+    expect(esignatureService.createSESSignature).toHaveBeenCalledTimes(1);
+    expect((await getEsignatureQuota(organizationId)).used).toBe(10);
+  });
+});

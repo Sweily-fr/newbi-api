@@ -48,6 +48,9 @@ import {
   isInvoiceFullyCredited,
 } from "../../src/utils/invoiceCredit.js";
 
+// Secret de signature des liens de paiement (voir invoicePaymentLink.js)
+process.env.BETTER_AUTH_SECRET ||= "secret-de-test-liens";
+
 const { ObjectId } = mongoose.Types;
 const workspaceId = buildOrganizationId();
 const userId = buildUserId();
@@ -139,7 +142,7 @@ describe("paiement en ligne", () => {
     ).toBeNull();
     expect(
       await invoiceResolvers.Invoice.paymentLink(partial, {}, context),
-    ).toMatch(new RegExp(`/pay/invoice/${partial._id}$`));
+    ).toMatch(new RegExp(`/pay/invoice/${partial._id}\\?t=[A-Za-z0-9_-]{32}$`));
   });
 
   it("GET /pay/invoice/:id : 409 « Facture soldée par avoir »", async () => {

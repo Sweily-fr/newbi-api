@@ -77,6 +77,20 @@ export const recurrenceForecastSubcategory = (rec) =>
 // (new Date("YYYY-MM-01")) avec setMonth (heure locale) provoquait un off-by-one
 // au passage heure d'été/hiver — la dernière borne tombant un mois d'hiver était
 // exclue (ex. plage 6 mois juin->novembre qui ne renvoyait que 5 mois).
+/** Mois courant (AAAA-MM), même calcul que le tableau de la prévision. */
+const currentMonthKey = (now = new Date()) =>
+  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+/**
+ * Mois de la prévision où compter un devis signé non facturé : son mois
+ * d'émission, ou le mois courant s'il est passé (toujours attendu).
+ */
+export const signedQuoteForecastMonth = (issueDate, currentMonth) => {
+  const d = new Date(issueDate);
+  const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return m < currentMonth ? currentMonth : m;
+};
+
 const getMonthRange = (startDate, endDate) => {
   const months = [];
   const [startYear, startMonth] = startDate.split("-").map(Number);
@@ -601,6 +615,8 @@ const treasuryForecastResolvers = {
             workspaceId: wId,
             month: { $gte: startMonth, $lte: endMonth },
           }).lean(),
+          // Devis signés non facturés : ceux des mois passés (même avant la
+          // plage) restent attendus et sont reportés sur le mois courant
           Quote.find({
             workspaceId: wId,
             status: "COMPLETED",
@@ -608,7 +624,7 @@ const treasuryForecastResolvers = {
               { convertedToInvoice: { $exists: false } },
               { convertedToInvoice: null },
             ],
-            issueDate: { $gte: txStartDate, $lt: txEndDate },
+            issueDate: { $lt: txEndDate },
           })
             .select("issueDate finalTotalTTC")
             .lean(),
@@ -741,12 +757,13 @@ const treasuryForecastResolvers = {
 
         // 6b. Signed quotes not yet converted to invoice — projected as SALES income
         // on their issueDate month (quote model has no execution date).
+        // Un devis signé d'un mois passé, toujours ni facturé ni annulé,
+        // reste attendu : reporté sur le mois courant.
         // Amounts are TTC (aligned with bank transactions).
         const quoteIncomeMap = {};
         for (const q of signedQuotes) {
           if (!q.issueDate || !q.finalTotalTTC) continue;
-          const d = new Date(q.issueDate);
-          const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const m = signedQuoteForecastMonth(q.issueDate, currentMonth);
           quoteIncomeMap[m] = (quoteIncomeMap[m] || 0) + q.finalTotalTTC;
         }
 
@@ -1312,7 +1329,12 @@ const treasuryForecastResolvers = {
                     { convertedToInvoice: { $exists: false } },
                     { convertedToInvoice: null },
                   ],
-                  issueDate: { $gte: start, $lt: end },
+                  // Mois courant : aussi les devis signés des mois passés,
+                  // toujours attendus (reportés comme dans le tableau)
+                  issueDate:
+                    month === currentMonthKey()
+                      ? { $lt: end }
+                      : { $gte: start, $lt: end },
                 })
                   .select("number prefix client finalTotalTTC issueDate status")
                   .sort({ issueDate: 1 })
@@ -1539,26 +1561,55 @@ const treasuryForecastResolvers = {
           }
         }
 
-        const result = await ForecastScenario.findOneAndUpdate(
-          input.id
-            ? { _id: input.id, workspaceId: wId }
-            : { workspaceId: wId, name: input.name },
-          {
-            $set: {
-              name: input.name,
-              incomeMultiplier: input.incomeMultiplier,
-              expenseMultiplier: input.expenseMultiplier,
-            },
-            $setOnInsert: {
-              workspaceId: wId,
-              createdBy: new mongoose.Types.ObjectId(context.user.id),
-            },
-          },
+        const duplicateName = (error) => {
+          if (error?.code === 11000) {
+            throw new AppError(
+              "Un scénario porte déjà ce nom",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+          throw error;
+        };
+
+        if (scenarioExists) {
           // runValidators : bornes du modèle (multiplicateurs de 0 à 5, nom
           // de 60 caractères au plus), sinon ignorées par findOneAndUpdate
-          { upsert: true, new: true, lean: true, runValidators: true },
-        );
-        return result;
+          return ForecastScenario.findOneAndUpdate(
+            { _id: input.id, workspaceId: wId },
+            {
+              $set: {
+                name: input.name,
+                incomeMultiplier: input.incomeMultiplier,
+                expenseMultiplier: input.expenseMultiplier,
+              },
+            },
+            { new: true, lean: true, runValidators: true },
+          ).catch(duplicateName);
+        }
+
+        // Création : jamais la modification d'un scénario du même nom créé
+        // au même instant (index unique), et plafond de 5 tenu même pour
+        // des créations simultanées : au-delà des 5 premiers, retirée
+        const created = await ForecastScenario.create({
+          workspaceId: wId,
+          name: input.name,
+          incomeMultiplier: input.incomeMultiplier,
+          expenseMultiplier: input.expenseMultiplier,
+          createdBy: new mongoose.Types.ObjectId(context.user.id),
+        }).catch(duplicateName);
+        const firstFive = await ForecastScenario.find({ workspaceId: wId })
+          .sort({ _id: 1 })
+          .limit(5)
+          .select("_id")
+          .lean();
+        if (!firstFive.some((sc) => sc._id.equals(created._id))) {
+          await ForecastScenario.deleteOne({ _id: created._id });
+          throw new AppError(
+            "Vous ne pouvez pas créer plus de 5 scénarios",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        return created.toObject();
       },
     ),
 

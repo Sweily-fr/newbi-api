@@ -399,14 +399,12 @@ const generateInvoiceNumber = async (customPrefix, options = {}) => {
       return `DRAFT-${options.manualNumber}`;
     }
 
-    // Brouillon sans numéro manuel - utiliser le prochain numéro séquentiel avec préfixe DRAFT-
-    const nextSequentialNumber = await generateInvoiceSequentialNumber(
-      prefix,
-      options,
-    );
-
-    // Vérifier si le numéro DRAFT-{number} existe déjà
-    const draftNumber = `DRAFT-${nextSequentialNumber}`;
+    // Brouillon sans numéro manuel : prochain numéro AFFICHÉ (DRAFT-NNNN), lu
+    // sans avancer le compteur. Un brouillon ne réserve aucun numéro légal :
+    // le numéro n'est attribué qu'à l'émission, sinon un brouillon supprimé
+    // ou jamais validé laissait un trou dans la séquence émise.
+    const draftNumber = await previewInvoiceDraftNumber(prefix, options);
+    const nextSequentialNumber = draftNumber.replace("DRAFT-", "");
     const existingQuery = {
       number: draftNumber,
     };
