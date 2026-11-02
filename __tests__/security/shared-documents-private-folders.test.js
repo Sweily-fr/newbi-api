@@ -67,6 +67,18 @@ vi.mock("../../src/config/redis.js", () => ({
 const uploaded = vi.hoisted(() => ({ buffer: null }));
 vi.mock("../../src/services/cloudflareTransferService.js", () => ({
   default: {
+    // ZIP envoyé en flux (jamais entièrement en mémoire côté API)
+    uploadStream: async (stream, transferId, fileId, name) => {
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+      const buffer = Buffer.concat(chunks);
+      uploaded.buffer = buffer;
+      return {
+        url: `https://r2.test/${name}`,
+        key: `transfers/${name}`,
+        size: buffer.length,
+      };
+    },
     uploadFile: async (buffer, transferId, fileId, name) => {
       uploaded.buffer = buffer;
       return {
@@ -311,6 +323,25 @@ describe("Dossier privé : membre hors de la liste", () => {
         info,
       ),
     ).rejects.toThrow();
+    expect(uploaded.buffer).toBeNull();
+  });
+});
+
+describe("Transfert depuis les documents partagés : taille bornée", () => {
+  it("plus de 50 Go de documents : refusé, aucun ZIP envoyé", async () => {
+    await SharedDocument.collection.updateOne(
+      { _id: publicDoc },
+      { $set: { fileSize: 51 * 1024 * 1024 * 1024 } },
+    );
+    uploaded.buffer = null;
+    await expect(
+      fileTransferResolvers.Mutation.createFileTransferFromSharedDocuments(
+        null,
+        { documentIds: [String(publicDoc)], workspaceId: ws() },
+        buildContext({ userId: editor, organizationId: ws() }),
+        { fieldName: "createFileTransferFromSharedDocuments" },
+      ),
+    ).rejects.toThrow(/50 Go au total/);
     expect(uploaded.buffer).toBeNull();
   });
 });

@@ -52,8 +52,9 @@ type PublicBoardShare {
   id: ID!
   token: String!
   boardId: ID!
-  workspaceId: ID!
-  createdBy: ID!
+  # Null pour un visiteur (getPublicBoard) : identifiants internes
+  workspaceId: ID
+  createdBy: ID
   name: String
   permissions: PublicSharePermissions!
   isActive: Boolean!
@@ -104,7 +105,9 @@ type PublicTask {
   timeTracking: PublicTimeTracking
   claudeWorkingSince: DateTime
   claudeCodingSince: DateTime
+  # Toujours null : le nom du créateur est dans createdByName
   userId: ID
+  createdByName: String
   createdAt: DateTime
   updatedAt: DateTime
 }

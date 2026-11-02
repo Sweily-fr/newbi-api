@@ -146,7 +146,9 @@ describe("Suppression définitive : fichier effacé dans le bon bucket", () => {
       ]),
     );
     expect(deletedKeys().map((d) => d.key)).not.toContain(ailleurs.fileKey);
-    expect(await SharedDocument.collection.countDocuments({ workspaceId })).toBe(0);
+    expect(
+      await SharedDocument.collection.countDocuments({ workspaceId }),
+    ).toBe(0);
     expect(
       await SharedDocument.collection.countDocuments({ _id: ailleurs._id }),
     ).toBe(1);
@@ -184,19 +186,24 @@ describe("Suppression définitive : fichier effacé dans le bon bucket", () => {
 });
 
 describe("Renommer : nom vide ou doublon refusé", () => {
-  it.each(["", "   "])("dossier renommé en %j : refusé, nom inchangé", async (name) => {
-    const f = folder({ name: "Contrats" });
-    await SharedFolder.collection.insertOne(f);
+  it.each(["", "   "])(
+    "dossier renommé en %j : refusé, nom inchangé",
+    async (name) => {
+      const f = folder({ name: "Contrats" });
+      await SharedFolder.collection.insertOne(f);
 
-    const res = await call(Mutation, "updateSharedFolder", {
-      id: String(f._id),
-      input: { name },
-    });
+      const res = await call(Mutation, "updateSharedFolder", {
+        id: String(f._id),
+        input: { name },
+      });
 
-    expect(res.success).toBe(false);
-    expect(res.message).toMatch(/ne peut pas être vide/);
-    expect((await SharedFolder.collection.findOne({ _id: f._id })).name).toBe("Contrats");
-  });
+      expect(res.success).toBe(false);
+      expect(res.message).toMatch(/ne peut pas être vide/);
+      expect((await SharedFolder.collection.findOne({ _id: f._id })).name).toBe(
+        "Contrats",
+      );
+    },
+  );
 
   it("dossier renommé comme son voisin : refusé", async () => {
     const parent = folder({ name: "Clients" });
@@ -211,7 +218,9 @@ describe("Renommer : nom vide ou doublon refusé", () => {
 
     expect(res.success).toBe(false);
     expect(res.message).toBe("Un dossier avec ce nom existe déjà");
-    expect((await SharedFolder.collection.findOne({ _id: b._id })).name).toBe("Martin");
+    expect((await SharedFolder.collection.findOne({ _id: b._id })).name).toBe(
+      "Martin",
+    );
   });
 
   it("même nom dans un autre dossier, ou vrai nom accentué : accepté", async () => {
@@ -247,24 +256,33 @@ describe("Renommer : nom vide ou doublon refusé", () => {
     expect(res.success).toBe(true);
   });
 
-  it.each(["", "  "])("document renommé en %j : refusé, nom inchangé", async (name) => {
-    const d = doc({ trashedAt: null, name: "devis.pdf" });
-    await SharedDocument.collection.insertOne(d);
+  it.each(["", "  "])(
+    "document renommé en %j : refusé, nom inchangé",
+    async (name) => {
+      const d = doc({ trashedAt: null, name: "devis.pdf" });
+      await SharedDocument.collection.insertOne(d);
 
-    const res = await call(Mutation, "updateSharedDocument", {
-      id: String(d._id),
-      input: { name },
-    });
+      const res = await call(Mutation, "updateSharedDocument", {
+        id: String(d._id),
+        input: { name },
+      });
 
-    expect(res.success).toBe(false);
-    expect(res.message).toMatch(/ne peut pas être vide/);
-    expect((await SharedDocument.collection.findOne({ _id: d._id })).name).toBe("devis.pdf");
-  });
+      expect(res.success).toBe(false);
+      expect(res.message).toMatch(/ne peut pas être vide/);
+      expect(
+        (await SharedDocument.collection.findOne({ _id: d._id })).name,
+      ).toBe("devis.pdf");
+    },
+  );
 });
 
 describe("Sous-dossier d'un dossier privé : visibilité héritée", () => {
   it("créé sans visibilité dans « RH » privé : invisible pour un membre hors liste", async () => {
-    const rh = folder({ name: "RH", visibility: "private", allowedUserIds: [] });
+    const rh = folder({
+      name: "RH",
+      visibility: "private",
+      allowedUserIds: [],
+    });
     await SharedFolder.collection.insertOne(rh);
 
     const created = await call(Mutation, "createSharedFolder", {
@@ -280,7 +298,12 @@ describe("Sous-dossier d'un dossier privé : visibilité héritée", () => {
 
     // Le membre hors liste ne voit ni le dossier ni le document
     expect(await folderIds(member)).not.toContain(String(paieId));
-    const unDoc = await call(Query, "sharedDocument", { id: String(d._id) }, member);
+    const unDoc = await call(
+      Query,
+      "sharedDocument",
+      { id: String(d._id) },
+      member,
+    );
     expect(unDoc?.document ?? null).toBeNull();
     expect(unDoc?.success).toBe(false);
   });
@@ -307,5 +330,37 @@ describe("Sous-dossier d'un dossier privé : visibilité héritée", () => {
       _id: new mongoose.Types.ObjectId(String(created.folder.id)),
     });
     expect(stored.visibility).toBe("public");
+  });
+});
+
+// Aucune tâche ne vide la corbeille : l'écran et l'API ne promettent plus
+// de suppression au bout de 30 jours (décision : pas de purge automatique,
+// elle effacerait des fichiers clients)
+describe("Corbeille : aucune suppression automatique annoncée", () => {
+  it("pas de décompte de jours avant suppression", () => {
+    const trashed = { trashedAt: new Date(Date.now() - 40 * 86400_000) };
+    expect(
+      sharedDocumentResolvers.SharedDocument.daysUntilPermanentDeletion(
+        trashed,
+      ),
+    ).toBeNull();
+    expect(
+      sharedDocumentResolvers.SharedFolder.daysUntilPermanentDeletion(trashed),
+    ).toBeNull();
+  });
+
+  it("dossier mis à la corbeille : message sans délai de suppression", async () => {
+    const parent = folder({ name: "Projets" });
+    await SharedFolder.collection.insertMany([
+      parent,
+      folder({ name: "Sous-dossier", parentId: parent._id }),
+    ]);
+    const res = await call(Mutation, "deleteSharedFolder", {
+      id: String(parent._id),
+    });
+    expect(res.success).toBe(true);
+    expect(res.message).not.toMatch(/30 jours|définitive/);
+    // Documents gardés, rien d'effacé dans le stockage
+    expect(r2.deleteImage).not.toHaveBeenCalled();
   });
 });

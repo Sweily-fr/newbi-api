@@ -13,7 +13,17 @@ import { readPsd, initializeCanvas } from "ag-psd";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import { registerTransferDownload } from "../services/transferDownloadService.js";
-import { checkTransferRecipientAccess } from "../utils/transferAccess.js";
+import {
+  checkTransferRecipientAccess,
+  isTransferOwnerRequest,
+} from "../utils/transferAccess.js";
+import {
+  WATERMARK_PDF_MAX_BYTES,
+  isPdfFile,
+  isWatermarkableImage,
+  watermarkImage,
+  watermarkPdf,
+} from "../utils/previewWatermark.js";
 
 const router = express.Router();
 
@@ -243,6 +253,90 @@ router.get("/download/:transferId/:fileId", async (req, res) => {
 });
 
 // Route pour prévisualiser un fichier
+const readAll = async (body) => {
+  const chunks = [];
+  for await (const chunk of body) chunks.push(chunk);
+  return Buffer.concat(chunks);
+};
+
+const PROTECTED_PREVIEW_UNAVAILABLE =
+  "Aperçu indisponible : ce fichier est protégé par un filigrane.";
+
+/**
+ * Aperçu filigrané d'un fichier d'un transfert « filigrane » :
+ * { status, error } si l'aperçu est refusé, { buffer, contentType } s'il
+ * est filigrané, null pour les autres types (vidéo, audio…), servis comme
+ * avant faute de pouvoir les filigraner.
+ */
+async function watermarkedPreview(file, { isHeic, isZipFile }) {
+  const fetchBody = async () =>
+    (
+      await s3Client.send(
+        new GetObjectCommand({
+          Bucket: process.env.TRANSFER_BUCKET,
+          Key: file.r2Key,
+        }),
+      )
+    ).Body;
+  if (isZipFile) return { status: 403, error: PROTECTED_PREVIEW_UNAVAILABLE };
+  if (isHeic) {
+    const rawJpeg = await convert({
+      buffer: await readAll(await fetchBody()),
+      format: "JPEG",
+      quality: 0.85,
+    });
+    return {
+      buffer: await watermarkImage(Buffer.from(rawJpeg)),
+      contentType: "image/jpeg",
+    };
+  }
+  if (isWatermarkableImage(file)) {
+    return {
+      buffer: await watermarkImage(await fetchBody()),
+      contentType: "image/jpeg",
+    };
+  }
+  if (isPdfFile(file)) {
+    if (Number(file.size) > WATERMARK_PDF_MAX_BYTES) {
+      return { status: 403, error: PROTECTED_PREVIEW_UNAVAILABLE };
+    }
+    return {
+      buffer: await watermarkPdf(await readAll(await fetchBody())),
+      contentType: "application/pdf",
+    };
+  }
+  return null;
+}
+
+function sendWatermarkedPreview(res, file, preview) {
+  if (preview.error) {
+    return res.status(preview.status).json({ error: preview.error });
+  }
+  const extension = preview.contentType === "application/pdf" ? ".pdf" : ".jpg";
+  const displayName = (file.originalName || "apercu").replace(
+    /\.[^.]+$/,
+    extension,
+  );
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${encodeURIComponent(displayName)}"`,
+  );
+  res.setHeader("Content-Type", preview.contentType);
+  res.setHeader("Content-Length", preview.buffer.length);
+  // Jamais gardé par un cache partagé
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader(
+    "Content-Security-Policy",
+    `frame-ancestors 'self' ${frontendUrl}`,
+  );
+  res.removeHeader("X-Frame-Options");
+  return res.end(preview.buffer);
+}
+
 router.get("/preview/:transferId/:fileId", async (req, res) => {
   try {
     const { transferId, fileId } = req.params;
@@ -302,6 +396,22 @@ router.get("/preview/:transferId/:fileId", async (req, res) => {
     const isHeic =
       ["image/heic", "image/heif"].includes(file.mimeType?.toLowerCase()) ||
       /\.(heic|heif)$/i.test(file.originalName || "");
+
+    // Transfert « filigrane (lecture seule) » : images et PDF servis avec un
+    // filigrane, jamais l'original ; une archive ZIP (les originaux) n'est
+    // pas ouverte. Le propriétaire voit ses originaux.
+    if (
+      fileTransfer.hasWatermark &&
+      !isTransferOwnerRequest(fileTransfer, req)
+    ) {
+      const protectedPreview = await watermarkedPreview(file, {
+        isHeic,
+        isZipFile,
+      });
+      if (protectedPreview) {
+        return sendWatermarkedPreview(res, file, protectedPreview);
+      }
+    }
 
     // Grandes images raster : servir l'original (parfois plusieurs centaines
     // de Mo) rend la preview inutilisable, surtout sur mobile — on sert une

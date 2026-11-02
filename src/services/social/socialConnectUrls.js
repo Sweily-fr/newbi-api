@@ -7,6 +7,8 @@
 
 export const DEFAULT_RETURN_TO = "/dashboard/outils/kanban";
 export const CONNECT_STATE_TTL_MS = 15 * 60 * 1000;
+// Cookie qui lie le retour OAuth au navigateur (voir oauthBrowserBinding.js)
+export const SOCIAL_CONNECT_COOKIE_PATH = "/social-connect";
 
 /**
  * Page de retour après la connexion : un chemin du tableau de bord

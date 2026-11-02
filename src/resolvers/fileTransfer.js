@@ -1,4 +1,8 @@
 import logger from "../utils/logger.js";
+import {
+  RETIRED_TRANSFER_UPLOADS,
+  retireTransferUploads,
+} from "../utils/retiredTransferUploads.js";
 import { ApolloError, UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import SharedDocument from "../models/SharedDocument.js";
@@ -31,13 +35,15 @@ import {
   normalizeTransferEmailInput,
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
-import { normalizeTransferCreationOptions } from "../utils/transferOptions.js";
+import {
+  assertTransferTotal,
+  normalizeTransferCreationOptions,
+} from "../utils/transferOptions.js";
 import { deleteTransferStorage } from "../utils/transferStorage.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
 import archiver from "archiver";
-import { PassThrough } from "stream";
 import mongoose from "mongoose";
 
 // Taille maximale par défaut (5 GB en octets)
@@ -93,6 +99,32 @@ const requireTransferLevel = (level) =>
 const requireTransferAction = (action) =>
   requireWorkspaceAction("fileTransfers", action);
 
+// Transfert existant (lecture, renommage, suppression) : le rôle contrôlé est
+// celui de l'espace où le transfert est enregistré, pas celui de l'en-tête
+// choisi par le client. Ancien transfert sans espace : l'en-tête fait foi.
+const onTransferWorkspace = (guard) => (fn) => {
+  const guarded = guard(fn);
+  return async (parent, args, context, info) => {
+    const userId = context?.user?.id || context?.user?._id;
+    let workspaceId = null;
+    if (userId && mongoose.isValidObjectId(args?.id)) {
+      const transfer = await FileTransfer.findOne({
+        _id: args.id,
+        userId,
+      })
+        .select("workspaceId")
+        .lean();
+      if (transfer?.workspaceId) workspaceId = String(transfer.workspaceId);
+    }
+    return guarded(
+      parent,
+      workspaceId ? { ...args, workspaceId } : args,
+      context,
+      info,
+    );
+  };
+};
+
 // Création classique : l'espace du transfert arrive dans input.workspaceId.
 // On le présente comme args.workspaceId pour que le rôle contrôlé soit celui
 // de l'espace où le transfert est enregistré. Sans espace dans l'input,
@@ -128,24 +160,13 @@ const fileTransferResolvers = {
             status: { $ne: "deleted" },
           };
 
-          // Isolation par workspace: si un workspaceId est fourni, on ne retourne
-          // que les transferts de ce workspace. Pour garantir la compatibilité
-          // avec les transferts créés avant l'ajout du multi-workspace (sans
-          // workspaceId), on les rattache automatiquement au workspace courant
-          // lors de la première requête, puis on applique le filtre strict.
+          // Isolation par workspace : les transferts de cet espace, plus ceux
+          // de l'utilisateur créés sans espace (avant le multi-espace, ou
+          // depuis l'application sans espace actif), listés sans être
+          // modifiés. Ils étaient rattachés en base au premier espace dont la
+          // liste était ouverte.
           if (workspaceId) {
-            await FileTransfer.updateMany(
-              {
-                userId: user.id,
-                status: { $ne: "deleted" },
-                $or: [
-                  { workspaceId: null },
-                  { workspaceId: { $exists: false } },
-                ],
-              },
-              { $set: { workspaceId } },
-            );
-            baseFilter.workspaceId = workspaceId;
+            baseFilter.workspaceId = { $in: [workspaceId, null] };
           }
 
           // Compter le nombre total d'éléments pour la pagination
@@ -184,7 +205,7 @@ const fileTransferResolvers = {
     ),
 
     // Obtenir les informations d'un transfert de fichiers par son ID
-    fileTransferById: requireTransferLevel("read")(
+    fileTransferById: onTransferWorkspace(requireTransferLevel("read"))(
       async (_, { id }, { user }) => {
         try {
           const fileTransfer = await FileTransfer.findOne({
@@ -418,7 +439,7 @@ const fileTransferResolvers = {
 
     // Supprimer un transfert de fichiers
     // Renommer un transfert (titre personnalisé)
-    renameFileTransfer: requireTransferAction("edit")(
+    renameFileTransfer: onTransferWorkspace(requireTransferAction("edit"))(
       async (_, { id, title }, { user }) => {
         try {
           const trimmed = (title || "").trim();
@@ -460,7 +481,7 @@ const fileTransferResolvers = {
       },
     ),
 
-    deleteFileTransfer: requireTransferLevel("delete")(
+    deleteFileTransfer: onTransferWorkspace(requireTransferLevel("delete"))(
       async (_, { id }, { user }) => {
         try {
           const fileTransfer = await FileTransfer.findOne({
@@ -753,34 +774,12 @@ const fileTransferResolvers = {
             }
           }
 
-          // 3. Créer le ZIP en mémoire
-          const archive = archiver("zip", { zlib: { level: 6 } });
-          const passThrough = new PassThrough();
-          const chunks = [];
-
-          passThrough.on("data", (chunk) => chunks.push(chunk));
-
-          const streamFinished = new Promise((resolve, reject) => {
-            passThrough.on("end", resolve);
-            passThrough.on("error", reject);
-            archive.on("error", reject);
-          });
-
-          archive.pipe(passThrough);
-
-          for (const { document: doc, zipPath } of allDocumentsToZip) {
-            const getCmd = new GetObjectCommand({
-              Bucket: SHARED_DOCUMENTS_BUCKET,
-              Key: doc.fileKey,
-            });
-            const srcResponse = await sharedDocsS3Client.send(getCmd);
-            archive.append(srcResponse.Body, { name: zipPath });
-          }
-
-          await archive.finalize();
-          await streamFinished;
-
-          const zipBuffer = Buffer.concat(chunks);
+          // 3. Taille bornée comme un transfert envoyé (50 Go, 5 000 fichiers)
+          assertTransferTotal(
+            allDocumentsToZip.map(({ document: doc }) => ({
+              size: doc.fileSize,
+            })),
+          );
 
           // 4. Déterminer le nom du ZIP
           let zipName;
@@ -797,17 +796,61 @@ const fileTransferResolvers = {
             zipName = "Documents.zip";
           }
 
-          // 5. Upload le ZIP vers le bucket transfers
+          // 5. ZIP construit à la volée et envoyé en même temps vers le
+          // bucket des transferts (jamais entièrement en mémoire), un
+          // document source ouvert à la fois
           const transferId = crypto.randomUUID();
           const fileId = crypto.randomUUID();
-
-          const result = await cloudflareTransferService.uploadFile(
-            zipBuffer,
+          const archive = archiver("zip", { zlib: { level: 6 } });
+          const uploading = cloudflareTransferService.uploadStream(
+            archive,
             transferId,
             fileId,
             zipName,
             "application/zip",
           );
+          const appending = (async () => {
+            for (const { document: doc, zipPath } of allDocumentsToZip) {
+              const srcResponse = await sharedDocsS3Client.send(
+                new GetObjectCommand({
+                  Bucket: SHARED_DOCUMENTS_BUCKET,
+                  Key: doc.fileKey,
+                }),
+              );
+              const added = new Promise((resolve, reject) => {
+                const done = () => {
+                  archive.off("entry", onEntry);
+                  archive.off("error", onError);
+                  archive.off("close", onClose);
+                };
+                const onEntry = () => {
+                  done();
+                  resolve();
+                };
+                const onError = (error) => {
+                  done();
+                  reject(error);
+                };
+                // Envoi vers R2 interrompu : le ZIP n'est plus lu
+                const onClose = () => {
+                  done();
+                  reject(new Error("Création du ZIP interrompue"));
+                };
+                archive.once("entry", onEntry);
+                archive.once("error", onError);
+                archive.once("close", onClose);
+              });
+              archive.append(srcResponse.Body, { name: zipPath });
+              await added;
+            }
+            await archive.finalize();
+          })().catch((error) => {
+            // Le flux échoue aussi : l'envoi multipart est annulé, aucun ZIP
+            // tronqué n'est enregistré
+            archive.destroy(error);
+            throw error;
+          });
+          const [result] = await Promise.all([uploading, appending]);
 
           const filesInfo = [
             {
@@ -930,5 +973,8 @@ fileTransferResolvers.Mutation = Object.fromEntries(
     ];
   }),
 );
+
+// Envois hérités sans effet (voir retiredTransferUploads.js)
+retireTransferUploads(fileTransferResolvers, RETIRED_TRANSFER_UPLOADS.fileTransfer);
 
 export default fileTransferResolvers;

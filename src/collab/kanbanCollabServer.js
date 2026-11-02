@@ -19,6 +19,7 @@
 //   appliquée au document en mémoire (voir syncExternalDescription), sinon
 //   il l'écraserait au prochain enregistrement.
 import crypto from "node:crypto";
+import mongoose from "mongoose";
 import IORedis from "ioredis";
 import * as Y from "yjs";
 import { Hocuspocus } from "@hocuspocus/server";
@@ -33,6 +34,8 @@ import {
   clientIpOf,
 } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
+import { assertBoardAccess } from "../services/kanbanBoardAccess.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { publishTaskUpdated } from "../resolvers/kanban.js";
@@ -183,7 +186,7 @@ export const ydocToHtml = (document) => {
   return normalizeHtml(generateHTML(json, collabExtensions));
 };
 
-const authenticate = async ({
+export const authenticate = async ({
   token,
   documentName,
   connectionConfig,
@@ -202,6 +205,71 @@ const authenticate = async ({
     );
     throw error;
   }
+};
+
+// Refus d'accès (par opposition à une erreur technique, base injoignable…)
+const denied = (message) => Object.assign(new Error(message), { denied: true });
+
+/**
+ * Droits d'un utilisateur sur la description d'une tâche, relus à la
+ * connexion puis régulièrement pendant celle-ci (voir recheckConnection) :
+ * appartenance à l'espace, niveau kanban, tableau réservé à une liste de
+ * membres. Sans abonnement actif, la connexion passe en lecture seule
+ * (comme les mutations kanban, refusées par checkSubscriptionActive).
+ * Lève une erreur si l'accès est refusé.
+ */
+export const collabAccess = async (userId, taskId) => {
+  const task = await Task.findById(taskId).select("workspaceId boardId");
+  if (!task) throw denied("Tâche introuvable");
+  const workspaceId = task.workspaceId?.toString();
+  const organization = await getActiveOrganization(userId, workspaceId);
+  if (!organization) throw denied("Accès refusé");
+
+  // Droits du rôle sur le kanban : sans lecture, pas de connexion ; en
+  // lecture seule, la connexion reçoit les modifications sans pouvoir en
+  // envoyer (Hocuspocus ignore ses mises à jour)
+  const levels = await getEffectiveLevelsFor(
+    organization.id,
+    organization.memberRole,
+  );
+  if (!levelsAllowLevel(levels, "kanban", "read")) {
+    throw denied("Accès refusé");
+  }
+  // Tableau réservé à une liste de membres dont l'utilisateur ne fait pas partie
+  try {
+    await assertBoardAccess(task.boardId?.toString(), { _id: userId });
+  } catch {
+    throw denied("Accès refusé");
+  }
+  let readOnly = !levelsAllowLevel(levels, "kanban", "write");
+  let subscriptionInactive = false;
+  if (!readOnly) {
+    try {
+      await checkSubscriptionActive({ workspaceId });
+    } catch {
+      readOnly = true;
+      subscriptionInactive = true;
+    }
+  }
+  return { task, workspaceId, readOnly, subscriptionInactive };
+};
+
+// L'utilisateur a encore au moins une session valide (déconnexion de tous
+// ses appareils, compte supprimé ou désactivé : plus aucune)
+const hasActiveSession = async (userId) => {
+  const db = mongoose.connection.db;
+  if (!db) return true;
+  const ids = [userId];
+  if (mongoose.isValidObjectId(userId)) {
+    ids.push(new mongoose.Types.ObjectId(userId));
+  }
+  const session = await db
+    .collection("session")
+    .findOne(
+      { userId: { $in: ids }, expiresAt: { $gt: new Date() } },
+      { projection: { _id: 1 } },
+    );
+  return Boolean(session);
 };
 
 const authenticateOrThrow = async ({
@@ -226,36 +294,69 @@ const authenticateOrThrow = async ({
   if (!user) throw new Error("Non authentifié");
   const userId = user._id.toString();
 
-  const task = await Task.findById(taskId).select("workspaceId boardId");
-  if (!task) throw new Error("Tâche introuvable");
-  const organization = await getActiveOrganization(
-    userId,
-    task.workspaceId?.toString(),
-  );
-  if (!organization) throw new Error("Accès refusé");
-
-  // Droits du rôle sur le kanban : sans lecture, pas de connexion ; en
-  // lecture seule, la connexion reçoit les modifications sans pouvoir en
-  // envoyer (Hocuspocus ignore ses mises à jour)
-  const levels = await getEffectiveLevelsFor(
-    organization.id,
-    organization.memberRole,
-  );
-  if (!levelsAllowLevel(levels, "kanban", "read")) {
-    throw new Error("Accès refusé");
-  }
-  const readOnly = !levelsAllowLevel(levels, "kanban", "write");
+  const { task, workspaceId, readOnly, subscriptionInactive } =
+    await collabAccess(userId, taskId);
   if (readOnly && connectionConfig) connectionConfig.readOnly = true;
 
   logger.info(
-    `[Collab] ${userId} connecté sur la tâche ${taskId}${readOnly ? " (lecture seule)" : ""}`,
+    `[Collab] ${userId} connecté sur la tâche ${taskId}${readOnly ? ` (lecture seule${subscriptionInactive ? ", abonnement inactif" : ""})` : ""}`,
   );
   return {
     user: { id: userId },
     taskId,
-    workspaceId: task.workspaceId.toString(),
+    workspaceId,
     boardId: task.boardId?.toString(),
+    checkedAt: Date.now(),
   };
+};
+
+// Droits relus au plus toutes les 30 s pendant une connexion (chaque client
+// envoie au moins sa présence toutes les 15 s environ)
+export const COLLAB_RECHECK_MS = 30 * 1000;
+
+/**
+ * Avant chaque message d'une connexion : membre retiré de l'espace, rôle
+ * sans lecture du kanban, retiré de la liste du tableau ou plus aucune
+ * session valide = connexion fermée (le client se reconnecte et la
+ * reconnexion est refusée) ; plus de droit d'écriture ou abonnement inactif
+ * = connexion en lecture seule.
+ */
+export const recheckConnection = async ({ connection, context, now }) => {
+  const userId = context?.user?.id;
+  // Connexions internes (description modifiée hors collab) : pas d'utilisateur
+  if (!userId || !context?.taskId) return;
+  const at = now ?? Date.now();
+  if (context.checkedAt && at - context.checkedAt < COLLAB_RECHECK_MS) return;
+  context.checkedAt = at;
+
+  let access;
+  try {
+    if (!(await hasActiveSession(userId))) {
+      throw denied("Session expirée");
+    }
+    access = await collabAccess(userId, context.taskId);
+  } catch (error) {
+    if (!error?.denied) {
+      // Erreur technique : les droits vérifiés jusqu'ici valent encore
+      logger.warn(
+        `[Collab] Droits de ${userId} non revérifiés: ${error?.message || error}`,
+      );
+      return;
+    }
+    logger.info(
+      `[Collab] ${userId} déconnecté de la tâche ${context.taskId}: ${error.message}`,
+    );
+    const closing = new Error("Accès retiré");
+    closing.code = 4403;
+    closing.reason = "Forbidden";
+    throw closing;
+  }
+  if (access.readOnly && connection && !connection.readOnly) {
+    connection.readOnly = true;
+    logger.info(
+      `[Collab] ${userId} passé en lecture seule sur la tâche ${context.taskId}`,
+    );
+  }
 };
 
 // État initial du document : état stocké si le HTML de la tâche n'a pas
@@ -603,6 +704,7 @@ export const createKanbanCollabServer = ({ authenticate: authFn } = {}) => {
     unloadImmediately: false,
     extensions,
     onAuthenticate: authFn || authenticate,
+    beforeHandleMessage: recheckConnection,
     onLoadDocument: loadDocument,
     onStoreDocument: storeDocument,
   });

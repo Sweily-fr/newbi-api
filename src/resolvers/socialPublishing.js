@@ -52,6 +52,12 @@ import { getXPostQuota } from "../services/social/xPostQuota.js";
  * L'espace est toujours celui validé par RBAC (context.workspaceId).
  */
 
+import { bindOAuthToBrowser } from "../utils/oauthBrowserBinding.js";
+import {
+  CONNECT_STATE_TTL_MS,
+  SOCIAL_CONNECT_COOKIE_PATH,
+} from "../services/social/socialConnectUrls.js";
+
 const subscriptionIsActive = async (context) => {
   try {
     await checkSubscriptionActive(context);
@@ -146,13 +152,27 @@ const socialPublishingResolvers = {
       "manage",
     )(
       withActiveSubscription(
-        async (_, { platform, connector, returnTo }, { workspaceId, user }) =>
+        async (
+          _,
+          { platform, connector, returnTo },
+          { workspaceId, user, req },
+        ) =>
           createConnectUrl({
             workspaceId,
             userId: user._id || user.id,
             platform,
             connector,
             returnTo,
+            // Seul ce navigateur pourra terminer la connexion (cookie posé
+            // sur la réponse GraphQL, exigé au retour du réseau)
+            onState: (token) => {
+              if (!req?.res) return;
+              bindOAuthToBrowser(req.res, {
+                nonce: token,
+                path: SOCIAL_CONNECT_COOKIE_PATH,
+                ttlMs: CONNECT_STATE_TTL_MS,
+              });
+            },
           }),
       ),
     ),
