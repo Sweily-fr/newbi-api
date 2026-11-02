@@ -21,6 +21,13 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import {
+  assertTransferStorageAvailable,
+  recordStoredFile,
+  releasePendingUploads,
+  reservePendingUpload,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
+import {
   normalizeTransferEmailInput,
   reserveTransferEmail,
 } from "../utils/transferEmailInput.js";
@@ -254,6 +261,8 @@ const chunkUploadR2Resolvers = {
           // bornée par l'offre de l'espace, avant tout appel à R2
           assertTransferUploadIds({ transferId, fileId });
           await assertTransferFileSize(workspaceId, fileSize);
+          // Espace de stockage : ce fichier et ceux en cours d'envoi
+          await assertTransferStorageAvailable(workspaceId, fileId, fileSize);
 
           // Déterminer le type MIME si non fourni
           const ext = fileName.split(".").pop()?.toLowerCase();
@@ -305,6 +314,7 @@ const chunkUploadR2Resolvers = {
             presignedUrls: result.presignedUrls,
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur démarrage multipart upload:", error);
 
           if (error instanceof UserInputError) {
@@ -596,13 +606,16 @@ const chunkUploadR2Resolvers = {
 
     // Générer des URLs signées pour upload direct vers R2
     generatePresignedUploadUrls: requireTransferCreate(
-      async (_, { fileId, totalChunks, fileName }, { user }) => {
+      async (_, { fileId, totalChunks, fileName }, { user, workspaceId }) => {
         try {
           if (!fileId || !fileName || !totalChunks) {
             throw new UserInputError(
               "Paramètres manquants: fileId, fileName ou totalChunks",
             );
           }
+
+          // Taille inconnue : refusé seulement si l'espace est déjà plein
+          await assertTransferStorageAvailable(workspaceId, null, 0);
 
           if (totalChunks < 1 || totalChunks > 10000) {
             throw new UserInputError(
@@ -653,6 +666,7 @@ const chunkUploadR2Resolvers = {
             expiresIn: 3600,
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur génération URLs signées:", error);
 
           if (error instanceof UserInputError) {
@@ -752,6 +766,7 @@ const chunkUploadR2Resolvers = {
             storageType: "r2",
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur confirmation chunk:", error);
 
           if (error instanceof UserInputError) {
@@ -771,7 +786,7 @@ const chunkUploadR2Resolvers = {
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
-        { user },
+        { user, workspaceId },
       ) => {
         try {
           // Vérifier que les paramètres sont valides
@@ -796,6 +811,15 @@ const chunkUploadR2Resolvers = {
 
           if (chunkIndex < 0 || chunkIndex >= totalChunks) {
             throw new UserInputError("Index de chunk invalide");
+          }
+
+          // Premier morceau : contrôle de l'espace de stockage (taille annoncée)
+          if (chunkIndex === 0) {
+            await assertTransferStorageAvailable(
+              workspaceId,
+              fileId,
+              Number(fileSize) || 0,
+            );
           }
 
           // Générer un transferId temporaire pour ce fichier
@@ -884,6 +908,7 @@ const chunkUploadR2Resolvers = {
         } catch (error) {
           // En cas d'erreur, nettoyer les chunks temporaires
           await cleanupChunksFromR2(`temp_${fileId}`, fileId, totalChunks);
+          rethrowStorageError(error);
 
           if (error instanceof UserInputError) {
             throw error;
@@ -1014,6 +1039,24 @@ const chunkUploadR2Resolvers = {
           await fileTransfer.save();
           transferSaved = true;
 
+          // Transfert actif : ses fichiers comptent dans l'espace de stockage
+          if (workspaceId) {
+            for (const file of filesInfo) {
+              await recordStoredFile({
+                workspaceId,
+                key: file.r2Key,
+                bucket: cloudflareTransferService.bucketName,
+                size: file.size,
+                category: "transfers",
+                userId: user.id || user._id,
+              });
+            }
+            await releasePendingUploads(
+              workspaceId,
+              filesInfo.map((f) => f.fileId),
+            );
+          }
+
           // Les métadonnées temporaires ont été consommées : purger les caches
           // L1 (mémoire) et L2 (Redis) pour éviter toute réutilisation périmée.
           for (const fileId of fileIds) {
@@ -1110,11 +1153,13 @@ const chunkUploadR2Resolvers = {
 
     // Upload direct d'un fichier vers R2
     uploadFileDirectToR2: requireTransferCreate(
-      async (_, { file, transferId }, { user }) => {
+      async (_, { file, transferId }, { user, workspaceId }) => {
         try {
           if (!file) {
             throw new UserInputError("Aucun fichier fourni");
           }
+
+          await assertTransferStorageAvailable(workspaceId, null, 0);
 
           // Générer un ID unique pour le fichier
           const fileId = uuidv4();
@@ -1126,6 +1171,7 @@ const chunkUploadR2Resolvers = {
 
           // Upload direct vers R2
           const fileInfo = await uploadFileDirectToR2(file, transferId, fileId);
+          await reservePendingUpload(workspaceId, fileId, fileInfo.size);
 
           return {
             fileId,
@@ -1137,6 +1183,7 @@ const chunkUploadR2Resolvers = {
             storageType: "r2",
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur lors de l'upload direct vers R2:", error);
 
           if (error instanceof UserInputError) {
@@ -1153,11 +1200,13 @@ const chunkUploadR2Resolvers = {
 
     // Upload d'un fichier base64 vers R2
     uploadBase64FileToR2: requireTransferCreate(
-      async (_, { fileInput, transferId }, { user }) => {
+      async (_, { fileInput, transferId }, { user, workspaceId }) => {
         try {
           if (!fileInput) {
             throw new UserInputError("Aucune donnée de fichier fournie");
           }
+
+          await assertTransferStorageAvailable(workspaceId, null, 0);
 
           // Générer un ID unique pour le fichier
           const fileId = uuidv4();
@@ -1173,6 +1222,7 @@ const chunkUploadR2Resolvers = {
             transferId,
             fileId,
           );
+          await reservePendingUpload(workspaceId, fileId, fileInfo.size);
 
           return {
             fileId,
@@ -1184,6 +1234,7 @@ const chunkUploadR2Resolvers = {
             storageType: "r2",
           };
         } catch (error) {
+          rethrowStorageError(error);
           console.error("❌ Erreur lors de l'upload base64 vers R2:", error);
 
           if (error instanceof UserInputError) {

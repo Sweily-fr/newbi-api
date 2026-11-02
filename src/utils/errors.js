@@ -28,6 +28,8 @@ const ERROR_CODES = {
 
   // Erreurs d'abonnement
   SUBSCRIPTION_READ_ONLY: "SUBSCRIPTION_READ_ONLY",
+  // Espace de stockage plein : nouvel envoi refusé (details : offre)
+  STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",
 
   // Erreurs système
   INTERNAL_ERROR: "INTERNAL_ERROR",

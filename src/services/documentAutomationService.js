@@ -13,6 +13,11 @@ import PurchaseOrder from "../models/PurchaseOrder.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Transaction from "../models/Transaction.js";
 import cloudflareService from "./cloudflareService.js";
+import {
+  assertStorageAvailable,
+  hasStorageAvailable,
+  recordStoredFile,
+} from "./storage/storageService.js";
 import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
 import axios from "axios";
 
@@ -410,6 +415,15 @@ const documentAutomationService = {
         return { executed: 0, results: [] };
       }
 
+      // Espace de stockage plein : pas de nouvelle copie automatique (les
+      // documents existants ne bougent pas)
+      if (!(await hasStorageAvailable(workspaceId, 0))) {
+        logger.info(
+          `[DocumentAutomation] Espace de stockage plein, automatisations ignorées (${workspaceId})`,
+        );
+        return { executed: 0, results: [], skippedForStorage: true };
+      }
+
       const results = [];
 
       for (const automation of automations) {
@@ -620,6 +634,14 @@ const documentAutomationService = {
           });
 
           await sharedDocument.save();
+          await recordStoredFile({
+            workspaceId: sharedDocument.workspaceId,
+            key: sharedDocument.fileKey,
+            bucket: cloudflareService.sharedDocumentsBucketName,
+            size: sharedDocument.fileSize,
+            category: "sharedDocuments",
+            userId: sharedDocument.uploadedBy,
+          });
           publishSharedDocsChanged(
             sharedDocument.workspaceId,
             "CREATED",
@@ -738,6 +760,15 @@ const documentAutomationService = {
 
       if (automations.length === 0) {
         return { executed: 0, results: [] };
+      }
+
+      // Espace de stockage plein : pas de nouvelle copie automatique (les
+      // documents existants ne bougent pas)
+      if (!(await hasStorageAvailable(workspaceId, 0))) {
+        logger.info(
+          `[DocumentAutomation] Espace de stockage plein, automatisations ignorées (${workspaceId})`,
+        );
+        return { executed: 0, results: [], skippedForStorage: true };
       }
 
       // Utiliser le vrai type de document pour les logs (cohérent avec executeAutomationForExistingDocuments)
@@ -938,6 +969,14 @@ const documentAutomationService = {
           });
 
           await sharedDocument.save();
+          await recordStoredFile({
+            workspaceId: sharedDocument.workspaceId,
+            key: sharedDocument.fileKey,
+            bucket: cloudflareService.sharedDocumentsBucketName,
+            size: sharedDocument.fileSize,
+            category: "sharedDocuments",
+            userId: sharedDocument.uploadedBy,
+          });
           publishSharedDocsChanged(
             sharedDocument.workspaceId,
             "CREATED",
@@ -1457,6 +1496,12 @@ const documentAutomationService = {
       throw new Error("Automatisation non trouvée");
     }
 
+    // Copie demandée depuis l'écran : refusée si l'espace de stockage est plein
+    await assertStorageAvailable(
+      workspaceId,
+      Math.floor((String(pdfBase64 || "").length * 3) / 4),
+    );
+
     // Supprimer les anciens logs FAILED pour ce document (avant de réessayer)
     await DocumentAutomationLog.deleteMany({
       sourceDocumentType: documentType,
@@ -1682,6 +1727,14 @@ const documentAutomationService = {
     });
 
     await sharedDocument.save();
+    await recordStoredFile({
+      workspaceId: sharedDocument.workspaceId,
+      key: sharedDocument.fileKey,
+      bucket: cloudflareService.sharedDocumentsBucketName,
+      size: sharedDocument.fileSize,
+      category: "sharedDocuments",
+      userId: sharedDocument.uploadedBy,
+    });
     publishSharedDocsChanged(
       sharedDocument.workspaceId,
       "CREATED",
@@ -1740,6 +1793,9 @@ const documentAutomationService = {
    * Traite par batch de 5 avec 500ms de pause entre batches.
    */
   async executeAutomationForExistingDocuments(automation, workspaceId, userId) {
+    // Copie des documents existants, lancée depuis l'écran : refusée si
+    // l'espace de stockage est déjà plein
+    await assertStorageAvailable(workspaceId, 0);
     const config = this._getTriggerConfig(automation.triggerType);
     if (!config) {
       // Trigger non supporté pour le traitement rétroactif
@@ -2071,6 +2127,14 @@ const documentAutomationService = {
             });
 
             await sharedDocument.save();
+            await recordStoredFile({
+              workspaceId: sharedDocument.workspaceId,
+              key: sharedDocument.fileKey,
+              bucket: cloudflareService.sharedDocumentsBucketName,
+              size: sharedDocument.fileSize,
+              category: "sharedDocuments",
+              userId: sharedDocument.uploadedBy,
+            });
             publishSharedDocsChanged(
               sharedDocument.workspaceId,
               "CREATED",

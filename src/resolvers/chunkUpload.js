@@ -12,6 +12,10 @@ import {
   cleanupChunks,
 } from "../utils/chunkUploadUtils.js";
 import FileTransfer from "../models/FileTransfer.js";
+import {
+  assertTransferStorageAvailable,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 
 // 🔐 Même droit que createFileTransfer (« Créer » du module Transferts),
@@ -88,7 +92,7 @@ const chunkUploadResolvers = {
       async (
         _,
         { chunk, fileId, chunkIndex, totalChunks, fileName, fileSize },
-        { user },
+        { user, workspaceId },
       ) => {
         try {
           // Vérifier que les paramètres sont valides
@@ -117,6 +121,15 @@ const chunkUploadResolvers = {
 
           if (chunkIndex < 0 || chunkIndex >= totalChunks) {
             throw new UserInputError("Index de chunk invalide");
+          }
+
+          // Premier morceau : contrôle de l'espace de stockage
+          if (chunkIndex === 0) {
+            await assertTransferStorageAvailable(
+              workspaceId,
+              null,
+              Number(fileSize) || 0,
+            );
           }
 
           // Sauvegarder le chunk
@@ -197,6 +210,7 @@ const chunkUploadResolvers = {
         } catch (error) {
           // En cas d'erreur, nettoyer les chunks temporaires
           await cleanupChunks(fileId);
+          rethrowStorageError(error);
 
           if (error instanceof UserInputError) {
             throw error;

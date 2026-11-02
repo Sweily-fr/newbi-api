@@ -12,6 +12,7 @@ import abbyService, {
   mapVatCodeToRate,
 } from "./abbyService.js";
 import cloudflareService from "./cloudflareService.js";
+import { recordStoredFile } from "./storage/storageService.js";
 import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import { publishNotification } from "../resolvers/notification.js";
 import { sendNotificationPush } from "./notificationPushService.js";
@@ -129,6 +130,15 @@ async function fetchPdfToR2(
     "ocr",
     workspaceId,
   );
+  // Import automatique : jamais refusé, compté dans l'espace de stockage
+  await recordStoredFile({
+    workspaceId,
+    key: upload?.key,
+    bucket: cloudflareService.ocrBucketName,
+    size: file.buffer.length,
+    category: "importedDocuments",
+    userId,
+  });
   return {
     buffer: file.buffer,
     fileName,

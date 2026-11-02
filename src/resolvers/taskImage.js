@@ -3,6 +3,12 @@ import { GraphQLUpload } from "graphql-upload";
 import { Board, Task } from "../models/kanban.js";
 import cloudflareService from "../services/cloudflareService.js";
 import { kanbanFileType } from "../utils/kanbanFileTypes.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordStoredFileDeleted,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import logger from "../utils/logger.js";
 import mongoose from "mongoose";
 import { getPubSub } from "../config/redis.js";
@@ -82,12 +88,29 @@ const deleteOwnTaskImage = async (task, image) => {
   const key = typeof image?.key === "string" ? image.key : "";
   if (key && key.startsWith(`${task._id.toString()}/`)) {
     await cloudflareService.deleteTaskImage(key);
+    await recordStoredFileDeleted({
+      workspaceId: task.workspaceId,
+      key,
+      size: image.fileSize,
+      category: "kanban",
+    });
     return;
   }
   logger.warn(
     `[TaskImage] Fichier R2 conservé : clé hors du dossier de la tâche ${task._id}`,
   );
 };
+
+/** Compte une image envoyée dans l'espace de stockage de la tâche. */
+const recordTaskImage = (task, uploadResult, userId) =>
+  recordStoredFile({
+    workspaceId: task.workspaceId,
+    key: uploadResult.key,
+    bucket: cloudflareService.kanbanBucketName,
+    size: uploadResult.fileSize,
+    category: "kanban",
+    userId,
+  });
 
 /**
  * Resolvers pour la gestion des images de tâches Kanban
@@ -195,6 +218,8 @@ const taskImageResolvers = {
             };
           }
 
+          await assertStorageAvailable(task.workspaceId, fileBuffer.length);
+
           // Upload vers Cloudflare R2
           const uploadResult = await cloudflareService.uploadTaskImage(
             fileBuffer,
@@ -205,6 +230,7 @@ const taskImageResolvers = {
             null,
             mimetype,
           );
+          await recordTaskImage(task, uploadResult, user.id);
 
           // Créer l'objet image
           const newImage = {
@@ -286,6 +312,7 @@ const taskImageResolvers = {
             message: "Image uploadée avec succès",
           };
         } catch (error) {
+          rethrowStorageError(error);
           logger.error("❌ [TaskImage] Erreur upload:", error);
           return {
             success: false,
@@ -530,6 +557,8 @@ const taskImageResolvers = {
           };
         }
 
+        await assertStorageAvailable(task.workspaceId, fileBuffer.length);
+
         // Upload vers Cloudflare R2
         const uploadResult = await cloudflareService.uploadTaskImage(
           fileBuffer,
@@ -540,6 +569,7 @@ const taskImageResolvers = {
           commentId,
           mimetype,
         );
+        await recordTaskImage(task, uploadResult, user.id);
 
         // Créer l'objet image
         const newImage = {
@@ -602,6 +632,7 @@ const taskImageResolvers = {
           message: "Image uploadée avec succès",
         };
       } catch (error) {
+        rethrowStorageError(error);
         logger.error("❌ [TaskImage] Erreur upload commentaire:", error);
         return {
           success: false,
