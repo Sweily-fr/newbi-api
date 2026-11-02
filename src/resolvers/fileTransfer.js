@@ -33,6 +33,12 @@ import {
 } from "../utils/transferEmailInput.js";
 import { normalizeTransferCreationOptions } from "../utils/transferOptions.js";
 import { deleteTransferStorage } from "../utils/transferStorage.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  recordTransferRemoved,
+  rethrowStorageError,
+} from "../services/storage/storageService.js";
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import crypto from "crypto";
@@ -483,6 +489,7 @@ const fileTransferResolvers = {
             if (file.storageType !== "r2") deleteFile(file.filePath);
           }
           await deleteTransferStorage(fileTransfer);
+          await recordTransferRemoved(fileTransfer);
 
           return true;
         } catch (error) {
@@ -797,6 +804,9 @@ const fileTransferResolvers = {
             zipName = "Documents.zip";
           }
 
+          // Espace de stockage : le ZIP doit y tenir
+          await assertStorageAvailable(workspaceId, zipBuffer.length);
+
           // 5. Upload le ZIP vers le bucket transfers
           const transferId = crypto.randomUUID();
           const fileId = crypto.randomUUID();
@@ -855,6 +865,14 @@ const fileTransferResolvers = {
           // Générer les liens de partage
           await fileTransfer.generateShareCredentials();
           await fileTransfer.save();
+          await recordStoredFile({
+            workspaceId,
+            key: result.key,
+            bucket: cloudflareTransferService.bucketName,
+            size: result.size,
+            category: "transfers",
+            userId: user.id,
+          });
 
           // Envoyer l'email si un destinataire est spécifié
           if (
@@ -899,6 +917,7 @@ const fileTransferResolvers = {
             accessKey: fileTransfer.accessKey,
           };
         } catch (error) {
+          rethrowStorageError(error);
           if (error instanceof UserInputError) {
             throw error;
           }
