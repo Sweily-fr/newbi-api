@@ -6,7 +6,8 @@
  *   - account.disconnected : seul le compte de l'espace de l'utilisateur
  *     Bridge est retiré, ses transactions et justificatifs restent ;
  *   - GET /webhook/bridge/test ne révèle ni l'URL ni la présence du secret ;
- *   - POST /banking/webhook/* : signature refusée, aucun traitement.
+ *   - POST /banking/webhook/* : routes retirées (toujours refusées, le corps
+ *     était déjà lu), aucun traitement.
  */
 import {
   describe,
@@ -229,17 +230,20 @@ describe("GET /webhook/bridge/test", () => {
   });
 });
 
-describe("POST /banking/webhook/* (montées après la lecture JSON)", () => {
+describe("POST /banking/webhook/* : routes retirées", () => {
   for (const [path, header] of [
     ["/banking/webhook/bridge", "bridgeapi-signature"],
+    ["/banking/webhook/stripe", "stripe-signature"],
     ["/banking/webhook/paypal", "paypal-transmission-sig"],
   ]) {
-    it(`${path} : sans signature ou signature forgée, refusé sans traitement`, async () => {
+    // Plus de route : la requête tombe sur le contrôle de session des
+    // routes bancaires (401), jamais sur un traitement
+    it(`${path} : n'existe plus, refusé sans traitement`, async () => {
       const body = JSON.stringify({ type: "account.disconnected" });
-      expect((await postWebhook(path, body)).status).toBe(401);
-      expect(
+      expect([401, 404]).toContain((await postWebhook(path, body)).status);
+      expect([401, 404]).toContain(
         (await postWebhook(path, body, { [header]: "v1=FORGEE" })).status,
-      ).toBe(401);
+      );
       expect(bridge.handled).toBe(0);
     });
   }
