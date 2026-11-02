@@ -1,9 +1,9 @@
 /**
  * Suppression du compte du dernier membre d'un espace (RGPD) : ses comptes
- * de réseaux sociaux sont déconnectés (accès révoqué, jetons effacés), ses
- * posts programmés annulés, et les images et vidéos de ses posts supprimées
- * du stockage par le cron. Un membre qui part d'un espace partagé n'y
- * touche pas.
+ * de réseaux sociaux sont déconnectés (accès révoqué) puis supprimés avec
+ * le profil Zernio, ses posts programmés annulés, puis les images et
+ * vidéos de ses posts et leurs fiches supprimées par le cron. Un membre qui
+ * part d'un espace partagé n'y touche pas.
  */
 import {
   describe,
@@ -50,6 +50,7 @@ import User from "../../../src/models/User.js";
 import SocialAccount from "../../../src/models/SocialAccount.js";
 import SocialPost from "../../../src/models/SocialPost.js";
 import SocialPostMedia from "../../../src/models/SocialPostMedia.js";
+import SocialProfile from "../../../src/models/SocialProfile.js";
 import { deleteUserAccount } from "../../../src/services/rgpd.js";
 import xApi from "../../../src/services/social/direct/xApi.js";
 import storage from "../../../src/services/social/socialMediaStorage.js";
@@ -145,30 +146,32 @@ afterEach(() => {
 });
 
 describe("suppression du compte (RGPD) et réseaux sociaux", () => {
-  it("dernier membre : comptes déconnectés, posts annulés, médias supprimés", async () => {
+  it("dernier membre : accès révoqué, comptes, profil, posts et médias supprimés", async () => {
     await seedOrgMembership({ userId: leaver, organizationId: org });
     const { account, media, post } = await seedSocial();
+    await SocialProfile.create({
+      workspaceId: org,
+      externalProfileId: "zp_profile",
+    });
 
     const summary = await deleteUserAccount(String(leaver), String(org));
     expect(summary.organizationDeleted).toBe(true);
 
     expect(xApi.revoke).toHaveBeenCalledTimes(1);
-    const stored = await SocialAccount.findById(account._id)
-      .select("+accessToken +refreshToken")
-      .lean();
-    expect(stored.deletedAt).toBeInstanceOf(Date);
-    expect(stored.accessToken).toBeNull();
-    expect(stored.refreshToken).toBeNull();
-    let storedPost = await SocialPost.findById(post._id).lean();
-    expect(storedPost.status).toBe("cancelled");
-    expect(storedPost.taskDeletedAt).toBeInstanceOf(Date);
+    expect(await SocialAccount.exists({ _id: account._id })).toBeNull();
+    expect(await SocialProfile.countDocuments({ workspaceId: org })).toBe(0);
+    // Post annulé, gardé le temps de supprimer ses médias
+    const storedPost = await SocialPost.findById(post._id).lean();
+    expect(storedPost).toMatchObject({
+      status: "cancelled",
+      purgeAction: "delete",
+    });
     expect(storedPost.mediaPurgeAt).toBeInstanceOf(Date);
 
     await purgeDeletedPostsMedia({ now: new Date(Date.now() + 60 * 1000) });
     expect(storage.deleteObject).toHaveBeenCalledWith(`social/${IMAGE_ID}.jpg`);
     expect(await SocialPostMedia.exists({ _id: media._id })).toBeNull();
-    storedPost = await SocialPost.findById(post._id).lean();
-    expect(storedPost.media).toEqual([]);
+    expect(await SocialPost.exists({ _id: post._id })).toBeNull();
   });
 
   it("espace partagé : rien n'est touché", async () => {

@@ -39,8 +39,10 @@ vi.mock("../../../src/collab/kanbanCollabServer.js", () => ({
 
 import { Board, Column, Task } from "../../../src/models/kanban.js";
 import SocialAccount from "../../../src/models/SocialAccount.js";
+import SocialConnectState from "../../../src/models/SocialConnectState.js";
 import SocialPost from "../../../src/models/SocialPost.js";
 import SocialPostMedia from "../../../src/models/SocialPostMedia.js";
+import SocialProfile from "../../../src/models/SocialProfile.js";
 import kanbanResolvers from "../../../src/resolvers/kanban.js";
 import socialResolvers from "../../../src/resolvers/socialPublishing.js";
 import xApi from "../../../src/services/social/direct/xApi.js";
@@ -57,8 +59,10 @@ import {
   purgeDeletedPostsMedia,
   purgeOrphanMedia,
   purgeWorkspaceSocialData,
+  redactedPostFields,
   scheduleForgottenPostsPurge,
 } from "../../../src/services/social/socialMediaCleanup.js";
+import { countXPostsInMonth } from "../../../src/services/social/xPostQuota.js";
 import { runSocialDirectPublish } from "../../../src/cron/socialDirectPublishCron.js";
 
 const { Mutation: KanbanMutation } = kanbanResolvers;
@@ -145,6 +149,8 @@ async function publishedPost(media = [], { target = {}, ...fields } = {}) {
         socialAccountId: xAccount._id,
         platform: "twitter",
         externalAccountId: "42",
+        username: "acme",
+        displayName: "Acme",
         status: "published",
         provider: "direct",
         externalPostId: "1850",
@@ -164,6 +170,25 @@ const deleteTask = (task) =>
   KanbanMutation.deleteTask(null, { id: String(task._id) }, ctx);
 
 const deletedKeys = () => deleteObject.mock.calls.map(([key]) => key);
+
+/** Fiche réduite : plus de texte, de réglages, d'auteur ni de noms. */
+function expectRedacted(stored) {
+  expect(stored).toMatchObject({
+    content: "",
+    tiktokSettings: null,
+    instagramSettings: null,
+    facebookSettings: null,
+    createdBy: null,
+    updatedBy: null,
+  });
+  expect(stored.redactedAt).toBeInstanceOf(Date);
+  for (const target of stored.targets) {
+    expect(target.username).toBeNull();
+    expect(target.displayName).toBeNull();
+    expect(target.errorMessage).toBeNull();
+    expect(target.processingRef).toBeNull();
+  }
+}
 
 beforeAll(async () => {
   await startMongo();
@@ -286,17 +311,27 @@ describe("fichiers d'un média", () => {
 // ── Post supprimé ──────────────────────────────────────────────────────────
 
 describe("post supprimé avec sa carte", () => {
-  it("images supprimées du stockage, documents effacés ; le post garde ses cibles", async () => {
+  it("images supprimées du stockage, documents effacés ; fiche réduite aux dates, statuts et publications", async () => {
     const [first, second] = [await imageMedia("1"), await imageMedia("2")];
-    const { post, task } = await publishedPost([first, second]);
+    const { post, task } = await publishedPost([first, second], {
+      updatedBy: alice,
+      instagramSettings: {
+        format: "post",
+        sound: { soundId: "s1", title: "Été", artist: "Artiste" },
+      },
+      facebookSettings: { format: "story" },
+      tiktokSettings: { privacyLevel: "PUBLIC_TO_EVERYONE", mode: "direct" },
+    });
 
     await deleteTask(task);
     expect(await Task.exists({ _id: task._id })).toBeNull();
     let stored = await SocialPost.findById(post._id).lean();
     expect(stored.taskDeletedAt).toBeInstanceOf(Date);
     expect(stored.mediaPurgeAt).toBeInstanceOf(Date);
-    // Rien n'est supprimé pendant la mutation
+    expect(stored.purgeAction).toBe("redact");
+    // Rien n'est supprimé ni effacé pendant la mutation
     expect(deleteObject).not.toHaveBeenCalled();
+    expect(stored.content).toBe("Bonjour");
 
     expect(await purgeDeletedPostsMedia({ now: later(MINUTE) })).toEqual({
       purged: 1,
@@ -316,11 +351,29 @@ describe("post supprimé avec sa carte", () => {
     expect(stored.media).toEqual([]);
     expect(stored.mediaPurgeAt).toBeNull();
     expect(stored.mediaPurgedAt).toBeInstanceOf(Date);
+    expectRedacted(stored);
+    // Restent : dates, statut, réseau, compte, publication
+    expect(stored).toMatchObject({
+      status: "published",
+      workspaceId: organizationId,
+      scheduledFor: post.scheduledFor,
+      taskDeletedAt: expect.any(Date),
+    });
     expect(stored.targets[0]).toMatchObject({
+      socialAccountId: xAccount._id,
+      platform: "twitter",
+      externalAccountId: "42",
       status: "published",
       externalPostId: "1850",
       platformPostUrl: "https://x.com/acme/status/1850",
+      publishedAt: expect.any(Date),
     });
+    // Toujours compté dans la limite mensuelle X
+    const month = {
+      start: new Date(post.scheduledFor.getTime() - DAY),
+      end: new Date(post.scheduledFor.getTime() + DAY),
+    };
+    expect(await countXPostsInMonth(organizationId, month)).toBe(1);
 
     // Tour suivant : plus rien à faire
     deleteObject.mockClear();
@@ -379,6 +432,10 @@ describe("post supprimé avec sa carte", () => {
       new Date(now.getTime() + IN_FLIGHT_RETRY_MS),
     );
     expect(stored.media).toHaveLength(1);
+    // Texte et noms gardés tant que la publication en a besoin
+    expect(stored.content).toBe("Bonjour");
+    expect(stored.targets[0].username).toBe("acme");
+    expect(stored.redactedAt).toBeNull();
 
     // Publication terminée : supprimés au tour suivant
     await SocialPost.updateOne(
@@ -396,6 +453,7 @@ describe("post supprimé avec sa carte", () => {
     ).toBe(1);
     stored = await SocialPost.findById(post._id).lean();
     expect(stored.media).toEqual([]);
+    expectRedacted(stored);
     expect(await SocialPostMedia.exists({ _id: image._id })).toBeNull();
   });
 
@@ -432,6 +490,13 @@ describe("post supprimé avec sa carte", () => {
       ),
     ).toBe(false);
     expect(isPostPublishing(post({ status: "cancelled" }), now)).toBe(false);
+    // Suivi Zernio en train d'écrire le post
+    expect(
+      isPostPublishing(
+        { ...post({ status: "published" }), syncLockedUntil: later(MINUTE) },
+        now,
+      ),
+    ).toBe(true);
   });
 
   it("média repris dans un autre post : gardé jusqu'à la suppression du dernier", async () => {
@@ -468,6 +533,8 @@ describe("post supprimé avec sa carte", () => {
     expect(stored.mediaPurgeAt).toEqual(
       new Date(now.getTime() + FAILURE_RETRY_MS),
     );
+    // Texte effacé sans attendre le stockage
+    expectRedacted(stored);
     expect(await SocialPostMedia.exists({ _id: image._id })).not.toBeNull();
 
     // Pas avant l'heure
@@ -508,7 +575,7 @@ describe("post supprimé avec sa carte", () => {
     expect(xApi.publish).not.toHaveBeenCalled();
   });
 
-  it("posts supprimés avant ce nettoyage : rattrapés", async () => {
+  it("posts supprimés avant ce nettoyage : médias rattrapés, fiche laissée telle quelle", async () => {
     const image = await imageMedia("1");
     const { post } = await publishedPost([image], {
       taskDeletedAt: later(-30 * DAY),
@@ -517,8 +584,32 @@ describe("post supprimé avec sa carte", () => {
     expect(await scheduleForgottenPostsPurge({ now: new Date() })).toBe(1);
     expect(await scheduleForgottenPostsPurge({ now: new Date() })).toBe(0);
     await purgeDeletedPostsMedia({ now: later(MINUTE) });
-    expect((await SocialPost.findById(post._id).lean()).media).toEqual([]);
+    const stored = await SocialPost.findById(post._id).lean();
+    expect(stored.media).toEqual([]);
     expect(await SocialPostMedia.countDocuments()).toBe(1);
+    // Pas de migration implicite : texte et noms gardés
+    expect(stored.purgeAction).toBeNull();
+    expect(stored.redactedAt).toBeNull();
+    expect(stored.content).toBe("Bonjour");
+    expect(stored.createdBy).toEqual(alice);
+    expect(stored.targets[0].username).toBe("acme");
+  });
+
+  it("champs effacés : texte, réglages, auteur, noms, erreurs, état intermédiaire", () => {
+    expect(Object.keys(redactedPostFields()).sort()).toEqual(
+      [
+        "content",
+        "createdBy",
+        "facebookSettings",
+        "instagramSettings",
+        "targets.$[].displayName",
+        "targets.$[].errorMessage",
+        "targets.$[].processingRef",
+        "targets.$[].username",
+        "tiktokSettings",
+        "updatedBy",
+      ].sort(),
+    );
   });
 
   it("cron : médias des posts supprimés à chaque tour", async () => {
@@ -634,8 +725,9 @@ describe("médias jamais utilisés par un post", () => {
 // ── Espace supprimé ────────────────────────────────────────────────────────
 
 describe("espace supprimé", () => {
-  it("comptes déconnectés (accès révoqué, jetons effacés), posts annulés, médias supprimés", async () => {
+  it("comptes déconnectés puis supprimés avec le profil Zernio ; posts supprimés après leurs médias", async () => {
     const image = await imageMedia("1");
+    const unused = await imageMedia("3");
     const { post: published } = await publishedPost([await imageMedia("2")]);
     const { post: scheduled } = await Mutation.scheduleSocialPost(
       null,
@@ -650,28 +742,140 @@ describe("espace supprimé", () => {
       },
       ctx,
     );
+    // Post dont la carte a déjà été supprimée et nettoyée
+    const { post: alreadyPurged } = await publishedPost([], {
+      taskDeletedAt: later(-DAY),
+      purgeAction: "redact",
+      mediaPurgedAt: later(-DAY),
+      redactedAt: later(-DAY),
+      content: "",
+    });
+    await SocialProfile.create({
+      workspaceId: organizationId,
+      externalProfileId: "zp_profile",
+    });
+    await SocialConnectState.create({
+      token: "state_1",
+      workspaceId: organizationId,
+      userId: alice,
+      platform: "twitter",
+      returnTo: "/dashboard",
+      expiresAt: later(10 * MINUTE),
+    });
+    // Autre espace : jamais touché
+    const otherWorkspace = buildOrganizationId();
+    const otherAccount = await SocialAccount.create({
+      workspaceId: otherWorkspace,
+      platform: "twitter",
+      externalAccountId: "zernio_other",
+    });
+    await SocialProfile.create({
+      workspaceId: otherWorkspace,
+      externalProfileId: "zp_other",
+    });
 
     expect(await purgeWorkspaceSocialData(organizationId)).toEqual({
       accounts: 1,
-      posts: 2,
+      posts: 3,
     });
+    // Accès révoqué chez X avant la suppression de la fiche
     expect(xApi.revoke).toHaveBeenCalledTimes(1);
-    const account = await SocialAccount.findById(xAccount._id)
-      .select("+accessToken +refreshToken")
-      .lean();
-    expect(account.deletedAt).toBeInstanceOf(Date);
-    expect(account.accessToken).toBeNull();
-    expect(account.refreshToken).toBeNull();
-    expect((await SocialPost.findById(scheduled.id).lean()).status).toBe(
-      "cancelled",
-    );
+    expect(await SocialAccount.exists({ _id: xAccount._id })).toBeNull();
+    expect(
+      await SocialProfile.countDocuments({ workspaceId: organizationId }),
+    ).toBe(0);
+    expect(
+      await SocialConnectState.countDocuments({ workspaceId: organizationId }),
+    ).toBe(0);
+    expect(
+      await SocialAccount.exists({ _id: otherAccount._id }),
+    ).not.toBeNull();
+    expect(
+      await SocialProfile.countDocuments({ workspaceId: otherWorkspace }),
+    ).toBe(1);
+    // Fiches des posts gardées jusqu'à la suppression de leurs médias
+    const scheduledPost = await SocialPost.findById(scheduled.id).lean();
+    expect(scheduledPost).toMatchObject({
+      status: "cancelled",
+      purgeAction: "delete",
+    });
+    expect(scheduledPost.media).toHaveLength(1);
 
-    await purgeDeletedPostsMedia({ now: later(MINUTE) });
-    for (const id of [published._id, scheduled.id]) {
-      const stored = await SocialPost.findById(id).lean();
-      expect(stored.taskDeletedAt).toBeInstanceOf(Date);
-      expect(stored.media).toEqual([]);
+    expect(await purgeDeletedPostsMedia({ now: later(MINUTE) })).toMatchObject({
+      purged: 3,
+      failed: 0,
+    });
+    for (const id of [published._id, scheduled.id, alreadyPurged._id]) {
+      expect(await SocialPost.exists({ _id: id })).toBeNull();
     }
+    expect(deletedKeys()).toEqual(
+      expect.arrayContaining([
+        `social/${uuid("1")}.jpg`,
+        `social/${uuid("2")}.jpg`,
+      ]),
+    );
+    expect(await SocialPostMedia.exists({ _id: image._id })).toBeNull();
+
+    // Média jamais utilisé : au nettoyage horaire suivant, sans attendre
+    // 7 jours
+    expect(await SocialPostMedia.exists({ _id: unused._id })).not.toBeNull();
+    expect(await purgeOrphanMedia({ now: later(HOUR) })).toMatchObject({
+      deleted: 1,
+    });
     expect(await SocialPostMedia.countDocuments()).toBe(0);
+  });
+
+  it("publication en cours : fiche et médias gardés jusqu'à la fin, puis supprimés", async () => {
+    const image = await imageMedia("1");
+    const { post } = await publishedPost([image], {
+      status: "publishing",
+      target: {
+        status: "publishing",
+        platformPostUrl: null,
+        lockedUntil: later(10 * MINUTE),
+      },
+    });
+    await purgeWorkspaceSocialData(organizationId);
+
+    expect(await purgeDeletedPostsMedia({ now: later(MINUTE) })).toMatchObject({
+      deferred: 1,
+    });
+    let stored = await SocialPost.findById(post._id).lean();
+    expect(stored.content).toBe("Bonjour");
+    expect(stored.media).toHaveLength(1);
+    expect(deleteObject).not.toHaveBeenCalled();
+
+    // Envoi terminé (le compte supprimé, la cible est annulée)
+    await SocialPost.updateOne(
+      { _id: post._id },
+      {
+        $set: {
+          status: "cancelled",
+          "targets.0.status": "cancelled",
+          "targets.0.lockedUntil": null,
+        },
+      },
+    );
+    await purgeDeletedPostsMedia({ now: later(12 * MINUTE) });
+    expect(await SocialPost.exists({ _id: post._id })).toBeNull();
+    expect(await SocialPostMedia.exists({ _id: image._id })).toBeNull();
+  });
+
+  it("stockage en échec : texte effacé tout de suite, fiche supprimée au nouvel essai", async () => {
+    const image = await imageMedia("1");
+    const { post } = await publishedPost([image]);
+    await purgeWorkspaceSocialData(organizationId);
+    deleteObject.mockRejectedValueOnce(new Error("R2 indisponible"));
+
+    expect(await purgeDeletedPostsMedia({ now: later(MINUTE) })).toMatchObject({
+      failed: 1,
+    });
+    const stored = await SocialPost.findById(post._id).lean();
+    expectRedacted(stored);
+    expect(stored.media).toHaveLength(1);
+
+    await purgeDeletedPostsMedia({ now: later(HOUR + 2 * MINUTE) });
+    expect(await SocialPost.exists({ _id: post._id })).toBeNull();
+    expect(await SocialPostMedia.exists({ _id: image._id })).toBeNull();
   });
 });

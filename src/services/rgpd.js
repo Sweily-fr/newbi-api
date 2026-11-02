@@ -25,6 +25,12 @@ import CalendarConnection from "../models/CalendarConnection.js";
 import GmailConnection from "../models/GmailConnection.js";
 import Notification from "../models/Notification.js";
 import DocumentSettings from "../models/DocumentSettings.js";
+import { Board, Column, Task } from "../models/kanban.js";
+import KanbanCollabDoc from "../models/KanbanCollabDoc.js";
+import {
+  TASK_FILE_FIELDS,
+  cleanupDeletedTasksFilesLater,
+} from "./kanbanTaskFilesCleanup.js";
 import EmailSettings from "../models/EmailSettings.js";
 
 /**
@@ -253,15 +259,13 @@ async function findSoleMemberOrganizations(userObjectId, session) {
     .toArray();
   const sole = [];
   for (const membership of memberships) {
-    const others = await db
-      .collection("member")
-      .countDocuments(
-        {
-          organizationId: membership.organizationId,
-          userId: { $ne: userObjectId },
-        },
-        { session, limit: 1 },
-      );
+    const others = await db.collection("member").countDocuments(
+      {
+        organizationId: membership.organizationId,
+        userId: { $ne: userObjectId },
+      },
+      { session, limit: 1 },
+    );
     if (!others) sole.push(membership.organizationId);
   }
   return sole;
@@ -310,6 +314,8 @@ export async function deleteUserAccount(userId, organizationId) {
 
   // Transferts supprimés : leurs fichiers R2 sont effacés après validation
   let transfersToPurge = [];
+  // Cartes kanban supprimées : leurs pièces jointes aussi
+  let deletedKanbanTasks = [];
 
   try {
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -351,10 +357,7 @@ export async function deleteUserAccount(userId, organizationId) {
 
     // Espaces dont il est le seul membre (l'espace traité et les autres) :
     // leur abonnement n'est plus facturé
-    const soleOrgIds = await findSoleMemberOrganizations(
-      userObjectId,
-      session,
-    );
+    const soleOrgIds = await findSoleMemberOrganizations(userObjectId, session);
     if (
       isLastMember &&
       !soleOrgIds.some((id) => String(id) === String(orgObjectId))
@@ -611,16 +614,30 @@ export async function deleteUserAccount(userId, organizationId) {
         workspaceId: orgObjectId,
       }).session(session);
 
-      // --- Kanban (projets et tâches) ---
-      const kanbanResult = await db
-        .collection("kanbanprojects")
-        .deleteMany({ workspaceId: orgObjectId }, { session });
-      summary.kanbanProjectsDeleted = kanbanResult.deletedCount || 0;
-
-      // --- Supprimer les tâches kanban associées ---
-      await db
-        .collection("kanbantasks")
-        .deleteMany({ workspaceId: orgObjectId }, { session });
+      // --- Kanban : tableaux, colonnes et cartes (commentaires, activité,
+      // minuteurs et liens entre cartes sont dans la carte) ; pièces
+      // jointes effacées du bucket kanban après validation ---
+      deletedKanbanTasks = await Task.find({ workspaceId: orgObjectId })
+        .select(TASK_FILE_FIELDS)
+        .session(session)
+        .lean();
+      const boardsResult = await Board.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
+      summary.kanbanProjectsDeleted = boardsResult.deletedCount || 0;
+      const columnsResult = await Column.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
+      const tasksResult = await Task.deleteMany({
+        workspaceId: orgObjectId,
+      }).session(session);
+      // Descriptions collaboratives des cartes (rattachées par taskId)
+      const collabResult = await KanbanCollabDoc.deleteMany({
+        taskId: { $in: deletedKanbanTasks.map((task) => String(task._id)) },
+      }).session(session);
+      logger.info(
+        `[RGPD] Kanban de l'espace ${organizationId} : ${summary.kanbanProjectsDeleted} tableau(x), ${columnsResult.deletedCount || 0} colonne(s), ${tasksResult.deletedCount || 0} carte(s), ${collabResult.deletedCount || 0} description(s) collaborative(s) supprimés`,
+      );
     }
 
     // ================================================================
@@ -691,6 +708,7 @@ export async function deleteUserAccount(userId, organizationId) {
       { name: "sharedfolders", filter: { workspaceId: orgObjectId } },
       { name: "sharedtags", filter: { workspaceId: orgObjectId } },
       { name: "publicboardshares", filter: { workspaceId: orgObjectId } },
+      { name: "kanbantemplates", filter: { workspaceId: orgObjectId } },
       { name: "signaturerequests", filter: { workspaceId: orgObjectId } },
       { name: "stripeconnectaccounts", filter: { workspaceId: orgObjectId } },
       { name: "transactions", filter: { workspaceId: orgObjectId } },
@@ -758,6 +776,12 @@ export async function deleteUserAccount(userId, organizationId) {
     // Fichiers R2 des transferts supprimés (un échec n'annule rien)
     for (const transfer of transfersToPurge) {
       await deleteTransferStorage(transfer);
+    }
+
+    // Pièces jointes des cartes et de leurs commentaires (bucket kanban),
+    // comme à la suppression d'un tableau : sans attendre, sans jamais lever
+    if (deletedKanbanTasks.length > 0) {
+      cleanupDeletedTasksFilesLater(deletedKanbanTasks);
     }
 
     // Réseaux sociaux de l'espace supprimé : comptes déconnectés (accès
