@@ -1,5 +1,9 @@
 import DocumentEmailLog from "../models/DocumentEmailLog.js";
 import cloudflareService from "./cloudflareService.js";
+import {
+  hasStorageAvailable,
+  recordStoredFile,
+} from "./storage/storageService.js";
 import { APP_URL } from "../utils/trialEmails.js";
 import logger from "../utils/logger.js";
 
@@ -72,6 +76,16 @@ export async function storeEmailLogAttachments(log, files) {
     .map((attachment, index) => (attachment.isDocument ? null : index))
     .filter((index) => index !== null);
 
+  // Espace de stockage plein : l'e-mail est déjà parti, les fichiers ne
+  // sont pas conservés (leur nom reste affiché)
+  const totalBytes = files.reduce((sum, f) => sum + (f.content?.length || 0), 0);
+  if (!(await hasStorageAvailable(log.workspaceId, totalBytes))) {
+    logger.info(
+      `[DocumentEmailLog] pièces jointes non conservées, espace de stockage plein (${log._id})`,
+    );
+    return;
+  }
+
   const updates = {};
   await Promise.all(
     files.map(async (file, position) => {
@@ -85,6 +99,13 @@ export async function storeEmailLogAttachments(log, files) {
           file.contentType,
           log.workspaceId,
         );
+        await recordStoredFile({
+          workspaceId: log.workspaceId,
+          key,
+          bucket: cloudflareService.emailAttachmentsBucketName,
+          size: file.content?.length || 0,
+          category: "billingDocuments",
+        });
         updates[`attachments.${index}.storageKey`] = key;
         updates[`attachments.${index}.contentType`] = file.contentType || null;
       } catch (error) {

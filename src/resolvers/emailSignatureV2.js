@@ -52,6 +52,10 @@ import {
 } from "../services/signatureAssets.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
+  assertStorageAvailable,
+  recordStoredFile,
+} from "../services/storage/storageService.js";
+import {
   isWorkspaceMember,
   listWorkspaceMembers,
   memberSignatureProfile,
@@ -919,6 +923,7 @@ const emailSignatureV2Resolvers = {
       async (_, { id, kind, file }, ctx) => {
         const doc = await findOwned(id, ctx);
         const { buffer, filename, mimetype } = await readUpload(file);
+        await assertStorageAvailable(doc.workspaceId, buffer.length);
         let stored;
         try {
           stored = await storeSignatureImage({
@@ -946,6 +951,14 @@ const emailSignatureV2Resolvers = {
             "L'image n'a pas pu être enregistrée. Réessayez dans un instant.",
           );
         }
+        await recordStoredFile({
+          workspaceId: doc.workspaceId,
+          key: stored.key,
+          bucket: cloudflareService.signatureBucketName,
+          size: stored.size,
+          category: "branding",
+          userId: ctx.user.id,
+        });
         doc.images[kind.toLowerCase()] = stored;
         // Cette image seule : le document a été lu avant l'envoi (plusieurs
         // secondes), une autre image envoyée entre-temps ne doit pas être
