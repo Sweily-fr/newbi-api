@@ -174,7 +174,21 @@ export async function refreshWorkspaceStorage(workspaceId, options = {}) {
 
 /** Attend la fin des recalculs en cours sur cette instance (arrêt, tests). */
 export async function waitForStorageRefreshes() {
-  await Promise.allSettled(Array.from(inFlight.values()));
+  while (inFlight.size > 0 || backgroundTasks.size > 0) {
+    await Promise.allSettled([
+      ...inFlight.values(),
+      ...backgroundTasks.values(),
+    ]);
+  }
+}
+
+// Tâches lancées sans être attendues (alertes, recalcul d'un résultat
+// périmé) : suivies pour pouvoir les attendre
+const backgroundTasks = new Set();
+function inBackground(promise) {
+  backgroundTasks.add(promise);
+  promise.finally(() => backgroundTasks.delete(promise)).catch(() => {});
+  return promise;
 }
 
 function withTimeout(promise, ms) {
@@ -200,8 +214,10 @@ export async function getWorkspaceStorageUsage(workspaceId, options = {}) {
 
   if (ready) {
     if (doc.stale) {
-      refreshWorkspaceStorage(id).catch((error) =>
-        logger.warn(`[storage] Recalcul en échec (${id}) : ${error.message}`),
+      inBackground(
+        refreshWorkspaceStorage(id).catch((error) =>
+          logger.warn(`[storage] Recalcul en échec (${id}) : ${error.message}`),
+        ),
       );
     }
     return doc;
@@ -313,7 +329,7 @@ export async function assertStorageAvailable(workspaceId, bytes, options = {}) {
     currentPacks: state.packs,
     incomingBytes,
   });
-  checkStorageAlerts(String(workspaceId)).catch(() => {});
+  inBackground(checkStorageAlerts(String(workspaceId)).catch(() => {}));
   throw new AppError(
     storageQuotaExceededMessage({
       usedBytes: state.usedBytes,
@@ -498,8 +514,10 @@ export async function recordStoredFile(file) {
       files: previous ? 0 : 1,
     });
     if (delta > 0) {
-      checkStorageAlerts(String(workspaceId)).catch((error) =>
-        logger.warn(`[storage] Alerte non vérifiée : ${error.message}`),
+      inBackground(
+        checkStorageAlerts(String(workspaceId)).catch((error) =>
+          logger.warn(`[storage] Alerte non vérifiée : ${error.message}`),
+        ),
       );
     }
   } catch (error) {

@@ -226,13 +226,11 @@ describe("Stockage : recalcul complet", () => {
   it("lit sur R2 la taille des PDF archivés, puis la mémorise", async () => {
     const key = `invoices/${ws}/2026/10/f1_newbi_F-001.pdf`;
     r2Objects.set(`invoices-bucket/${key}`, 300_000);
-    await db()
-      .collection("invoices")
-      .insertOne({
-        workspaceId: organizationId,
-        archivedPdfKey: key,
-        createdBy: userId,
-      });
+    await db().collection("invoices").insertOne({
+      workspaceId: organizationId,
+      archivedPdfKey: key,
+      createdBy: userId,
+    });
 
     const first = await computeWorkspaceStorage(ws);
     expect(first.totalBytes).toBe(300_000);
@@ -275,6 +273,7 @@ describe("Stockage : recalcul complet", () => {
           status: "active",
           expiryDate: new Date(Date.now() + 86400000),
           shareLink: "lien-a",
+          downloadLink: "telechargement-a",
           files: [{ r2Key: "prod/a", size: 4 * MB }],
         },
         {
@@ -283,6 +282,7 @@ describe("Stockage : recalcul complet", () => {
           status: "expired",
           expiryDate: new Date(Date.now() - 86400000),
           shareLink: "lien-b",
+          downloadLink: "telechargement-b",
           files: [{ r2Key: "prod/b", size: 40 * MB }],
         },
         {
@@ -291,6 +291,7 @@ describe("Stockage : recalcul complet", () => {
           status: "active",
           expiryDate: new Date(Date.now() - 1000),
           shareLink: "lien-c",
+          downloadLink: "telechargement-c",
           files: [{ r2Key: "prod/c", size: 40 * MB }],
         },
       ]);
