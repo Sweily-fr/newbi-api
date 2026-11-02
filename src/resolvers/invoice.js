@@ -46,6 +46,7 @@ import {
   validateNumberSequence,
 } from "../utils/documentNumbers.js";
 import mongoose from "mongoose";
+import { boundedPage } from "../utils/pagination.js";
 import {
   createNotFoundError,
   createResourceLockedError,
@@ -650,6 +651,8 @@ const invoiceResolvers = {
         // Les viewers ont accès en lecture seule à TOUTES les ressources de l'organisation
         // (pas de filtre par createdBy pour les viewers)
 
+        // Page et taille bornées (1 000 factures au plus par page)
+        ({ page, limit } = boundedPage(page, limit));
         const skip = (page - 1) * limit;
         // Comptage et page lus en parallèle (ils étaient enchaînés).
         const [totalCount, invoices] = await Promise.all([

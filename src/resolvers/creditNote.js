@@ -1,5 +1,6 @@
 import logger from "../utils/logger.js";
 import DocumentCounter from "../models/DocumentCounter.js";
+import { boundedPage } from "../utils/pagination.js";
 import { buildSearchRegex } from "../utils/searchRegex.js";
 import {
   computeDocumentTotals,
@@ -236,7 +237,9 @@ const creditNoteResolvers = {
     }),
 
     creditNotes: readCreditNotes(async (parent, args, context) => {
-      const { startDate, endDate, status, search, page = 1, limit = 10 } = args;
+      const { startDate, endDate, status, search } = args;
+      // Page et taille bornées (1 000 avoirs au plus par page)
+      const { page, limit } = boundedPage(args.page ?? 1, args.limit ?? 10);
       const { workspaceId } = context;
 
       const query = {
