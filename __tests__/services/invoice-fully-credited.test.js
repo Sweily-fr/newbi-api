@@ -142,7 +142,7 @@ describe("paiement en ligne", () => {
     ).toBeNull();
     expect(
       await invoiceResolvers.Invoice.paymentLink(partial, {}, context),
-    ).toMatch(new RegExp(`/pay/invoice/${partial._id}$`));
+    ).toMatch(new RegExp(`/pay/invoice/${partial._id}\\?t=[A-Za-z0-9_-]{32}$`));
   });
 
   it("GET /pay/invoice/:id : 409 « Facture soldée par avoir »", async () => {
