@@ -231,3 +231,36 @@ describe("createCreditNote : routage e-invoicing avant l'enregistrement", () => 
     expect(counter.lastNumber).toBe(4);
   });
 });
+
+describe("motif de l'avoir", () => {
+  beforeEach(() => {
+    evaluateAndRouteCreditNote.mockReset();
+    evaluateAndRouteCreditNote.mockResolvedValue(null);
+  });
+
+  it("2 000 caractères : accepté ; au-delà : refusé avec un message, sans numéro consommé", async () => {
+    const inv = await insertInvoice();
+    await expect(
+      create(buildCreditNoteInput(inv._id, { reason: "x".repeat(2001) })),
+    ).rejects.toThrow(/motif de l'avoir ne peut pas dépasser 2000 caractères/);
+    expect(await CreditNote.countDocuments({})).toBe(0);
+
+    const ok = await create(
+      buildCreditNoteInput(inv._id, { reason: "x".repeat(2000) }),
+    );
+    expect(ok.number).toBe("0001");
+  });
+
+  it("modification : un motif trop long est refusé, l'avoir ne change pas", async () => {
+    const inv = await insertInvoice();
+    const cn = await create(buildCreditNoteInput(inv._id, { reason: "Retour" }));
+    await expect(
+      creditNoteResolvers.Mutation.updateCreditNote(
+        null,
+        { id: String(cn._id || cn.id), input: { reason: "y".repeat(5000) } },
+        ctx(),
+      ),
+    ).rejects.toThrow(/2000 caractères/);
+    expect((await CreditNote.findById(cn._id || cn.id).lean()).reason).toBe("Retour");
+  });
+});

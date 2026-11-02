@@ -148,6 +148,22 @@ const plainObject = (value) =>
     ? value.toObject()
     : value || null;
 
+/** Longueur maximale du motif d'un avoir (texte imprimé sur le document). */
+export const CREDIT_NOTE_REASON_MAX_LENGTH = 2000;
+
+/** Motif saisi : borné (les avoirs déjà enregistrés ne sont pas touchés). */
+const assertCreditNoteReason = (reason) => {
+  if (
+    typeof reason === "string" &&
+    reason.trim().length > CREDIT_NOTE_REASON_MAX_LENGTH
+  ) {
+    throw createValidationError(
+      `Le motif de l'avoir ne peut pas dépasser ${CREDIT_NOTE_REASON_MAX_LENGTH} caractères.`,
+      { reason: `${CREDIT_NOTE_REASON_MAX_LENGTH} caractères au plus` },
+    );
+  }
+};
+
 /**
  * Routage e-invoicing / e-reporting d'un avoir AVANT son enregistrement. Un
  * avoir est une facture au sens de la réforme (UNTDID 381) : il suit le même
@@ -338,6 +354,7 @@ const creditNoteResolvers = {
         "create",
       )(async (parent, { input }, context) => {
         assertDocumentAppearance(input?.appearance);
+        assertCreditNoteReason(input?.reason);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
@@ -644,6 +661,7 @@ const creditNoteResolvers = {
 
     updateCreditNote: requireCompanyInfo(
       requireWrite("creditNotes")(async (parent, { id, input }, context) => {
+        assertCreditNoteReason(input?.reason);
         const { workspaceId } = context;
         await checkSubscriptionActive(context);
         try {
