@@ -13,6 +13,7 @@ import mongoose from "mongoose";
 import hybridOcrService from "../services/hybridOcrService.js";
 import claudeVisionOcrService from "../services/claudeVisionOcrService.js";
 import cloudflareService from "../services/cloudflareService.js";
+import { getActiveOrganizationCached } from "../middlewares/org-cache.js";
 import {
   assertStorageAvailable,
   recordStoredFile,
@@ -82,11 +83,19 @@ const ocrResolvers = {
             throw createValidationError("Fichier trop volumineux (max 10MB)");
           }
 
-          // Le fichier est conservé dans l'espace : il doit y tenir
-          await assertStorageAvailable(
-            workspaceId || contextOrgId,
-            fileBuffer.length,
-          );
+          // Le fichier est conservé dans l'espace : il doit y tenir. Seul un
+          // espace dont l'utilisateur est membre est contrôlé et compté.
+          const requestedOrg = workspaceId || contextOrgId;
+          const storageOrg = requestedOrg
+            ? await getActiveOrganizationCached(
+                String(user._id || user.id),
+                requestedOrg,
+              ).catch(() => null)
+            : null;
+          const storageWorkspaceId = storageOrg?.id || null;
+          if (storageWorkspaceId) {
+            await assertStorageAvailable(storageWorkspaceId, fileBuffer.length);
+          }
 
           // Hash du contenu pour le cache
           const contentHash = crypto
@@ -160,7 +169,7 @@ const ocrResolvers = {
                   fallbackOrgId,
                 );
                 await recordStoredFile({
-                  workspaceId: fallbackOrgId,
+                  workspaceId: storageWorkspaceId,
                   key: uploadResult?.key,
                   bucket: cloudflareService.ocrBucketName,
                   size: fileBuffer.length,
@@ -255,7 +264,7 @@ const ocrResolvers = {
               documentUrl = uploadResult.url;
               cloudflareKey = uploadResult.key;
               await recordStoredFile({
-                workspaceId: workspaceId || contextOrgId,
+                workspaceId: storageWorkspaceId,
                 key: uploadResult.key,
                 bucket: cloudflareService.ocrBucketName,
                 size: fileBuffer.length,
