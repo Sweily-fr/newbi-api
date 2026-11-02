@@ -43,6 +43,7 @@ import CrmEmailAutomationLog from "../../src/models/CrmEmailAutomationLog.js";
 import {
   processCrmEmailAutomations,
   calculateTargetDate,
+  isYearlyAutomation,
 } from "../../src/services/crmEmailAutomationService.js";
 
 const userId = buildUserId();
@@ -210,11 +211,106 @@ describe("Envois", () => {
 });
 
 describe("Dates d'anniversaire", () => {
-  // Décision produit attendue : un champ « Date d'anniversaire » (1990-10-31)
-  // n'est jamais relancé, la date étant comparée année comprise. Relancer
-  // chaque année tous les champs date changerait le sens des dates uniques
-  // (fin de contrat) : il faut une option « chaque année » sur l'automatisation.
-  it.todo(
-    "une date d'une année passée (1990-10-31) est relancée le 31/10 de l'année en cours si l'automatisation est annuelle",
-  );
+  // Une date d'une année passée (date de naissance) est relancée chaque
+  // année le même jour, une seule fois par an et par contact ; jamais les
+  // anniversaires des autres jours (pas de rafale à la mise en service).
+  async function birthdayField() {
+    return ClientCustomField.create({
+      name: "Date d'anniversaire",
+      fieldType: "DATE",
+      workspaceId: organizationId,
+      createdBy: userId,
+    });
+  }
+
+  it("une date d'une année passée (1990-10-31) est relancée le 31/10 de l'année en cours si l'automatisation est annuelle", async () => {
+    vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
+    const birthday = await contactWithDate("1990-10-31", {
+      email: "anniversaire@test.fr",
+    });
+    await automation({ timing: { repeatYearly: true } });
+
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(recipients()).toEqual([birthday.email]);
+  });
+
+  it("seuls les anniversaires du jour partent, pas ceux déjà passés ni à venir", async () => {
+    vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
+    const today = await contactWithDate("1985-10-31", {
+      email: "jour@test.fr",
+    });
+    await contactWithDate("1985-10-30", { email: "hier@test.fr" });
+    await contactWithDate("1985-01-15", { email: "janvier@test.fr" });
+    await contactWithDate("1985-11-01", { email: "demain@test.fr" });
+    // Date future : jamais relancée en avance
+    await contactWithDate("2030-10-31", { email: "futur@test.fr" });
+    await automation({ timing: { repeatYearly: true } });
+
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(recipients()).toEqual([today.email]);
+  });
+
+  it("une fois par an et par contact : deuxième passage du jour sans envoi, l'année suivante de nouveau", async () => {
+    vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
+    await contactWithDate("1990-10-31", { email: "anniversaire@test.fr" });
+    await automation({ timing: { repeatYearly: true } });
+
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(await processCrmEmailAutomations()).toBe(0);
+
+    vi.setSystemTime(new Date("2027-10-31T08:05:00Z"));
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  it("un 29 février est fêté le 28 février d'une année non bissextile", async () => {
+    vi.useFakeTimers({
+      now: new Date("2027-02-28T08:05:00Z"),
+      toFake: ["Date"],
+    });
+    const leap = await contactWithDate("2000-02-29", {
+      email: "bissextile@test.fr",
+    });
+    await automation({ timing: { repeatYearly: true } });
+
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(recipients()).toEqual([leap.email]);
+  });
+
+  it("sans l'option, une date unique (fin de contrat) n'est pas relancée les années suivantes", async () => {
+    vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
+    await contactWithDate("2025-10-31", { email: "contrat@test.fr" });
+    await automation({ timing: { repeatYearly: false } });
+
+    expect(await processCrmEmailAutomations()).toBe(0);
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("automatisation créée avant l'option sur un champ « Date d'anniversaire » : relancée chaque année", async () => {
+    vi.useFakeTimers({ now: NEUF_HEURES_PARIS, toFake: ["Date"] });
+    field = await birthdayField();
+    const birthday = await contactWithDate("1990-10-31", {
+      email: "anniversaire@test.fr",
+    });
+    const auto = await automation();
+    expect(auto.timing.repeatYearly).toBeUndefined();
+
+    expect(await processCrmEmailAutomations()).toBe(1);
+    expect(recipients()).toEqual([birthday.email]);
+  });
+
+  it("le nom d'un champ quelconque ne rend pas la relance annuelle", () => {
+    expect(
+      isYearlyAutomation(
+        { name: "Relance", timing: {} },
+        { name: "Date d'échéance du contrat" },
+      ),
+    ).toBe(false);
+    expect(
+      isYearlyAutomation(
+        { name: "Relance", timing: { repeatYearly: false } },
+        { name: "Date de naissance" },
+      ),
+    ).toBe(false);
+  });
 });

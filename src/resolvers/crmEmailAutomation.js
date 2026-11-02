@@ -16,6 +16,7 @@ import { isValidEmail } from "../utils/validators.js";
 import { escapeHtml } from "../utils/trialEmails.js";
 import { recordAttempt } from "../utils/attemptLimiter.js";
 import { workspaceSenderEmails } from "../utils/crmEmailSender.js";
+import { isYearlyAutomation } from "../services/crmEmailAutomationService.js";
 
 // E-mails de test : envoyés à l'adresse du compte connecté seulement,
 // TEST_EMAIL_MAX envois par fenêtre de TEST_EMAIL_WINDOW_SECONDS
@@ -163,6 +164,9 @@ const crmEmailAutomationResolvers = {
           type: input.timing.type,
           daysOffset: input.timing.daysOffset || 0,
           sendHour: input.timing.sendHour ?? 9,
+          ...(typeof input.timing.repeatYearly === "boolean"
+            ? { repeatYearly: input.timing.repeatYearly }
+            : {}),
         },
         email: {
           fromName: input.email.fromName || "",
@@ -240,6 +244,10 @@ const crmEmailAutomationResolvers = {
             input.timing.sendHour !== undefined
               ? input.timing.sendHour
               : automation.timing.sendHour,
+          repeatYearly:
+            typeof input.timing.repeatYearly === "boolean"
+              ? input.timing.repeatYearly
+              : automation.timing.repeatYearly,
         };
       }
 
@@ -432,6 +440,23 @@ const crmEmailAutomationResolvers = {
     customField: async (parent) => {
       if (!parent.customFieldId) return null;
       return await ClientCustomField.findById(parent.customFieldId);
+    },
+    // Relance annuelle effective (option, sinon déduite du nom du champ)
+    timing: async (parent) => {
+      const timing =
+        (typeof parent.toObject === "function"
+          ? parent.toObject().timing
+          : parent.timing) || {};
+      let repeatYearly = timing.repeatYearly;
+      if (typeof repeatYearly !== "boolean") {
+        const customField = parent.customFieldId
+          ? await ClientCustomField.findById(parent.customFieldId)
+              .select("name")
+              .lean()
+          : null;
+        repeatYearly = isYearlyAutomation(parent, customField);
+      }
+      return { ...timing, repeatYearly };
     },
   },
 
