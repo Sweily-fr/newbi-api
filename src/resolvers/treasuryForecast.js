@@ -1561,26 +1561,55 @@ const treasuryForecastResolvers = {
           }
         }
 
-        const result = await ForecastScenario.findOneAndUpdate(
-          input.id
-            ? { _id: input.id, workspaceId: wId }
-            : { workspaceId: wId, name: input.name },
-          {
-            $set: {
-              name: input.name,
-              incomeMultiplier: input.incomeMultiplier,
-              expenseMultiplier: input.expenseMultiplier,
-            },
-            $setOnInsert: {
-              workspaceId: wId,
-              createdBy: new mongoose.Types.ObjectId(context.user.id),
-            },
-          },
+        const duplicateName = (error) => {
+          if (error?.code === 11000) {
+            throw new AppError(
+              "Un scénario porte déjà ce nom",
+              ERROR_CODES.VALIDATION_ERROR,
+            );
+          }
+          throw error;
+        };
+
+        if (scenarioExists) {
           // runValidators : bornes du modèle (multiplicateurs de 0 à 5, nom
           // de 60 caractères au plus), sinon ignorées par findOneAndUpdate
-          { upsert: true, new: true, lean: true, runValidators: true },
-        );
-        return result;
+          return ForecastScenario.findOneAndUpdate(
+            { _id: input.id, workspaceId: wId },
+            {
+              $set: {
+                name: input.name,
+                incomeMultiplier: input.incomeMultiplier,
+                expenseMultiplier: input.expenseMultiplier,
+              },
+            },
+            { new: true, lean: true, runValidators: true },
+          ).catch(duplicateName);
+        }
+
+        // Création : jamais la modification d'un scénario du même nom créé
+        // au même instant (index unique), et plafond de 5 tenu même pour
+        // des créations simultanées : au-delà des 5 premiers, retirée
+        const created = await ForecastScenario.create({
+          workspaceId: wId,
+          name: input.name,
+          incomeMultiplier: input.incomeMultiplier,
+          expenseMultiplier: input.expenseMultiplier,
+          createdBy: new mongoose.Types.ObjectId(context.user.id),
+        }).catch(duplicateName);
+        const firstFive = await ForecastScenario.find({ workspaceId: wId })
+          .sort({ _id: 1 })
+          .limit(5)
+          .select("_id")
+          .lean();
+        if (!firstFive.some((sc) => sc._id.equals(created._id))) {
+          await ForecastScenario.deleteOne({ _id: created._id });
+          throw new AppError(
+            "Vous ne pouvez pas créer plus de 5 scénarios",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        return created.toObject();
       },
     ),
 
