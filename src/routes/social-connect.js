@@ -1,6 +1,11 @@
 import express from "express";
 import { completeConnect } from "../services/social/socialPublishingService.js";
 import { completeDirectConnect } from "../services/social/socialDirectConnect.js";
+import { isOAuthBoundToBrowser } from "../utils/oauthBrowserBinding.js";
+import {
+  DEFAULT_RETURN_TO,
+  SOCIAL_CONNECT_COOKIE_PATH,
+} from "../services/social/socialConnectUrls.js";
 import {
   META_CALLBACK_SOURCES,
   dataDeletionStatusPage,
@@ -33,12 +38,34 @@ import logger from "../utils/logger.js";
  */
 const router = express.Router();
 
+// Retour terminé dans un autre navigateur que celui qui a lancé la
+// connexion : refusé sans consommer le state (voir oauthBrowserBinding.js)
+const otherBrowserRedirect = () => {
+  const frontend = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+  return `${frontend}${DEFAULT_RETURN_TO}?social_error=other_browser`;
+};
+const boundToBrowser = (req, res) => {
+  const state = req.query?.state;
+  return (
+    typeof state === "string" &&
+    state.length <= 64 &&
+    isOAuthBoundToBrowser(req, res, {
+      nonce: state,
+      path: SOCIAL_CONNECT_COOKIE_PATH,
+    })
+  );
+};
+
 const fallbackRedirect = () => {
   const frontend = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
   return `${frontend}/dashboard/outils/kanban?social_error=connection_failed`;
 };
 
 router.get("/callback", async (req, res) => {
+  if (!boundToBrowser(req, res)) {
+    logger.warn("[SocialConnect] Retour OAuth dans un autre navigateur");
+    return res.redirect(otherBrowserRedirect());
+  }
   try {
     const redirectUrl = await completeConnect(req.query || {});
     res.redirect(redirectUrl);
@@ -90,6 +117,10 @@ router.get("/meta/data-deletion/:code", async (req, res) => {
 router.get("/:key/callback", async (req, res) => {
   const { key } = req.params;
   if (!connectorByKey(key)) return res.status(404).end();
+  if (!boundToBrowser(req, res)) {
+    logger.warn(`[SocialConnect] Retour OAuth ${key} dans un autre navigateur`);
+    return res.redirect(otherBrowserRedirect());
+  }
   try {
     const redirectUrl = await completeDirectConnect(key, req.query || {});
     return res.redirect(redirectUrl);
