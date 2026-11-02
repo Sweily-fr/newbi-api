@@ -348,6 +348,52 @@ async function resolveTargetFolder(
 /**
  * Service principal d'exécution des automatisations de documents
  */
+/**
+ * Enregistre le journal « réussi » d'un document classé. Deux exécutions
+ * simultanées pour le même document (cron, lancement manuel, double clic)
+ * créaient chacune un document partagé : l'index unique du journal ne
+ * refusait que la seconde ligne de journal. Ici, l'exécution arrivée en
+ * second retire son document partagé et son fichier, et renvoie le journal
+ * déjà en place. Un échec enregistré entre-temps est remplacé.
+ * @returns {Promise<{duplicate: boolean, log: object}>}
+ */
+async function recordAutomationSuccess(logData, sharedDocument) {
+  try {
+    const log = await DocumentAutomationLog.create(logData);
+    return { duplicate: false, log };
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    const key = {
+      sourceDocumentType: logData.sourceDocumentType,
+      sourceDocumentId: logData.sourceDocumentId,
+      automationId: logData.automationId,
+    };
+    const replaced = await DocumentAutomationLog.findOneAndUpdate(
+      { ...key, status: "FAILED" },
+      { $set: logData, $unset: { error: "" } },
+      { new: true },
+    );
+    if (replaced) return { duplicate: false, log: replaced };
+
+    await SharedDocument.deleteOne({ _id: sharedDocument._id });
+    publishSharedDocsChanged(
+      sharedDocument.workspaceId,
+      "DELETED",
+      sharedDocument._id,
+    );
+    if (sharedDocument.fileKey) {
+      await cloudflareService
+        .deleteImage(
+          sharedDocument.fileKey,
+          cloudflareService.sharedDocumentsBucketName,
+        )
+        .catch(() => {});
+    }
+    const existing = await DocumentAutomationLog.findOne(key).lean();
+    return { duplicate: true, log: existing };
+  }
+}
+
 const documentAutomationService = {
   /**
    * Exécute toutes les automatisations correspondant à un trigger
@@ -580,22 +626,35 @@ const documentAutomationService = {
             sharedDocument._id,
           );
 
-          // Logger le succès
-          await DocumentAutomationLog.create({
-            automationId: automation._id,
-            workspaceId,
-            sourceDocumentType: documentContext.documentType,
-            sourceDocumentId: documentContext.documentId,
-            sourceDocumentNumber: documentContext.prefix
-              ? `${documentContext.prefix}${documentContext.documentNumber}`
-              : documentContext.documentNumber || "",
-            sharedDocumentId: sharedDocument._id,
-            targetFolderId,
-            targetFolderName,
-            status: "SUCCESS",
-            fileName,
-            fileSize: fileSize,
-          });
+          // Logger le succès (exécution simultanée déjà enregistrée : la
+          // copie en double est retirée)
+          const { duplicate } = await recordAutomationSuccess(
+            {
+              automationId: automation._id,
+              workspaceId,
+              sourceDocumentType: documentContext.documentType,
+              sourceDocumentId: documentContext.documentId,
+              sourceDocumentNumber: documentContext.prefix
+                ? `${documentContext.prefix}${documentContext.documentNumber}`
+                : documentContext.documentNumber || "",
+              sharedDocumentId: sharedDocument._id,
+              targetFolderId,
+              targetFolderName,
+              status: "SUCCESS",
+              fileName,
+              fileSize: fileSize,
+            },
+            sharedDocument,
+          );
+          if (duplicate) {
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+            });
+            continue;
+          }
 
           // Mettre à jour les stats
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
@@ -885,19 +944,31 @@ const documentAutomationService = {
             sharedDocument._id,
           );
 
-          await DocumentAutomationLog.create({
-            automationId: automation._id,
-            workspaceId,
-            sourceDocumentType: logDocType,
-            sourceDocumentId: expenseContext.documentId,
-            sourceDocumentNumber: expenseContext.documentNumber || "",
-            sharedDocumentId: sharedDocument._id,
-            targetFolderId,
-            targetFolderName,
-            status: "SUCCESS",
-            fileName,
-            fileSize: fileSize,
-          });
+          const { duplicate } = await recordAutomationSuccess(
+            {
+              automationId: automation._id,
+              workspaceId,
+              sourceDocumentType: logDocType,
+              sourceDocumentId: expenseContext.documentId,
+              sourceDocumentNumber: expenseContext.documentNumber || "",
+              sharedDocumentId: sharedDocument._id,
+              targetFolderId,
+              targetFolderName,
+              status: "SUCCESS",
+              fileName,
+              fileSize: fileSize,
+            },
+            sharedDocument,
+          );
+          if (duplicate) {
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+            });
+            continue;
+          }
 
           await DocumentAutomation.findByIdAndUpdate(automation._id, {
             $inc: { "stats.totalExecutions": 1 },
@@ -1617,22 +1688,34 @@ const documentAutomationService = {
       sharedDocument._id,
     );
 
-    // Logger le succès
-    await DocumentAutomationLog.create({
-      automationId: automation._id,
-      workspaceId,
-      sourceDocumentType: documentType,
-      sourceDocumentId: documentId,
-      sourceDocumentNumber: documentContext.prefix
-        ? `${documentContext.prefix}${documentContext.documentNumber}`
-        : documentContext.documentNumber || "",
-      sharedDocumentId: sharedDocument._id,
-      targetFolderId,
-      targetFolderName,
-      status: "SUCCESS",
-      fileName,
-      fileSize: fileSize,
-    });
+    // Logger le succès (exécution simultanée déjà enregistrée : la copie
+    // en double est retirée, le document déjà classé est renvoyé)
+    const { duplicate, log } = await recordAutomationSuccess(
+      {
+        automationId: automation._id,
+        workspaceId,
+        sourceDocumentType: documentType,
+        sourceDocumentId: documentId,
+        sourceDocumentNumber: documentContext.prefix
+          ? `${documentContext.prefix}${documentContext.documentNumber}`
+          : documentContext.documentNumber || "",
+        sharedDocumentId: sharedDocument._id,
+        targetFolderId,
+        targetFolderName,
+        status: "SUCCESS",
+        fileName,
+        fileSize: fileSize,
+      },
+      sharedDocument,
+    );
+    if (duplicate) {
+      return {
+        success: true,
+        skipped: true,
+        sharedDocumentId: log?.sharedDocumentId?.toString() || null,
+        fileName: log?.fileName || fileName,
+      };
+    }
 
     // Mettre à jour les stats
     await DocumentAutomation.findByIdAndUpdate(automation._id, {
@@ -1994,24 +2077,28 @@ const documentAutomationService = {
               sharedDocument._id,
             );
 
-            // Logger le succès
-            await DocumentAutomationLog.create({
-              automationId: automation._id,
-              workspaceId,
-              sourceDocumentType: config.docType,
-              sourceDocumentId: doc._id,
-              sourceDocumentNumber: documentContext.prefix
-                ? `${documentContext.prefix}${documentContext.documentNumber}`
-                : documentContext.documentNumber || "",
-              sharedDocumentId: sharedDocument._id,
-              targetFolderId,
-              targetFolderName,
-              status: "SUCCESS",
-              fileName,
-              fileSize,
-            });
+            // Logger le succès (exécution simultanée déjà enregistrée : la
+            // copie en double est retirée, rien n'est compté)
+            const { duplicate } = await recordAutomationSuccess(
+              {
+                automationId: automation._id,
+                workspaceId,
+                sourceDocumentType: config.docType,
+                sourceDocumentId: doc._id,
+                sourceDocumentNumber: documentContext.prefix
+                  ? `${documentContext.prefix}${documentContext.documentNumber}`
+                  : documentContext.documentNumber || "",
+                sharedDocumentId: sharedDocument._id,
+                targetFolderId,
+                targetFolderName,
+                status: "SUCCESS",
+                fileName,
+                fileSize,
+              },
+              sharedDocument,
+            );
 
-            successCount++;
+            if (!duplicate) successCount++;
           } catch (error) {
             if (!firstError) firstError = error.message;
             failCount++;
@@ -2195,4 +2282,5 @@ const documentAutomationService = {
 
 export { cacheDocumentPdf, generateDocumentPdf };
 
+export { recordAutomationSuccess };
 export default documentAutomationService;

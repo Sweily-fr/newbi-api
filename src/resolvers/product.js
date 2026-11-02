@@ -28,6 +28,9 @@ import {
 } from "../utils/errors.js";
 
 const LINKED_ROUNDINGS = ["UP", "DOWN", "NONE"];
+// Bornes de « quantity » liés pour « per » unités du produit principal
+const LINKED_RATIO_MIN = 0.01;
+const LINKED_RATIO_MAX = 1e6;
 
 // Bornes d'un produit : prix lisibles sur un document, textes de taille
 // raisonnable (le formulaire n'en a pas, l'API les tient)
@@ -104,6 +107,19 @@ async function normalizeLinkedProducts(linkedProducts, { workspaceId, selfId }) 
       throw createValidationError(
         "La base d'un produit lié doit être supérieure à 0",
         { productId, per: entry.per },
+      );
+    }
+    // Quantités lisibles sur un document (2 décimales) : « 1 pour 0,0001 »
+    // s'affichait « 1 pour 0 » et multipliait la ligne liée par 10 000
+    if (
+      quantity < LINKED_RATIO_MIN ||
+      quantity > LINKED_RATIO_MAX ||
+      per < LINKED_RATIO_MIN ||
+      per > LINKED_RATIO_MAX
+    ) {
+      throw createValidationError(
+        "Les quantités d'un produit lié vont de 0,01 à 1 000 000",
+        { productId, quantity: entry.quantity, per: entry.per },
       );
     }
     const rounding = entry.rounding || "UP";
