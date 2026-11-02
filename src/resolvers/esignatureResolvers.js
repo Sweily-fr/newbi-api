@@ -14,6 +14,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import logger from "../utils/logger.js";
 import { acceptQuoteOnSignature } from "../services/quoteSignatureSync.js";
 import { storeSignedDocuments } from "../services/esignatureDocuments.js";
+import { signedFileUrl } from "../services/esignatureFileUrls.js";
 import { sendSignatureInvitations } from "../services/esignatureEmail.js";
 import { mapExternalStatus } from "../services/esignatureStatus.js";
 import { assertQualifiedSignatureAllowed } from "../services/planLimits.js";
@@ -120,6 +121,12 @@ function canReadSigned(context, documentType) {
 }
 
 const esignatureResolvers = {
+  // Documents d'une demande : URL présignée courte (bucket privé), ou
+  // adresse d'origine pour une demande plus ancienne
+  SignatureRequest: {
+    signedDocumentUrl: (parent) => signedFileUrl(parent, "signedDocument"),
+    auditTrailUrl: (parent) => signedFileUrl(parent, "auditTrail"),
+  },
   // Field resolvers pour Quote
   Quote: {
     // Signature du client : on ignore les cachets QES automatiques de l'entreprise
@@ -146,21 +153,21 @@ const esignatureResolvers = {
       const sig = await getLatestSignature(parent, "quote", {
         signatureType: "QES_automatic",
       });
-      return sig?.signedDocumentUrl || null;
+      return signedFileUrl(sig, "signedDocument");
     },
     // Document signé par le client (preuve), hors cachet entreprise
     signedDocumentUrl: async (parent) => {
       const sig = await getLatestSignature(parent, "quote", {
         signatureType: { $ne: "QES_automatic" },
       });
-      return sig?.signedDocumentUrl || null;
+      return signedFileUrl(sig, "signedDocument");
     },
     // Certificat de preuve / piste d'audit de la signature client
     auditTrailUrl: async (parent) => {
       const sig = await getLatestSignature(parent, "quote", {
         signatureType: { $ne: "QES_automatic" },
       });
-      return sig?.auditTrailUrl || null;
+      return signedFileUrl(sig, "auditTrail");
     },
     // Signataires de la signature client (avec date de signature)
     signers: async (parent) => {
@@ -294,7 +301,8 @@ const esignatureResolvers = {
                 }
               } else if (
                 signatureRequest.status === "DONE" &&
-                !signatureRequest.signedDocumentUrl
+                !signatureRequest.signedDocumentUrl &&
+                !signatureRequest.signedDocumentKey
               ) {
                 // Demande déjà terminée mais document jamais récupéré
                 // (cas local : le webhook n'a pas tourné) → backfill.
