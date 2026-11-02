@@ -10,6 +10,11 @@ import {
 } from "../utils/boardShareAccessToken.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { resolveVisitorSession } from "../utils/boardVisitorSession.js";
+import {
+  visitorTaskView,
+  visitorTasksView,
+  visitorMembersView,
+} from "../utils/publicBoardVisitorView.js";
 import { userHasWorkspaceLevel } from "../utils/workspace-membership.js";
 import UserInvited from "../models/UserInvited.js";
 import { Board, Column, Task } from "../models/kanban.js";
@@ -317,6 +322,27 @@ function guardIterator(iterator, isAllowed) {
     },
     return: () =>
       iterator.return?.() ?? Promise.resolve({ done: true, value: undefined }),
+    throw: (error) => iterator.throw?.(error) ?? Promise.reject(error),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}
+
+// Joint à chaque événement le lien et le visiteur de l'abonnement : le
+// resolve applique ses permissions et ne lui laisse que son propre e-mail
+function withVisitorViewer(iterator, viewer) {
+  return {
+    async next() {
+      const result = await iterator.next();
+      if (result.done || !result.value || typeof result.value !== "object") {
+        return result;
+      }
+      return { ...result, value: { ...result.value, __viewer: viewer } };
+    },
+    return: (value) =>
+      iterator.return?.(value) ??
+      Promise.resolve({ done: true, value: undefined }),
     throw: (error) => iterator.throw?.(error) ?? Promise.reject(error),
     [Symbol.asyncIterator]() {
       return this;
@@ -763,6 +789,9 @@ const resolvers = {
               }
             : null,
           userId: task.userId,
+          createdByName: task.userId
+            ? membersMap[String(task.userId)]?.name || null
+            : null,
           createdAt: task.createdAt,
           updatedAt: task.updatedAt,
         }));
@@ -806,12 +835,22 @@ const resolvers = {
             title: board.title,
             description: board.description,
             columns: publicColumns,
-            tasks: publicTasks,
-            members: publicMembers,
+            // Sans e-mail des autres, taux horaire ni identifiants internes,
+            // permissions du lien appliquées (voir publicBoardVisitorView.js)
+            tasks: visitorTasksView(publicTasks, {
+              viewerEmail: emailLower,
+              permissions: share.permissions,
+            }),
+            members: visitorMembersView(publicMembers, {
+              permissions: share.permissions,
+            }),
           },
           share: {
             ...share.toObject(),
             id: share._id.toString(),
+            // Identifiants internes de l'espace et du créateur du lien
+            workspaceId: null,
+            createdBy: null,
             hasPassword: hasPasswordProtection(share),
             shareUrl: `${getBaseUrl()}/public/kanban/${share.token}`,
             // 🔐 Un visiteur ne voit que sa propre fiche : ni les adresses
@@ -1701,70 +1740,100 @@ const resolvers = {
           }
         }
 
-        // Retourner la tâche mise à jour avec TOUTES les données
+        // Retourner la tâche mise à jour, vue par le visiteur (voir
+        // publicBoardVisitorView.js)
         return {
           success: true,
-          task: {
-            id: task._id.toString(),
-            title: task.title,
-            description: task.description,
-            status: task.status,
-            priority: task.priority,
-            tags: task.tags,
-            startDate: task.startDate,
-            dueDate: task.dueDate,
-            columnId: task.columnId,
-            position: task.position,
-            claudeWorkingSince: task.claudeWorkingSince,
-            claudeCodingSince: task.claudeCodingSince,
-            checklist: task.checklist,
-            images: (task.images || []).map((img) => ({
-              id: img._id?.toString() || img.id,
-              key: img.key,
-              url: img.url,
-              fileName: img.fileName,
-              contentType: img.contentType,
-            })),
-            assignedMembers: (task.assignedMembers || []).map(
-              (memberId) =>
-                membersMap[memberId] || {
-                  id: memberId,
-                  name: "Membre",
-                  image: null,
-                },
-            ),
-            timeTracking: task.timeTracking
-              ? {
-                  totalSeconds: task.timeTracking.totalSeconds || 0,
-                  isRunning: task.timeTracking.isRunning || false,
-                  currentStartTime: task.timeTracking.currentStartTime,
-                  hourlyRate: task.timeTracking.hourlyRate,
-                  startedBy: task.timeTracking.startedBy
-                    ? {
-                        userId: task.timeTracking.startedBy.userId,
-                        userName: task.timeTracking.startedBy.userName,
-                        userImage: task.timeTracking.startedBy.userImage,
-                      }
-                    : null,
+          task: visitorTaskView(
+            {
+              id: task._id.toString(),
+              title: task.title,
+              description: task.description,
+              status: task.status,
+              priority: task.priority,
+              tags: task.tags,
+              startDate: task.startDate,
+              dueDate: task.dueDate,
+              columnId: task.columnId,
+              position: task.position,
+              claudeWorkingSince: task.claudeWorkingSince,
+              claudeCodingSince: task.claudeCodingSince,
+              checklist: task.checklist,
+              images: (task.images || []).map((img) => ({
+                id: img._id?.toString() || img.id,
+                key: img.key,
+                url: img.url,
+                fileName: img.fileName,
+                contentType: img.contentType,
+              })),
+              assignedMembers: (task.assignedMembers || []).map(
+                (memberId) =>
+                  membersMap[memberId] || {
+                    id: memberId,
+                    name: "Membre",
+                    image: null,
+                  },
+              ),
+              timeTracking: task.timeTracking
+                ? {
+                    totalSeconds: task.timeTracking.totalSeconds || 0,
+                    isRunning: task.timeTracking.isRunning || false,
+                    currentStartTime: task.timeTracking.currentStartTime,
+                    hourlyRate: task.timeTracking.hourlyRate,
+                    startedBy: task.timeTracking.startedBy
+                      ? {
+                          userId: task.timeTracking.startedBy.userId,
+                          userName: task.timeTracking.startedBy.userName,
+                          userImage: task.timeTracking.startedBy.userImage,
+                        }
+                      : null,
+                  }
+                : null,
+              comments: task.comments.map((c) => {
+                // Pour les commentaires externes, récupérer les infos du visiteur
+                if (c.isExternal && c.userEmail) {
+                  const visitorInfo = share.visitors?.find(
+                    (v) => v.email?.toLowerCase() === c.userEmail.toLowerCase(),
+                  );
+                  return {
+                    id: c._id?.toString(),
+                    userName:
+                      visitorInfo?.name ||
+                      visitorInfo?.firstName ||
+                      c.userName ||
+                      c.userEmail.split("@")[0],
+                    userEmail: c.userEmail,
+                    userImage: visitorInfo?.image || c.userImage || null,
+                    content: c.content,
+                    isExternal: true,
+                    images: (c.images || []).map((img) => ({
+                      id: img._id?.toString() || img.id,
+                      key: img.key,
+                      url: img.url,
+                      fileName: img.fileName,
+                      contentType: img.contentType,
+                    })),
+                    createdAt: c.createdAt,
+                  };
                 }
-              : null,
-            comments: task.comments.map((c) => {
-              // Pour les commentaires externes, récupérer les infos du visiteur
-              if (c.isExternal && c.userEmail) {
-                const visitorInfo = share.visitors?.find(
-                  (v) => v.email?.toLowerCase() === c.userEmail.toLowerCase(),
-                );
+                // Pour les commentaires non-externes
+                let userInfo =
+                  c.userId && !c.userId.toString().startsWith("external_")
+                    ? membersMap[c.userId.toString()]
+                    : null;
+                if (!userInfo && c.userEmail) {
+                  userInfo = emailToUserMap[c.userEmail.toLowerCase()];
+                }
                 return {
                   id: c._id?.toString(),
                   userName:
-                    visitorInfo?.name ||
-                    visitorInfo?.firstName ||
+                    userInfo?.name ||
                     c.userName ||
-                    c.userEmail.split("@")[0],
-                  userEmail: c.userEmail,
-                  userImage: visitorInfo?.image || c.userImage || null,
+                    (c.userEmail ? c.userEmail.split("@")[0] : "Utilisateur"),
+                  userEmail: c.userEmail || null,
+                  userImage: userInfo?.image || c.userImage || null,
                   content: c.content,
-                  isExternal: true,
+                  isExternal: c.isExternal || false,
                   images: (c.images || []).map((img) => ({
                     id: img._id?.toString() || img.id,
                     key: img.key,
@@ -1774,39 +1843,16 @@ const resolvers = {
                   })),
                   createdAt: c.createdAt,
                 };
-              }
-              // Pour les commentaires non-externes
-              let userInfo =
-                c.userId && !c.userId.toString().startsWith("external_")
-                  ? membersMap[c.userId.toString()]
-                  : null;
-              if (!userInfo && c.userEmail) {
-                userInfo = emailToUserMap[c.userEmail.toLowerCase()];
-              }
-              return {
-                id: c._id?.toString(),
-                userName:
-                  userInfo?.name ||
-                  c.userName ||
-                  (c.userEmail ? c.userEmail.split("@")[0] : "Utilisateur"),
-                userEmail: c.userEmail || null,
-                userImage: userInfo?.image || c.userImage || null,
-                content: c.content,
-                isExternal: c.isExternal || false,
-                images: (c.images || []).map((img) => ({
-                  id: img._id?.toString() || img.id,
-                  key: img.key,
-                  url: img.url,
-                  fileName: img.fileName,
-                  contentType: img.contentType,
-                })),
-                createdAt: c.createdAt,
-              };
-            }),
-            userId: task.userId,
-            createdAt: task.createdAt,
-            updatedAt: task.updatedAt,
-          },
+              }),
+              userId: task.userId,
+              createdByName: task.userId
+                ? membersMap[String(task.userId)]?.name || null
+                : null,
+              createdAt: task.createdAt,
+              updatedAt: task.updatedAt,
+            },
+            { viewerEmail: identity?.email, permissions: share.permissions },
+          ),
         };
       } catch (error) {
         logger.error(
@@ -2409,14 +2455,18 @@ const resolvers = {
           // Flux coupé dès que le partage est révoqué ou expiré, que le mot
           // de passe change, que la session prend fin ou que le visiteur est
           // banni
-          return guardIterator(
-            pubsub.asyncIterableIterator([taskChannel, visitorChannel]),
-            () =>
-              isVisitorSubscriptionAllowed(share._id, {
-                accessToken,
-                identity,
-                sessionToken,
-              }),
+          return withVisitorViewer(
+            guardIterator(
+              pubsub.asyncIterableIterator([taskChannel, visitorChannel]),
+              () =>
+                isVisitorSubscriptionAllowed(share._id, {
+                  accessToken,
+                  identity,
+                  sessionToken,
+                }),
+            ),
+            // Ce que ce visiteur peut voir (son e-mail, permissions du lien)
+            { shareId: share._id, viewerEmail: identity.email },
           );
         } catch (error) {
           logger.error(
@@ -2451,12 +2501,14 @@ const resolvers = {
         let usersMap = {};
 
         // Récupérer le share pour enrichir les commentaires externes avec les infos des visiteurs
+        // (le lien de l'abonnement : ses permissions s'appliquent)
         let visitorsMap = {};
+        let sharePermissions = { canViewTasks: false };
         try {
-          const share = await PublicBoardShare.findOne({
-            boardId: payload.boardId,
-            isActive: true,
-          });
+          const share = payload.__viewer?.shareId
+            ? await PublicBoardShare.findById(payload.__viewer.shareId)
+            : null;
+          if (share?.permissions) sharePermissions = share.permissions;
           if (share?.visitors) {
             share.visitors.forEach((v) => {
               if (v.email) {
@@ -2485,6 +2537,9 @@ const resolvers = {
           else if (id && typeof id === "object" && !id.name)
             allUserIds.add(id.toString());
         });
+
+        // Créateur de la tâche : son nom remplace son identifiant
+        if (task.userId) allUserIds.add(String(task.userId));
 
         // Ajouter les IDs des auteurs de commentaires (toujours, pour avoir userImage)
         comments.forEach((c) => {
@@ -2646,10 +2701,20 @@ const resolvers = {
               }
             : null,
           userId: task.userId,
+          createdByName: task.userId
+            ? usersMap[String(task.userId)]?.name || null
+            : null,
           createdAt: task.createdAt,
           updatedAt: task.updatedAt,
           __typename: "PublicTask",
         };
+        if (!sharePermissions || sharePermissions.canViewTasks === false) {
+          return null;
+        }
+        const visibleTask = visitorTaskView(enrichedTask, {
+          viewerEmail: payload.__viewer?.viewerEmail,
+          permissions: sharePermissions,
+        });
 
         logger.info(
           `✅ [PublicShare] Subscription resolve terminé - ${enrichedComments.length} commentaires enrichis`,
@@ -2657,7 +2722,7 @@ const resolvers = {
 
         return {
           type: payload.type,
-          task: enrichedTask,
+          task: visibleTask,
           taskId: enrichedTask.id,
           boardId: task.boardId?.toString() || payload.boardId,
         };
