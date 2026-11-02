@@ -3,7 +3,8 @@
  *
  * - Avec un secret configuré : sans en-tête, avec un mauvais secret ou un
  *   secret plus long, refus 401 et aucune demande modifiée.
- * - En production sans secret configuré : refus 401.
+ * - Sans secret configuré, hors développement local et tests (production,
+ *   staging, NODE_ENV absent ou inconnu) : refus 401.
  * - Identifiants hostiles : un opérateur MongoDB à la place d'un identifiant,
  *   ou l'identifiant interne d'une demande dont l'identifiant chez le
  *   prestataire n'est pas celui du message, ne modifient aucune demande et
@@ -258,6 +259,26 @@ describe("webhook e-signature : authentification", () => {
     expect(response.status).toBe(401);
     expect(await snapshot()).toBe(before);
   });
+
+  for (const env of [undefined, "", "prod", "preprod"]) {
+    it(`NODE_ENV ${env === undefined ? "absent" : `« ${env} »`} sans secret configuré : 401, rien de modifié`, async () => {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      delete process.env.ESIGNATURE_WEBHOOK_SECRET;
+      const quoteId = await insertQuote();
+      const request = await insertSignature(quoteId);
+      const before = await snapshot();
+
+      const response = await post({
+        id: request.externalSignatureId,
+        state: "DONE",
+        custom: { signatureRequestId: String(request._id) },
+      });
+
+      expect(response.status).toBe(401);
+      expect(await snapshot()).toBe(before);
+    });
+  }
 });
 
 describe("webhook e-signature : identifiants hostiles", () => {
