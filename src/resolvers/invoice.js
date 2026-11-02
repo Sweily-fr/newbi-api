@@ -1,4 +1,5 @@
 import Invoice from "../models/Invoice.js";
+import { buildInvoicePaymentUrl } from "../utils/invoicePaymentLink.js";
 import { assertClientNotBlocked } from "../utils/blockedClient.js";
 import CreditNote from "../models/CreditNote.js";
 import { getOrganizationDefaultAnnex } from "../utils/documentAnnex.js";
@@ -404,7 +405,7 @@ const invoiceResolvers = {
         );
         if (isCoveredByCredit(invoice, credited)) return null;
         const baseUrl = process.env.BACKEND_URL || "http://localhost:4000";
-        return `${baseUrl}/pay/invoice/${invoice._id.toString()}`;
+        return buildInvoicePaymentUrl(baseUrl, invoice._id);
       } catch (error) {
         logger.error("[Invoice.paymentLink] Erreur:", error);
         return null;

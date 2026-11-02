@@ -10,7 +10,7 @@ import {
   withOrganization,
 } from "../middlewares/rbac.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
-import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { AppError, ERROR_CODES, publicErrorMessage } from "../utils/errors.js";
 
 function requireUser(user) {
   if (!user) {
@@ -94,7 +94,7 @@ const qontoResolvers = {
         return account || null;
       } catch (error) {
         logger.error("Erreur récupération compte Qonto:", error);
-        throw new Error(`Erreur: ${error.message}`);
+        throw new Error(`Erreur: ${publicErrorMessage(error)}`);
       }
     },
   },
@@ -216,7 +216,7 @@ const qontoResolvers = {
         logger.error("Erreur connexion Qonto:", error);
         return {
           success: false,
-          message: `Erreur lors de la connexion: ${error.message}`,
+          message: `Erreur lors de la connexion: ${publicErrorMessage(error)}`,
         };
       }
     },
@@ -256,7 +256,7 @@ const qontoResolvers = {
         logger.error("Erreur déconnexion Qonto:", error);
         return {
           success: false,
-          message: `Erreur lors de la déconnexion: ${error.message}`,
+          message: `Erreur lors de la déconnexion: ${publicErrorMessage(error)}`,
         };
       }
     },
@@ -304,7 +304,7 @@ const qontoResolvers = {
         };
       } catch (error) {
         logger.error("Erreur mise à jour autoSync Qonto:", error);
-        return { success: false, message: `Erreur: ${error.message}` };
+        return { success: false, message: `Erreur: ${publicErrorMessage(error)}` };
       }
     },
 
@@ -350,7 +350,7 @@ const qontoResolvers = {
         };
       } catch (error) {
         logger.error("Erreur sélection compte bancaire Qonto:", error);
-        return { success: false, message: `Erreur: ${error.message}` };
+        return { success: false, message: `Erreur: ${publicErrorMessage(error)}` };
       }
     },
 
@@ -388,7 +388,7 @@ const qontoResolvers = {
         };
       } catch (error) {
         logger.error("Erreur refresh comptes Qonto:", error);
-        return { success: false, message: `Erreur: ${error.message}` };
+        return { success: false, message: `Erreur: ${publicErrorMessage(error)}` };
       }
     },
 
@@ -423,7 +423,7 @@ const qontoResolvers = {
         return applySyncResult(invoice, account, result, "invoicesSynced");
       } catch (error) {
         logger.error("Erreur sync facture Qonto:", error);
-        return { success: false, message: error.message };
+        return { success: false, message: publicErrorMessage(error) };
       }
     },
 
@@ -466,7 +466,7 @@ const qontoResolvers = {
         );
       } catch (error) {
         logger.error("Erreur sync facture d'achat Qonto:", error);
-        return { success: false, message: error.message };
+        return { success: false, message: publicErrorMessage(error) };
       }
     },
 
@@ -500,7 +500,7 @@ const qontoResolvers = {
         return applySyncResult(quote, account, result, "quotesSynced");
       } catch (error) {
         logger.error("Erreur sync devis Qonto:", error);
-        return { success: false, message: error.message };
+        return { success: false, message: publicErrorMessage(error) };
       }
     },
 
@@ -545,7 +545,7 @@ const qontoResolvers = {
         };
       } catch (error) {
         logger.error("Erreur import Qonto:", error);
-        return { success: false, message: error.message };
+        return { success: false, message: publicErrorMessage(error) };
       }
     },
 
@@ -584,7 +584,7 @@ const qontoResolvers = {
         };
       } catch (error) {
         logger.error("Erreur syncAll Qonto:", error);
-        return { success: false, message: error.message };
+        return { success: false, message: publicErrorMessage(error) };
       }
     },
   },

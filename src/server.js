@@ -1,4 +1,5 @@
 // Doit rester le premier import : charge le .env avant tout autre module
+import { ensurePaymentLinkTokensSince } from "./utils/invoicePaymentLink.js";
 import { envFile } from "./config/env.js";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -188,6 +189,13 @@ mongoose
       { collection: "clients", index: "email_1_createdBy_1" },
     ];
 
+    // Liens de paiement signés : date de mise en service, posée une fois
+    try {
+      await ensurePaymentLinkTokensSince();
+    } catch (err) {
+      logger.error("Liens de paiement signés :", err.message);
+    }
+
     for (const { collection, index } of legacyIndexes) {
       try {
         await mongoose.connection.db.collection(collection).dropIndex(index);
@@ -369,7 +377,20 @@ async function startServer() {
   app.use(stripMongoOperators);
 
   // Redirection publique de paiement d'une facture vers Stripe Checkout
-  app.get("/pay/invoice/:invoiceId", redirectToInvoicePayment);
+  // Lien public de paiement : chaque appel crée une session Stripe, débit
+  // limité par adresse IP
+  const invoicePaymentLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: plafond("RATE_LIMIT_PAY_MAX", 30),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: "Trop de tentatives de paiement, réessayez dans quelques minutes.",
+  });
+  app.get(
+    "/pay/invoice/:invoiceId",
+    invoicePaymentLimiter,
+    redirectToInvoicePayment,
+  );
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);

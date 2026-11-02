@@ -63,6 +63,9 @@ import { reportPaymentIfNeeded } from "../../src/utils/eInvoiceRoutingHelper.js"
 import documentAutomationService from "../../src/services/documentAutomationService.js";
 import { automationService } from "../../src/resolvers/clientAutomation.js";
 
+// Secret de signature des liens de paiement (voir invoicePaymentLink.js)
+process.env.BETTER_AUTH_SECRET ||= "secret-de-test-liens";
+
 const userId = buildUserId();
 const organizationId = buildOrganizationId();
 
@@ -156,9 +159,11 @@ describe("Invoice Resolver - Invoice.paymentLink", () => {
     );
 
     liens.forEach((lien, i) =>
-      expect(lien).toMatch(new RegExp(`/pay/invoice/${factures[i]._id}$`)),
+      expect(lien).toMatch(
+        new RegExp(`/pay/invoice/${factures[i]._id}\\?t=[A-Za-z0-9_-]{32}$`),
+      ),
     );
-    expect(dernier).toMatch(/\/pay\/invoice\/[0-9a-f]{24}$/);
+    expect(dernier).toMatch(/\/pay\/invoice\/[0-9a-f]{24}\?t=[A-Za-z0-9_-]{32}$/);
   });
 });
 

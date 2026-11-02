@@ -5,6 +5,10 @@ import stripeConnectService from "../services/stripeConnectService.js";
 import { applyInvoicePaid } from "../resolvers/invoice.js";
 import logger from "../utils/logger.js";
 import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
+import {
+  acceptsUnsignedPaymentLink,
+  verifyInvoicePaymentToken,
+} from "../utils/invoicePaymentLink.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -38,9 +42,20 @@ export const redirectToInvoicePayment = async (req, res) => {
 
     // Lien abîmé (identifiant qui n'est pas un ObjectId) : introuvable, et
     // non une erreur serveur (findById lève une CastError)
-    const invoice = OBJECT_ID.test(invoiceId)
+    const found = OBJECT_ID.test(invoiceId)
       ? await Invoice.findById(invoiceId)
       : null;
+    // Lien signé (e-mail, tableau de bord) ; sans jeton valide, seules les
+    // factures antérieures aux liens signés restent payables par leur ancien
+    // lien. Sinon : même réponse qu'une facture inconnue.
+    const token = typeof req.query?.t === "string" ? req.query.t : null;
+    const signed = Boolean(
+      found && token && verifyInvoicePaymentToken(found._id, token),
+    );
+    const invoice =
+      found && (signed || (await acceptsUnsignedPaymentLink(found)))
+        ? found
+        : null;
     if (!invoice) {
       return infoPage(
         res,
@@ -92,7 +107,9 @@ export const redirectToInvoicePayment = async (req, res) => {
     }
 
     const successUrl = `${FRONTEND_URL}/pay/invoice/${invoiceId}/success`;
-    const cancelUrl = `${FRONTEND_URL}/pay/invoice/${invoiceId}/cancel`;
+    const cancelUrl = `${FRONTEND_URL}/pay/invoice/${invoiceId}/cancel${
+      signed ? `?t=${encodeURIComponent(token)}` : ""
+    }`;
 
     const result = await stripeConnectService.createInvoicePaymentSession(
       invoice,

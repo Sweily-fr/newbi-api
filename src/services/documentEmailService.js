@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { buildInvoicePaymentUrl } from "../utils/invoicePaymentLink.js";
 import crypto from "crypto";
 import Invoice from "../models/Invoice.js";
 import Quote from "../models/Quote.js";
@@ -967,7 +968,7 @@ async function sendDocumentEmail({
         !(await isInvoiceFullyCredited(document))
       ) {
         const backendUrl = process.env.BACKEND_URL || "http://localhost:4000";
-        paymentUrl = `${backendUrl}/pay/invoice/${documentId}`;
+        paymentUrl = buildInvoicePaymentUrl(backendUrl, documentId);
       }
     } catch (stripeLinkError) {
       console.error(
