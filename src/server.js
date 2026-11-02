@@ -142,6 +142,7 @@ import { startAbbyImportCron } from "./cron/abbyImportCron.js";
 import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaymentRetryCron.js";
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
+import { startStorageReconcileCron } from "./cron/storageReconcileCron.js";
 import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
 import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
 import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
@@ -823,6 +824,10 @@ async function startServer() {
       // Démarrer le cron de vérification de la remise des e-mails de documents
       // (filet du webhook Resend : reçu ou alerte de rejet à l'émetteur)
       startDocumentDeliveryCheckCron();
+
+      // Réconciliation du compteur de stockage des espaces, toutes les
+      // 30 minutes
+      startStorageReconcileCron();
 
       // Récap du calendrier le lundi à 8 h (no-op tant que
       // CALENDAR_WEEKLY_DIGEST_MODE n'est pas « simulation » ou « live »)
