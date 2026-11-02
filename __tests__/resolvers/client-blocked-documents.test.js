@@ -153,9 +153,10 @@ describe("Création d'un document pour un contact bloqué", () => {
 
 describe("Envoi par e-mail d'un document existant", () => {
   it("refusé quand le contact a été bloqué après coup", async () => {
+    // Bon émis : un brouillon n'est de toute façon pas envoyé
     const dn = await deliveryNoteResolvers.Mutation.createDeliveryNote(
       null,
-      { input: dnInput(active) },
+      { input: { ...dnInput(active), status: "PENDING" } },
       ctx(),
     );
     await Client.updateOne({ _id: active._id }, { $set: { isBlocked: true } });
