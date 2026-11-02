@@ -109,7 +109,9 @@ import socialMediaRoutes from "./routes/social-media.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
 import calendarFeedRoutes from "./routes/calendarFeed.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
-import invoicePreviewPdfRoutes from "./routes/invoicePreviewPdf.js";
+import invoicePreviewPdfRoutes, {
+  PREVIEW_BODY_LIMIT,
+} from "./routes/invoicePreviewPdf.js";
 import invoiceDocumentPdfRoutes from "./routes/invoiceDocumentPdf.js";
 import documentPdfRoutes from "./routes/documentPdf.js";
 import documentAnnexRoutes from "./routes/documentAnnex.js";
@@ -363,6 +365,12 @@ async function startServer() {
   app.use("/webhook/resend", resendWebhookRoutes);
 
   // Middleware pour les uploads
+  // Aperçu PDF : données d'un document seulement, corps borné avant le
+  // plafond général
+  app.use(
+    "/api/invoice-preview-pdf",
+    express.json({ limit: PREVIEW_BODY_LIMIT }),
+  );
   app.use(express.json({ limit: "100mb" }));
   app.use(express.urlencoded({ limit: "100mb", extended: true }));
   // Même nettoyage pour les corps JSON et formulaires, une fois analysés
