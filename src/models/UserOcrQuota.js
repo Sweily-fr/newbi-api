@@ -170,21 +170,21 @@ userOcrQuotaSchema.statics.getOrCreateCurrentQuota = async function (
   nextMonth.setDate(1);
   nextMonth.setHours(0, 0, 0, 0);
 
-  let quota = await this.findOne({
-    userId,
-    workspaceId,
-    month: currentMonth,
-  });
+  // Création atomique (upsert) : plusieurs analyses simultanées du premier
+  // fichier du mois ne créent pas deux fiches (index unique, E11000)
+  let quota;
+  try {
+    quota = await this.findOneAndUpdate(
+      { userId, workspaceId, month: currentMonth },
+      { $setOnInsert: { plan, resetDate: nextMonth } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    quota = await this.findOne({ userId, workspaceId, month: currentMonth });
+  }
 
-  if (!quota) {
-    quota = await this.create({
-      userId,
-      workspaceId,
-      plan,
-      month: currentMonth,
-      resetDate: nextMonth,
-    });
-  } else if (quota.plan !== plan) {
+  if (quota.plan !== plan) {
     // Mettre à jour le plan si changé
     quota.plan = plan;
     await quota.save();
