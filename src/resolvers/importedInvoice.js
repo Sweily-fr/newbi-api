@@ -5,6 +5,10 @@ import { buildSearchRegex } from "../utils/searchRegex.js";
  */
 
 import mongoose from "mongoose";
+import {
+  MAX_RECEIPT_FILE_BYTES,
+  readUploadBounded,
+} from "../utils/boundedUpload.js";
 import crypto from "crypto";
 import { GraphQLUpload } from "graphql-upload";
 import {
@@ -1149,17 +1153,12 @@ const importedInvoiceResolvers = {
           throw createValidationError("Nom de fichier requis");
         }
 
-        // Lecture du fichier en mémoire
-        const stream = createReadStream();
-        const chunks = [];
-        for await (const chunk of stream) {
-          chunks.push(chunk);
-        }
-        const fileBuffer = Buffer.concat(chunks);
-
-        // Validation de la taille (max 10MB)
-        const maxSize = 10 * 1024 * 1024;
-        if (fileBuffer.length > maxSize) {
+        // Lecture du fichier en mémoire, interrompue au-delà de 10 Mo
+        const { buffer: fileBuffer, tooLarge } = await readUploadBounded(
+          createReadStream,
+          MAX_RECEIPT_FILE_BYTES,
+        );
+        if (tooLarge) {
           throw createValidationError("Fichier trop volumineux (max 10MB)");
         }
 

@@ -54,6 +54,7 @@ import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
 import Transaction from "../../src/models/Transaction.js";
 import purchaseInvoiceResolvers from "../../src/resolvers/purchaseInvoice.js";
 import bankingResolvers from "../../src/resolvers/banking.js";
+import importedInvoiceResolvers from "../../src/resolvers/importedInvoice.js";
 import { readUploadBounded } from "../../src/utils/boundedUpload.js";
 
 const userId = buildUserId();
@@ -275,5 +276,27 @@ describe("addPurchaseInvoiceFile (fichier envoyé)", () => {
       addFile(id, upload(EXE, "facture.exe", "application/pdf")),
     ).rejects.toThrow("Type de fichier non supporté (facture.exe)");
     expect(state.uploads).toEqual([]);
+  });
+});
+
+describe("importInvoiceDirect", () => {
+  it("fichier de 100 Mo : refusé dès 10 Mo lus, rien n'est envoyé", async () => {
+    const file = largeFile(100);
+    const result = await importedInvoiceResolvers.Mutation.importInvoiceDirect(
+        null,
+        {
+          file: Promise.resolve({
+            createReadStream: file.createReadStream,
+            filename: "facture-geante.pdf",
+            mimetype: "application/pdf",
+          }),
+          workspaceId: ws,
+        },
+        ctx(),
+      );
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).toMatch(/trop volumineux/);
+    expect(file.read.chunks).toBeLessThanOrEqual(11);
+    expect(state.uploads).toHaveLength(0);
   });
 });
