@@ -302,6 +302,31 @@ describe("facture d'un bon de commande", () => {
     await expect(convert(validated)).resolves.toBeTruthy();
     await expect(convert(confirmed)).rejects.toThrow(/validés, en cours ou livrés/);
   });
+
+  it("un bon de commande sans devis ne se facture qu'une fois", async () => {
+    const poId = await insertPurchaseOrder(null);
+    await convert(poId);
+    await expect(convert(poId)).rejects.toThrow(/déjà facturé/);
+    expect(await Invoice.countDocuments({ purchaseOrderNumber: { $regex: /^BC-202610-/ } })).toBe(1);
+    expect((await PurchaseOrder.findById(poId)).linkedInvoices).toHaveLength(1);
+  });
+
+  it("deux conversions simultanées du même bon : une seule facture", async () => {
+    const quoteId = await insertQuote();
+    const poId = await insertPurchaseOrder(quoteId);
+    const results = await Promise.allSettled([convert(poId), convert(poId)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect((await PurchaseOrder.findById(poId)).linkedInvoices).toHaveLength(1);
+    expect(await invoicesOf(quoteId)).toHaveLength(1);
+    expect((await Quote.findById(quoteId)).linkedInvoices).toHaveLength(1);
+  });
+
+  it("facture liée annulée : le bon de commande peut être refacturé", async () => {
+    const poId = await insertPurchaseOrder(null);
+    const first = await convert(poId);
+    await Invoice.updateOne({ _id: first._id }, { $set: { status: "CANCELED" } });
+    await expect(convert(poId)).resolves.toBeTruthy();
+  });
 });
 
 describe("conversion d'un devis par répartition", () => {
