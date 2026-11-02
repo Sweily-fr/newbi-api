@@ -159,14 +159,12 @@ describe("POST /webhook/bridge : signature", () => {
 
 describe("account.disconnected : périmètre et conservation", () => {
   it("seul le compte de l'espace de l'utilisateur Bridge est retiré, ses transactions restent", async () => {
+    // Index unique provider + externalId : le compte d'un autre espace a son
+    // propre identifiant Bridge, visé plus bas par un second webhook
     const own = account(wsA, "888");
-    const sameIdElsewhere = account(wsB, "888");
+    const elsewhere = account(wsB, "890");
     const otherOwn = account(wsA, "889");
-    await AccountBanking.collection.insertMany([
-      own,
-      sameIdElsewhere,
-      otherOwn,
-    ]);
+    await AccountBanking.collection.insertMany([own, elsewhere, otherOwn]);
     const txId = new ObjectId();
     await Transaction.collection.insertOne({
       _id: txId,
@@ -195,14 +193,26 @@ describe("account.disconnected : périmètre et conservation", () => {
       await AccountBanking.collection.findOne({ _id: own._id }),
     ).toBeNull();
     expect(
-      (await AccountBanking.collection.findOne({ _id: sameIdElsewhere._id }))
-        .status,
+      (await AccountBanking.collection.findOne({ _id: elsewhere._id })).status,
     ).toBe("active");
     expect(
       (await AccountBanking.collection.findOne({ _id: otherOwn._id })).status,
     ).toBe("active");
     const tx = await Transaction.collection.findOne({ _id: txId });
     expect(tx.receiptFiles).toHaveLength(1);
+
+    // Le compte d'un autre espace visé par l'utilisateur Bridge de l'espace A
+    const foreign = JSON.stringify({
+      type: "account.disconnected",
+      content: { user_uuid: "uuid-a", account_id: 890 },
+    });
+    const resForeign = await postWebhook("/webhook/bridge", foreign, {
+      "bridgeapi-signature": sign(foreign),
+    });
+    expect(resForeign.status).toBe(200);
+    expect(
+      (await AccountBanking.collection.findOne({ _id: elsewhere._id })).status,
+    ).toBe("active");
   });
 
   it("utilisateur Bridge inconnu : rien ne change", async () => {
