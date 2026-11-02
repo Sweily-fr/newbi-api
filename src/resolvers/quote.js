@@ -2375,26 +2375,6 @@ const quoteResolvers = {
       },
     ),
 
-    sendQuote: requireAction("quotes", "send")(
-      async (_, { id /* email */ }, context) => {
-        const { user, workspaceId } = context;
-        // ✅ FIX: Utiliser workspaceId au lieu de createdBy
-        const quote = await Quote.findOne({
-          _id: id,
-          workspaceId: workspaceId,
-        });
-
-        if (!quote) {
-          throw createNotFoundError("Devis");
-        }
-
-        // Ici, vous pourriez implémenter la logique d'envoi d'email
-        // Pour l'instant, nous simulons un succès
-        // TODO: Implémenter l'envoi réel du devis par email
-
-        return true;
-      },
-    ),
   },
 };
 

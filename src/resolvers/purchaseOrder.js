@@ -1620,19 +1620,6 @@ const purchaseOrderResolvers = {
       },
     ),
 
-    sendPurchaseOrder: requireAction("purchaseOrders", "send")(
-      async (_, { id, workspaceId: inputWorkspaceId, email }, context) => {
-        const { user, workspaceId } = context;
-        const po = await PurchaseOrder.findOne({ _id: id, workspaceId });
-
-        if (!po) {
-          throw createNotFoundError("Bon de commande");
-        }
-
-        // TODO: Implémenter l'envoi réel par email
-        return true;
-      },
-    ),
   },
 };
 

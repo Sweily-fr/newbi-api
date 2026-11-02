@@ -3472,29 +3472,6 @@ const invoiceResolvers = {
       },
     ),
 
-    sendInvoice: requireAction(
-      "invoices",
-      "send",
-    )(async (_, { id, workspaceId: inputWorkspaceId }, context) => {
-      const { user } = context;
-      const workspaceId = resolveWorkspaceId(
-        inputWorkspaceId,
-        context.workspaceId,
-      );
-
-      const invoice = await Invoice.findOne({ _id: id, workspaceId });
-
-      if (!invoice) {
-        throw createNotFoundError("Facture");
-      }
-
-      // Ici, vous pourriez implémenter la logique d'envoi d'email
-      // Pour l'instant, nous simulons un succès
-      // TODO: Implémenter l'envoi réel de la facture par email
-
-      return true;
-    }),
-
     // Facture liée (acompte, partielle) depuis un devis : transformation du
     // devis, « Transformer » sur les devis ET « Créer » sur les factures
     // (comme l'écran)

@@ -152,6 +152,5 @@ extend type Mutation {
   changePurchaseOrderStatus(id: ID!, workspaceId: ID!, status: PurchaseOrderStatus!): PurchaseOrder!
   convertQuoteToPurchaseOrder(quoteId: ID!, workspaceId: ID!): PurchaseOrder!
   convertPurchaseOrderToInvoice(id: ID!, workspaceId: ID!): Invoice!
-  sendPurchaseOrder(id: ID!, workspaceId: ID!, email: String!): Boolean!
   archivePurchaseOrderPdf(workspaceId: ID!, purchaseOrderId: ID!, file: Upload!): PurchaseOrder!
 }
