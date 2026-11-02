@@ -1,4 +1,5 @@
 import express from "express";
+import { isBackofficeAdmin } from "../utils/backofficeAdmin.js";
 import crypto from "crypto";
 import Stripe from "stripe";
 import { bankingService } from "../services/banking/BankingService.js";
@@ -163,16 +164,19 @@ router.post(
  * Routes d'administration banking (protégées)
  */
 
-// Switch de provider (admin only)
+// Switch de provider (administrateurs du back-office seulement)
 router.post(
   "/admin/switch-provider",
-  betterAuthJWTMiddleware,
   async (req, res) => {
     try {
-      const user = req.user;
+      const user = await betterAuthJWTMiddleware(req);
+      if (!user) {
+        return res.status(401).json({ error: "Non authentifié" });
+      }
 
-      // Vérifier les permissions admin
-      if (!user.role || !user.role.includes("admin")) {
+      // Change le prestataire bancaire de tout le service : réservé au
+      // back-office (liste blanche BACKOFFICE_ADMIN_USER_IDS)
+      if (!(await isBackofficeAdmin(user._id))) {
         return res.status(403).json({ error: "Accès non autorisé" });
       }
 
@@ -185,7 +189,7 @@ router.post(
       res.json({ success: true, message: `Provider switché vers ${provider}` });
     } catch (error) {
       console.error("Erreur switch provider:", error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Changement de prestataire impossible" });
     }
   },
 );
