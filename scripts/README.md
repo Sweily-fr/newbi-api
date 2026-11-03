@@ -94,6 +94,7 @@ Si une migration est faite, son script peut soit :
 | `clean-duplicate-drafts.js` | Renomme les brouillons en double pour libérer l'index unique. |
 | `clean-empty-assigned-members.js` | Supprime les `assignedMember` vides et backfill `expenseType`. |
 | `clean-orphan-commissions.js` | Supprime les commissions dont le `referralId` n'existe plus. |
+| `clean-orphan-purchase-invoice-notifications.js` | Supprime les notifications « Nouvelle facture reçue » dont la facture d'achat a disparu ou appartient à un autre espace (incident SuperPDP du 01/09/2026). Aperçu par défaut, `--apply` avec sauvegarde, `--restore`. Liste aussi les espaces sans SIREN ayant des factures SuperPDP. |
 
 ### Backup / Restore (paire analyse + restauration)
 

@@ -80,6 +80,12 @@ beforeEach(async () => {
   transformReceivedInvoiceToPurchaseInvoice.mockReset();
   publishNotification.mockClear();
   sendPushToUser.mockClear();
+  // Organisation destinataire : son SIREN correspond au buyer de detailFor
+  await mongoose.connection.db.collection("organization").insertOne({
+    _id: workspaceId,
+    name: "Sweily",
+    siret: "12345678900019",
+  });
 });
 
 const detailFor = (id) => ({
@@ -88,6 +94,10 @@ const detailFor = (id) => ({
     number: "FA-2026-001",
     seller: { name: "Acme Telecom" },
     totals: { total_with_vat: "1200" },
+    buyer: {
+      name: "Sweily",
+      legal_registration_identifier: { value: "123456789", scheme: "0002" },
+    },
   },
 });
 
@@ -137,7 +147,7 @@ describe("invoiceIsAddressedToOrganization", () => {
     ).toBe(true);
   });
 
-  it("accepte si l'org n'a pas de SIRET (comparaison impossible)", () => {
+  it("refuse si l'org n'a pas de SIRET (comparaison impossible)", () => {
     expect(
       invoiceIsAddressedToOrganization(
         withBuyer({
@@ -145,16 +155,16 @@ describe("invoiceIsAddressedToOrganization", () => {
         }),
         { companyInfo: {} },
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("accepte si le buyer n'a aucun identifiant exploitable", () => {
+  it("refuse si le buyer n'a aucun identifiant exploitable", () => {
     expect(
       invoiceIsAddressedToOrganization(
         withBuyer({ name: "Client sans SIREN" }),
         org("12345678900019"),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -445,11 +455,12 @@ describe("importReceivedInvoices — récupération du détail EN16931", () => {
 
   it("ignore une facture adressée à un autre destinataire (compte SuperPDP partagé)", async () => {
     // Organisation avec un SIRET différent du buyer de la facture
-    await mongoose.connection.db.collection("organization").insertOne({
-      _id: workspaceId,
-      name: "Autre Société",
-      companyInfo: { siret: "98765432100019" },
-    });
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne(
+        { _id: workspaceId },
+        { $set: { name: "Autre Société", siret: "98765432100019" } },
+      );
 
     getReceivedInvoices.mockResolvedValue({
       invoices: [{ id: "sp-1", direction: "in" }],
@@ -478,6 +489,31 @@ describe("importReceivedInvoices — récupération du détail EN16931", () => {
     expect(res.errors).toBe(0);
     expect(transformReceivedInvoiceToPurchaseInvoice).not.toHaveBeenCalled();
     expect(await PurchaseInvoice.countDocuments()).toBe(0);
+  });
+
+  it("ignore toute facture si l'organisation n'a pas de SIREN (compte mandataire partagé)", async () => {
+    // Espace inscrit sans SIRET : sans comparaison possible, il ne doit pas
+    // récupérer les factures des autres clients du compte mandataire
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne({ _id: workspaceId }, { $unset: { siret: "" } });
+
+    getReceivedInvoices.mockResolvedValue({
+      invoices: [{ id: "sp-1", direction: "in" }],
+      hasAfter: false,
+    });
+    getReceivedInvoiceDetail.mockResolvedValue(detailFor("sp-1"));
+
+    const res = await importReceivedInvoices(
+      workspaceId.toString(),
+      userId.toString(),
+    );
+
+    expect(res.imported).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(transformReceivedInvoiceToPurchaseInvoice).not.toHaveBeenCalled();
+    expect(await PurchaseInvoice.countDocuments()).toBe(0);
+    expect(await Notification.countDocuments()).toBe(0);
   });
 
   it("ne crée pas de facture vide si le détail renvoyé est vide lui aussi", async () => {

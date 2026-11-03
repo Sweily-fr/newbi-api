@@ -213,7 +213,7 @@ router.post(
             await EInvoicingSettingsService.getOrganizationById(workspaceId);
           if (!invoiceIsAddressedToOrganization(invoiceDetail, organization)) {
             logger.info(
-              `Facture SuperPDP ${invoiceId} ignorée : destinataire différent de l'organisation ${workspaceId}`
+              `Facture SuperPDP ${invoiceId} ignorée : destinataire différent ou non vérifiable (SIREN absent) pour l'organisation ${workspaceId}`
             );
             return res.status(200).json({
               received: true,
