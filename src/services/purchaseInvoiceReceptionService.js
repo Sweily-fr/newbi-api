@@ -16,9 +16,11 @@ import logger from "../utils/logger.js";
  * SuperPDP : sans ce filtre, chacun importerait toutes les factures entrantes
  * du compte, y compris celles destinées aux autres.
  *
- * Retourne true si le buyer correspond, ou si la comparaison est impossible
- * (SIREN de l'org ou identifiants buyer absents) afin de ne pas perdre de
- * factures légitimes.
+ * Retourne true uniquement si le SIREN du buyer correspond à celui de l'org.
+ * Si la comparaison est impossible (SIREN de l'org ou identifiants buyer
+ * absents), la facture est refusée : le compte SuperPDP de Sweily est
+ * mandataire pour tous les clients, l'accepter l'importerait dans chaque
+ * workspace branché sur ce compte.
  *
  * @param {Object} sourceInvoice - Enveloppe { en_invoice } ou EN16931 nu
  * @param {Object|null} organization - Document organization (Better Auth)
@@ -48,7 +50,7 @@ export function invoiceIsAddressedToOrganization(sourceInvoice, organization) {
       organization?.companyInfo?.siret,
   ).substring(0, 9);
 
-  if (orgSiren.length < 9 || buyerSirens.length === 0) return true;
+  if (orgSiren.length < 9 || buyerSirens.length === 0) return false;
   return buyerSirens.includes(orgSiren);
 }
 
@@ -188,7 +190,7 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
         if (!invoiceIsAddressedToOrganization(sourceInvoice, organization)) {
           skipped++;
           logger.info(
-            `[reception] facture SuperPDP ${superPdpId} ignorée : destinataire différent de l'organisation ${workspaceId}`,
+            `[reception] facture SuperPDP ${superPdpId} ignorée : destinataire différent ou non vérifiable (SIREN absent) pour l'organisation ${workspaceId}`,
           );
           continue;
         }
