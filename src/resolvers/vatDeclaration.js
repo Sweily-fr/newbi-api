@@ -6,7 +6,9 @@ import {
   getVatReturn,
 } from "../services/vat/vatDeclarationService.js";
 
-const requireConfirm = requireAction("vat", "edit");
+const requireConfirm = requireAction("vat", "edit", {
+  preferArgsWorkspace: true,
+});
 
 const vatDeclarationResolvers = {
   Query: {

@@ -738,3 +738,28 @@ describe("périodes et enregistrement", () => {
     expect(after).toMatchObject({ state: "DONE", isDeclared: true });
   });
 });
+
+describe("droits", () => {
+  it("le module vat suit les rôles : Membre lit, Comptable et Éditeur confirment", async () => {
+    const { PREDEFINED_ROLES } =
+      await import("../../src/config/rolePermissions.js");
+    expect(PREDEFINED_ROLES.viewer.actions.vat).toEqual(["view"]);
+    expect(PREDEFINED_ROLES.accountant.actions.vat).toEqual(["view", "edit"]);
+    expect(PREDEFINED_ROLES.member.actions.vat).toEqual(["view", "edit"]);
+    expect(PREDEFINED_ROLES.admin.actions.vat).toEqual(["view", "edit"]);
+  });
+
+  it("les requêtes et mutations acceptent l'espace en argument", async () => {
+    const { default: typeDefs } = await import("../../src/schemas/index.js");
+    const { buildASTSchema } = await import("graphql");
+    const schema = buildASTSchema(typeDefs);
+    for (const field of [
+      schema.getQueryType().getFields().vatOverview,
+      schema.getQueryType().getFields().vatReturn,
+      schema.getMutationType().getFields().confirmVatDeclaration,
+      schema.getMutationType().getFields().cancelVatDeclaration,
+    ]) {
+      expect(field.args.map((arg) => arg.name)).toContain("workspaceId");
+    }
+  });
+});

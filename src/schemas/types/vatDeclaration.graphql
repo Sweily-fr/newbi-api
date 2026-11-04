@@ -142,17 +142,22 @@ input VatReturnAdjustmentsInput {
 
 extend type Query {
   "Situation de TVA de l'espace, rythme et périodes à déclarer"
-  vatOverview: VatOverview!
+  vatOverview(workspaceId: ID): VatOverview!
   "Calcul d'une période, ou déclaration figée si elle est déjà confirmée"
-  vatReturn(periodKey: String!, adjustments: VatReturnAdjustmentsInput): VatReturn!
+  vatReturn(
+    workspaceId: ID
+    periodKey: String!
+    adjustments: VatReturnAdjustmentsInput
+  ): VatReturn!
 }
 
 extend type Mutation {
   "Enregistre que la déclaration a été déposée sur impots.gouv.fr"
   confirmVatDeclaration(
+    workspaceId: ID
     periodKey: String!
     adjustments: VatReturnAdjustmentsInput
   ): VatReturn!
   "Annule une confirmation faite par erreur (rien n'est changé aux impôts)"
-  cancelVatDeclaration(periodKey: String!): VatOverview!
+  cancelVatDeclaration(workspaceId: ID, periodKey: String!): VatOverview!
 }
