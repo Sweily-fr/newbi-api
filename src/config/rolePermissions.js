@@ -154,6 +154,12 @@ export const MODULES = [
     label: "Analytiques",
     actions: [VIEW],
   },
+  {
+    key: "vat",
+    group: "pilotage",
+    label: "Déclaration de TVA",
+    actions: [VIEW, action("edit", "Confirmer les déclarations")],
+  },
   // Ventes
   {
     key: "invoices",
@@ -627,6 +633,7 @@ const EDITOR_EXCLUDED = {
 };
 
 const ACCOUNTANT_LEVELS = fill("read", {
+  vat: "write",
   invoicePayments: "write",
   importedInvoices: "write",
   importedQuotes: "write",

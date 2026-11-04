@@ -1,0 +1,163 @@
+"Information légale qui manque pour préparer une déclaration de TVA"
+type VatMissingInfo {
+  code: String!
+  label: String!
+}
+
+"Période à déclarer, déduite du régime de TVA de l'espace"
+type VatPeriod {
+  key: String!
+  label: String!
+  "CA3 ou CA12"
+  form: String!
+  start: String!
+  end: String!
+  dueDate: String!
+  "La date limite exacte dépend de l'entreprise (voir le rythme)"
+  isIndicative: Boolean!
+  "IN_PROGRESS, TO_DECLARE, NOT_CONFIRMED ou DECLARED"
+  status: String!
+  "Déclarée : total payé"
+  totalToPay: Int
+  "Déclarée : crédit reporté sur la suivante"
+  creditToCarry: Int
+  declaredAt: DateTime
+}
+
+"Franchise en base : chiffre d'affaires de l'année face aux seuils"
+type VatFranchiseTracking {
+  year: Int!
+  revenueHT: Float!
+  servicesThreshold: Int!
+  servicesUpperThreshold: Int!
+  goodsThreshold: Int!
+  goodsUpperThreshold: Int!
+}
+
+type VatOverview {
+  "SUBJECT, FRANCHISE, NOT_SUBJECT ou INCOMPLETE"
+  situation: String!
+  legalForm: String
+  "Réel normal, réel simplifié"
+  regimeLabel: String
+  "Mensuelle, trimestrielle, annuelle"
+  frequencyLabel: String
+  "debits ou encaissements"
+  vatMode: String
+  "Le rythme de déclaration en clair"
+  rhythm: String
+  missing: [VatMissingInfo!]!
+  periods: [VatPeriod!]!
+  franchise: VatFranchiseTracking
+  "Période à ouvrir par défaut"
+  defaultPeriodKey: String
+}
+
+type VatReturnLine {
+  "Numéro de ligne du formulaire, absent pour la CA12"
+  code: String
+  label: String!
+  base: Int
+  amount: Int!
+  isTotal: Boolean!
+  note: String
+}
+
+type VatReturnSection {
+  key: String!
+  title: String!
+  lines: [VatReturnLine!]!
+}
+
+type VatReturnCheckDocument {
+  id: ID
+  label: String!
+  amount: Float
+}
+
+"Point à vérifier avant de déclarer"
+type VatReturnCheck {
+  code: String!
+  "WARNING : le montant peut être faux ; INFO : à savoir"
+  severity: String!
+  label: String!
+  count: Int!
+  amount: Float
+  documents: [VatReturnCheckDocument!]!
+}
+
+type VatReturnTotals {
+  grossVat: Int!
+  deductibleVat: Int!
+  vatDue: Int!
+  credit: Int!
+  refundRequested: Int!
+  creditToCarry: Int!
+  assimilatedTaxes: Int!
+  installmentsPaid: Int!
+  totalToPay: Int!
+}
+
+type VatReturnAdjustments {
+  reverseChargeServicesBase: Int!
+  intraCommunityAcquisitionsBase: Int!
+  fixedAssetsVat: Int!
+  otherDeductibleVat: Int!
+  vatToRepay: Int!
+  previousCredit: Int!
+  refundRequested: Int!
+  assimilatedTaxes: Int!
+  installmentsPaid: Int!
+}
+
+type VatReturn {
+  period: VatPeriod!
+  vatMode: String!
+  isNil: Boolean!
+  totals: VatReturnTotals!
+  sections: [VatReturnSection!]!
+  checks: [VatReturnCheck!]!
+  adjustments: VatReturnAdjustments!
+  "Crédit repris de la déclaration confirmée précédente, null s'il n'y en a pas"
+  carriedCredit: Int
+  "Nombre de documents pris en compte"
+  documentCount: Int!
+  "Pourquoi la période ne peut pas encore être confirmée"
+  cannotConfirmReason: String
+  declaredByName: String
+}
+
+"Montants saisis à la main, en euros entiers"
+input VatReturnAdjustmentsInput {
+  reverseChargeServicesBase: Int
+  intraCommunityAcquisitionsBase: Int
+  fixedAssetsVat: Int
+  otherDeductibleVat: Int
+  vatToRepay: Int
+  previousCredit: Int
+  refundRequested: Int
+  assimilatedTaxes: Int
+  installmentsPaid: Int
+}
+
+extend type Query {
+  "Situation de TVA de l'espace, rythme et périodes à déclarer"
+  vatOverview(workspaceId: ID): VatOverview!
+  "Calcul d'une période, ou déclaration figée si elle est déjà confirmée"
+  vatReturn(
+    workspaceId: ID
+    periodKey: String!
+    adjustments: VatReturnAdjustmentsInput
+  ): VatReturn!
+}
+
+extend type Mutation {
+  "Enregistre que la déclaration a été déposée sur impots.gouv.fr"
+  confirmVatDeclaration(
+    workspaceId: ID
+    periodKey: String!
+    adjustments: VatReturnAdjustmentsInput
+  ): VatReturn!
+  "Annule une confirmation faite par erreur (rien n'est changé aux impôts)"
+  cancelVatDeclaration(workspaceId: ID, periodKey: String!): VatOverview!
+}

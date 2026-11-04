@@ -359,7 +359,7 @@ function vatDayRange(legalForm) {
   };
 }
 
-function vatDayNote(range) {
+export function vatDayNote(range) {
   if (range.first === range.last) {
     return `Date limite fixée au ${range.first} du mois.`;
   }
@@ -572,9 +572,24 @@ const VAT_PAYMENT_NOTE = "La TVA due se paie en même temps que la déclaration.
 
 // CA3 de la période, due le mois suivant (`intro` : phrase placée en tête de
 // la note, `infoUrl` : page officielle si ce n'est pas celle de la TVA)
-function vatReturn({ code, period, dueYear, dueMonth, range, intro, infoUrl }) {
+function vatReturn({
+  code,
+  period,
+  periodKey,
+  periodStart,
+  periodEnd,
+  dueYear,
+  dueMonth,
+  range,
+  intro,
+  infoUrl,
+}) {
   return {
     code,
+    form: "CA3",
+    periodKey,
+    periodStart,
+    periodEnd,
     day: nextWorkingDay(dayString(dueYear, dueMonth, range.first)),
     title: "Déclaration de TVA (CA3)",
     reference: period,
@@ -597,6 +612,9 @@ function monthlyVatReturns(years, range) {
         vatReturn({
           code: "VAT_RETURN_MONTHLY",
           period: monthLabel(year, month),
+          periodKey: `${year}-${pad(month)}`,
+          periodStart: dayString(year, month, 1),
+          periodEnd: lastDayOfMonth(year, month),
           dueYear: month === 12 ? year + 1 : year,
           dueMonth: month === 12 ? 1 : month + 1,
           range,
@@ -622,6 +640,9 @@ function quarterlyVatReturns(
         vatReturn({
           code: "VAT_RETURN_QUARTERLY",
           period: quarterLabel(year, quarter),
+          periodKey: `${year}-T${quarter}`,
+          periodStart: start,
+          periodEnd: lastDayOfMonth(year, 3 * quarter),
           dueYear: quarter === 4 ? year + 1 : year,
           dueMonth: quarter === 4 ? 1 : 3 * quarter + 1,
           range,
@@ -710,6 +731,10 @@ function simplifiedVatDeadlines(years, range, closingInfo) {
     const isLast = endKnown && closing === lastClosing;
     deadlines.push({
       code: "VAT_ANNUAL_RETURN",
+      form: "CA12",
+      periodKey: `CA12-${closing}`,
+      periodStart: addDays(addMonths(closing, -12), 1),
+      periodEnd: closing,
       day: closing.endsWith("-12-31")
         ? nthWorkingDayOfMonth(yearOf(closing) + 1, 5, 2)
         : nextWorkingDay(addMonths(closing, 3)),
@@ -746,6 +771,24 @@ function simplifiedVatDeadlines(years, range, closingInfo) {
   }
 
   return deadlines;
+}
+
+function vatDeadlinesOf(profile, years) {
+  const { regime, range } = profile.vat || {};
+  if (regime === "monthly") return monthlyVatReturns(years, range);
+  if (regime === "quarterly") return quarterlyVatReturns(years, range);
+  if (regime === "simplified") {
+    return simplifiedVatDeadlines(years, range, profile.closing);
+  }
+  return [];
+}
+
+/**
+ * Déclarations de TVA à déposer (sans les acomptes), avec leur période : le
+ * rythme du calendrier et celui de la page Déclaration de TVA sont les mêmes.
+ */
+export function vatReturnDeadlines(profile, years) {
+  return vatDeadlinesOf(profile, years).filter((item) => item.periodKey);
 }
 
 /**
@@ -870,6 +913,9 @@ function urssafDeadlines(years, frequency) {
                 ? lastDayOfMonth(year + 1, 1)
                 : lastDayOfMonth(year, month + 1),
             period: monthLabel(year, month),
+          periodKey: `${year}-${pad(month)}`,
+          periodStart: dayString(year, month, 1),
+          periodEnd: lastDayOfMonth(year, month),
           }),
         );
       }
@@ -909,16 +955,7 @@ export function computeFiscalDeadlines(organization, { from, to, today }) {
     years.push(year);
   }
 
-  const deadlines = [];
-  if (profile.vat?.regime === "monthly") {
-    deadlines.push(...monthlyVatReturns(years, profile.vat.range));
-  } else if (profile.vat?.regime === "quarterly") {
-    deadlines.push(...quarterlyVatReturns(years, profile.vat.range));
-  } else if (profile.vat?.regime === "simplified") {
-    deadlines.push(
-      ...simplifiedVatDeadlines(years, profile.vat.range, profile.closing),
-    );
-  }
+  const deadlines = vatDeadlinesOf(profile, years);
   if (profile.corporateTax) {
     deadlines.push(...corporateTaxDeadlines(years, profile.closing));
   }
@@ -945,6 +982,8 @@ export function computeFiscalDeadlines(organization, { from, to, today }) {
       isIndicative: deadline.isIndicative,
       isConditional: deadline.isConditional,
       note: deadline.note,
+      vatPeriodKey: deadline.periodKey ?? null,
+      isDeclared: false,
     }))
     .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id));
 
