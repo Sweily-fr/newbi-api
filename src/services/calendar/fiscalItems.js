@@ -3,6 +3,7 @@ import {
   FISCAL_ORGANIZATION_FIELDS,
   computeFiscalDeadlines,
 } from "./fiscalDeadlines.js";
+import { declaredVatPeriodKeys } from "../vat/vatDeclarationService.js";
 
 /**
  * Échéances fiscales et sociales dans le calendrier : calculées à chaque
@@ -20,5 +21,15 @@ export async function fiscalItems({ workspaceId, from, to, today, db }) {
     to,
     today,
   });
+  // Déclaration de TVA confirmée dans Newbi : l'échéance est faite
+  const declared = items.some((item) => item.vatPeriodKey)
+    ? await declaredVatPeriodKeys(workspaceId)
+    : new Set();
+  for (const item of items) {
+    if (item.vatPeriodKey && declared.has(item.vatPeriodKey)) {
+      item.isDeclared = true;
+      item.state = "DONE";
+    }
+  }
   return { items, truncated: false, fiscalSetup: setup };
 }

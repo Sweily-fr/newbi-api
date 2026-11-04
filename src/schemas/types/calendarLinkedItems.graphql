@@ -84,6 +84,10 @@ type CalendarLinkedItem {
   isConditional: Boolean
   "Échéance fiscale : règle appliquée et conditions"
   note: String
+  "Déclaration de TVA : période à ouvrir dans la page Déclaration de TVA"
+  vatPeriodKey: String
+  "Déclaration de TVA : confirmée dans Newbi"
+  isDeclared: Boolean
 }
 
 "Information légale qui manque pour calculer des échéances fiscales"
