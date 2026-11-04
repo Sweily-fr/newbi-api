@@ -28,6 +28,7 @@ import Invoice from "../../src/models/Invoice.js";
 import CreditNote from "../../src/models/CreditNote.js";
 import ImportedInvoice from "../../src/models/ImportedInvoice.js";
 import PurchaseInvoice from "../../src/models/PurchaseInvoice.js";
+import Supplier from "../../src/models/Supplier.js";
 import {
   classifyNonTaxedSale,
   companyRegion,
@@ -631,7 +632,7 @@ describe("périodes et enregistrement", () => {
     await insertPurchase({
       amountTVA: 0,
       amountTTC: 100,
-      supplierVatNumber: "IE6388047V",
+      ocrMetadata: { supplierVatNumber: "IE6388047V" },
       supplierName: "Meta",
     });
     await insertPurchase({ category: "TRANSPORT", amountTVA: 10 });
@@ -646,6 +647,78 @@ describe("périodes et enregistrement", () => {
       ]),
     );
     expect(result.totals.deductibleVat).toBe(10);
+  });
+
+  it("autoliquidation : retrouve le numéro de TVA sur la fiche du fournisseur", async () => {
+    await insertOrganization(MONTHLY);
+    const { insertedId } = await Supplier.collection.insertOne({
+      workspaceId: orgA,
+      name: "Google Ireland",
+      vatNumber: "IE6388047V",
+    });
+    await insertPurchase({
+      amountTVA: 0,
+      amountTTC: 100,
+      supplierId: insertedId,
+    });
+    const result = await preview("2026-10");
+    expect(result.checks.map((c) => c.code)).toContain(
+      "PURCHASE_REVERSE_CHARGE",
+    );
+  });
+
+  it("le rappel aux douanes vise les clients assujettis de l'UE, pas une exonération en France", async () => {
+    await insertOrganization(MONTHLY);
+    const noVat = {
+      items: [
+        {
+          quantity: 1,
+          unitPrice: 100,
+          vatRate: 0,
+          vatExemptionText: "Article 261 du CGI",
+        },
+      ],
+      finalTotalHT: 100,
+      finalTotalVAT: 0,
+    };
+    await insertInvoice(noVat);
+    let result = await preview("2026-10");
+    expect(result.checks.map((c) => c.code)).not.toContain(
+      "CUSTOMS_DECLARATION",
+    );
+
+    await insertInvoice({
+      ...noVat,
+      number: "002",
+      operationType: "PS",
+      client: {
+        name: "GmbH",
+        vatNumber: "DE123456789",
+        address: { country: "Allemagne" },
+      },
+    });
+    result = await preview("2026-10");
+    expect(result.checks.map((c) => c.code)).toContain("CUSTOMS_DECLARATION");
+  });
+
+  it("garde l'historique lisible après un changement de régime", async () => {
+    await insertOrganization(MONTHLY);
+    await insertInvoice({ issueDate: new Date("2026-09-15T00:00:00Z") });
+    await confirm("2026-09");
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne({ _id: orgA }, { $set: { vatFrequency: "trimestriel" } });
+
+    const result = await overview();
+    const september = result.periods.find((p) => p.key === "2026-09");
+    expect(september).toMatchObject({
+      status: "DECLARED",
+      label: "Septembre 2026",
+      totalToPay: 200,
+    });
+    expect(result.periods.find((p) => p.key === "2026-T3")).toBeDefined();
+    const frozen = await preview("2026-09");
+    expect(frozen.totals.totalToPay).toBe(200);
   });
 
   it("refuse de confirmer une période en cours ou hors régime", async () => {

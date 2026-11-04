@@ -7,6 +7,7 @@ import CreditNote from "../../models/CreditNote.js";
 import ImportedInvoice from "../../models/ImportedInvoice.js";
 import PurchaseInvoice from "../../models/PurchaseInvoice.js";
 import Transaction from "../../models/Transaction.js";
+import Supplier from "../../models/Supplier.js";
 import {
   FISCAL_ORGANIZATION_FIELDS,
   analyzeFiscalProfile,
@@ -17,6 +18,7 @@ import {
   classifyNonTaxedSale,
   companyRegion,
   computeVatReturn,
+  countryZone,
   normalizeAdjustments,
   normalizeVatMode,
   saleExigibility,
@@ -87,6 +89,24 @@ function periodStatus(period, today, declaration) {
   if (declaration) return "DECLARED";
   if (period.periodEnd >= today) return "IN_PROGRESS";
   return period.day >= today ? "TO_DECLARE" : "NOT_CONFIRMED";
+}
+
+// Période d'une déclaration confirmée : figée comme ses montants, elle reste
+// lisible si l'entreprise change ensuite de régime ou de rythme
+function declaredPeriod(declaration) {
+  return {
+    key: declaration.periodKey,
+    label: declaration.periodLabel || declaration.periodKey,
+    form: declaration.form,
+    start: declaration.periodStart,
+    end: declaration.periodEnd,
+    dueDate: declaration.dueDate || declaration.periodEnd,
+    isIndicative: Boolean(declaration.isIndicative),
+    status: "DECLARED",
+    totalToPay: declaration.totals?.totalToPay ?? null,
+    creditToCarry: declaration.creditToCarry ?? null,
+    declaredAt: declaration.declaredAt ?? null,
+  };
 }
 
 function toPeriod(deadline, today, declaration) {
@@ -245,18 +265,18 @@ export async function getVatOverview({ workspaceId, now = new Date() }) {
   const created = organization.createdAt
     ? parisDay(new Date(organization.createdAt))
     : null;
-  const periods = vatDeadlines(profile, today)
+  const toFile = vatDeadlines(profile, today)
     .filter(
       (deadline) =>
+        !declared.has(deadline.periodKey) &&
         deadline.periodStart <= today &&
-        (declared.has(deadline.periodKey) ||
-          (deadline.periodEnd >= historyStart &&
-            (!created || deadline.periodEnd >= created))),
+        deadline.periodEnd >= historyStart &&
+        (!created || deadline.periodEnd >= created),
     )
-    .map((deadline) =>
-      toPeriod(deadline, today, declared.get(deadline.periodKey)),
-    )
-    .sort((a, b) => b.end.localeCompare(a.end));
+    .map((deadline) => toPeriod(deadline, today, null));
+  const periods = [...toFile, ...declarations.map(declaredPeriod)].sort(
+    (a, b) => b.end.localeCompare(a.end),
+  );
 
   // Ouverture : la plus ancienne à déposer, sinon la période en cours
   const toDeclare = periods.filter((p) => p.status === "TO_DECLARE");
@@ -336,6 +356,9 @@ const invoiceLabel = (invoice) =>
 const clientVatNumberOf = (doc) => doc.client?.vatNumber;
 const clientCountryOf = (doc) => doc.client?.address?.country;
 
+const CUSTOMS_LABEL =
+  "Ventes sans TVA à des clients assujettis de l'Union européenne : un état récapitulatif ou une déclaration européenne de services peut être à déposer aux douanes dans les dix jours ouvrables.";
+
 function toSaleParts(parts, doc, checks) {
   const taxed = [];
   const nonTaxed = [];
@@ -351,6 +374,13 @@ function toSaleParts(parts, doc, checks) {
       operationType: doc.operationType,
     });
     nonTaxed.push({ line, ht: part.ht });
+    if (countryZone(clientCountryOf(doc)) === "EU" && clientVatNumberOf(doc)) {
+      checks.add("CUSTOMS_DECLARATION", "INFO", CUSTOMS_LABEL, {
+        id: doc._id,
+        label: invoiceLabel(doc),
+        amount: part.ht,
+      });
+    }
     if (!certain) {
       checks.add(
         "NON_TAXED_TO_CLASSIFY",
@@ -544,6 +574,18 @@ async function collectPurchases({ wId, period, vatMode, checks }) {
     $or: [{ issueDate: window }, { paymentDate: window }],
   }).lean();
 
+  // Numéro de TVA du fournisseur : lu sur la facture, sinon sur sa fiche
+  const supplierIds = documents.map((doc) => doc.supplierId).filter(Boolean);
+  const suppliers = supplierIds.length
+    ? await Supplier.find(
+        { _id: { $in: supplierIds }, workspaceId: wId },
+        { vatNumber: 1 },
+      ).lean()
+    : [];
+  const supplierVatById = new Map(
+    suppliers.map((supplier) => [String(supplier._id), supplier.vatNumber]),
+  );
+
   const purchases = [];
   for (const doc of documents) {
     const issueDay = dayOf(doc.issueDate);
@@ -594,7 +636,10 @@ async function collectPurchases({ wId, period, vatMode, checks }) {
     const vat = Number(doc.amountTVA) || 0;
     const ht = Number(doc.amountHT) || 0;
     const ttc = Number(doc.amountTTC) || 0;
-    if (!vat && isForeignVatNumber(doc.supplierVatNumber)) {
+    const supplierVat =
+      doc.ocrMetadata?.supplierVatNumber ||
+      supplierVatById.get(String(doc.supplierId));
+    if (!vat && isForeignVatNumber(supplierVat)) {
       checks.add(
         "PURCHASE_REVERSE_CHARGE",
         "WARNING",
@@ -693,9 +738,9 @@ async function carriedCreditFor(wId, periodStart) {
   return previous ? previous.creditToCarry || 0 : null;
 }
 
-function frozenReturn(declaration, deadline, today) {
+function frozenReturn(declaration) {
   return {
-    period: toPeriod(deadline, today, declaration),
+    period: declaredPeriod(declaration),
     vatMode: declaration.vatMode,
     isNil: declaration.isNil,
     totals: declaration.totals,
@@ -748,14 +793,6 @@ async function calculate({ workspaceId, periodKey, adjustments, today }) {
       { label: `Taux de ${rate} %` },
     );
   }
-  if (result.nonTaxedAmounts.F2 || result.nonTaxedAmounts.E2) {
-    checks.add(
-      "CUSTOMS_DECLARATION",
-      "INFO",
-      "Ventes à des clients de l'Union européenne : un état récapitulatif ou une déclaration européenne de services peut être à déposer aux douanes dans les dix jours ouvrables.",
-    );
-  }
-
   return {
     deadline,
     vatMode,
@@ -798,10 +835,7 @@ export async function getVatReturn({
     workspaceId: toObjectId(workspaceId),
     periodKey,
   }).lean();
-  if (declaration) {
-    const { deadline } = await findPeriod({ workspaceId, periodKey, today });
-    return frozenReturn(declaration, deadline, today);
-  }
+  if (declaration) return frozenReturn(declaration);
   const calculation = await calculate({
     workspaceId,
     periodKey,
@@ -842,6 +876,9 @@ export async function confirmVatDeclaration({
       form: deadline.form,
       periodStart: deadline.periodStart,
       periodEnd: deadline.periodEnd,
+      periodLabel: deadline.reference,
+      dueDate: deadline.day,
+      isIndicative: deadline.isIndicative,
       vatMode,
       totals: result.totals,
       sections: result.sections,
@@ -861,7 +898,7 @@ export async function confirmVatDeclaration({
     }
     throw error;
   }
-  return frozenReturn(declaration.toObject(), deadline, today);
+  return frozenReturn(declaration.toObject());
 }
 
 export async function cancelVatDeclaration({
