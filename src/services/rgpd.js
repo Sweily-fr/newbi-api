@@ -707,6 +707,7 @@ export async function deleteUserAccount(userId, organizationId) {
       { name: "shareddocuments", filter: { workspaceId: orgObjectId } },
       { name: "sharedfolders", filter: { workspaceId: orgObjectId } },
       { name: "sharedtags", filter: { workspaceId: orgObjectId } },
+      { name: "documentshares", filter: { workspaceId: orgObjectId } },
       { name: "publicboardshares", filter: { workspaceId: orgObjectId } },
       { name: "kanbantemplates", filter: { workspaceId: orgObjectId } },
       { name: "signaturerequests", filter: { workspaceId: orgObjectId } },

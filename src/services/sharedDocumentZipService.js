@@ -9,6 +9,7 @@ import mongoose from "mongoose";
 import SharedDocument from "../models/SharedDocument.js";
 import SharedFolder from "../models/SharedFolder.js";
 import logger from "../utils/logger.js";
+import { contentDisposition } from "../utils/fileSignature.js";
 
 // Configuration R2
 const s3Client = new S3Client({
@@ -210,7 +211,7 @@ async function streamFolderAsZip(folderId, workspaceId, res, options = {}) {
   res.setHeader("Content-Type", "application/zip");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${encodeURIComponent(rootFolderName)}.zip"`,
+    contentDisposition("attachment", `${rootFolderName}.zip`),
   );
 
   // Créer l'archive

@@ -111,6 +111,18 @@ export const SHARED_PREVIEW_EXTRA_TYPES = new Set([
 ]);
 
 /**
+ * Content-Disposition d'un nom de fichier quelconque. Le header n'accepte que
+ * du Latin-1 : repli ASCII + variante UTF-8 (RFC 5987), sinon certains
+ * navigateurs affichent le nom encodé (« Contrat%20sign%C3%A9.pdf »).
+ */
+export function contentDisposition(disposition, filename) {
+  const rawName = String(filename || "fichier");
+  const asciiName =
+    rawName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") || "fichier";
+  return `${disposition}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName)}`;
+}
+
+/**
  * En-têtes d'un fichier d'utilisateur servi pour l'aperçu, d'après un type
  * déjà établi.
  *
@@ -143,12 +155,6 @@ export function filePreviewHeaders({
   let servedType = inline ? type : "application/octet-stream";
   if (servedType === "text/plain") servedType = "text/plain; charset=utf-8";
 
-  const rawName = String(filename || "fichier");
-  // Le header n'accepte que du Latin-1 : repli ASCII + variante UTF-8
-  // (RFC 5987)
-  const asciiName =
-    rawName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "") || "fichier";
-
   const ancestors = frameAncestors ? `frame-ancestors ${frameAncestors}` : "";
   const policy =
     servedType === "application/pdf"
@@ -166,7 +172,10 @@ export function filePreviewHeaders({
 
   const headers = {
     "Content-Type": servedType,
-    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(rawName)}`,
+    "Content-Disposition": contentDisposition(
+      inline ? "inline" : "attachment",
+      filename,
+    ),
     "X-Content-Type-Options": "nosniff",
   };
   if (policy) headers["Content-Security-Policy"] = policy;

@@ -41,6 +41,7 @@ import importedInvoiceResolvers from "./importedInvoice.js";
 import importedQuoteResolvers from "./importedQuote.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
 import sharedDocumentResolvers from "./sharedDocument.js";
+import documentShareResolvers from "./documentShare.js";
 import storageResolvers from "./storage.js";
 import eInvoicingResolvers from "./eInvoicing.js";
 import publicBoardShareResolvers from "./publicBoardShare.js";
@@ -123,6 +124,7 @@ const resolvers = mergeResolvers([
   importedQuoteResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
+  documentShareResolvers,
   storageResolvers,
   eInvoicingResolvers,
   publicBoardShareResolvers,
