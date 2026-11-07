@@ -53,7 +53,10 @@ import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
-import { invalidateOrgCache } from "../../src/middlewares/rbac.js";
+import {
+  invalidateOrgCache,
+  invalidateSubCache,
+} from "../../src/middlewares/rbac.js";
 import { invalidateOrganizationRoles } from "../../src/services/organizationRoleService.js";
 import { PREDEFINED_ROLES } from "../../src/config/rolePermissions.js";
 import DocumentShare from "../../src/models/DocumentShare.js";
@@ -169,6 +172,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await clearMongo();
   invalidateOrgCache();
+  invalidateSubCache(String(workspaceId));
   invalidateOrganizationRoles();
   await seedOrgMembership({
     userId: owner,
@@ -464,8 +468,12 @@ describe("Lien protégé par mot de passe", () => {
 });
 
 describe("Gestion des liens", () => {
-  const { createDocumentShare, updateDocumentShare, deleteDocumentShare } =
-    shareResolvers.Mutation;
+  const {
+    createDocumentShare,
+    updateDocumentShare,
+    revokeDocumentShare,
+    deleteDocumentShare,
+  } = shareResolvers.Mutation;
   const { documentShares } = shareResolvers.Query;
   const create = (input, context = asOwner()) =>
     createDocumentShare(null, { workspaceId: ws, input }, context);
@@ -550,10 +558,13 @@ describe("Gestion des liens", () => {
     await expect(
       updateDocumentShare(
         null,
-        { ...args, input: { isActive: false } },
+        { ...args, input: { isActive: true } },
         asOwner(),
       ),
     ).rejects.toThrow("non trouvé");
+    await expect(revokeDocumentShare(null, args, asOwner())).rejects.toThrow(
+      "non trouvé",
+    );
     await expect(deleteDocumentShare(null, args, asOwner())).rejects.toThrow(
       "non trouvé",
     );
@@ -568,11 +579,7 @@ describe("Gestion des liens", () => {
     );
     const args = { workspaceId: ws, id: created.id };
 
-    await updateDocumentShare(
-      null,
-      { ...args, input: { isActive: false } },
-      asOwner(),
-    );
+    await revokeDocumentShare(null, args, asOwner());
     expect((await fetch(url)).status).toBe(410);
 
     await updateDocumentShare(
@@ -584,6 +591,33 @@ describe("Gestion des liens", () => {
 
     await deleteDocumentShare(null, args, asOwner());
     expect((await fetch(url)).status).toBe(404);
+  });
+
+  it("abonnement échu : on ne crée ni ne modifie plus, mais on coupe l'accès", async () => {
+    const created = await create({ folderId: String(ids.shared) });
+    const other = await create({ folderId: String(ids.sibling) });
+    await mongoose.connection.db.collection("subscription").deleteMany({});
+    invalidateOrgCache();
+    invalidateSubCache(ws);
+    const args = { workspaceId: ws, id: created.id };
+
+    await expect(create({ folderId: String(ids.shared) })).rejects.toThrow();
+    await expect(
+      updateDocumentShare(
+        null,
+        { ...args, input: { isActive: true } },
+        asOwner(),
+      ),
+    ).rejects.toThrow();
+
+    const revoked = await revokeDocumentShare(null, args, asOwner());
+    expect(revoked.isActive).toBe(false);
+    await deleteDocumentShare(
+      null,
+      { workspaceId: ws, id: other.id },
+      asOwner(),
+    );
+    expect(await DocumentShare.countDocuments()).toBe(1);
   });
 
   it("retire le mot de passe et l'expiration avec null", async () => {

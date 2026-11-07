@@ -135,13 +135,8 @@ export default {
     }),
 
     updateDocumentShare: shareGuard(async (_, args, context) => {
+      await checkSubscriptionActive(context);
       const { input } = args;
-      // Désactiver un lien reste possible sans abonnement actif
-      const onlyDisables =
-        input.isActive === false &&
-        Object.keys(input).every((key) => key === "isActive");
-      if (!onlyDisables) await checkSubscriptionActive(context);
-
       const workspaceId = workspaceOf(args, context);
       const share = await findShare(args.id, workspaceId);
       if (input.name !== undefined) share.name = cleanName(input.name);
@@ -155,6 +150,15 @@ export default {
         if (input.password) checkPassword(input.password);
         await share.setPassword(input.password);
       }
+      await share.save();
+      return toPayload(share, await loadFolderAvailability(workspaceId));
+    }),
+
+    // Couper l'accès reste possible sans abonnement actif, comme la suppression
+    revokeDocumentShare: shareGuard(async (_, args, context) => {
+      const workspaceId = workspaceOf(args, context);
+      const share = await findShare(args.id, workspaceId);
+      share.isActive = false;
       await share.save();
       return toPayload(share, await loadFolderAvailability(workspaceId));
     }),

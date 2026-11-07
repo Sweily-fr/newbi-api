@@ -133,6 +133,8 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
   revokeAccess: [
     "deletePublicShare",
     "revokePublicShare",
+    "deleteDocumentShare",
+    "revokeDocumentShare",
     "revokeVisitorAccess",
     "banInvitedUserFromBoard",
     "unbanInvitedUserFromBoard",

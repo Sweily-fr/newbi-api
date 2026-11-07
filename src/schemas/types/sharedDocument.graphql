@@ -299,6 +299,7 @@ extend type Mutation {
     id: ID!
     input: UpdateDocumentShareInput!
   ): DocumentShare!
+  revokeDocumentShare(workspaceId: ID!, id: ID!): DocumentShare!
   deleteDocumentShare(workspaceId: ID!, id: ID!): Boolean!
 
   # Documents
