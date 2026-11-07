@@ -104,6 +104,7 @@ import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.js";
 import publicBookingRoutes from "./routes/publicBooking.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
+import publicDocumentShareRoutes from "./routes/publicDocumentShare.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
 import socialConnectRoutes from "./routes/social-connect.js";
 import socialMediaRoutes from "./routes/social-media.js";
@@ -456,6 +457,8 @@ async function startServer() {
 
   // Routes téléchargement documents partagés (ZIP dossiers)
   app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
+  // Liens clients : consultation publique d'un dossier partagé
+  app.use("/api/public-documents", publicDocumentShareRoutes);
 
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);

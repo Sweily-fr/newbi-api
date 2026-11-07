@@ -34,6 +34,7 @@ import {
   getEffectiveVisibility,
   sharedFolderAccessFor,
 } from "../services/sharedFolderAccess.js";
+import { deleteOrphanDocumentShares } from "../services/documentShareAccess.js";
 import { endWhenMemberRemoved } from "../utils/subscriptionMembership.js";
 
 const { ObjectId } = mongoose.Types;
@@ -2090,6 +2091,7 @@ const sharedDocumentResolvers = {
             trashedAt: { $ne: null },
             ...visible.folders,
           });
+          await deleteOrphanDocumentShares(workspaceId);
 
           return {
             success: true,
@@ -2229,6 +2231,7 @@ const sharedDocumentResolvers = {
             workspaceId,
             trashedAt: { $ne: null },
           });
+          await deleteOrphanDocumentShares(workspaceId);
 
           return {
             success: true,

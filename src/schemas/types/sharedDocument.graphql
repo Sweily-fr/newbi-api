@@ -195,8 +195,41 @@ input SharedDocumentsFilterInput {
   maxSize: Int # en bytes
 }
 
+# Liens clients : URL publique d'un dossier, sans compte
+type DocumentShare {
+  id: ID!
+  folderId: ID!
+  name: String!
+  isActive: Boolean!
+  expiresAt: DateTime
+  hasPassword: Boolean!
+  isFolderAvailable: Boolean!
+  shareUrl: String!
+  totalViews: Int!
+  totalDownloads: Int!
+  lastViewedAt: DateTime
+  createdAt: DateTime!
+}
+
+input CreateDocumentShareInput {
+  folderId: ID!
+  name: String
+  password: String
+  expiresAt: DateTime
+}
+
+# Champ absent : inchangé. expiresAt ou password à null : retiré.
+input UpdateDocumentShareInput {
+  name: String
+  password: String
+  expiresAt: DateTime
+  isActive: Boolean
+}
+
 # Queries
 extend type Query {
+  documentShares(workspaceId: ID!, folderId: ID): [DocumentShare!]!
+
   # Documents
   sharedDocuments(
     workspaceId: ID!
@@ -257,6 +290,17 @@ type RestoreResponse {
 
 # Mutations
 extend type Mutation {
+  createDocumentShare(
+    workspaceId: ID!
+    input: CreateDocumentShareInput!
+  ): DocumentShare!
+  updateDocumentShare(
+    workspaceId: ID!
+    id: ID!
+    input: UpdateDocumentShareInput!
+  ): DocumentShare!
+  deleteDocumentShare(workspaceId: ID!, id: ID!): Boolean!
+
   # Documents
   uploadSharedDocument(
     workspaceId: ID!

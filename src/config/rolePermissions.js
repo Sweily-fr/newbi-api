@@ -369,6 +369,7 @@ export const MODULES = [
       action("create", "Ajouter des documents et des dossiers"),
       action("edit", "Renommer, déplacer, classer"),
       DELETE,
+      action("share", "Partager un dossier par lien client"),
     ],
   },
   // Communication
@@ -653,6 +654,14 @@ const ACCOUNTANT_LEVELS = fill("read", {
   integrations: "read",
 });
 
+const withoutActions = (grid, removed) => {
+  const result = { ...grid };
+  for (const [key, actions] of Object.entries(removed)) {
+    result[key] = result[key].filter((a) => !actions.includes(a));
+  }
+  return result;
+};
+
 const PREDEFINED_ACTIONS = {
   owner: ALL_ACTIONS,
   admin: buildActions(
@@ -673,7 +682,11 @@ const PREDEFINED_ACTIONS = {
       (a === "view" || m.alwaysVisible) &&
       !["billing", "integrations"].includes(m.key),
   ),
-  accountant: actionsFromLevels(ACCOUNTANT_LEVELS),
+  // Comptable : droits d'avant les rôles, sans les liens clients (ajoutés
+  // ensuite), que le super admin peut lui ouvrir
+  accountant: withoutActions(actionsFromLevels(ACCOUNTANT_LEVELS), {
+    sharedDocuments: ["share"],
+  }),
 };
 
 const predefined = (key, label, description, editable = true) => ({
