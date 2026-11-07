@@ -329,9 +329,14 @@ describe("Consultation d'un lien client", () => {
     await fetch(urlOf(share));
     const res = await fetch(fileUrl(share, docs.inShared));
     await res.text();
+    // Le téléchargement est compté une fois l'envoi lancé, pas avant la fin de
+    // la réponse : le client peut avoir tout reçu avant l'écriture en base
+    await vi.waitFor(async () => {
+      const saved = await DocumentShare.findById(share._id).lean();
+      expect(saved.stats.totalDownloads).toBe(1);
+    });
     const saved = await DocumentShare.findById(share._id).lean();
     expect(saved.stats.totalViews).toBe(1);
-    expect(saved.stats.totalDownloads).toBe(1);
     expect(saved.stats.lastViewedAt).toBeTruthy();
   });
 });
