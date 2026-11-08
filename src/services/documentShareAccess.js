@@ -1,6 +1,6 @@
 /**
- * Ce qu'un lien client laisse voir, relu à chaque visite : un dossier mis à la
- * corbeille, passé en privé ou déplacé sort du lien aussitôt.
+ * Ce qu'un accès client laisse voir, relu à chaque visite : un dossier mis à
+ * la corbeille, passé en privé ou déplacé sort de l'accès aussitôt.
  *
  * Plus strict que la visibilité entre membres (sharedFolderAccess.js) : un
  * dossier privé n'est jamais montré à l'extérieur, ni ce qu'il contient, même
@@ -8,7 +8,7 @@
  */
 import SharedFolder from "../models/SharedFolder.js";
 import SharedDocument from "../models/SharedDocument.js";
-import DocumentShare from "../models/DocumentShare.js";
+import DocumentShare, { shareFolderIds } from "../models/DocumentShare.js";
 
 const isClosed = (folder) =>
   Boolean(folder.trashedAt) || folder.visibility === "private";
@@ -25,6 +25,19 @@ function hasClosedLineage(folder, folderMap) {
   return false;
 }
 
+/** Le dossier `folder` est-il rangé (même indirectement) sous l'un des `ids` ? */
+function isUnderOneOf(folder, ids, folderMap) {
+  const visited = new Set([String(folder._id)]);
+  let parentKey = folder.parentId ? String(folder.parentId) : null;
+  while (parentKey && !visited.has(parentKey)) {
+    if (ids.has(parentKey)) return true;
+    visited.add(parentKey);
+    const parent = folderMap.get(parentKey);
+    parentKey = parent?.parentId ? String(parent.parentId) : null;
+  }
+  return false;
+}
+
 async function loadFolderMap(workspaceId) {
   const folders = await SharedFolder.find(
     { workspaceId },
@@ -33,51 +46,74 @@ async function loadFolderMap(workspaceId) {
   return new Map(folders.map((folder) => [String(folder._id), folder]));
 }
 
-/**
- * Motif pour lequel ce dossier ne peut pas être partagé, null s'il le peut.
- * @returns {Promise<"NOT_FOUND"|"CLOSED"|null>}
- */
-export async function folderShareBlock(workspaceId, folderId) {
-  const folderMap = await loadFolderMap(workspaceId);
+const isAvailableIn = (folderMap) => (folderId) => {
   const folder = folderMap.get(String(folderId));
-  if (!folder) return "NOT_FOUND";
-  return hasClosedLineage(folder, folderMap) ? "CLOSED" : null;
+  return Boolean(folder) && !hasClosedLineage(folder, folderMap);
+};
+
+/**
+ * Dossiers de l'espace qui ne peuvent pas être partagés, parmi `folderIds`.
+ * @returns {Promise<{missing: string[], closed: string[]}>}
+ */
+export async function folderShareBlocks(workspaceId, folderIds) {
+  const folderMap = await loadFolderMap(workspaceId);
+  const missing = [];
+  const closed = [];
+  for (const folderId of folderIds) {
+    const folder = folderMap.get(String(folderId));
+    if (!folder) missing.push(String(folderId));
+    else if (hasClosedLineage(folder, folderMap)) closed.push(String(folderId));
+  }
+  return { missing, closed };
 }
 
 /**
- * Pour afficher plusieurs liens d'un coup : un dossier partagé est-il toujours
- * accessible ? Tous les dossiers de l'espace sont lus une seule fois.
- * @returns {Promise<(folderId: unknown) => boolean>}
+ * Pour afficher plusieurs accès d'un coup : nom et disponibilité de chaque
+ * dossier. Tous les dossiers de l'espace sont lus une seule fois.
  */
 export async function loadFolderAvailability(workspaceId) {
   const folderMap = await loadFolderMap(workspaceId);
+  const isAvailable = isAvailableIn(folderMap);
   return (folderId) => {
     const folder = folderMap.get(String(folderId));
-    return Boolean(folder) && !hasClosedLineage(folder, folderMap);
+    return {
+      id: String(folderId),
+      name: folder?.name || "Dossier supprimé",
+      available: isAvailable(folderId),
+    };
   };
 }
 
 /**
- * Dossiers visibles par un lien : le dossier partagé et ses sous-dossiers,
- * sans les branches privées ou à la corbeille.
- * @returns {Promise<{root: object, folders: object[], folderIds: Set<string>}|null>}
- *   null si le dossier partagé n'est plus accessible
+ * Dossiers visibles par un accès : les dossiers choisis encore ouverts
+ * (« racines », sans ceux déjà rangés sous un autre dossier choisi) et leurs
+ * sous-dossiers, sans les branches privées ou à la corbeille.
+ * @returns {Promise<{roots: object[], folders: object[], folderIds: Set<string>}|null>}
+ *   null si plus aucun dossier choisi n'est accessible
  */
 export async function loadShareFolders(share) {
   const folderMap = await loadFolderMap(share.workspaceId);
-  const root = folderMap.get(String(share.folderId));
-  if (!root || hasClosedLineage(root, folderMap)) return null;
+  const isAvailable = isAvailableIn(folderMap);
+  const chosen = shareFolderIds(share)
+    .map((id) => folderMap.get(String(id)))
+    .filter((folder) => folder && isAvailable(folder._id));
+  if (chosen.length === 0) return null;
+
+  const chosenIds = new Set(chosen.map((folder) => String(folder._id)));
+  const roots = chosen.filter(
+    (folder) => !isUnderOneOf(folder, chosenIds, folderMap),
+  );
 
   const childrenOf = new Map();
   for (const folder of folderMap.values()) {
-    const parentKey = folder.parentId ? String(folder.parentId) : null;
-    if (!parentKey) continue;
+    if (!folder.parentId) continue;
+    const parentKey = String(folder.parentId);
     if (!childrenOf.has(parentKey)) childrenOf.set(parentKey, []);
     childrenOf.get(parentKey).push(folder);
   }
 
-  const folders = [root];
-  const folderIds = new Set([String(root._id)]);
+  const folders = [...roots];
+  const folderIds = new Set(roots.map((folder) => String(folder._id)));
   for (const folder of folders) {
     for (const child of childrenOf.get(String(folder._id)) || []) {
       const key = String(child._id);
@@ -86,10 +122,10 @@ export async function loadShareFolders(share) {
       folders.push(child);
     }
   }
-  return { root, folders, folderIds };
+  return { roots, folders, folderIds };
 }
 
-/** Document de la portée du lien, hors corbeille ; sinon null. */
+/** Document de la portée de l'accès, hors corbeille ; sinon null. */
 export async function findShareDocument(share, shareFolders, documentId) {
   const document = await SharedDocument.findOne({
     _id: documentId,
@@ -116,23 +152,36 @@ export async function listShareDocuments(share, shareFolders) {
     .lean();
 }
 
-/** Après une suppression définitive de dossiers : leurs liens disparaissent. */
+/**
+ * Après une suppression définitive de dossiers : ils sortent des accès, et un
+ * accès qui n'a plus aucun dossier disparaît.
+ */
 export async function deleteOrphanDocumentShares(workspaceId) {
   const shares = await DocumentShare.find(
     { workspaceId },
-    { folderId: 1 },
+    { folderIds: 1, folderId: 1 },
   ).lean();
   if (shares.length === 0) return;
-  const existing = await SharedFolder.distinct("_id", {
-    workspaceId,
-    _id: { $in: shares.map((share) => share.folderId) },
-  });
-  const existingIds = new Set(existing.map(String));
-  await DocumentShare.deleteMany({
-    _id: {
-      $in: shares
-        .filter((share) => !existingIds.has(String(share.folderId)))
-        .map((share) => share._id),
-    },
-  });
+  const referenced = shares.flatMap((share) => shareFolderIds(share));
+  const existing = new Set(
+    (
+      await SharedFolder.distinct("_id", {
+        workspaceId,
+        _id: { $in: referenced },
+      })
+    ).map(String),
+  );
+  for (const share of shares) {
+    const ids = shareFolderIds(share);
+    const kept = ids.filter((id) => existing.has(String(id)));
+    if (kept.length === ids.length) continue;
+    if (kept.length === 0) {
+      await DocumentShare.deleteOne({ _id: share._id });
+    } else {
+      await DocumentShare.updateOne(
+        { _id: share._id },
+        { $set: { folderIds: kept }, $unset: { folderId: "" } },
+      );
+    }
+  }
 }

@@ -195,10 +195,41 @@ input SharedDocumentsFilterInput {
   maxSize: Int # en bytes
 }
 
-# Liens clients : URL publique d'un dossier, sans compte
+# Accès clients : URL publique de dossiers choisis, sans compte Newbi
+type DocumentShareFolder {
+  id: ID!
+  name: String!
+  available: Boolean!
+}
+
+type DocumentShareVisitor {
+  email: String!
+  name: String!
+  firstVisitAt: DateTime
+  lastVisitAt: DateTime
+  visitCount: Int!
+  downloadCount: Int!
+  isBanned: Boolean!
+}
+
+type DocumentShareBan {
+  email: String!
+  bannedAt: DateTime
+  reason: String!
+}
+
+type DocumentShareAccessRequest {
+  id: ID!
+  email: String!
+  name: String!
+  message: String!
+  requestedAt: DateTime
+}
+
 type DocumentShare {
   id: ID!
-  folderId: ID!
+  folderIds: [ID!]!
+  folders: [DocumentShareFolder!]!
   name: String!
   isActive: Boolean!
   expiresAt: DateTime
@@ -208,11 +239,15 @@ type DocumentShare {
   totalViews: Int!
   totalDownloads: Int!
   lastViewedAt: DateTime
+  visitors: [DocumentShareVisitor!]!
+  bannedEmails: [DocumentShareBan!]!
+  accessRequests: [DocumentShareAccessRequest!]!
+  pendingRequestsCount: Int!
   createdAt: DateTime!
 }
 
 input CreateDocumentShareInput {
-  folderId: ID!
+  folderIds: [ID!]!
   name: String
   password: String
   expiresAt: DateTime
@@ -220,6 +255,7 @@ input CreateDocumentShareInput {
 
 # Champ absent : inchangé. expiresAt ou password à null : retiré.
 input UpdateDocumentShareInput {
+  folderIds: [ID!]
   name: String
   password: String
   expiresAt: DateTime
@@ -228,7 +264,7 @@ input UpdateDocumentShareInput {
 
 # Queries
 extend type Query {
-  documentShares(workspaceId: ID!, folderId: ID): [DocumentShare!]!
+  documentShares(workspaceId: ID!): [DocumentShare!]!
 
   # Documents
   sharedDocuments(
@@ -301,6 +337,27 @@ extend type Mutation {
   ): DocumentShare!
   revokeDocumentShare(workspaceId: ID!, id: ID!): DocumentShare!
   deleteDocumentShare(workspaceId: ID!, id: ID!): Boolean!
+  revokeDocumentShareVisitor(
+    workspaceId: ID!
+    id: ID!
+    email: String!
+    reason: String
+  ): DocumentShare!
+  unbanDocumentShareVisitor(
+    workspaceId: ID!
+    id: ID!
+    email: String!
+  ): DocumentShare!
+  approveDocumentShareRequest(
+    workspaceId: ID!
+    id: ID!
+    requestId: ID!
+  ): DocumentShare!
+  rejectDocumentShareRequest(
+    workspaceId: ID!
+    id: ID!
+    requestId: ID!
+  ): DocumentShare!
 
   # Documents
   uploadSharedDocument(

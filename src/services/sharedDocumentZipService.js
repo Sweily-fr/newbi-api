@@ -308,6 +308,8 @@ async function streamSelectionAsZip(
     excludedFolderIds = [],
     workspaceId,
     canAccess = ALL_FOLDERS,
+    // Nom du ZIP imposé (sinon le dossier unique, ou « documents »)
+    zipName: requestedZipName,
   },
   res,
 ) {
@@ -425,15 +427,16 @@ async function streamSelectionAsZip(
   }
 
   // Configure response headers
-  const zipName =
-    folderIds.length === 1 && documentIds.length === 0
+  const zipName = requestedZipName
+    ? `${sanitizeFileName(requestedZipName)}.zip`
+    : folderIds.length === 1 && documentIds.length === 0
       ? `${allFolderPaths[0] || "documents"}.zip`
       : "documents.zip";
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${encodeURIComponent(zipName)}"`,
+    contentDisposition("attachment", zipName),
   );
 
   // Create archive
