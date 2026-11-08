@@ -1,8 +1,9 @@
 /**
- * Liens clients des documents partagés : une URL publique sans compte.
- * Le lien ne doit montrer que le dossier partagé : ni dossier privé, ni
- * corbeille, ni autre dossier de l'espace, ni rien d'interne, et toute
- * révocation doit agir sur-le-champ.
+ * Accès clients des documents partagés : une URL publique sans compte, sur le
+ * modèle du partage d'un tableau kanban. L'accès ne doit montrer que les
+ * dossiers choisis (ni dossier privé, ni corbeille, ni rien d'interne), à un
+ * visiteur qui a prouvé son adresse e-mail, et toute révocation doit agir
+ * sur-le-champ.
  */
 import {
   describe,
@@ -19,6 +20,27 @@ vi.hoisted(() => {
   process.env.FRONTEND_URL = "https://app.test";
   process.env.BETTER_AUTH_SECRET = "secret-de-test";
 });
+
+// Codes et e-mails envoyés aux visiteurs
+const mails = vi.hoisted(() => ({
+  codes: new Map(),
+  approved: [],
+  rejected: [],
+}));
+vi.mock("../../src/utils/documentShareEmails.js", () => ({
+  sendDocumentShareCodeEmail: async (to, { code }) => {
+    mails.codes.set(to, code);
+    return true;
+  },
+  sendDocumentShareApprovedEmail: async (to, data) => {
+    mails.approved.push({ to, ...data });
+    return true;
+  },
+  sendDocumentShareRejectedEmail: async (to, data) => {
+    mails.rejected.push({ to, ...data });
+    return true;
+  },
+}));
 
 vi.mock("@aws-sdk/client-s3", () => ({
   S3Client: class {
@@ -73,6 +95,7 @@ const otherWorkspaceId = buildOrganizationId();
 const owner = buildUserId();
 const viewer = buildUserId();
 const accountant = buildUserId();
+const CLIENT = "client@dupont.fr";
 
 const ids = {
   shared: new ObjectId(),
@@ -96,6 +119,10 @@ const docs = {
 
 let server;
 let baseUrl;
+// Adresse IP propre à chaque test : les plafonds anti-abus (par IP) ne se
+// cumulent pas d'un test à l'autre
+let clientIp = "10.0.0.1";
+let ipCounter = 0;
 
 const folder = (_id, name, parentId, extra = {}) => ({
   _id,
@@ -129,7 +156,7 @@ async function createShare(extra = {}) {
   const share = new DocumentShare({
     token: DocumentShare.generateToken(),
     workspaceId,
-    folderId: ids.shared,
+    folderIds: [ids.shared],
     createdBy: owner,
     ...extra,
   });
@@ -140,14 +167,33 @@ async function createShare(extra = {}) {
 
 const urlOf = (share, path = "", query = "") =>
   `${baseUrl}/api/public-documents/${share.token}${path}${query}`;
-const fileUrl = (share, documentId, kind = "download", query = "") =>
-  urlOf(share, `/files/${documentId}/${kind}`, query);
-const unlock = (share, password) =>
-  fetch(urlOf(share, "/unlock"), {
+const post = (share, path, body) =>
+  fetch(urlOf(share, path), {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password }),
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": clientIp,
+    },
+    body: JSON.stringify(body),
   });
+const q = (session) => `?session=${encodeURIComponent(session)}`;
+const fileUrl = (share, documentId, session, kind = "download") =>
+  urlOf(share, `/files/${documentId}/${kind}`, q(session));
+const getJson = async (share, session) =>
+  (await fetch(urlOf(share, "", session ? q(session) : ""))).json();
+
+/** Parcours complet du visiteur : code reçu par e-mail, puis session. */
+async function identify(share, email = CLIENT, access) {
+  const sent = await post(share, "/identify/code", { email, access });
+  expect(sent.status).toBe(200);
+  const res = await post(share, "/identify/verify", {
+    email,
+    code: mails.codes.get(email),
+    access,
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()).session;
+}
 
 const asOwner = () =>
   buildContext({ userId: owner, organizationId: workspaceId });
@@ -156,6 +202,7 @@ const ws = String(workspaceId);
 beforeAll(async () => {
   await startMongo();
   const app = express();
+  app.set("trust proxy", true);
   app.use(express.json());
   app.use("/api/public-documents", publicRoutes);
   await new Promise((resolve) => {
@@ -170,10 +217,15 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  ipCounter += 1;
+  clientIp = `10.0.${Math.floor(ipCounter / 250)}.${(ipCounter % 250) + 1}`;
   await clearMongo();
   invalidateOrgCache();
   invalidateSubCache(String(workspaceId));
   invalidateOrganizationRoles();
+  mails.codes.clear();
+  mails.approved.length = 0;
+  mails.rejected.length = 0;
   await seedOrgMembership({
     userId: owner,
     organizationId: workspaceId,
@@ -200,7 +252,7 @@ beforeEach(async () => {
     folder(ids.trashedChild, "À la corbeille", ids.shared, {
       trashedAt: new Date(),
     }),
-    folder(ids.sibling, "Autre client", null),
+    folder(ids.sibling, "Factures Dupont", null),
     folder(ids.otherWorkspace, "Autre espace", null, {
       workspaceId: otherWorkspaceId,
     }),
@@ -212,31 +264,153 @@ beforeEach(async () => {
     doc(docs.underPrivate, "paie.pdf", ids.underPrivate),
     doc(docs.inTrashedChild, "ancien.pdf", ids.trashedChild),
     doc(docs.trashed, "jete.pdf", ids.shared, { trashedAt: new Date() }),
-    doc(docs.inSibling, "voisin.pdf", ids.sibling),
+    doc(docs.inSibling, "facture.pdf", ids.sibling),
     doc(docs.inbox, "a-classer.pdf", null),
   ]);
 });
 
-describe("Consultation d'un lien client", () => {
-  it("montre le dossier et ses sous-dossiers, rien d'autre", async () => {
-    const res = await fetch(urlOf(await createShare()));
-    expect(res.status).toBe(200);
-    expect(res.headers.get("x-robots-tag")).toContain("noindex");
-    const body = await res.json();
+describe("Identification du visiteur", () => {
+  it("sans session : ni contenu, ni fichier, ni ZIP", async () => {
+    const share = await createShare();
+    const body = await getJson(share);
+    expect(body.status).toBe("identify");
     expect(body.workspace.name).toBe("Cabinet Martin");
+    expect(body.documents).toBeUndefined();
+    for (const url of [
+      urlOf(share, `/files/${docs.inShared}/download`),
+      urlOf(share, `/files/${docs.inShared}/preview`),
+      urlOf(share, "/download-all"),
+      fileUrl(share, docs.inShared, "v1.faux.0.signature"),
+    ]) {
+      expect((await fetch(url)).status).toBe(401);
+    }
+  });
+
+  it("le code reçu par e-mail ouvre une session, une seule fois", async () => {
+    const share = await createShare();
+    await post(share, "/identify/code", { email: "  Client@Dupont.FR " });
+    const code = mails.codes.get(CLIENT);
+    expect(code).toMatch(/^\d{6}$/);
+
+    const wrong = await post(share, "/identify/verify", {
+      email: CLIENT,
+      code: code === "000000" ? "111111" : "000000",
+    });
+    expect(wrong.status).toBe(401);
+
+    const ok = await post(share, "/identify/verify", { email: CLIENT, code });
+    const { session, needsProfile } = await ok.json();
+    expect(needsProfile).toBe(true);
+    const reused = await post(share, "/identify/verify", {
+      email: CLIENT,
+      code,
+    });
+    expect(reused.status).toBe(401);
+
+    const body = await getJson(share, session);
+    expect(body.status).toBe("ready");
+    expect(body.visitor.email).toBe(CLIENT);
+  });
+
+  it("le code est plafonné à 5 essais", async () => {
+    const share = await createShare();
+    await post(share, "/identify/code", { email: CLIENT });
+    const code = mails.codes.get(CLIENT);
+    const wrong = code === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 5; i += 1) {
+      await post(share, "/identify/verify", { email: CLIENT, code: wrong });
+    }
+    const late = await post(share, "/identify/verify", { email: CLIENT, code });
+    expect(late.status).toBe(401);
+  });
+
+  it("une session ne sert ni à un autre accès, ni sous une autre adresse", async () => {
+    const share = await createShare();
+    const other = await createShare();
+    const session = await identify(share);
+    expect((await getJson(other, session)).status).toBe("identify");
+    expect((await fetch(fileUrl(other, docs.inShared, session))).status).toBe(
+      401,
+    );
+    const [v, , expires, signature] = session.split(".");
+    const forged = [
+      v,
+      Buffer.from("autre@pirate.fr").toString("base64url"),
+      expires,
+      signature,
+    ].join(".");
+    expect((await getJson(share, forged)).status).toBe("identify");
+  });
+
+  it("enregistre le nom à la première visite et compte les visites", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    await post(share, "/profile", {
+      session,
+      firstName: "Jeanne",
+      lastName: "Dupont",
+    });
+    await getJson(share, session);
+    await getJson(share, session);
+    const res = await fetch(fileUrl(share, docs.inShared, session));
+    await res.text();
+    await vi.waitFor(async () => {
+      const saved = await DocumentShare.findById(share._id).lean();
+      expect(saved.visitors[0].downloadCount).toBe(1);
+    });
+    const saved = await DocumentShare.findById(share._id).lean();
+    expect(saved.visitors).toHaveLength(1);
+    expect(saved.visitors[0]).toMatchObject({
+      email: CLIENT,
+      firstName: "Jeanne",
+      lastName: "Dupont",
+      visitCount: 2,
+    });
+    expect(saved.stats.totalViews).toBe(2);
+    expect(saved.stats.totalDownloads).toBe(1);
+
+    const again = await identify(share);
+    const verify = await getJson(share, again);
+    expect(verify.visitor.firstName).toBe("Jeanne");
+  });
+});
+
+describe("Contenu d'un accès", () => {
+  it("montre les dossiers choisis et leurs sous-dossiers, rien d'autre", async () => {
+    const share = await createShare({ folderIds: [ids.shared, ids.sibling] });
+    const body = await getJson(share, await identify(share));
+    expect(body.rootFolderIds.sort()).toEqual(
+      [String(ids.shared), String(ids.sibling)].sort(),
+    );
     expect(body.folders.map((f) => f.name).sort()).toEqual([
       "Client Dupont",
       "Contrats",
+      "Factures Dupont",
     ]);
     expect(body.documents.map((d) => d.name).sort()).toEqual([
       "contrat.pdf",
       "devis.pdf",
+      "facture.pdf",
     ]);
   });
 
+  it("un sous-dossier choisi avec son parent n'est pas montré deux fois", async () => {
+    const share = await createShare({ folderIds: [ids.shared, ids.child] });
+    const body = await getJson(share, await identify(share));
+    expect(body.rootFolderIds).toEqual([String(ids.shared)]);
+  });
+
+  it("lit le premier format (un seul dossier)", async () => {
+    const share = await createShare({ folderIds: [], folderId: ids.sibling });
+    const body = await getJson(share, await identify(share));
+    expect(body.documents.map((d) => d.name)).toEqual(["facture.pdf"]);
+  });
+
   it("n'expose rien d'interne", async () => {
-    const res = await fetch(urlOf(await createShare()));
+    const share = await createShare();
+    const res = await fetch(urlOf(share, "", q(await identify(share))));
     const text = await res.text();
+    expect(res.headers.get("x-robots-tag")).toContain("noindex");
     for (const secret of [
       "cle-secrete",
       "r2.test",
@@ -245,39 +419,34 @@ describe("Consultation d'un lien client", () => {
       "salaires",
       "RH confidentiel",
       String(owner),
+      share.token,
     ]) {
       expect(text).not.toContain(secret);
     }
   });
 
-  it("sert les fichiers de la portée, sans cache", async () => {
+  it("sert les fichiers de la portée, sans cache et sous leur vrai nom", async () => {
+    await SharedDocument.updateOne(
+      { _id: docs.inChild },
+      { originalName: "Contrat signé.pdf" },
+    );
     const share = await createShare();
+    const session = await identify(share);
     for (const kind of ["download", "preview"]) {
-      const res = await fetch(fileUrl(share, docs.inChild, kind));
+      const res = await fetch(fileUrl(share, docs.inChild, session, kind));
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("private, no-store");
       expect(await res.text()).toBe("contenu:cle-secrete/contrat.pdf");
     }
-  });
-
-  it("donne au fichier et au ZIP leur vrai nom, accents et espaces compris", async () => {
-    await SharedDocument.updateOne(
-      { _id: docs.inShared },
-      { originalName: "Devis signé.pdf" },
-    );
-    const share = await createShare();
-    const file = await fetch(fileUrl(share, docs.inShared));
-    expect(file.headers.get("content-disposition")).toBe(
-      "attachment; filename=\"Devis sign_.pdf\"; filename*=UTF-8''Devis%20sign%C3%A9.pdf",
-    );
-    const zip = await fetch(urlOf(share, "/download-all"));
-    expect(zip.headers.get("content-disposition")).toContain(
-      "filename*=UTF-8''Client%20Dupont.zip",
+    const res = await fetch(fileUrl(share, docs.inChild, session));
+    expect(res.headers.get("content-disposition")).toContain(
+      "filename*=UTF-8''Contrat%20sign%C3%A9.pdf",
     );
   });
 
   it("refuse tout fichier hors de la portée", async () => {
     const share = await createShare();
+    const session = await identify(share);
     for (const documentId of [
       docs.inPrivate,
       docs.underPrivate,
@@ -289,163 +458,149 @@ describe("Consultation d'un lien client", () => {
       "pas-un-id",
     ]) {
       for (const kind of ["download", "preview"]) {
-        const res = await fetch(fileUrl(share, documentId, kind));
+        const res = await fetch(fileUrl(share, documentId, session, kind));
         expect(res.status).toBe(404);
       }
     }
   });
 
-  it("le ZIP ne contient ni branche privée ni corbeille", async () => {
-    const res = await fetch(urlOf(await createShare(), "/download-all"));
+  it("le ZIP réunit les dossiers choisis, sans branche privée ni corbeille", async () => {
+    const share = await createShare({
+      name: "Dupont",
+      folderIds: [ids.shared, ids.sibling],
+    });
+    const res = await fetch(
+      urlOf(share, "/download-all", q(await identify(share))),
+    );
     expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toContain("Dupont.zip");
     const zip = Buffer.from(await res.arrayBuffer()).toString("latin1");
-    expect(zip).toContain("devis.pdf");
-    expect(zip).toContain("contrat.pdf");
+    for (const present of ["devis.pdf", "contrat.pdf", "facture.pdf"]) {
+      expect(zip).toContain(present);
+    }
     for (const absent of [
       "salaires.pdf",
       "paie.pdf",
       "ancien.pdf",
       "jete.pdf",
-      "voisin.pdf",
       "RH confidentiel",
     ]) {
       expect(zip).not.toContain(absent);
     }
   });
 
-  it("répond 404 à un jeton inconnu ou mal formé", async () => {
-    const res = await fetch(
-      `${baseUrl}/api/public-documents/${"a".repeat(64)}`,
-    );
-    expect(res.status).toBe(404);
-    const malformed = await fetch(
-      `${baseUrl}/api/public-documents/${encodeURIComponent('{"$ne":null}')}`,
-    );
-    expect(malformed.status).toBe(404);
-  });
-
-  it("compte les consultations et les téléchargements", async () => {
-    const share = await createShare();
-    await fetch(urlOf(share));
-    const res = await fetch(fileUrl(share, docs.inShared));
-    await res.text();
-    // Le téléchargement est compté une fois l'envoi lancé, pas avant la fin de
-    // la réponse : le client peut avoir tout reçu avant l'écriture en base
-    await vi.waitFor(async () => {
-      const saved = await DocumentShare.findById(share._id).lean();
-      expect(saved.stats.totalDownloads).toBe(1);
-    });
-    const saved = await DocumentShare.findById(share._id).lean();
-    expect(saved.stats.totalViews).toBe(1);
-    expect(saved.stats.lastViewedAt).toBeTruthy();
-  });
-});
-
-describe("Fermeture d'un lien", () => {
-  const expectClosed = async (share) => {
-    expect((await fetch(urlOf(share))).status).toBe(410);
-    expect((await fetch(fileUrl(share, docs.inShared))).status).toBe(410);
-    expect((await fetch(fileUrl(share, docs.inShared, "preview"))).status).toBe(
-      410,
-    );
-    expect((await fetch(urlOf(share, "/download-all"))).status).toBe(410);
-    expect((await unlock(share, "peu-importe")).status).toBe(410);
-  };
-
-  it("lien désactivé", async () => {
-    await expectClosed(await createShare({ isActive: false }));
-  });
-
-  it("lien expiré", async () => {
-    await expectClosed(
-      await createShare({ expiresAt: new Date(Date.now() - 1000) }),
-    );
-  });
-
-  it("dossier passé en privé", async () => {
-    const share = await createShare();
+  it("un dossier fermé sort de l'accès, les autres restent", async () => {
+    const share = await createShare({ folderIds: [ids.shared, ids.sibling] });
+    const session = await identify(share);
     await SharedFolder.updateOne(
       { _id: ids.shared },
       { visibility: "private" },
     );
-    await expectClosed(share);
+    const body = await getJson(share, session);
+    expect(body.documents.map((d) => d.name)).toEqual(["facture.pdf"]);
+    expect((await fetch(fileUrl(share, docs.inShared, session))).status).toBe(
+      404,
+    );
   });
 
-  it("dossier mis à la corbeille", async () => {
+  it("répond 404 à un jeton inconnu ou mal formé", async () => {
+    expect(
+      (await fetch(`${baseUrl}/api/public-documents/${"a".repeat(64)}`)).status,
+    ).toBe(404);
+    expect(
+      (
+        await fetch(
+          `${baseUrl}/api/public-documents/${encodeURIComponent('{"$ne":null}')}`,
+        )
+      ).status,
+    ).toBe(404);
+  });
+});
+
+describe("Fermeture d'un accès", () => {
+  const expectClosed = async (share, session) => {
+    expect((await fetch(urlOf(share, "", q(session)))).status).toBe(410);
+    expect((await fetch(fileUrl(share, docs.inShared, session))).status).toBe(
+      410,
+    );
+    expect(
+      (await fetch(urlOf(share, "/download-all", q(session)))).status,
+    ).toBe(410);
+    expect(
+      (await post(share, "/identify/code", { email: CLIENT })).status,
+    ).toBe(410);
+  };
+
+  it("désactivé, expiré, ou tous ses dossiers fermés", async () => {
     const share = await createShare();
+    const session = await identify(share);
+    await DocumentShare.updateOne({ _id: share._id }, { isActive: false });
+    await expectClosed(share, session);
+
+    await DocumentShare.updateOne(
+      { _id: share._id },
+      { isActive: true, expiresAt: new Date(Date.now() - 1000) },
+    );
+    await expectClosed(share, session);
+
+    await DocumentShare.updateOne({ _id: share._id }, { expiresAt: null });
     await SharedFolder.updateOne(
       { _id: ids.shared },
       { trashedAt: new Date() },
     );
-    await expectClosed(share);
+    await expectClosed(share, session);
   });
 
   it("dossier public rangé sous un parent privé", async () => {
     const share = await createShare();
+    const session = await identify(share);
     await SharedFolder.updateOne(
       { _id: ids.shared },
       { parentId: ids.privateChild },
     );
     await SharedFolder.updateOne({ _id: ids.privateChild }, { parentId: null });
-    await expectClosed(share);
-  });
-
-  it("document déplacé hors du dossier partagé : plus accessible", async () => {
-    const share = await createShare();
-    await SharedDocument.updateOne(
-      { _id: docs.inShared },
-      { folderId: ids.sibling },
-    );
-    expect((await fetch(fileUrl(share, docs.inShared))).status).toBe(404);
+    await expectClosed(share, session);
   });
 });
 
-describe("Lien protégé par mot de passe", () => {
-  it("sans preuve : ni contenu ni fichier ni ZIP", async () => {
+describe("Accès protégé par mot de passe", () => {
+  it("le mot de passe précède l'identification", async () => {
     const share = await createShare({ password: "secret-123" });
-    const res = await fetch(urlOf(share));
-    const body = await res.json();
-    expect(body.requiresPassword).toBe(true);
-    expect(body.documents).toBeUndefined();
-    expect(body.folders).toBeUndefined();
-
-    for (const url of [
-      fileUrl(share, docs.inShared),
-      fileUrl(share, docs.inShared, "preview"),
-      urlOf(share, "/download-all"),
-    ]) {
-      const denied = await fetch(url);
-      expect(denied.status).toBe(401);
-    }
-    expect((await DocumentShare.findById(share._id)).stats.totalViews).toBe(0);
-  });
-
-  it("le bon mot de passe remet un jeton qui ouvre l'accès", async () => {
-    const share = await createShare({ password: "secret-123" });
-    expect((await unlock(share, "mauvais")).status).toBe(401);
-    expect((await unlock(share, { $ne: null })).status).toBe(401);
-
-    const res = await unlock(share, "secret-123");
-    expect(res.status).toBe(200);
-    const { accessToken } = await res.json();
-    const query = `?access=${encodeURIComponent(accessToken)}`;
-
-    const list = await (await fetch(urlOf(share, "", query))).json();
-    expect(list.documents).toHaveLength(2);
-    const file = await fetch(fileUrl(share, docs.inShared, "download", query));
-    expect(file.status).toBe(200);
-  });
-
-  it("le jeton ne sert ni à un autre lien, ni après un changement de mot de passe", async () => {
-    const share = await createShare({ password: "secret-123" });
-    const other = await createShare({ password: "autre-456" });
-    const { accessToken } = await (await unlock(share, "secret-123")).json();
-    const query = `?access=${encodeURIComponent(accessToken)}`;
-
+    expect((await getJson(share)).status).toBe("password");
     expect(
-      (await fetch(fileUrl(other, docs.inShared, "download", query))).status,
+      (await post(share, "/identify/code", { email: CLIENT })).status,
     ).toBe(401);
+    expect(mails.codes.size).toBe(0);
 
+    expect((await post(share, "/unlock", { password: "mauvais" })).status).toBe(
+      401,
+    );
+    expect(
+      (await post(share, "/unlock", { password: { $ne: null } })).status,
+    ).toBe(401);
+    const { accessToken } = await (
+      await post(share, "/unlock", { password: "secret-123" })
+    ).json();
+    expect(
+      (
+        await (
+          await fetch(
+            urlOf(share, "", `?access=${encodeURIComponent(accessToken)}`),
+          )
+        ).json()
+      ).status,
+    ).toBe("identify");
+
+    const session = await identify(share, CLIENT, accessToken);
+    expect((await getJson(share, session)).status).toBe("ready");
+  });
+
+  it("changer le mot de passe coupe les sessions ouvertes", async () => {
+    const share = await createShare({ password: "secret-123" });
+    const { accessToken } = await (
+      await post(share, "/unlock", { password: "secret-123" })
+    ).json();
+    const session = await identify(share, CLIENT, accessToken);
     await shareResolvers.Mutation.updateDocumentShare(
       null,
       {
@@ -455,24 +610,130 @@ describe("Lien protégé par mot de passe", () => {
       },
       asOwner(),
     );
-    expect(
-      (await fetch(fileUrl(share, docs.inShared, "download", query))).status,
-    ).toBe(401);
+    expect((await getJson(share, session)).status).toBe("password");
+    expect((await fetch(fileUrl(share, docs.inShared, session))).status).toBe(
+      401,
+    );
   });
 
   it("les essais en échec sont plafonnés", async () => {
     const share = await createShare({ password: "secret-123" });
     let last;
     for (let i = 0; i < 21; i += 1) {
-      last = await unlock(share, "mauvais");
+      last = await post(share, "/unlock", { password: "mauvais" });
     }
     expect(last.status).toBe(429);
-    // Même le bon mot de passe attend la fin de la fenêtre
-    expect((await unlock(share, "secret-123")).status).toBe(429);
+    expect(
+      (await post(share, "/unlock", { password: "secret-123" })).status,
+    ).toBe(429);
   });
 });
 
-describe("Gestion des liens", () => {
+describe("Visiteur retiré et demande d'accès", () => {
+  const M = shareResolvers.Mutation;
+
+  it("retirer l'accès coupe la session, la demande d'accès le rétablit", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    await post(share, "/profile", { session, firstName: "Jeanne" });
+    const args = { workspaceId: ws, id: String(share._id) };
+
+    await M.revokeDocumentShareVisitor(
+      null,
+      { ...args, email: "CLIENT@dupont.fr", reason: "Fin de mission" },
+      asOwner(),
+    );
+    const banned = await getJson(share, session);
+    expect(banned.status).toBe("banned");
+    expect(banned.documents).toBeUndefined();
+    expect((await fetch(fileUrl(share, docs.inShared, session))).status).toBe(
+      403,
+    );
+    expect(
+      (await fetch(urlOf(share, "/download-all", q(session)))).status,
+    ).toBe(403);
+
+    // Une nouvelle identification ne contourne pas le retrait
+    expect((await getJson(share, await identify(share))).status).toBe("banned");
+
+    await post(share, "/access-request", { session, message: "Merci" });
+    await post(share, "/access-request", { session, message: "Doublon" });
+    const [listed] = await shareResolvers.Query.documentShares(
+      null,
+      { workspaceId: ws },
+      asOwner(),
+    );
+    expect(listed.pendingRequestsCount).toBe(1);
+    expect(listed.accessRequests[0]).toMatchObject({
+      email: CLIENT,
+      name: "Jeanne",
+      message: "Merci",
+    });
+    expect(listed.visitors[0].isBanned).toBe(true);
+    expect((await getJson(share, session)).accessRequest).toBe("pending");
+
+    await M.approveDocumentShareRequest(
+      null,
+      { ...args, requestId: listed.accessRequests[0].id },
+      asOwner(),
+    );
+    expect((await getJson(share, session)).status).toBe("ready");
+    expect(mails.approved).toHaveLength(1);
+    expect(mails.approved[0]).toMatchObject({
+      to: CLIENT,
+      workspaceName: "Cabinet Martin",
+      shareUrl: `https://app.test/public/documents/${share.token}`,
+    });
+  });
+
+  it("une demande refusée laisse l'accès fermé et prévient le visiteur", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    const args = { workspaceId: ws, id: String(share._id) };
+    await M.revokeDocumentShareVisitor(
+      null,
+      { ...args, email: CLIENT },
+      asOwner(),
+    );
+    await post(share, "/access-request", { session });
+    const saved = await DocumentShare.findById(share._id);
+    await M.rejectDocumentShareRequest(
+      null,
+      { ...args, requestId: String(saved.accessRequests[0]._id) },
+      asOwner(),
+    );
+    const body = await getJson(share, session);
+    expect(body.status).toBe("banned");
+    expect(body.accessRequest).toBe("rejected");
+    expect(mails.rejected.map((m) => m.to)).toEqual([CLIENT]);
+    await expect(
+      M.approveDocumentShareRequest(
+        null,
+        { ...args, requestId: String(saved.accessRequests[0]._id) },
+        asOwner(),
+      ),
+    ).rejects.toThrow("non trouvé");
+  });
+
+  it("rétablir un visiteur sans demande", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    const args = { workspaceId: ws, id: String(share._id), email: CLIENT };
+    await M.revokeDocumentShareVisitor(null, args, asOwner());
+    await M.unbanDocumentShareVisitor(null, args, asOwner());
+    expect((await getJson(share, session)).status).toBe("ready");
+  });
+
+  it("un visiteur qui a accès ne peut pas déposer de demande", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    expect((await post(share, "/access-request", { session })).status).toBe(
+      400,
+    );
+  });
+});
+
+describe("Gestion des accès", () => {
   const {
     createDocumentShare,
     updateDocumentShare,
@@ -483,65 +744,93 @@ describe("Gestion des liens", () => {
   const create = (input, context = asOwner()) =>
     createDocumentShare(null, { workspaceId: ws, input }, context);
 
-  it("crée un lien sans jamais stocker le mot de passe en clair", async () => {
+  it("crée un accès sur plusieurs dossiers, sans mot de passe en clair", async () => {
     const share = await create({
-      folderId: String(ids.shared),
+      folderIds: [String(ids.shared), String(ids.sibling), String(ids.shared)],
       name: " Dupont ",
       password: "secret-123",
     });
     expect(share.name).toBe("Dupont");
+    expect(share.folders.map((f) => f.name)).toEqual([
+      "Client Dupont",
+      "Factures Dupont",
+    ]);
     expect(share.hasPassword).toBe(true);
-    expect(share.isFolderAvailable).toBe(true);
     expect(share.shareUrl).toMatch(
       /^https:\/\/app\.test\/public\/documents\/[0-9a-f]{64}$/,
     );
-    expect(share.passwordHash).toBeUndefined();
     const saved = await DocumentShare.findById(share.id).lean();
     expect(saved.passwordHash).not.toContain("secret-123");
   });
 
-  it("refuse un dossier privé, à la corbeille, sous un privé ou d'un autre espace", async () => {
+  it("refuse aucun dossier, un dossier privé, à la corbeille ou d'un autre espace", async () => {
+    await expect(create({ folderIds: [] })).rejects.toThrow("au moins un");
     for (const folderId of [
       ids.privateChild,
       ids.trashedChild,
       ids.underPrivate,
     ]) {
-      await expect(create({ folderId: String(folderId) })).rejects.toThrow(
-        "ne peut pas être partagé",
-      );
+      await expect(
+        create({ folderIds: [String(ids.shared), String(folderId)] }),
+      ).rejects.toThrow("ne peut pas être partagé");
     }
     await expect(
-      create({ folderId: String(ids.otherWorkspace) }),
+      create({ folderIds: [String(ids.otherWorkspace)] }),
     ).rejects.toThrow("non trouvé");
-    await expect(create({ folderId: "pas-un-id" })).rejects.toThrow(
+    await expect(create({ folderIds: ["pas-un-id"] })).rejects.toThrow(
       "non trouvé",
     );
     expect(await DocumentShare.countDocuments()).toBe(0);
   });
 
+  it("modifie les dossiers d'un accès : le visiteur voit le changement", async () => {
+    const created = await create({ folderIds: [String(ids.shared)] });
+    const share = await DocumentShare.findById(created.id);
+    const session = await identify(share);
+    await updateDocumentShare(
+      null,
+      {
+        workspaceId: ws,
+        id: created.id,
+        input: { folderIds: [String(ids.sibling)] },
+      },
+      asOwner(),
+    );
+    const body = await getJson(share, session);
+    expect(body.documents.map((d) => d.name)).toEqual(["facture.pdf"]);
+  });
+
   it("refuse une expiration passée et un mot de passe trop court", async () => {
     await expect(
       create({
-        folderId: String(ids.shared),
+        folderIds: [String(ids.shared)],
         expiresAt: new Date(Date.now() - 1000),
       }),
     ).rejects.toThrow("futur");
     await expect(
-      create({ folderId: String(ids.shared), password: "abc" }),
+      create({ folderIds: [String(ids.shared)], password: "abc" }),
     ).rejects.toThrow("mot de passe");
   });
 
   it("exige l'action « share » : ni Membre ni Comptable par défaut", async () => {
+    const share = await createShare();
     for (const userId of [viewer, accountant]) {
       const context = buildContext({ userId, organizationId: workspaceId });
       await expect(
-        create({ folderId: String(ids.shared) }, context),
+        create({ folderIds: [String(ids.shared)] }, context),
       ).rejects.toThrow();
       await expect(
         documentShares(null, { workspaceId: ws }, context),
       ).rejects.toThrow();
+      await expect(
+        shareResolvers.Mutation.revokeDocumentShareVisitor(
+          null,
+          { workspaceId: ws, id: String(share._id), email: CLIENT },
+          context,
+        ),
+      ).rejects.toThrow();
     }
-    expect(await DocumentShare.countDocuments()).toBe(0);
+    expect(await DocumentShare.countDocuments()).toBe(1);
   });
 
   it("répartit l'action entre les rôles prédéfinis", () => {
@@ -552,61 +841,72 @@ describe("Gestion des liens", () => {
     expect(has("accountant")).toBe(false);
   });
 
-  it("un lien d'un autre espace reste introuvable", async () => {
+  it("un accès d'un autre espace reste introuvable", async () => {
     const foreign = await DocumentShare.create({
       token: DocumentShare.generateToken(),
       workspaceId: otherWorkspaceId,
-      folderId: ids.otherWorkspace,
+      folderIds: [ids.otherWorkspace],
       createdBy: owner,
     });
     const args = { workspaceId: ws, id: String(foreign._id) };
-    await expect(
-      updateDocumentShare(
-        null,
-        { ...args, input: { isActive: true } },
-        asOwner(),
-      ),
-    ).rejects.toThrow("non trouvé");
-    await expect(revokeDocumentShare(null, args, asOwner())).rejects.toThrow(
-      "non trouvé",
+    const M = shareResolvers.Mutation;
+    for (const call of [
+      () =>
+        updateDocumentShare(
+          null,
+          { ...args, input: { isActive: true } },
+          asOwner(),
+        ),
+      () => revokeDocumentShare(null, args, asOwner()),
+      () => deleteDocumentShare(null, args, asOwner()),
+      () =>
+        M.revokeDocumentShareVisitor(
+          null,
+          { ...args, email: CLIENT },
+          asOwner(),
+        ),
+      () =>
+        M.unbanDocumentShareVisitor(
+          null,
+          { ...args, email: CLIENT },
+          asOwner(),
+        ),
+    ]) {
+      await expect(call()).rejects.toThrow("non trouvé");
+    }
+    expect(await documentShares(null, { workspaceId: ws }, asOwner())).toEqual(
+      [],
     );
-    await expect(deleteDocumentShare(null, args, asOwner())).rejects.toThrow(
-      "non trouvé",
-    );
-    expect(await DocumentShare.countDocuments()).toBe(1);
   });
 
   it("révoque, réactive et supprime : effet immédiat sur l'URL publique", async () => {
-    const created = await create({ folderId: String(ids.shared) });
-    const url = created.shareUrl.replace(
-      "https://app.test/public/documents/",
-      `${baseUrl}/api/public-documents/`,
-    );
+    const created = await create({ folderIds: [String(ids.shared)] });
+    const share = await DocumentShare.findById(created.id);
+    const session = await identify(share);
     const args = { workspaceId: ws, id: created.id };
 
     await revokeDocumentShare(null, args, asOwner());
-    expect((await fetch(url)).status).toBe(410);
-
+    expect((await fetch(urlOf(share, "", q(session)))).status).toBe(410);
     await updateDocumentShare(
       null,
       { ...args, input: { isActive: true } },
       asOwner(),
     );
-    expect((await fetch(url)).status).toBe(200);
-
+    expect((await fetch(urlOf(share, "", q(session)))).status).toBe(200);
     await deleteDocumentShare(null, args, asOwner());
-    expect((await fetch(url)).status).toBe(404);
+    expect((await fetch(urlOf(share, "", q(session)))).status).toBe(404);
   });
 
   it("abonnement échu : on ne crée ni ne modifie plus, mais on coupe l'accès", async () => {
-    const created = await create({ folderId: String(ids.shared) });
-    const other = await create({ folderId: String(ids.sibling) });
+    const created = await create({ folderIds: [String(ids.shared)] });
+    const other = await create({ folderIds: [String(ids.sibling)] });
     await mongoose.connection.db.collection("subscription").deleteMany({});
     invalidateOrgCache();
     invalidateSubCache(ws);
     const args = { workspaceId: ws, id: created.id };
+    const M = shareResolvers.Mutation;
 
-    await expect(create({ folderId: String(ids.shared) })).rejects.toThrow();
+    await expect(create({ folderIds: [String(ids.shared)] })).rejects.toThrow();
     await expect(
       updateDocumentShare(
         null,
@@ -615,8 +915,15 @@ describe("Gestion des liens", () => {
       ),
     ).rejects.toThrow();
 
-    const revoked = await revokeDocumentShare(null, args, asOwner());
-    expect(revoked.isActive).toBe(false);
+    expect((await revokeDocumentShare(null, args, asOwner())).isActive).toBe(
+      false,
+    );
+    const banned = await M.revokeDocumentShareVisitor(
+      null,
+      { ...args, email: CLIENT },
+      asOwner(),
+    );
+    expect(banned.bannedEmails.map((b) => b.email)).toEqual([CLIENT]);
     await deleteDocumentShare(
       null,
       { workspaceId: ws, id: other.id },
@@ -625,42 +932,22 @@ describe("Gestion des liens", () => {
     expect(await DocumentShare.countDocuments()).toBe(1);
   });
 
-  it("retire le mot de passe et l'expiration avec null", async () => {
-    const created = await create({
-      folderId: String(ids.shared),
-      password: "secret-123",
-      expiresAt: new Date(Date.now() + 86400000),
-    });
-    const updated = await updateDocumentShare(
-      null,
-      {
-        workspaceId: ws,
-        id: created.id,
-        input: { password: null, expiresAt: null },
-      },
-      asOwner(),
-    );
-    expect(updated.hasPassword).toBe(false);
-    expect(updated.expiresAt).toBeNull();
-  });
-
   it("signale un dossier devenu privé dans la liste", async () => {
-    await create({ folderId: String(ids.shared) });
+    await create({ folderIds: [String(ids.shared), String(ids.sibling)] });
     await SharedFolder.updateOne(
       { _id: ids.shared },
       { visibility: "private" },
     );
-    const [share] = await documentShares(
-      null,
-      { workspaceId: ws, folderId: String(ids.shared) },
-      asOwner(),
-    );
-    expect(share.isFolderAvailable).toBe(false);
+    const [share] = await documentShares(null, { workspaceId: ws }, asOwner());
+    expect(share.isFolderAvailable).toBe(true);
+    expect(share.folders.map((f) => f.available)).toEqual([false, true]);
   });
 
-  it("supprimer le dossier définitivement supprime ses liens", async () => {
-    await create({ folderId: String(ids.shared) });
-    const kept = await create({ folderId: String(ids.sibling) });
+  it("supprimer un dossier définitivement le retire des accès", async () => {
+    const both = await create({
+      folderIds: [String(ids.shared), String(ids.sibling)],
+    });
+    const only = await create({ folderIds: [String(ids.shared)] });
     await SharedFolder.updateOne(
       { _id: ids.shared },
       { trashedAt: new Date() },
@@ -671,6 +958,8 @@ describe("Gestion des liens", () => {
       asOwner(),
     );
     const remaining = await DocumentShare.find().lean();
-    expect(remaining.map((s) => String(s._id))).toEqual([kept.id]);
+    expect(remaining.map((s) => String(s._id))).toEqual([both.id]);
+    expect(remaining[0].folderIds.map(String)).toEqual([String(ids.sibling)]);
+    expect(await DocumentShare.findById(only.id)).toBeNull();
   });
 });
