@@ -21,11 +21,9 @@ async function deliver({ to, subject, html, text, label }) {
   }
 }
 
-export function sendDocumentShareCodeEmail(to, { code, workspaceName }) {
+export function buildDocumentShareCodeEmail({ code, workspaceName }) {
   const from = workspaceName || "votre interlocuteur";
-  return deliver({
-    to,
-    label: "code",
+  return {
     subject: `Votre code d'accès : ${code}`,
     text: `Votre code pour accéder aux documents partagés par ${from} : ${code}\n\nIl est valable 10 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.`,
     html: renderEmail({
@@ -39,17 +37,15 @@ export function sendDocumentShareCodeEmail(to, { code, workspaceName }) {
       `,
       footerNoteHtml: "E-mail automatique, merci de ne pas répondre",
     }),
-  });
+  };
 }
 
-export function sendDocumentShareApprovedEmail(
+export function buildDocumentShareApprovedEmail(
   to,
   { recipientName, workspaceName, shareUrl },
 ) {
   const from = workspaceName || "votre interlocuteur";
-  return deliver({
-    to,
-    label: "accès approuvé",
+  return {
     subject: "Votre accès aux documents a été rétabli",
     text: `Bonjour ${recipientName || ""},\n\n${from} a approuvé votre demande d'accès. Vous pouvez de nouveau consulter les documents partagés : ${shareUrl}`,
     html: renderEmail({
@@ -64,17 +60,15 @@ export function sendDocumentShareApprovedEmail(
       ctaUrl: shareUrl,
       footerNoteHtml: "E-mail automatique, merci de ne pas répondre",
     }),
-  });
+  };
 }
 
-export function sendDocumentShareRejectedEmail(
+export function buildDocumentShareRejectedEmail(
   to,
   { recipientName, workspaceName },
 ) {
   const from = workspaceName || "votre interlocuteur";
-  return deliver({
-    to,
-    label: "accès refusé",
+  return {
     subject: "Votre demande d'accès aux documents",
     text: `Bonjour ${recipientName || ""},\n\n${from} n'a pas donné suite à votre demande d'accès aux documents partagés. Si vous pensez qu'il s'agit d'une erreur, contactez directement votre interlocuteur.`,
     html: renderEmail({
@@ -88,5 +82,22 @@ export function sendDocumentShareRejectedEmail(
       `,
       footerNoteHtml: "E-mail automatique, merci de ne pas répondre",
     }),
-  });
+  };
 }
+
+export const sendDocumentShareCodeEmail = (to, data) =>
+  deliver({ to, label: "code", ...buildDocumentShareCodeEmail(data) });
+
+export const sendDocumentShareApprovedEmail = (to, data) =>
+  deliver({
+    to,
+    label: "accès approuvé",
+    ...buildDocumentShareApprovedEmail(to, data),
+  });
+
+export const sendDocumentShareRejectedEmail = (to, data) =>
+  deliver({
+    to,
+    label: "accès refusé",
+    ...buildDocumentShareRejectedEmail(to, data),
+  });
