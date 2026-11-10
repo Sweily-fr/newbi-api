@@ -42,12 +42,26 @@ const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 const validationError = (message, details) =>
   new AppError(message, ERROR_CODES.VALIDATION_ERROR, details);
 
-export function isProspectGenerationEnabled() {
-  return process.env.PROSPECTS_ENABLED === "true" && isSocieteinfoConfigured();
+// PROSPECTS_WORKSPACE_IDS (facultatif, ids séparés par des virgules) limite
+// l'ouverture à ces espaces : test en prod avant l'ouverture à tous
+function allowedWorkspaceIds() {
+  return String(process.env.PROSPECTS_WORKSPACE_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
 }
 
-function assertEnabled() {
-  if (!isProspectGenerationEnabled()) {
+export function isProspectGenerationEnabled(workspaceId) {
+  if (process.env.PROSPECTS_ENABLED !== "true" || !isSocieteinfoConfigured()) {
+    return false;
+  }
+  const allowed = allowedWorkspaceIds();
+  if (!allowed.length) return true;
+  return workspaceId != null && allowed.includes(String(workspaceId));
+}
+
+function assertEnabled(workspaceId) {
+  if (!isProspectGenerationEnabled(workspaceId)) {
     throw validationError(
       "La génération de prospects n'est pas encore disponible.",
       { reason: "PROSPECTS_DISABLED" },
@@ -95,8 +109,8 @@ export function listProspectTrades() {
   return PROSPECT_TRADES.map(({ id, label }) => ({ id, label }));
 }
 
-export async function searchProspectPlaces(query) {
-  assertEnabled();
+export async function searchProspectPlaces(workspaceId, query) {
+  assertEnabled(workspaceId);
   const q = String(query || "").trim();
   if (q.length < 2) return [];
   try {
@@ -134,7 +148,7 @@ export function resetProviderCreditsCache() {
 export async function getProspectAvailability(workspaceId) {
   const quota = await getProspectQuota(workspaceId);
   const [provider, monthUsed] = await Promise.all([
-    isProspectGenerationEnabled() ? getProviderCreditsLeft() : null,
+    isProspectGenerationEnabled(workspaceId) ? getProviderCreditsLeft() : null,
     getMonthlyCreditsUsed(),
   ]);
   const limits = [quota.remaining, monthlyCreditCap() - monthUsed - 1];
@@ -204,7 +218,7 @@ async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
  * Coûte 1 crédit à Newbi, rien au quota de l'espace.
  */
 export async function searchProspects({ workspaceId, userId, input = {} }) {
-  assertEnabled();
+  assertEnabled(workspaceId);
   const criteria = normalizeSearchInput(input);
   const page = Math.min(Math.max(1, Number(input.page) || 1), MAX_PAGE);
   const result = await fetchSearchPage({ workspaceId, userId, criteria, page });
@@ -302,7 +316,7 @@ export async function unlockProspects({
   // Statuts déjà vérifiés par generateProspects (évite une seconde requête)
   oppositionStatuses = null,
 }) {
-  assertEnabled();
+  assertEnabled(workspaceId);
 
   const wanted = [...new Set(sirens.map((s) => String(s).trim()))];
   if (!wanted.length)
@@ -496,7 +510,7 @@ export async function generateProspects({
   listId,
   newListName,
 }) {
-  assertEnabled();
+  assertEnabled(workspaceId);
   const wanted = Number(count);
   if (!Number.isInteger(wanted) || wanted < 1) {
     throw validationError("Indiquez le nombre de prospects souhaité.");

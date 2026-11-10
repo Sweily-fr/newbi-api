@@ -34,15 +34,15 @@ const prospectsResolvers = {
     prospectSettings: requireRead("clients")(async (_, args, context) => {
       const workspaceId = workspaceOf(args, context);
       return {
-        enabled: isProspectGenerationEnabled(),
+        enabled: isProspectGenerationEnabled(workspaceId),
         trades: listProspectTrades(),
         quota: await getProspectAvailability(workspaceId),
         maxPerUnlock: MAX_UNLOCK_PER_REQUEST,
       };
     }),
 
-    prospectPlaces: requireRead("clients")(async (_, { query }) =>
-      searchProspectPlaces(query),
+    prospectPlaces: requireRead("clients")(async (_, args, context) =>
+      searchProspectPlaces(workspaceOf(args, context), args.query),
     ),
   },
 
