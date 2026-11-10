@@ -10,6 +10,7 @@ import {
   getCompany,
   autocompletePlaces,
   isSocieteinfoConfigured,
+  getKeyInfo,
   ProspectProviderError,
   SEARCH_PAGE_SIZE,
 } from "./societeinfoClient.js";
@@ -18,6 +19,8 @@ import { mapCompanyToClient } from "./prospectMapping.js";
 import { checkCommercialOpposition } from "./prospectOpposition.js";
 import {
   getProspectQuota,
+  getMonthlyCreditsUsed,
+  monthlyCreditCap,
   assertGlobalBudget,
   assertSearchAllowed,
 } from "./prospectQuota.js";
@@ -103,44 +106,72 @@ export async function searchProspectPlaces(query) {
   }
 }
 
-/**
- * Une page de résultats (25 au plus) : aperçu sans coordonnées.
- * Coûte 1 crédit à Newbi, rien au quota de l'espace.
- */
-export async function searchProspects({ workspaceId, userId, input = {} }) {
-  assertEnabled();
+/** Crédits restants sur le compte Societeinfo (null : inconnu), lus au plus une fois par minute. */
+let providerCredits = { at: 0, value: null };
+export async function getProviderCreditsLeft() {
+  if (Date.now() - providerCredits.at < 60_000) return providerCredits.value;
+  let value = null;
+  try {
+    const info = await getKeyInfo();
+    const left = Number(info?.totalAvailableCredits);
+    value = Number.isFinite(left) ? left : null;
+  } catch {
+    value = null;
+  }
+  providerCredits = { at: Date.now(), value };
+  return value;
+}
 
+export function resetProviderCreditsCache() {
+  providerCredits = { at: 0, value: null };
+}
+
+/**
+ * Prospects réellement disponibles pour l'espace : le plus petit de son
+ * quota offert, des crédits restants chez le fournisseur et du budget
+ * mensuel de Newbi (une page de recherche réservée dans les deux derniers).
+ */
+export async function getProspectAvailability(workspaceId) {
+  const quota = await getProspectQuota(workspaceId);
+  const [provider, monthUsed] = await Promise.all([
+    isProspectGenerationEnabled() ? getProviderCreditsLeft() : null,
+    getMonthlyCreditsUsed(),
+  ]);
+  const limits = [quota.remaining, monthlyCreditCap() - monthUsed - 1];
+  if (provider !== null) limits.push(provider - 1);
+  return { ...quota, available: Math.max(0, Math.min(...limits)) };
+}
+
+/** Disponibilité relue après une dépense (solde fournisseur non mis en cache). */
+async function freshAvailability(workspaceId) {
+  resetProviderCreditsCache();
+  return getProspectAvailability(workspaceId);
+}
+
+function normalizeSearchInput(input = {}) {
   let nafCodes;
   try {
     nafCodes = resolveNafCodes(input);
   } catch (error) {
     throw validationError(error.message);
   }
-  const placeIds = (input.placeIds || []).slice(0, MAX_PLACES).map(String);
-  const contact = CONTACT_MODES.includes(input.contact)
-    ? input.contact
-    : "phone";
-  const page = Math.min(Math.max(1, Number(input.page) || 1), MAX_PAGE);
-  const minStaff = Number.isInteger(input.minStaff)
-    ? input.minStaff
-    : undefined;
-  const maxStaff = Number.isInteger(input.maxStaff)
-    ? input.maxStaff
-    : undefined;
+  return {
+    nafCodes,
+    placeIds: (input.placeIds || []).slice(0, MAX_PLACES).map(String),
+    contact: CONTACT_MODES.includes(input.contact) ? input.contact : "phone",
+    minStaff: Number.isInteger(input.minStaff) ? input.minStaff : undefined,
+    maxStaff: Number.isInteger(input.maxStaff) ? input.maxStaff : undefined,
+  };
+}
 
+/** Une page chez le fournisseur : limites vérifiées, crédit journalisé. */
+async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
   await assertSearchAllowed(workspaceId);
   await assertGlobalBudget(1);
 
   let result;
   try {
-    result = await searchCompanies({
-      nafCodes,
-      placeIds,
-      contact,
-      page,
-      minStaff,
-      maxStaff,
-    });
+    result = await searchCompanies({ ...criteria, page });
   } catch (error) {
     throw providerToAppError(error);
   }
@@ -151,6 +182,18 @@ export async function searchProspects({ workspaceId, userId, input = {} }) {
     credits: 1,
     userId: userId ? toObjectId(userId) : undefined,
   });
+  return result;
+}
+
+/**
+ * Une page de résultats (25 au plus) : aperçu sans coordonnées.
+ * Coûte 1 crédit à Newbi, rien au quota de l'espace.
+ */
+export async function searchProspects({ workspaceId, userId, input = {} }) {
+  assertEnabled();
+  const criteria = normalizeSearchInput(input);
+  const page = Math.min(Math.max(1, Number(input.page) || 1), MAX_PAGE);
+  const result = await fetchSearchPage({ workspaceId, userId, criteria, page });
 
   const existing = await existingClientsBySiren(
     workspaceId,
@@ -167,7 +210,7 @@ export async function searchProspects({ workspaceId, userId, input = {} }) {
       alreadyInClients: existing.has(r.siren),
       clientId: existing.get(r.siren) || null,
     })),
-    quota: await getProspectQuota(workspaceId),
+    quota: await getProspectAvailability(workspaceId),
   };
 }
 
@@ -241,6 +284,8 @@ export async function unlockProspects({
   sirens = [],
   listId,
   newListName,
+  // Statuts déjà vérifiés par generateProspects (évite une seconde requête)
+  oppositionStatuses = null,
 }) {
   assertEnabled();
 
@@ -283,7 +328,8 @@ export async function unlockProspects({
   }
   if (toUnlock.length) await assertGlobalBudget(toUnlock.length);
 
-  const opposition = await checkCommercialOpposition(toUnlock);
+  const opposition =
+    oppositionStatuses || (await checkCommercialOpposition(toUnlock));
   const created = [];
   let providerError = null;
 
@@ -410,7 +456,124 @@ export async function unlockProspects({
     unlockedCount: created.length,
     skipped,
     listId: list?._id || null,
-    quota: await getProspectQuota(workspaceId),
+    quota: await freshAvailability(workspaceId),
     providerError: providerError?.message || null,
   };
+}
+
+// Pages parcourues au plus pour trouver le nombre demandé (1 crédit chacune)
+export const MAX_GENERATION_PAGES = 6;
+const OPPOSITION_CHUNK = 5;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * « Je veux 20 menuisiers dans la Vienne » : parcourt les pages de résultats
+ * jusqu'à réunir le nombre demandé d'entreprises nouvelles pour l'espace et
+ * libres de toute opposition à la prospection, puis les débloque.
+ */
+export async function generateProspects({
+  workspaceId,
+  user,
+  input = {},
+  count,
+  listId,
+  newListName,
+}) {
+  assertEnabled();
+  const wanted = Number(count);
+  if (!Number.isInteger(wanted) || wanted < 1) {
+    throw validationError("Indiquez le nombre de prospects souhaité.");
+  }
+  if (wanted > MAX_UNLOCK_PER_REQUEST) {
+    throw validationError(
+      `${MAX_UNLOCK_PER_REQUEST} prospects au maximum par génération.`,
+    );
+  }
+  const criteria = normalizeSearchInput(input);
+  await resolveTargetList(workspaceId, { listId, newListName });
+
+  const availability = await getProspectAvailability(workspaceId);
+  if (wanted > availability.available) {
+    throw validationError(
+      availability.available > 0
+        ? `Il vous reste ${availability.available} prospect${availability.available > 1 ? "s" : ""} disponible${availability.available > 1 ? "s" : ""}.`
+        : availability.plan
+          ? "Vous n'avez plus de prospects disponibles."
+          : "Les prospects offerts sont réservés aux abonnements payés.",
+      { reason: "QUOTA_EXCEEDED", remaining: availability.available },
+    );
+  }
+
+  const chosen = [];
+  const statuses = new Map();
+  const seen = new Set();
+  let matching = 0;
+  let totalPages = 1;
+  let opposedCount = 0;
+  let checks = 0;
+
+  for (
+    let page = 1;
+    chosen.length < wanted &&
+    page <= Math.min(totalPages, MAX_GENERATION_PAGES);
+    page++
+  ) {
+    const result = await fetchSearchPage({
+      workspaceId,
+      userId: user?.id,
+      criteria,
+      page,
+    });
+    matching = result.total;
+    totalPages = result.totalPages;
+
+    const sirens = result.results
+      .map((r) => r.siren)
+      .filter((s) => SIREN.test(s || "") && !seen.has(s));
+    sirens.forEach((s) => seen.add(s));
+    const existing = await existingClientsBySiren(workspaceId, sirens);
+    const candidates = sirens.filter((s) => !existing.has(s));
+
+    // Vérification par petits paquets : on s'arrête dès que le compte y est
+    for (
+      let i = 0;
+      i < candidates.length && chosen.length < wanted;
+      i += OPPOSITION_CHUNK
+    ) {
+      // API publique limitée à 7 requêtes par seconde
+      if (checks++ > 0) await sleep(1000);
+      const chunk = candidates.slice(i, i + OPPOSITION_CHUNK);
+      const checked = await checkCommercialOpposition(chunk);
+      for (const siren of chunk) {
+        const status = checked.get(siren);
+        statuses.set(siren, status);
+        if (status === "ALLOWED" && chosen.length < wanted) chosen.push(siren);
+        else if (status === "OPPOSED") opposedCount++;
+      }
+    }
+    if (!result.results.length) break;
+  }
+
+  const base = { requested: wanted, matching, opposedCount };
+  if (!chosen.length) {
+    return {
+      ...base,
+      clients: [],
+      unlockedCount: 0,
+      skipped: [],
+      listId: listId || null,
+      quota: await freshAvailability(workspaceId),
+      providerError: null,
+    };
+  }
+
+  const outcome = await unlockProspects({
+    workspaceId,
+    user,
+    sirens: chosen,
+    listId,
+    newListName,
+    oppositionStatuses: statuses,
+  });
+  return { ...base, ...outcome };
 }

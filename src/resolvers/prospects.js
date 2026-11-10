@@ -10,15 +10,24 @@ import {
   searchProspectPlaces,
   searchProspects,
   unlockProspects,
+  generateProspects,
+  getProspectAvailability,
   MAX_UNLOCK_PER_REQUEST,
 } from "../services/prospects/prospectService.js";
-import { getProspectQuota } from "../services/prospects/prospectQuota.js";
 
 // Chercher et débloquer des prospects crée des fiches clients
 const requireCreate = requireAction("clients", ["create", "import"]);
 
 const workspaceOf = (args, context) =>
   resolveWorkspaceId(args.workspaceId, context.workspaceId);
+
+// Ajout à une liste : droit sur les listes en plus
+function assertListRights(args, context) {
+  if (args.listId) assertPermissionAction(context, "clientLists", "edit");
+  else if (args.newListName) {
+    assertPermissionAction(context, "clientLists", "create");
+  }
+}
 
 const prospectsResolvers = {
   Query: {
@@ -27,7 +36,7 @@ const prospectsResolvers = {
       return {
         enabled: isProspectGenerationEnabled(),
         trades: listProspectTrades(),
-        quota: await getProspectQuota(workspaceId),
+        quota: await getProspectAvailability(workspaceId),
         maxPerUnlock: MAX_UNLOCK_PER_REQUEST,
       };
     }),
@@ -46,12 +55,20 @@ const prospectsResolvers = {
       }),
     ),
 
+    generateProspects: requireCreate(async (_, args, context) => {
+      assertListRights(args, context);
+      return generateProspects({
+        workspaceId: workspaceOf(args, context),
+        user: context.user,
+        input: args.input,
+        count: args.count,
+        listId: args.listId,
+        newListName: args.newListName,
+      });
+    }),
+
     unlockProspects: requireCreate(async (_, args, context) => {
-      // Ajout à une liste : droit sur les listes en plus
-      if (args.listId) assertPermissionAction(context, "clientLists", "edit");
-      else if (args.newListName) {
-        assertPermissionAction(context, "clientLists", "create");
-      }
+      assertListRights(args, context);
       return unlockProspects({
         workspaceId: workspaceOf(args, context),
         user: context.user,

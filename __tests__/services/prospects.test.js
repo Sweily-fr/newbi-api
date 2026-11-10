@@ -22,6 +22,7 @@ vi.mock(
       isSocieteinfoConfigured: vi.fn(() => true),
       searchCompanies: vi.fn(),
       getCompany: vi.fn(),
+      getKeyInfo: vi.fn(),
       autocompletePlaces: vi.fn(),
     };
   },
@@ -34,6 +35,7 @@ vi.mock("../../src/services/prospects/prospectOpposition.js", () => ({
 import {
   searchCompanies,
   getCompany,
+  getKeyInfo,
   ProspectProviderError,
 } from "../../src/services/prospects/societeinfoClient.js";
 import { checkCommercialOpposition } from "../../src/services/prospects/prospectOpposition.js";
@@ -50,6 +52,9 @@ import {
 import {
   searchProspects,
   unlockProspects,
+  generateProspects,
+  getProspectAvailability,
+  resetProviderCreditsCache,
 } from "../../src/services/prospects/prospectService.js";
 import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
@@ -117,6 +122,8 @@ beforeEach(async () => {
   delete process.env.PROSPECT_MONTHLY_CREDIT_CAP;
   checkCommercialOpposition.mockImplementation(async (s) => allowAll(s));
   getCompany.mockImplementation(async (siren) => fiche(siren));
+  getKeyInfo.mockResolvedValue({ totalAvailableCredits: 1000 });
+  resetProviderCreditsCache();
   await setSubscription("pme");
 });
 
@@ -439,5 +446,99 @@ describe("déblocage", () => {
       }),
     ).rejects.toThrow(/déjà ce nom/);
     expect(getCompany).not.toHaveBeenCalled();
+  });
+});
+
+const page = (sirens, totalPages = 3) => ({
+  total: totalPages * 25,
+  page: 1,
+  totalPages,
+  results: sirens.map((siren) => ({ siren, name: `M ${siren}` })),
+});
+
+describe("disponibilité réelle", () => {
+  it("prend le plus petit du quota et des crédits du fournisseur", async () => {
+    getKeyInfo.mockResolvedValue({ totalAvailableCredits: 8 });
+    expect(await getProspectAvailability(workspaceId)).toMatchObject({
+      remaining: 20,
+      // 8 crédits moins une page de recherche
+      available: 7,
+    });
+  });
+
+  it("ignore le solde fournisseur quand il est illisible", async () => {
+    getKeyInfo.mockRejectedValue(new Error("réseau"));
+    expect((await getProspectAvailability(workspaceId)).available).toBe(20);
+  });
+});
+
+describe("génération par nombre", () => {
+  it("parcourt les pages jusqu'au nombre demandé, sans opposées ni déjà présentes", async () => {
+    await Client.create({
+      name: "Déjà client",
+      email: "deja@client.fr",
+      siret: "100000001",
+      address: { city: "Poitiers" },
+      workspaceId,
+      createdBy: userId,
+    });
+    searchCompanies
+      .mockResolvedValueOnce(page(["100000001", "100000002", "100000003"]))
+      .mockResolvedValueOnce(page(["100000004", "100000005", "100000006"]));
+    checkCommercialOpposition.mockImplementation(
+      async (sirens) =>
+        new Map(
+          sirens.map((s) => [s, s === "100000003" ? "OPPOSED" : "ALLOWED"]),
+        ),
+    );
+
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 3,
+      newListName: "Menuisiers",
+    });
+
+    expect(searchCompanies).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      requested: 3,
+      unlockedCount: 3,
+      opposedCount: 1,
+    });
+    expect(getCompany.mock.calls.map(([s]) => s)).toEqual([
+      "100000002",
+      "100000004",
+      "100000005",
+    ]);
+    // Le contrôle d'opposition fait pendant la recherche n'est pas refait
+    expect(checkCommercialOpposition).toHaveBeenCalledTimes(2);
+    const list = await ClientList.findOne({ name: "Menuisiers" }).lean();
+    expect(list.clients).toHaveLength(3);
+  });
+
+  it("s'arrête sur la dernière page s'il n'y a pas assez d'entreprises", async () => {
+    searchCompanies.mockResolvedValue(page(["100000002"], 1));
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 5,
+    });
+    expect(searchCompanies).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ requested: 5, unlockedCount: 1 });
+  });
+
+  it("refuse plus que la disponibilité réelle, avant toute recherche", async () => {
+    getKeyInfo.mockResolvedValue({ totalAvailableCredits: 4 });
+    await expect(
+      generateProspects({
+        workspaceId,
+        user,
+        input: { tradeIds: ["menuisier"] },
+        count: 5,
+      }),
+    ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
+    expect(searchCompanies).not.toHaveBeenCalled();
   });
 });
