@@ -56,6 +56,7 @@ import {
   generateProspects,
   getProspectAvailability,
   resetProviderCreditsCache,
+  isProspectGenerationEnabled,
 } from "../../src/services/prospects/prospectService.js";
 import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
@@ -248,6 +249,23 @@ describe("recherche", () => {
       searchProspects({ workspaceId, input: { tradeIds: ["menuisier"] } }),
     ).rejects.toThrow(/pas encore disponible/);
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+
+  it("réservée aux espaces listés quand PROSPECTS_WORKSPACE_IDS est renseigné", async () => {
+    const other = new mongoose.Types.ObjectId().toString();
+    process.env.PROSPECTS_WORKSPACE_IDS = ` ${other} , 0123456789abcdef01234567`;
+    try {
+      expect(isProspectGenerationEnabled(workspaceId)).toBe(false);
+      expect(isProspectGenerationEnabled(other)).toBe(true);
+      expect(isProspectGenerationEnabled()).toBe(false);
+      await expect(
+        searchProspects({ workspaceId, input: { tradeIds: ["menuisier"] } }),
+      ).rejects.toThrow(/pas encore disponible/);
+      expect(searchCompanies).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.PROSPECTS_WORKSPACE_IDS;
+    }
+    expect(isProspectGenerationEnabled(workspaceId)).toBe(true);
   });
 
   it("compte 1 crédit et signale les entreprises déjà dans les clients", async () => {
