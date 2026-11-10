@@ -34,6 +34,8 @@ type ProspectQuota {
   quota: Int!
   used: Int!
   remaining: Int!
+  "Réellement disponible : le plus petit du quota restant, des crédits du fournisseur et du budget de Newbi"
+  available: Int!
   "Remise à zéro du quota mensuel"
   resetsAt: String
 }
@@ -101,6 +103,22 @@ type ProspectUnlockResult {
   providerError: String
 }
 
+"Bilan d'une génération par nombre"
+type ProspectGenerationResult {
+  "Nombre demandé"
+  requested: Int!
+  "Entreprises correspondant aux critères chez le fournisseur"
+  matching: Int!
+  "Entreprises écartées car opposées à la prospection"
+  opposedCount: Int!
+  clients: [Client!]!
+  unlockedCount: Int!
+  skipped: [ProspectSkipped!]!
+  listId: ID
+  quota: ProspectQuota!
+  providerError: String
+}
+
 extend type Query {
   prospectSettings(workspaceId: String!): ProspectSettings!
   prospectPlaces(workspaceId: String!, query: String!): [ProspectPlace!]!
@@ -115,6 +133,14 @@ extend type Mutation {
     workspaceId: String!
     input: ProspectSearchInput!
   ): ProspectSearchResult!
+  "Trouve et ajoute le nombre demandé de prospects correspondant aux critères"
+  generateProspects(
+    workspaceId: String!
+    input: ProspectSearchInput!
+    count: Int!
+    listId: ID
+    newListName: String
+  ): ProspectGenerationResult!
   "Débloque les entreprises choisies et les ajoute aux clients (et à une liste)"
   unlockProspects(
     workspaceId: String!
