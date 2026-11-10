@@ -7,6 +7,9 @@ import logger from "../../utils/logger.js";
  * l'API publique Recherche d'entreprises (champ
  * `opposition_diffusion_commerciale`).
  *
+ * Le même appel dit si l'entreprise est encore en activité
+ * (`etat_administratif` « A ») : une entreprise cessée n'est jamais débloquée.
+ *
  * Une entreprise opposée n'est jamais débloquée. Si la vérification échoue,
  * on ne débloque pas non plus : mieux vaut un prospect en moins qu'un
  * démarchage interdit.
@@ -26,7 +29,7 @@ const http = axios.create({
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** « OPPOSED », « ALLOWED » ou « UNKNOWN » (vérification impossible). */
+/** « OPPOSED », « CLOSED », « ALLOWED » ou « UNKNOWN » (vérification impossible). */
 async function checkOne(siren) {
   try {
     const { data } = await http.get(API_URL, {
@@ -34,6 +37,9 @@ async function checkOne(siren) {
     });
     const match = (data?.results || []).find((r) => r.siren === siren);
     if (!match) return "UNKNOWN";
+    if (match.etat_administratif && match.etat_administratif !== "A") {
+      return "CLOSED";
+    }
     return match.opposition_diffusion_commerciale === true
       ? "OPPOSED"
       : "ALLOWED";

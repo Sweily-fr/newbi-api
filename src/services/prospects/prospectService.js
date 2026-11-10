@@ -356,7 +356,9 @@ export async function unlockProspects({
         reason:
           status === "OPPOSED"
             ? "OPPOSED_TO_PROSPECTING"
-            : "VERIFICATION_UNAVAILABLE",
+            : status === "CLOSED"
+              ? "COMPANY_CLOSED"
+              : "VERIFICATION_UNAVAILABLE",
       });
       continue;
     }
@@ -525,6 +527,7 @@ export async function generateProspects({
   let matching = 0;
   let totalPages = 1;
   let opposedCount = 0;
+  let closedCount = 0;
   let checks = 0;
 
   for (
@@ -564,12 +567,13 @@ export async function generateProspects({
         statuses.set(siren, status);
         if (status === "ALLOWED" && chosen.length < wanted) chosen.push(siren);
         else if (status === "OPPOSED") opposedCount++;
+        else if (status === "CLOSED") closedCount++;
       }
     }
     if (!result.results.length) break;
   }
 
-  const base = { requested: wanted, matching, opposedCount };
+  const base = { requested: wanted, matching, opposedCount, closedCount };
   if (!chosen.length) {
     return {
       ...base,

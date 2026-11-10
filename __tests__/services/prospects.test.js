@@ -382,18 +382,20 @@ describe("déblocage", () => {
         ["111111111", "OPPOSED"],
         ["222222222", "UNKNOWN"],
         ["333333333", "ALLOWED"],
+        ["444444444", "CLOSED"],
       ]),
     );
     const result = await unlockProspects({
       workspaceId,
       user,
-      sirens: ["111111111", "222222222", "333333333"],
+      sirens: ["111111111", "222222222", "333333333", "444444444"],
     });
     expect(getCompany).toHaveBeenCalledTimes(1);
     expect(result.unlockedCount).toBe(1);
     expect(result.skipped.map((s) => s.reason)).toEqual([
       "OPPOSED_TO_PROSPECTING",
       "VERIFICATION_UNAVAILABLE",
+      "COMPANY_CLOSED",
     ]);
     expect(result.quota.used).toBe(1);
   });
