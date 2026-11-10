@@ -41,7 +41,14 @@ const clientSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: [true, "L'email est requis"],
+      // Un prospect généré peut n'avoir qu'un téléphone : l'email reste
+      // obligatoire pour toute fiche saisie à la main
+      required: [
+        function () {
+          return !this.prospect?.provider;
+        },
+        "L'email est requis",
+      ],
       trim: true,
       lowercase: true,
       validate: {
@@ -187,6 +194,17 @@ const clientSchema = new mongoose.Schema(
         type: String,
       },
     ],
+    // Origine d'un prospect débloqué depuis « Générer des prospects »
+    // (trace RGPD : source des coordonnées, date, auteur)
+    prospect: {
+      provider: { type: String },
+      siren: { type: String },
+      unlockedAt: { type: Date },
+      unlockedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      activityLabel: { type: String },
+      companyCreatedAt: { type: Date },
+      website: { type: String },
+    },
     // Blocage du client
     isBlocked: {
       type: Boolean,
@@ -417,7 +435,17 @@ const clientSchema = new mongoose.Schema(
 // Index pour améliorer les performances des recherches
 clientSchema.index({ createdBy: 1 });
 clientSchema.index({ workspaceId: 1 });
-clientSchema.index({ email: 1, workspaceId: 1 }, { unique: true });
+// Unicité de l'email dans l'espace, seulement quand il est renseigné : des
+// prospects sans email peuvent coexister. Remplace l'index « email_1_workspaceId_1 »
+// (voir src/scripts/migrate-client-email-index.js, à lancer avant mise en prod).
+clientSchema.index(
+  { email: 1, workspaceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { email: { $type: "string" } },
+    name: "client_email_unique_per_workspace",
+  },
+);
 clientSchema.index({ name: "text" }, { weights: { name: 10 } });
 clientSchema.index({ workspaceId: 1, "address.city": 1 });
 clientSchema.index({ workspaceId: 1, "address.postalCode": 1 });

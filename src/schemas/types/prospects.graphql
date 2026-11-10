@@ -1,0 +1,159 @@
+"Origine d'une fiche client créée depuis « Générer des prospects »"
+type ClientProspect {
+  provider: String!
+  siren: String
+  unlockedAt: String
+  activityLabel: String
+  website: String
+  "Date de création de l'entreprise (AAAA-MM-JJ)"
+  companyCreatedAt: String
+}
+
+extend type Client {
+  "Renseigné seulement pour un prospect généré"
+  prospect: ClientProspect
+}
+
+"Métier proposé dans la recherche de prospects"
+type ProspectTrade {
+  id: String!
+  label: String!
+}
+
+"Lieu (région, département, ville…) suggéré par le fournisseur"
+type ProspectPlace {
+  id: String!
+  label: String!
+  type: String
+}
+
+"Prospects offerts à l'espace"
+type ProspectQuota {
+  "Plan payé (freelance, pme, entreprise), null pendant l'essai"
+  plan: String
+  "monthly (TPE, Entreprise) ou welcome (Freelance, une seule fois)"
+  bucket: String
+  quota: Int!
+  used: Int!
+  remaining: Int!
+  "Réellement disponible : le plus petit du quota restant, des crédits du fournisseur et du budget de Newbi"
+  available: Int!
+  "Remise à zéro du quota mensuel"
+  resetsAt: String
+}
+
+type ProspectSettings {
+  "Fonctionnalité ouverte (accord fournisseur signé et clé configurée)"
+  enabled: Boolean!
+  trades: [ProspectTrade!]!
+  quota: ProspectQuota!
+  maxPerUnlock: Int!
+}
+
+"Aperçu d'une entreprise, sans ses coordonnées"
+type ProspectPreview {
+  siren: String!
+  siret: String
+  name: String!
+  activity: String
+  postalCode: String
+  city: String
+  "Déjà dans les clients de l'espace : son ajout ne coûte rien"
+  alreadyInClients: Boolean!
+  clientId: ID
+}
+
+type ProspectSearchResult {
+  total: Int!
+  page: Int!
+  totalPages: Int!
+  pageSize: Int!
+  results: [ProspectPreview!]!
+  quota: ProspectQuota!
+}
+
+input ProspectSearchInput {
+  "Identifiants de ProspectTrade"
+  tradeIds: [String!]
+  "Codes NAF supplémentaires (ex. 4332A)"
+  nafCodes: [String!]
+  "Identifiants de ProspectPlace (5 au plus)"
+  placeIds: [String!]
+  "phone, email ou both"
+  contact: String
+  minStaff: Int
+  maxStaff: Int
+  "Entreprises créées à partir de cette date (AAAA-MM-JJ)"
+  createdAfter: String
+  "Entreprises créées jusqu'à cette date (AAAA-MM-JJ)"
+  createdBefore: String
+  page: Int
+}
+
+"Entreprise non ajoutée, avec la raison"
+type ProspectSkipped {
+  siren: String!
+  "ALREADY_IN_CLIENTS, OPPOSED_TO_PROSPECTING, COMPANY_CLOSED, VERIFICATION_UNAVAILABLE, QUOTA_EXCEEDED, CLIENT_NOT_CREATED…"
+  reason: String!
+  message: String
+}
+
+type ProspectUnlockResult {
+  clients: [Client!]!
+  "Fiches débloquées (décomptées du quota)"
+  unlockedCount: Int!
+  skipped: [ProspectSkipped!]!
+  listId: ID
+  quota: ProspectQuota!
+  "Arrêt en cours de route côté fournisseur (les fiches déjà ajoutées restent)"
+  providerError: String
+}
+
+"Bilan d'une génération par nombre"
+type ProspectGenerationResult {
+  "Nombre demandé"
+  requested: Int!
+  "Entreprises correspondant aux critères chez le fournisseur"
+  matching: Int!
+  "Entreprises écartées car opposées à la prospection"
+  opposedCount: Int!
+  "Entreprises écartées car cessées au registre"
+  closedCount: Int!
+  clients: [Client!]!
+  unlockedCount: Int!
+  skipped: [ProspectSkipped!]!
+  listId: ID
+  quota: ProspectQuota!
+  providerError: String
+}
+
+extend type Query {
+  prospectSettings(workspaceId: String!): ProspectSettings!
+  prospectPlaces(workspaceId: String!, query: String!): [ProspectPlace!]!
+}
+
+extend type Mutation {
+  """
+  Une page de résultats. Mutation et non requête : chaque appel coûte un
+  crédit, il ne doit jamais être relancé tout seul par le cache du site.
+  """
+  searchProspects(
+    workspaceId: String!
+    input: ProspectSearchInput!
+  ): ProspectSearchResult!
+  "Trouve et ajoute le nombre demandé de prospects correspondant aux critères"
+  generateProspects(
+    workspaceId: String!
+    input: ProspectSearchInput!
+    count: Int!
+    listId: ID
+    newListName: String
+  ): ProspectGenerationResult!
+  "Débloque les entreprises choisies et les ajoute aux clients (et à une liste)"
+  unlockProspects(
+    workspaceId: String!
+    sirens: [String!]!
+    listId: ID
+    newListName: String
+  ): ProspectUnlockResult!
+}
