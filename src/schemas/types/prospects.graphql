@@ -1,0 +1,125 @@
+"Origine d'une fiche client créée depuis « Générer des prospects »"
+type ClientProspect {
+  provider: String!
+  siren: String
+  unlockedAt: String
+  activityLabel: String
+  website: String
+}
+
+extend type Client {
+  "Renseigné seulement pour un prospect généré"
+  prospect: ClientProspect
+}
+
+"Métier proposé dans la recherche de prospects"
+type ProspectTrade {
+  id: String!
+  label: String!
+}
+
+"Lieu (région, département, ville…) suggéré par le fournisseur"
+type ProspectPlace {
+  id: String!
+  label: String!
+  type: String
+}
+
+"Prospects offerts à l'espace"
+type ProspectQuota {
+  "Plan payé (freelance, pme, entreprise), null pendant l'essai"
+  plan: String
+  "monthly (TPE, Entreprise) ou welcome (Freelance, une seule fois)"
+  bucket: String
+  quota: Int!
+  used: Int!
+  remaining: Int!
+  "Remise à zéro du quota mensuel"
+  resetsAt: String
+}
+
+type ProspectSettings {
+  "Fonctionnalité ouverte (accord fournisseur signé et clé configurée)"
+  enabled: Boolean!
+  trades: [ProspectTrade!]!
+  quota: ProspectQuota!
+  maxPerUnlock: Int!
+}
+
+"Aperçu d'une entreprise, sans ses coordonnées"
+type ProspectPreview {
+  siren: String!
+  siret: String
+  name: String!
+  activity: String
+  postalCode: String
+  city: String
+  "Déjà dans les clients de l'espace : son ajout ne coûte rien"
+  alreadyInClients: Boolean!
+  clientId: ID
+}
+
+type ProspectSearchResult {
+  total: Int!
+  page: Int!
+  totalPages: Int!
+  pageSize: Int!
+  results: [ProspectPreview!]!
+  quota: ProspectQuota!
+}
+
+input ProspectSearchInput {
+  "Identifiants de ProspectTrade"
+  tradeIds: [String!]
+  "Codes NAF supplémentaires (ex. 4332A)"
+  nafCodes: [String!]
+  "Identifiants de ProspectPlace (5 au plus)"
+  placeIds: [String!]
+  "phone, email ou both"
+  contact: String
+  minStaff: Int
+  maxStaff: Int
+  page: Int
+}
+
+"Entreprise non ajoutée, avec la raison"
+type ProspectSkipped {
+  siren: String!
+  "ALREADY_IN_CLIENTS, OPPOSED_TO_PROSPECTING, VERIFICATION_UNAVAILABLE, QUOTA_EXCEEDED, CLIENT_NOT_CREATED…"
+  reason: String!
+  message: String
+}
+
+type ProspectUnlockResult {
+  clients: [Client!]!
+  "Fiches débloquées (décomptées du quota)"
+  unlockedCount: Int!
+  skipped: [ProspectSkipped!]!
+  listId: ID
+  quota: ProspectQuota!
+  "Arrêt en cours de route côté fournisseur (les fiches déjà ajoutées restent)"
+  providerError: String
+}
+
+extend type Query {
+  prospectSettings(workspaceId: String!): ProspectSettings!
+  prospectPlaces(workspaceId: String!, query: String!): [ProspectPlace!]!
+}
+
+extend type Mutation {
+  """
+  Une page de résultats. Mutation et non requête : chaque appel coûte un
+  crédit, il ne doit jamais être relancé tout seul par le cache du site.
+  """
+  searchProspects(
+    workspaceId: String!
+    input: ProspectSearchInput!
+  ): ProspectSearchResult!
+  "Débloque les entreprises choisies et les ajoute aux clients (et à une liste)"
+  unlockProspects(
+    workspaceId: String!
+    sirens: [String!]!
+    listId: ID
+    newListName: String
+  ): ProspectUnlockResult!
+}

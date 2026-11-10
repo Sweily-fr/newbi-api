@@ -1161,6 +1161,9 @@ const clientResolvers = {
 
   // Resolvers de champs pour convertir les dates en strings ISO
   Client: {
+    // Prospect généré sans email : chaîne vide plutôt que null (champ non nul
+    // du schéma, une seule fiche sans email ferait échouer toute la liste)
+    email: (parent) => parent.email || "",
     createdAt: (parent) =>
       parent.createdAt?.toISOString?.() || parent.createdAt,
     updatedAt: (parent) =>
