@@ -59,6 +59,7 @@ import {
  */
 
 import { bindOAuthToBrowser } from "../utils/oauthBrowserBinding.js";
+import { isFeatureEnabled } from "../utils/featureAccess.js";
 import {
   CONNECT_STATE_TTL_MS,
   SOCIAL_CONNECT_COOKIE_PATH,
@@ -87,7 +88,10 @@ const socialPublishingResolvers = {
       "read",
     )(async (_, __, context) => {
       const { workspaceId, permissions } = context;
-      const enabled = isSocialPublishingEnabled();
+      // Accès anticipé : fermé aux espaces hors de BETA_WORKSPACE_IDS
+      const enabled =
+        isSocialPublishingEnabled() &&
+        isFeatureEnabled("socialPublishing", workspaceId);
       let accounts = [];
       let xPostQuota = null;
       if (enabled) {

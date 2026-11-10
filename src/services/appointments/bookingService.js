@@ -51,6 +51,7 @@ import {
 import { escapeRegex } from "../../utils/escapeRegex.js";
 import { PHONE_REGEX } from "../../utils/validators.js";
 import logger from "../../utils/logger.js";
+import { isFeatureEnabled } from "../../utils/featureAccess.js";
 
 /**
  * Prise de rendez-vous côté invité : page publique, créneaux, réservation,
@@ -148,6 +149,8 @@ const organizationNameOf = (organization) =>
  * rendez-vous. Sinon : même 404 que pour une page inconnue.
  */
 async function pageIsPublishable(page) {
+  // Accès anticipé : page fermée tant que l'espace n'a pas la fonctionnalité
+  if (!isFeatureEnabled("appointments", page.workspaceId)) return false;
   try {
     await checkSubscriptionActive({ workspaceId: String(page.workspaceId) });
   } catch {

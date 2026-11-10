@@ -12,6 +12,7 @@ import {
   beforeAll,
   afterAll,
   beforeEach,
+  afterEach,
   vi,
 } from "vitest";
 import { Readable } from "stream";
@@ -267,6 +268,31 @@ beforeEach(async () => {
     doc(docs.inSibling, "facture.pdf", ids.sibling),
     doc(docs.inbox, "a-classer.pdf", null),
   ]);
+});
+
+describe("Accès anticipé (BETA_FEATURES)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("lien d'un espace hors des espaces bêta : introuvable, sans envoi de code", async () => {
+    vi.stubEnv("BETA_FEATURES", "documentShares");
+    vi.stubEnv("BETA_WORKSPACE_IDS", String(otherWorkspaceId));
+    const share = await createShare();
+    const res = await fetch(urlOf(share));
+    expect(res.status).toBe(404);
+    const sent = await post(share, "/identify/code", { email: CLIENT });
+    expect(sent.status).toBe(404);
+    expect(mails.codes.has(CLIENT)).toBe(false);
+  });
+
+  it("lien d'un espace bêta : servi normalement", async () => {
+    vi.stubEnv("BETA_FEATURES", "documentShares");
+    vi.stubEnv("BETA_WORKSPACE_IDS", ws);
+    const share = await createShare();
+    const res = await fetch(urlOf(share));
+    expect(res.status).toBe(200);
+  });
 });
 
 describe("Identification du visiteur", () => {

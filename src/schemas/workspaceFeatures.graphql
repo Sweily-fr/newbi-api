@@ -1,0 +1,18 @@
+# Accès anticipé : fonctionnalités livrées mais réservées à certains espaces
+# (BETA_FEATURES / BETA_WORKSPACE_IDS, voir src/utils/featureAccess.js).
+
+type WorkspaceFeatures {
+  "Déclaration de TVA"
+  vat: Boolean!
+  "Prise de rendez-vous"
+  appointments: Boolean!
+  "Liens clients des documents partagés"
+  documentShares: Boolean!
+  "Publication sur les réseaux sociaux depuis le kanban"
+  socialPublishing: Boolean!
+}
+
+extend type Query {
+  "Fonctionnalités en accès anticipé ouvertes à l'espace"
+  workspaceFeatures(workspaceId: ID): WorkspaceFeatures!
+}

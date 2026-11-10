@@ -81,6 +81,8 @@ import organizationRoleResolvers from "./organizationRole.js";
 import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
 import socialPublishingResolvers from "./socialPublishing.js";
 import appointmentsResolvers from "./appointments.js";
+import workspaceFeaturesResolvers from "./workspaceFeatures.js";
+import { gateFeatureResolvers } from "../utils/featureAccess.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -125,7 +127,7 @@ const resolvers = mergeResolvers([
   importedQuoteResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
-  documentShareResolvers,
+  gateFeatureResolvers("documentShares", documentShareResolvers),
   storageResolvers,
   eInvoicingResolvers,
   publicBoardShareResolvers,
@@ -143,7 +145,7 @@ const resolvers = mergeResolvers([
   gmailConnectionResolvers,
   calendarColorLabelsResolvers,
   calendarLinkedItemsResolvers,
-  vatDeclarationResolvers,
+  gateFeatureResolvers("vat", vatDeclarationResolvers),
   prospectsResolvers,
   calendarFeedResolvers,
   documentAutomationResolvers,
@@ -162,8 +164,13 @@ const resolvers = mergeResolvers([
   dashboardAggregationResolvers,
   receiptMatchingResolvers,
   organizationRoleResolvers,
-  socialPublishingResolvers,
-  appointmentsResolvers,
+  // socialPublishingStatus renvoie enabled: false à un espace sans accès :
+  // le site masque alors l'appli et l'onglet des posts
+  gateFeatureResolvers("socialPublishing", socialPublishingResolvers, {
+    except: ["socialPublishingStatus"],
+  }),
+  gateFeatureResolvers("appointments", appointmentsResolvers),
+  workspaceFeaturesResolvers,
 ]);
 
 // Contrôle d'abonnement différé (checkSubscriptionActive) : propre à chaque

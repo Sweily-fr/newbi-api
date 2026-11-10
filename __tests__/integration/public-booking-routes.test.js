@@ -194,6 +194,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   delete process.env.TURNSTILE_SECRET_KEY;
 });
 
@@ -239,6 +240,29 @@ describe("404 uniforme", () => {
       expect(res.status, path).toBe(404);
       expect(await res.json()).toEqual({ error: "NOT_FOUND" });
     }
+  });
+
+  it("accès anticipé : 404 hors des espaces bêta, page servie dans l'un d'eux", async () => {
+    vi.stubEnv("BETA_FEATURES", "appointments");
+    vi.stubEnv("BETA_WORKSPACE_IDS", "68cda7820000000000000001");
+    for (const path of [
+      "/jean-dupont",
+      "/jean-dupont/decouverte",
+      "/jean-dupont/decouverte/slots",
+    ]) {
+      const res = await api(path);
+      expect(res.status, path).toBe(404);
+      expect(await res.json()).toEqual({ error: "NOT_FOUND" });
+    }
+    const booked = await api("/jean-dupont/decouverte/book", {
+      method: "POST",
+      body: bookingBody(new Date(Date.now() + 86400000).toISOString()),
+    });
+    expect(booked.status).toBe(404);
+    expect(await Booking.countDocuments()).toBe(0);
+
+    vi.stubEnv("BETA_WORKSPACE_IDS", String(workspaceId));
+    expect((await api("/jean-dupont")).status).toBe(200);
   });
 
   it("réservation sur une page inconnue : 404", async () => {
