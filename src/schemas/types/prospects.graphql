@@ -93,7 +93,7 @@ input ProspectSearchInput {
 "Entreprise non ajoutée, avec la raison"
 type ProspectSkipped {
   siren: String!
-  "ALREADY_IN_CLIENTS, OPPOSED_TO_PROSPECTING, VERIFICATION_UNAVAILABLE, QUOTA_EXCEEDED, CLIENT_NOT_CREATED…"
+  "ALREADY_IN_CLIENTS, OPPOSED_TO_PROSPECTING, COMPANY_CLOSED, VERIFICATION_UNAVAILABLE, QUOTA_EXCEEDED, CLIENT_NOT_CREATED…"
   reason: String!
   message: String
 }
@@ -117,6 +117,8 @@ type ProspectGenerationResult {
   matching: Int!
   "Entreprises écartées car opposées à la prospection"
   opposedCount: Int!
+  "Entreprises écartées car cessées au registre"
+  closedCount: Int!
   clients: [Client!]!
   unlockedCount: Int!
   skipped: [ProspectSkipped!]!
