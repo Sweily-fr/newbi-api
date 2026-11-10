@@ -105,6 +105,8 @@ export async function searchCompanies({
   placeIds = [],
   minStaff,
   maxStaff,
+  minCreationDate,
+  maxCreationDate,
   contact = "phone",
   page = 1,
 }) {
@@ -116,6 +118,9 @@ export async function searchCompanies({
   placeIds.forEach((id) => params.append("placeId", id));
   if (Number.isFinite(minStaff)) params.set("minstaff", String(minStaff));
   if (Number.isFinite(maxStaff)) params.set("maxstaff", String(maxStaff));
+  // Dates de création au format AAAAMMJJ
+  if (minCreationDate) params.set("mincreationdate", minCreationDate);
+  if (maxCreationDate) params.set("maxcreationdate", maxCreationDate);
   if (contact === "phone" || contact === "both")
     params.set("withphone", "true");
   if (contact === "email" || contact === "both")

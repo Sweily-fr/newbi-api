@@ -89,6 +89,9 @@ const prospectsResolvers = {
         ? {
             ...(parent.prospect.toObject?.() || parent.prospect),
             unlockedAt: parent.prospect.unlockedAt?.toISOString?.() || null,
+            companyCreatedAt:
+              parent.prospect.companyCreatedAt?.toISOString?.().slice(0, 10) ||
+              null,
           }
         : null,
   },

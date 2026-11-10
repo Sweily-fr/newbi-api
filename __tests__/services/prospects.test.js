@@ -42,6 +42,7 @@ import { checkCommercialOpposition } from "../../src/services/prospects/prospect
 import {
   pickBestEmail,
   formatFrenchPhone,
+  parseCreationDate,
   mapCompanyToClient,
 } from "../../src/services/prospects/prospectMapping.js";
 import { resolveNafCodes } from "../../src/services/prospects/prospectTrades.js";
@@ -86,6 +87,7 @@ function fiche(siren, { email, emails, phones = ["0549513030"], name } = {}) {
     organization: {
       registration_number: siren,
       name: name || `MENUISERIE ${siren}`,
+      creation_date: "2024-03-15",
       vat_number: null,
       activity: { ape_name: "Travaux de menuiserie bois et PVC" },
       address: {
@@ -540,5 +542,49 @@ describe("génération par nombre", () => {
       }),
     ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+});
+
+describe("date de création", () => {
+  it("lit la date et écarte la date fictive du fournisseur", () => {
+    expect(parseCreationDate("2024-03-15")?.toISOString()).toBe(
+      "2024-03-15T00:00:00.000Z",
+    );
+    expect(parseCreationDate("1970-01-01")).toBeNull();
+    expect(parseCreationDate("")).toBeNull();
+  });
+
+  it("transmet les bornes au fournisseur et refuse une date invalide", async () => {
+    searchCompanies.mockResolvedValue(page([], 1));
+    await searchProspects({
+      workspaceId,
+      input: {
+        tradeIds: ["menuisier"],
+        createdAfter: "2025-11-10",
+        createdBefore: "2026-11-10",
+      },
+    });
+    expect(searchCompanies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        minCreationDate: "20251110",
+        maxCreationDate: "20261110",
+      }),
+    );
+    await expect(
+      searchProspects({
+        workspaceId,
+        input: { tradeIds: ["menuisier"], createdAfter: "10/11/2025" },
+      }),
+    ).rejects.toThrow(/Date de création invalide/);
+  });
+
+  it("garde la date de création sur la fiche du prospect", async () => {
+    await unlockProspects({ workspaceId, user, sirens: ["111111111"] });
+    const client = await Client.findOne({
+      "prospect.siren": "111111111",
+    }).lean();
+    expect(client.prospect.companyCreatedAt.toISOString()).toBe(
+      "2024-03-15T00:00:00.000Z",
+    );
   });
 });

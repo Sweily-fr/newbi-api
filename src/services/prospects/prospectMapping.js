@@ -102,6 +102,14 @@ const keepIf = (value, regex) => {
   return v && regex.test(v) ? v : undefined;
 };
 
+/** « 2012-05-14 » → Date ; null si absente ou fictive (« 1970-01-01 » du fournisseur). */
+export function parseCreationDate(value) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null;
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.getUTCFullYear() < 1800) return null;
+  return value.startsWith("1970-01-01") ? null : date;
+}
+
 /**
  * Champs de la fiche client à partir de la fiche Societeinfo (`result` de
  * company.json). Les contacts peuvent être rangés à la racine ou sous
@@ -132,5 +140,6 @@ export function mapCompanyToClient(company, fallback = {}) {
     website:
       company?.web_infos?.website_url || org.web_infos?.website_url || null,
     activityLabel: org.activity?.ape_name || fallback.activity || null,
+    companyCreatedAt: parseCreationDate(org.creation_date),
   };
 }
