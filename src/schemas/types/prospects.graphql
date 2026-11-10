@@ -5,6 +5,8 @@ type ClientProspect {
   unlockedAt: String
   activityLabel: String
   website: String
+  "Date de création de l'entreprise (AAAA-MM-JJ)"
+  companyCreatedAt: String
 }
 
 extend type Client {
@@ -81,6 +83,10 @@ input ProspectSearchInput {
   contact: String
   minStaff: Int
   maxStaff: Int
+  "Entreprises créées à partir de cette date (AAAA-MM-JJ)"
+  createdAfter: String
+  "Entreprises créées jusqu'à cette date (AAAA-MM-JJ)"
+  createdBefore: String
   page: Int
 }
 

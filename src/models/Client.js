@@ -202,6 +202,7 @@ const clientSchema = new mongoose.Schema(
       unlockedAt: { type: Date },
       unlockedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       activityLabel: { type: String },
+      companyCreatedAt: { type: Date },
       website: { type: String },
     },
     // Blocage du client

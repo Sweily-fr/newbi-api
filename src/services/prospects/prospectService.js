@@ -148,6 +148,18 @@ async function freshAvailability(workspaceId) {
   return getProspectAvailability(workspaceId);
 }
 
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** « 2025-11-10 » → « 20251110 » (format du fournisseur), null si vide. */
+function toProviderDate(value, label) {
+  if (!value) return undefined;
+  const match = ISO_DATE.exec(String(value));
+  if (!match || Number.isNaN(Date.parse(String(value)))) {
+    throw validationError(`Date de création invalide (${label}).`);
+  }
+  return `${match[1]}${match[2]}${match[3]}`;
+}
+
 function normalizeSearchInput(input = {}) {
   let nafCodes;
   try {
@@ -161,6 +173,8 @@ function normalizeSearchInput(input = {}) {
     contact: CONTACT_MODES.includes(input.contact) ? input.contact : "phone",
     minStaff: Number.isInteger(input.minStaff) ? input.minStaff : undefined,
     maxStaff: Number.isInteger(input.maxStaff) ? input.maxStaff : undefined,
+    minCreationDate: toProviderDate(input.createdAfter, "depuis"),
+    maxCreationDate: toProviderDate(input.createdBefore, "jusqu'au"),
   };
 }
 
@@ -257,6 +271,7 @@ function buildClientDoc({ mapped, workspaceId, user, fallbackName }) {
       unlockedAt: new Date(),
       unlockedBy: actor.userId ? toObjectId(actor.userId) : undefined,
       activityLabel: mapped.activityLabel || undefined,
+      companyCreatedAt: mapped.companyCreatedAt || undefined,
       website: mapped.website || undefined,
     },
     activity: [
