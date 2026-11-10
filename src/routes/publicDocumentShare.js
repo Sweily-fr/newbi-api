@@ -35,6 +35,7 @@ import {
 } from "../utils/documentShareAccessToken.js";
 import { isObjectIdString } from "../utils/objectIdString.js";
 import logger from "../utils/logger.js";
+import { isFeatureEnabled } from "../utils/featureAccess.js";
 
 const router = express.Router();
 
@@ -83,7 +84,9 @@ async function loadOpenShare(req, res) {
   const share = TOKEN_RE.test(token)
     ? await DocumentShare.findOne({ token })
     : null;
-  if (!share) {
+  // Accès anticipé : lien introuvable tant que l'espace n'a pas la
+  // fonctionnalité
+  if (!share || !isFeatureEnabled("documentShares", share.workspaceId)) {
     res.status(404).json({ success: false, message: "Lien introuvable." });
     return null;
   }
