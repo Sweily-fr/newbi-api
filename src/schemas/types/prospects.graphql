@@ -14,9 +14,18 @@ extend type Client {
   prospect: ClientProspect
 }
 
-"Métier proposé dans la recherche de prospects"
+"Métier courant proposé en tête de la recherche de prospects"
 type ProspectTrade {
   id: String!
+  label: String!
+  "Codes NAF recherchés pour ce métier (ex. 4332A)"
+  nafCodes: [String!]!
+}
+
+"Sous-classe de la nomenclature NAF rév. 2 (Insee)"
+type ProspectActivity {
+  "Code sans point (ex. 4776Z)"
+  code: String!
   label: String!
 }
 
@@ -72,13 +81,23 @@ type ProspectSearchResult {
   quota: ProspectQuota!
 }
 
+input ProspectPlaceInput {
+  id: String!
+  label: String!
+  type: String
+}
+
 input ProspectSearchInput {
   "Identifiants de ProspectTrade"
   tradeIds: [String!]
   "Codes NAF supplémentaires (ex. 4332A)"
   nafCodes: [String!]
-  "Identifiants de ProspectPlace (5 au plus)"
+  "Identifiants de ProspectPlace (5 au plus), ignorés avec un rayon"
   placeIds: [String!]
+  "Rayon autour de aroundPlace : 5, 10, 20, 30 ou 50 km (0 ou absent : sans rayon)"
+  radiusKm: Int
+  "Ville ou code postal au centre du rayon, tel que renvoyé par prospectPlaces"
+  aroundPlace: ProspectPlaceInput
   "phone, email ou both"
   contact: String
   minStaff: Int
@@ -119,6 +138,10 @@ type ProspectGenerationResult {
   opposedCount: Int!
   "Entreprises écartées car cessées au registre"
   closedCount: Int!
+  "Entreprises trouvées hors du rayon, écartées sans frais de fiche"
+  outOfRadiusCount: Int!
+  "Rayon réellement couvert en km (réduit autour des grandes villes), null sans rayon"
+  radiusKm: Int
   clients: [Client!]!
   unlockedCount: Int!
   skipped: [ProspectSkipped!]!
@@ -130,6 +153,8 @@ type ProspectGenerationResult {
 extend type Query {
   prospectSettings(workspaceId: String!): ProspectSettings!
   prospectPlaces(workspaceId: String!, query: String!): [ProspectPlace!]!
+  "Toutes les activités NAF, pour la recherche par activité"
+  prospectActivities(workspaceId: String!): [ProspectActivity!]!
 }
 
 extend type Mutation {

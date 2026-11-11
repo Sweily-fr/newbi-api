@@ -1,6 +1,9 @@
+import { nafLabel } from "./nafCodes.js";
+
 /**
- * Métiers proposés dans « Générer des prospects », reliés aux codes NAF.
- * Le client choisit un métier en clair ; il ne manipule jamais les codes.
+ * Métiers courants proposés en tête dans « Générer des prospects », reliés
+ * aux codes NAF (affichés à côté). Le client peut aussi choisir n'importe
+ * quelle sous-classe NAF (nafCodes.js).
  */
 export const PROSPECT_TRADES = [
   {
@@ -56,6 +59,7 @@ export const PROSPECT_TRADES = [
 const MAX_NAF_CODES = 10;
 // « 43 », « 43.3 », « 43.32 », « 4332A » : niveaux NAF acceptés par Societeinfo
 const NAF_CODE = /^\d{2}(\d{1,2})?[A-Z]?$/;
+const NAF_SUBCLASS = /^\d{4}[A-Z]$/;
 
 export function normalizeNafCode(code) {
   return String(code || "")
@@ -78,9 +82,14 @@ export function resolveNafCodes({ tradeIds = [], nafCodes = [] }) {
     const code = normalizeNafCode(raw);
     if (!NAF_CODE.test(code))
       throw new Error(`Code d'activité invalide : ${raw}`);
+    // Une sous-classe doit exister : une faute de frappe dépenserait un
+    // crédit pour zéro résultat
+    if (NAF_SUBCLASS.test(code) && !nafLabel(code)) {
+      throw new Error(`Code NAF inconnu : ${raw}`);
+    }
     codes.add(code);
   }
-  if (codes.size === 0) throw new Error("Choisissez au moins un métier.");
+  if (codes.size === 0) throw new Error("Choisissez au moins une activité.");
   if (codes.size > MAX_NAF_CODES) {
     throw new Error(
       `${MAX_NAF_CODES} codes d'activité au maximum par recherche.`,
