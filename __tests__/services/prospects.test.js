@@ -33,8 +33,14 @@ vi.mock(
   async (importOriginal) => ({
     ...(await importOriginal()),
     resolveRadiusArea: vi.fn(),
+    resolveRadiusZone: vi.fn(),
+    resolveRegistryZones: vi.fn(),
   }),
 );
+
+vi.mock("../../src/services/prospects/prospectCount.js", () => ({
+  countRegistryCompanies: vi.fn(),
+}));
 
 vi.mock("../../src/services/prospects/prospectOpposition.js", () => ({
   checkCommercialOpposition: vi.fn(),
@@ -49,8 +55,11 @@ import {
 import { checkCommercialOpposition } from "../../src/services/prospects/prospectOpposition.js";
 import {
   resolveRadiusArea,
+  resolveRadiusZone,
+  resolveRegistryZones,
   ProspectAreaError,
 } from "../../src/services/prospects/prospectArea.js";
+import { countRegistryCompanies } from "../../src/services/prospects/prospectCount.js";
 import {
   pickBestEmail,
   formatFrenchPhone,
@@ -70,6 +79,7 @@ import {
   resetProviderCreditsCache,
   isProspectGenerationEnabled,
   searchCursorKey,
+  countProspects,
   listProspectTrades,
   listProspectActivities,
 } from "../../src/services/prospects/prospectService.js";
@@ -687,6 +697,60 @@ describe("reprise d'une génération à l'autre", () => {
     expect(searchCursorKey(base)).not.toBe(
       searchCursorKey({ ...base, contact: "email" }),
     );
+  });
+});
+
+describe("compteur avant de lancer", () => {
+  const ml = {
+    id: "ml",
+    label: "Maisons-Laffitte, Yvelines, Île-de-France",
+    type: "locality",
+  };
+
+  it("compte au registre sans jamais appeler Societeinfo", async () => {
+    const zones = { code_commune: new Set(["78358"]) };
+    resolveRegistryZones.mockResolvedValue({ zones, unresolved: 0 });
+    countRegistryCompanies.mockResolvedValue({ total: 30, capped: false });
+
+    const result = await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"], maxStaff: 9 },
+      places: [ml],
+    });
+
+    expect(result).toEqual({ total: 30, capped: false });
+    expect(countRegistryCompanies).toHaveBeenCalledWith({
+      nafCodes: ["4334Z"],
+      zones,
+      minStaff: undefined,
+      maxStaff: 9,
+    });
+    expect(searchCompanies).not.toHaveBeenCalled();
+    expect(getCompany).not.toHaveBeenCalled();
+  });
+
+  it("avec un rayon, compte sur les codes postaux du cercle", async () => {
+    resolveRadiusZone.mockResolvedValue({ postalCodes: ["78600", "78500"] });
+    countRegistryCompanies.mockResolvedValue({ total: 474, capped: false });
+    await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"], radiusKm: 5, aroundPlace: ml },
+      places: [ml],
+    });
+    expect(countRegistryCompanies.mock.calls[0][0].zones).toEqual({
+      code_postal: ["78600", "78500"],
+    });
+  });
+
+  it("se tait si une zone n'a pas pu être traduite", async () => {
+    resolveRegistryZones.mockResolvedValue({ zones: {}, unresolved: 1 });
+    const result = await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"] },
+      places: [{ id: "x", label: "Quelque part", type: "route" }],
+    });
+    expect(result).toEqual({ total: null, capped: false });
+    expect(countRegistryCompanies).not.toHaveBeenCalled();
   });
 });
 

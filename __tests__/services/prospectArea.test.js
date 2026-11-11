@@ -17,6 +17,7 @@ const area = await import("../../src/services/prospects/prospectArea.js");
 const COMMUNES = [
   {
     nom: "Poitiers",
+    code: "86194",
     codesPostaux: ["86000"],
     centre: { type: "Point", coordinates: [0.3712, 46.5846] },
     codeDepartement: "86",
@@ -24,6 +25,7 @@ const COMMUNES = [
   },
   {
     nom: "Buxerolles",
+    code: "86041",
     codesPostaux: ["86180"],
     centre: { type: "Point", coordinates: [0.3693, 46.6146] },
     codeDepartement: "86",
@@ -51,6 +53,7 @@ const COMMUNES = [
     population: 2100000,
   },
 ];
+const REGIONS = [{ nom: "Nouvelle-Aquitaine", code: "75" }];
 const DEPARTEMENTS = [
   { nom: "Vienne", code: "86" },
   { nom: "Isère", code: "38" },
@@ -61,7 +64,12 @@ beforeEach(() => {
   area.resetAreaCaches();
   get.mockReset();
   get.mockImplementation(async (url) => ({
-    data: url === "/departements" ? DEPARTEMENTS : COMMUNES,
+    data:
+      url === "/departements"
+        ? DEPARTEMENTS
+        : url === "/regions"
+          ? REGIONS
+          : COMMUNES,
   }));
   autocompletePlaces.mockReset();
   autocompletePlaces.mockImplementation(async (query) => [
@@ -143,7 +151,12 @@ describe("recherche par rayon", () => {
       }),
     ).rejects.toThrow(/momentanément indisponible/);
     get.mockImplementation(async (url) => ({
-      data: url === "/departements" ? DEPARTEMENTS : COMMUNES,
+      data:
+        url === "/departements"
+          ? DEPARTEMENTS
+          : url === "/regions"
+            ? REGIONS
+            : COMMUNES,
     }));
     await expect(
       area.resolveRadiusArea({
@@ -151,6 +164,40 @@ describe("recherche par rayon", () => {
         radiusKm: 10,
       }),
     ).resolves.toMatchObject({ radiusKm: 10 });
+  });
+
+  it("traduit les zones choisies en codes du registre public", async () => {
+    const { zones, unresolved } = await area.resolveRegistryZones([
+      { label: "Poitiers, Vienne, Nouvelle-Aquitaine", type: "locality" },
+      { label: "86180, Vienne", type: "postal_code" },
+      {
+        label: "Vienne, Nouvelle-Aquitaine",
+        type: "administrative_area_level_2",
+      },
+      {
+        label: "Nouvelle-Aquitaine, FRANCE",
+        type: "administrative_area_level_1",
+      },
+      {
+        label: "Rue de la Gare, Buxerolles, Vienne, Nouvelle-Aquitaine",
+        type: "prediction_address",
+      },
+      { label: "Atlantide", type: "locality" },
+    ]);
+    expect([...zones.code_commune]).toEqual(["86194", "86041"]);
+    expect([...zones.code_postal]).toEqual(["86180"]);
+    expect([...zones.departement]).toEqual(["86"]);
+    expect([...zones.region]).toEqual(["75"]);
+    expect(unresolved).toBe(1);
+  });
+
+  it("rayon pour le compteur : codes postaux dans le rayon, sans Societeinfo", async () => {
+    const zone = await area.resolveRadiusZone({
+      place: { id: "p", label: "Poitiers, Vienne", type: "locality" },
+      radiusKm: 10,
+    });
+    expect(zone.postalCodes).toEqual(["86000", "86180"]);
+    expect(autocompletePlaces).not.toHaveBeenCalled();
   });
 
   it("garde une entreprise sans coordonnées, écarte celle hors du cercle", () => {

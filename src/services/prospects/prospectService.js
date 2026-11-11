@@ -24,9 +24,12 @@ import {
 import { NAF_SUBCLASSES } from "./nafCodes.js";
 import {
   resolveRadiusArea,
+  resolveRadiusZone,
+  resolveRegistryZones,
   isWithinArea,
   ProspectAreaError,
 } from "./prospectArea.js";
+import { countRegistryCompanies } from "./prospectCount.js";
 import { mapCompanyToClient } from "./prospectMapping.js";
 import { checkCommercialOpposition } from "./prospectOpposition.js";
 import {
@@ -123,6 +126,51 @@ export function listProspectTrades() {
     label,
     nafCodes,
   }));
+}
+
+/**
+ * Compteur gratuit avant de lancer : entreprises actives au registre public
+ * pour ces activités et cette zone (rayon compris). Aucun crédit Societeinfo.
+ * total null : registre muet ou zone impossible à traduire.
+ */
+export async function countProspects({ workspaceId, input = {}, places = [] }) {
+  assertEnabled(workspaceId);
+  let nafCodes;
+  try {
+    nafCodes = resolveNafCodes(input);
+  } catch (error) {
+    throw validationError(error.message);
+  }
+
+  let zones = {};
+  try {
+    const radiusKm = Number(input.radiusKm) || 0;
+    if (radiusKm > 0) {
+      const zone = await resolveRadiusZone({
+        place: input.aroundPlace,
+        radiusKm,
+      });
+      zones = { code_postal: zone.postalCodes };
+    } else if (places.length) {
+      const resolved = await resolveRegistryZones(places);
+      // Une zone non traduite fausserait le total : pas de compteur
+      if (resolved.unresolved) return { total: null, capped: false };
+      zones = resolved.zones;
+    }
+  } catch (error) {
+    if (error instanceof ProspectAreaError)
+      throw validationError(error.message);
+    logger.warn(`[Prospects] Zones du compteur : ${error.message}`);
+    return { total: null, capped: false };
+  }
+
+  const counted = await countRegistryCompanies({
+    nafCodes,
+    zones,
+    minStaff: Number.isInteger(input.minStaff) ? input.minStaff : undefined,
+    maxStaff: Number.isInteger(input.maxStaff) ? input.maxStaff : undefined,
+  });
+  return counted || { total: null, capped: false };
 }
 
 /** Les 732 sous-classes NAF, pour chercher n'importe quelle activité. */
