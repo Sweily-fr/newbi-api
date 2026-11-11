@@ -14,6 +14,7 @@ const visitorSchema = new mongoose.Schema(
     lastVisitAt: { type: Date, default: Date.now },
     visitCount: { type: Number, default: 0 },
     downloadCount: { type: Number, default: 0 },
+    uploadCount: { type: Number, default: 0 },
   },
   { _id: true },
 );
@@ -44,9 +45,10 @@ const accessRequestSchema = new mongoose.Schema(
 
 /**
  * Accès client des documents partagés : une URL publique, sans compte Newbi,
- * qui ouvre en lecture les dossiers choisis et leurs sous-dossiers, sur le
- * modèle du partage d'un tableau kanban (visiteurs identifiés par e-mail,
- * accès retiré à un visiteur, demandes d'accès). Le contenu n'est pas copié :
+ * qui ouvre les dossiers choisis et leurs sous-dossiers (en lecture, et en
+ * dépôt si `allowUploads`), sur le modèle du partage d'un tableau kanban
+ * (visiteurs identifiés par e-mail, accès retiré à un visiteur, demandes
+ * d'accès, temps réel). Le contenu n'est pas copié :
  * il est relu à chaque visite (voir services/documentShareAccess.js).
  */
 const documentShareSchema = new mongoose.Schema(
@@ -66,12 +68,17 @@ const documentShareSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     expiresAt: { type: Date, default: null },
     passwordHash: { type: String, default: null },
+    // Le client peut déposer des documents dans les dossiers de l'accès et
+    // supprimer ceux qu'il a déposés. Absent sur les accès créés avant :
+    // fermé, rien n'est ouvert sans que le propriétaire le décide.
+    allowUploads: { type: Boolean, default: false },
     visitors: [visitorSchema],
     bannedEmails: [bannedEmailSchema],
     accessRequests: [accessRequestSchema],
     stats: {
       totalViews: { type: Number, default: 0 },
       totalDownloads: { type: Number, default: 0 },
+      totalUploads: { type: Number, default: 0 },
       lastViewedAt: { type: Date, default: null },
     },
   },

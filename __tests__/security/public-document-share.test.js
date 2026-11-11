@@ -57,9 +57,40 @@ vi.mock("@aws-sdk/client-s3", () => ({
 }));
 vi.mock("heic-convert", () => ({ default: async () => Buffer.from("") }));
 vi.mock("sharp", () => ({ default: () => ({}) }));
+// Fichiers envoyés vers R2 par un dépôt du client
+const r2 = vi.hoisted(() => ({ uploads: [] }));
 vi.mock("../../src/services/cloudflareService.js", () => ({
-  default: { deleteImage: async () => {}, sharedDocumentsBucketName: "test" },
+  default: {
+    deleteImage: async () => {},
+    sharedDocumentsBucketName: "test",
+    uploadImage: async (buffer, filename, userId, type, workspaceId) => {
+      r2.uploads.push({ filename, userId, type, workspaceId, buffer });
+      const key = `shared-documents/${workspaceId}/depot-${r2.uploads.length}`;
+      return { key, url: `https://r2.test/${key}` };
+    },
+  },
 }));
+
+// Stockage de l'espace : plein à la demande, envois enregistrés
+const storage = vi.hoisted(() => ({ full: false, recorded: [] }));
+vi.mock(
+  "../../src/services/storage/storageService.js",
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      assertStorageAvailable: async () => {
+        if (!storage.full) return null;
+        const error = new Error("Espace plein");
+        error.code = actual.STORAGE_QUOTA_EXCEEDED;
+        throw error;
+      },
+      recordStoredFile: async (file) => {
+        storage.recorded.push(file);
+      },
+    };
+  },
+);
 vi.mock("../../src/config/redis.js", () => ({
   getPubSub: () => ({
     publish: async () => {},
@@ -232,6 +263,9 @@ beforeEach(async () => {
   mails.codes.clear();
   mails.approved.length = 0;
   mails.rejected.length = 0;
+  r2.uploads.length = 0;
+  storage.full = false;
+  storage.recorded.length = 0;
   await seedOrgMembership({
     userId: owner,
     organizationId: workspaceId,
@@ -802,6 +836,189 @@ describe("Visiteur retiré et demande d'accès", () => {
   });
 });
 
+const PDF = Buffer.from("%PDF-1.7\n1 0 obj << >> endobj\n%%EOF");
+
+/** Dépôt d'un fichier par le visiteur (multipart, comme le navigateur). */
+const upload = (share, session, folderId, file = {}) => {
+  const { name = "releve.pdf", content = PDF, type = "application/pdf" } = file;
+  const form = new FormData();
+  form.append("file", new Blob([content], { type }), name);
+  return fetch(
+    urlOf(share, `/folders/${folderId}/files`, session ? q(session) : ""),
+    { method: "POST", body: form, headers: { "x-forwarded-for": clientIp } },
+  );
+};
+const removeFile = (share, session, documentId) =>
+  fetch(urlOf(share, `/files/${documentId}`, q(session)), {
+    method: "DELETE",
+    headers: { "x-forwarded-for": clientIp },
+  });
+
+describe("Dépôt de documents par le client", () => {
+  it("fermé par défaut : refusé, rien n'est envoyé", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    const res = await upload(share, session, ids.shared);
+    expect(res.status).toBe(403);
+    expect(r2.uploads).toHaveLength(0);
+    expect((await getJson(share, session)).allowUploads).toBe(false);
+  });
+
+  it("dépose dans un dossier de l'accès, comme un envoi de l'espace", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    await post(share, "/profile", {
+      session,
+      firstName: "Jeanne",
+      lastName: "Dupont",
+    });
+
+    const res = await upload(share, session, ids.child, {
+      name: "Relevé de compte.pdf",
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.document).toMatchObject({
+      name: "Relevé de compte.pdf",
+      mimeType: "application/pdf",
+      folderId: String(ids.child),
+      mine: true,
+    });
+
+    const saved = await SharedDocument.findById(body.document.id).lean();
+    expect(saved).toMatchObject({
+      workspaceId,
+      folderId: ids.child,
+      uploadedBy: owner,
+      uploadedByName: "Jeanne Dupont (client)",
+      status: "classified",
+      fileSize: PDF.length,
+      clientUpload: { shareId: share._id, email: CLIENT },
+    });
+    expect(r2.uploads).toMatchObject([
+      { type: "sharedDocuments", workspaceId: ws, userId: String(owner) },
+    ]);
+    expect(storage.recorded).toMatchObject([
+      { workspaceId: ws, size: PDF.length, category: "sharedDocuments" },
+    ]);
+
+    // Le visiteur le voit, marqué comme le sien ; rien d'interne ne sort
+    const content = await getJson(share, session);
+    expect(content.allowUploads).toBe(true);
+    const mine = content.documents.filter((d) => d.mine);
+    expect(mine.map((d) => d.name)).toEqual(["Relevé de compte.pdf"]);
+    expect(JSON.stringify(content)).not.toContain("clientUpload");
+
+    const stats = await DocumentShare.findById(share._id).lean();
+    expect(stats.stats.totalUploads).toBe(1);
+    expect(stats.visitors[0].uploadCount).toBe(1);
+  });
+
+  it("refuse un dossier hors de l'accès", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    for (const folderId of [
+      ids.privateChild,
+      ids.underPrivate,
+      ids.trashedChild,
+      ids.sibling,
+      ids.otherWorkspace,
+      new ObjectId(),
+    ]) {
+      expect((await upload(share, session, folderId)).status).toBe(404);
+    }
+    expect(r2.uploads).toHaveLength(0);
+  });
+
+  it("refuse un type non accepté ou un contenu déguisé", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    const html = Buffer.from("<html><script>alert(1)</script></html>");
+    const cases = [
+      [{ name: "page.html", content: html, type: "text/html" }, 415],
+      [{ name: "facture.pdf", content: html }, 415],
+      [{ name: "photo.png", content: PDF, type: "image/png" }, 415],
+      [{ name: "vide.pdf", content: Buffer.alloc(0) }, 400],
+    ];
+    for (const [file, status] of cases) {
+      expect((await upload(share, session, ids.shared, file)).status).toBe(
+        status,
+      );
+    }
+    expect(r2.uploads).toHaveLength(0);
+  });
+
+  it("espace plein, abonnement échu : le dépôt est refusé", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    storage.full = true;
+    const full = await upload(share, session, ids.shared);
+    expect(full.status).toBe(507);
+    expect((await full.json()).message).toContain("plein");
+
+    storage.full = false;
+    await mongoose.connection.db.collection("subscription").deleteMany({});
+    invalidateSubCache(ws);
+    expect((await upload(share, session, ids.shared)).status).toBe(403);
+    expect(r2.uploads).toHaveLength(0);
+  });
+
+  it("sans session ou accès retiré : refusé", async () => {
+    const share = await createShare({ allowUploads: true });
+    expect((await upload(share, null, ids.shared)).status).toBe(401);
+    const session = await identify(share);
+    await DocumentShare.updateOne(
+      { _id: share._id },
+      { $push: { bannedEmails: { email: CLIENT } } },
+    );
+    expect((await upload(share, session, ids.shared)).status).toBe(403);
+    expect(r2.uploads).toHaveLength(0);
+  });
+
+  it("supprime seulement ses propres dépôts, vers la corbeille", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    const other = await identify(share, "associe@dupont.fr");
+    const { document } = await (
+      await upload(share, session, ids.shared)
+    ).json();
+
+    // Ni le document d'un autre visiteur, ni celui de l'espace
+    expect((await removeFile(share, other, document.id)).status).toBe(403);
+    expect((await removeFile(share, session, docs.inShared)).status).toBe(403);
+    expect((await removeFile(share, session, docs.inSibling)).status).toBe(404);
+
+    expect((await removeFile(share, session, document.id)).status).toBe(200);
+    const trashed = await SharedDocument.findById(document.id).lean();
+    expect(trashed.trashedAt).toBeInstanceOf(Date);
+    expect(String(trashed.originalFolderId)).toBe(String(ids.shared));
+    const content = await getJson(share, session);
+    expect(content.documents.map((d) => d.id)).not.toContain(document.id);
+    expect((await removeFile(share, session, document.id)).status).toBe(404);
+  });
+
+  it("dépôt refermé : le client ne supprime plus rien", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    const { document } = await (
+      await upload(share, session, ids.shared)
+    ).json();
+    await DocumentShare.updateOne({ _id: share._id }, { allowUploads: false });
+    expect((await removeFile(share, session, document.id)).status).toBe(403);
+    const content = await getJson(share, session);
+    expect(content.documents.map((d) => d.id)).toContain(document.id);
+  });
+
+  it("relire la page ouverte ne compte pas une visite", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    await getJson(share, session);
+    await fetch(urlOf(share, "", `${q(session)}&refresh=1`));
+    const saved = await DocumentShare.findById(share._id).lean();
+    expect(saved.stats.totalViews).toBe(1);
+  });
+});
+
 describe("Gestion des accès", () => {
   const {
     createDocumentShare,
@@ -825,6 +1042,7 @@ describe("Gestion des accès", () => {
       "Factures Dupont",
     ]);
     expect(share.hasPassword).toBe(true);
+    expect(share.allowUploads).toBe(false);
     expect(share.shareUrl).toMatch(
       /^https:\/\/app\.test\/public\/documents\/[0-9a-f]{64}$/,
     );
@@ -867,6 +1085,27 @@ describe("Gestion des accès", () => {
     );
     const body = await getJson(share, session);
     expect(body.documents.map((d) => d.name)).toEqual(["facture.pdf"]);
+  });
+
+  it("ouvre et referme le dépôt par le client", async () => {
+    const created = await create({
+      folderIds: [String(ids.shared)],
+      allowUploads: true,
+    });
+    expect(created.allowUploads).toBe(true);
+    const share = await DocumentShare.findById(created.id);
+    const session = await identify(share);
+    expect((await upload(share, session, ids.shared)).status).toBe(201);
+
+    const updated = await updateDocumentShare(
+      null,
+      { workspaceId: ws, id: created.id, input: { allowUploads: false } },
+      asOwner(),
+    );
+    expect(updated.allowUploads).toBe(false);
+    expect(updated.totalUploads).toBe(1);
+    expect(updated.visitors[0].uploadCount).toBe(1);
+    expect((await upload(share, session, ids.shared)).status).toBe(403);
   });
 
   it("refuse une expiration passée et un mot de passe trop court", async () => {
