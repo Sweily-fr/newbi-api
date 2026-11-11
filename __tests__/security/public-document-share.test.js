@@ -72,6 +72,7 @@ vi.mock("../../src/config/redis.js", () => ({
 }));
 
 import express from "express";
+import helmet from "helmet";
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
@@ -204,6 +205,10 @@ beforeAll(async () => {
   await startMongo();
   const app = express();
   app.set("trust proxy", true);
+  // Mêmes en-têtes de sécurité que src/server.js
+  app.use(
+    helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }),
+  );
   app.use(express.json());
   app.use("/api/public-documents", publicRoutes);
   await new Promise((resolve) => {
@@ -480,6 +485,31 @@ describe("Contenu d'un accès", () => {
     const res = await fetch(fileUrl(share, docs.inChild, session));
     expect(res.headers.get("content-disposition")).toContain(
       "filename*=UTF-8''Contrat%20sign%C3%A9.pdf",
+    );
+  });
+
+  it("l'aperçu s'affiche depuis le site, une autre origine que l'API", async () => {
+    await SharedDocument.updateOne(
+      { _id: docs.inChild },
+      { originalName: "logo.png", mimeType: "image/png" },
+    );
+    const share = await createShare();
+    const session = await identify(share);
+    const res = await fetch(fileUrl(share, docs.inChild, session, "preview"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    // Sans « cross-origin », le navigateur refuse l'image dans la page du
+    // visiteur (helmet pose « same-origin » sur toute l'API)
+    expect(res.headers.get("cross-origin-resource-policy")).toBe(
+      "cross-origin",
+    );
+    // Un fichier hors de la portée ne gagne pas cet en-tête
+    const refused = await fetch(
+      fileUrl(share, docs.inPrivate, session, "preview"),
+    );
+    expect(refused.status).toBe(404);
+    expect(refused.headers.get("cross-origin-resource-policy")).toBe(
+      "same-origin",
     );
   });
 

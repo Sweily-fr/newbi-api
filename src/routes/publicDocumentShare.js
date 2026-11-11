@@ -540,6 +540,11 @@ router.get("/:token/files/:documentId/preview", async (req, res) => {
   try {
     const loaded = await loadVisitorDocument(req, res);
     if (!loaded) return;
+    // La page du visiteur (site) affiche l'aperçu par une balise <img>,
+    // <video> ou <audio> pointée sur l'API, une autre origine : sans cela,
+    // le « same-origin » posé par helmet fait bloquer l'image par le
+    // navigateur. L'accès reste contrôlé par la session du visiteur.
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     await streamDocumentPreview(loaded.document, res, {
       cacheControl: NO_STORE,
     });
