@@ -2,18 +2,37 @@
  * Routes publiques des accès clients (documents partagés), sur le modèle du
  * partage d'un tableau kanban : sans compte Newbi, le visiteur ouvre le lien,
  * passe le mot de passe s'il y en a un, prouve son adresse e-mail par un code
- * reçu par e-mail, puis consulte. Tout est relu à chaque requête : désactiver
- * l'accès, le faire expirer, fermer un dossier ou retirer l'accès d'un
- * visiteur agit immédiatement, y compris sur une page déjà ouverte.
+ * reçu par e-mail, puis consulte. Si l'accès le permet, il dépose aussi des
+ * documents dans les dossiers et supprime ceux qu'il a déposés. Tout est relu
+ * à chaque requête : désactiver l'accès, le faire expirer, fermer un dossier
+ * ou retirer l'accès d'un visiteur agit immédiatement, y compris sur une
+ * page déjà ouverte (temps réel : publicDocumentShareChanged).
  */
+import crypto from "crypto";
 import express from "express";
 import rateLimit from "express-rate-limit";
+import multer from "multer";
 import DocumentShare from "../models/DocumentShare.js";
+import SharedDocument from "../models/SharedDocument.js";
+import { checkSubscriptionActive } from "../middlewares/rbac.js";
+import { publishSharedDocsChanged } from "../resolvers/sharedDocument.js";
+import cloudflareService from "../services/cloudflareService.js";
 import {
   findShareDocument,
+  isVisitorUpload,
   listShareDocuments,
-  loadShareFolders,
+  openShareByToken,
 } from "../services/documentShareAccess.js";
+import {
+  assertStorageAvailable,
+  recordStoredFile,
+  STORAGE_QUOTA_EXCEEDED,
+} from "../services/storage/storageService.js";
+import {
+  checkClientUpload,
+  cleanUploadedName,
+  CLIENT_VIDEO_MAX_BYTES,
+} from "../utils/clientUploadType.js";
 import {
   consumeDocumentShareCode,
   issueDocumentShareCode,
@@ -35,11 +54,9 @@ import {
 } from "../utils/documentShareAccessToken.js";
 import { isObjectIdString } from "../utils/objectIdString.js";
 import logger from "../utils/logger.js";
-import { isFeatureEnabled } from "../utils/featureAccess.js";
 
 const router = express.Router();
 
-const TOKEN_RE = /^[0-9a-f]{64}$/;
 // Le fichier ne doit rester dans aucun cache : la révocation doit agir
 const NO_STORE = "private, no-store";
 const NAME_MAX_LENGTH = 60;
@@ -66,6 +83,16 @@ const limited = (max) =>
 const formLimiter = limited(60);
 // Un ZIP lit tous les fichiers des dossiers sur R2
 const zipLimiter = limited(10);
+// Dépôts et suppressions d'un client : un dossier de plusieurs dizaines de
+// pièces passe, un envoi en rafale est arrêté
+const depositLimiter = limited(200);
+
+// Un fichier par envoi, gardé en mémoire le temps du contrôle puis de
+// l'envoi vers R2 (la plus grande taille acceptée est celle d'une vidéo)
+const receiveUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CLIENT_VIDEO_MAX_BYTES, files: 1, fields: 5 },
+}).single("file");
 
 router.use((req, res, next) => {
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
@@ -80,26 +107,24 @@ const text = (value, max) =>
     .trim()
     .slice(0, max);
 
-/** Accès existant, actif, non expiré, avec au moins un dossier ouvert. */
+/**
+ * Accès existant, actif, non expiré, avec au moins un dossier ouvert.
+ * Accès anticipé : lien introuvable tant que l'espace n'a pas la
+ * fonctionnalité.
+ */
 async function loadOpenShare(req, res) {
-  const { token } = req.params;
-  const share = TOKEN_RE.test(token)
-    ? await DocumentShare.findOne({ token })
-    : null;
-  // Accès anticipé : lien introuvable tant que l'espace n'a pas la
-  // fonctionnalité
-  if (!share || !isFeatureEnabled("documentShares", share.workspaceId)) {
+  const opened = await openShareByToken(req.params.token);
+  if (opened.status === 404) {
     res.status(404).json({ success: false, message: "Lien introuvable." });
     return null;
   }
-  const folders = share.isValid() ? await loadShareFolders(share) : null;
-  if (!folders) {
+  if (opened.status === 410) {
     res
       .status(410)
       .json({ success: false, message: "Ce lien n'est plus disponible." });
     return null;
   }
-  return { share, folders };
+  return opened;
 }
 
 const sessionOf = (req) => req.body?.session ?? req.query.session;
@@ -194,6 +219,17 @@ async function recordVisit(share, email) {
   }
 }
 
+const countUpload = (share, email) =>
+  DocumentShare.updateOne(
+    { _id: share._id, "visitors.email": email },
+    {
+      $inc: {
+        "stats.totalUploads": 1,
+        "visitors.$.uploadCount": 1,
+      },
+    },
+  ).catch((error) => logger.warn(`Accès client : ${error.message}`));
+
 const countDownload = (share, email) =>
   DocumentShare.updateOne(
     { _id: share._id, "visitors.email": email },
@@ -205,10 +241,23 @@ const countDownload = (share, email) =>
     },
   ).catch((error) => logger.warn(`Accès client : ${error.message}`));
 
+/** Document tel que le voit le visiteur : rien d'interne. */
+const documentView = (document, email) => ({
+  id: String(document._id),
+  name: document.name,
+  mimeType: document.mimeType,
+  fileSize: document.fileSize,
+  folderId: String(document.folderId),
+  createdAt: document.createdAt,
+  // Déposé par ce visiteur : il peut le supprimer
+  mine: isVisitorUpload(document, email),
+});
+
 /**
  * GET /:token
  * État de la visite (`password`, `identify`, `banned`) ou, pour un visiteur
- * identifié, le contenu des dossiers.
+ * identifié, le contenu des dossiers. `refresh=1` : relecture de la page
+ * ouverte (temps réel, après un dépôt), qui ne compte pas comme une visite.
  */
 router.get("/:token", async (req, res) => {
   try {
@@ -240,7 +289,7 @@ router.get("/:token", async (req, res) => {
     }
 
     const documents = await listShareDocuments(share, folders);
-    await recordVisit(share, email);
+    if (req.query.refresh !== "1") await recordVisit(share, email);
 
     return res.json({
       success: true,
@@ -248,6 +297,7 @@ router.get("/:token", async (req, res) => {
       workspace,
       name: share.name,
       expiresAt: share.expiresAt,
+      allowUploads: Boolean(share.allowUploads),
       visitor: visitorView(share, email),
       rootFolderIds: folders.roots.map((folder) => String(folder._id)),
       folders: folders.folders.map((folder) => ({
@@ -258,14 +308,7 @@ router.get("/:token", async (req, res) => {
         // Couleur choisie dans Newbi (page du visiteur au même visuel)
         color: HEX_COLOR.test(folder.color || "") ? folder.color : null,
       })),
-      documents: documents.map((document) => ({
-        id: String(document._id),
-        name: document.name,
-        mimeType: document.mimeType,
-        fileSize: document.fileSize,
-        folderId: String(document.folderId),
-        createdAt: document.createdAt,
-      })),
+      documents: documents.map((document) => documentView(document, email)),
     });
   } catch (error) {
     logger.error(`Accès client (consultation) : ${error.message}`);
@@ -573,6 +616,184 @@ router.get("/:token/files/:documentId/download", async (req, res) => {
         .status(500)
         .json({ success: false, message: "Erreur lors du téléchargement" });
     }
+  }
+});
+
+const UPLOADS_CLOSED = {
+  success: false,
+  message: "Le dépôt de documents n'est pas ouvert sur cet accès.",
+};
+
+/** Accès qui accepte les dépôts, pour un visiteur identifié. */
+async function loadDepositor(req, res) {
+  const loaded = await loadVisitor(req, res);
+  if (!loaded) return null;
+  if (!loaded.share.allowUploads) {
+    res.status(403).json(UPLOADS_CLOSED);
+    return null;
+  }
+  return loaded;
+}
+
+const parseUpload = (req, res) =>
+  new Promise((resolve) => {
+    receiveUpload(req, res, (error) => resolve(error || null));
+  });
+
+/**
+ * POST /:token/folders/:folderId/files?session=  (multipart, champ « file »)
+ * Le visiteur dépose un document dans un dossier de son accès. Il arrive
+ * dans le dossier de l'espace comme un envoi d'un membre, compté dans son
+ * stockage, et apparaît en temps réel chez les membres et les visiteurs.
+ */
+router.post(
+  "/:token/folders/:folderId/files",
+  depositLimiter,
+  async (req, res) => {
+    try {
+      // Session lue dans l'adresse : le corps est le fichier
+      const loaded = await loadDepositor(req, res);
+      if (!loaded) return;
+      const { share, folders, email } = loaded;
+      const { folderId } = req.params;
+      if (!folders.folderIds.has(String(folderId))) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Dossier introuvable." });
+      }
+      const workspaceId = String(share.workspaceId);
+      try {
+        await checkSubscriptionActive({ workspaceId });
+      } catch {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Cet espace ne peut pas recevoir de documents pour le moment.",
+        });
+      }
+
+      const parseError = await parseUpload(req, res);
+      if (parseError) {
+        const tooLarge = parseError.code === "LIMIT_FILE_SIZE";
+        return res.status(tooLarge ? 413 : 400).json({
+          success: false,
+          message: tooLarge
+            ? `Fichier trop volumineux (${CLIENT_VIDEO_MAX_BYTES / 1024 / 1024} Mo maximum).`
+            : "Envoi du fichier impossible.",
+        });
+      }
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Aucun fichier reçu." });
+      }
+
+      const filename = cleanUploadedName(req.file.originalname);
+      const buffer = req.file.buffer;
+      const checked = checkClientUpload({ filename, buffer });
+      if (!checked.ok) {
+        return res
+          .status(checked.status)
+          .json({ success: false, message: checked.message });
+      }
+
+      try {
+        await assertStorageAvailable(workspaceId, buffer.length);
+      } catch (error) {
+        if (error?.code !== STORAGE_QUOTA_EXCEEDED) throw error;
+        return res.status(507).json({
+          success: false,
+          message:
+            "L'espace de stockage de votre interlocuteur est plein : le document n'a pas pu être déposé.",
+        });
+      }
+
+      const createdBy = String(share.createdBy);
+      const stored = await cloudflareService.uploadImage(
+        buffer,
+        filename,
+        createdBy,
+        "sharedDocuments",
+        workspaceId,
+      );
+      await recordStoredFile({
+        workspaceId,
+        key: stored.key,
+        bucket: cloudflareService.sharedDocumentsBucketName,
+        size: buffer.length,
+        category: "sharedDocuments",
+        userId: createdBy,
+      });
+
+      const visitor = visitorView(share, email);
+      const visitorName = [visitor.firstName, visitor.lastName]
+        .filter(Boolean)
+        .join(" ");
+      const document = await SharedDocument.create({
+        name: filename,
+        originalName: filename,
+        fileUrl: stored.url,
+        fileKey: stored.key,
+        mimeType: checked.mime,
+        fileSize: buffer.length,
+        fileExtension: checked.extension,
+        fileHash: crypto.createHash("sha256").update(buffer).digest("hex"),
+        workspaceId: share.workspaceId,
+        folderId,
+        // Membre qui a ouvert l'accès ; le client est nommé à côté
+        uploadedBy: share.createdBy,
+        uploadedByName: `${visitorName || email} (client)`,
+        status: "classified",
+        isSharedWithAccountant: true,
+        clientUpload: { shareId: share._id, email },
+      });
+
+      await countUpload(share, email);
+      publishSharedDocsChanged(workspaceId, "CREATED", document._id);
+      return res.status(201).json({
+        success: true,
+        document: documentView(document, email),
+      });
+    } catch (error) {
+      logger.error(`Accès client (dépôt) : ${error.message}`);
+      if (!res.headersSent) {
+        return res
+          .status(500)
+          .json({ success: false, message: "Erreur lors du dépôt" });
+      }
+    }
+  },
+);
+
+/**
+ * DELETE /:token/files/:documentId?session=
+ * Le visiteur retire un document qu'il a déposé. Il part dans la corbeille
+ * de l'espace, d'où un membre peut le restaurer.
+ */
+router.delete("/:token/files/:documentId", depositLimiter, async (req, res) => {
+  try {
+    const loaded = await loadVisitorDocument(req, res);
+    if (!loaded) return;
+    const { share, email, document } = loaded;
+    if (!share.allowUploads) return res.status(403).json(UPLOADS_CLOSED);
+    if (!isVisitorUpload(document, email)) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Vous ne pouvez supprimer que les documents que vous avez déposés.",
+      });
+    }
+    await SharedDocument.updateOne(
+      { _id: document._id, trashedAt: null },
+      { $set: { trashedAt: new Date(), originalFolderId: document.folderId } },
+    );
+    publishSharedDocsChanged(share.workspaceId, "DELETED", document._id);
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error(`Accès client (suppression) : ${error.message}`);
+    return res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de la suppression" });
   }
 });
 

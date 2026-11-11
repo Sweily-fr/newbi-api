@@ -1,8 +1,9 @@
 /**
  * Gestion des accès clients des documents partagés (action « share » du
  * module), sur le modèle des liens publics du kanban : accès, visiteurs,
- * accès retiré à un visiteur, demandes d'accès. La consultation publique est
- * dans routes/publicDocumentShare.js.
+ * accès retiré à un visiteur, demandes d'accès. La consultation publique et
+ * le dépôt par le client sont dans routes/publicDocumentShare.js ; le temps
+ * réel de la page du visiteur est la souscription publicDocumentShareChanged.
  */
 import DocumentShare, { shareFolderIds } from "../models/DocumentShare.js";
 import {
@@ -10,10 +11,17 @@ import {
   requireAction,
   resolveWorkspaceId,
 } from "../middlewares/rbac.js";
+import { getPubSub } from "../config/redis.js";
 import {
+  findVisitorAccess,
   folderShareBlocks,
   loadFolderAvailability,
 } from "../services/documentShareAccess.js";
+import {
+  publishDocumentShareChanged,
+  visitorChangeStream,
+  visitorChannels,
+} from "../services/documentShareRealtime.js";
 import {
   normalizeVisitorEmail,
   workspaceDisplayIdentity,
@@ -108,11 +116,13 @@ function toPayload(share, folderInfo) {
     isActive: plain.isActive,
     expiresAt: plain.expiresAt,
     hasPassword: Boolean(plain.passwordHash),
+    allowUploads: Boolean(plain.allowUploads),
     // Dossiers devenus privés ou mis à la corbeille : l'accès ne montre rien
     isFolderAvailable: folders.some((folder) => folder.available),
     shareUrl: shareUrlOf(plain),
     totalViews: plain.stats?.totalViews || 0,
     totalDownloads: plain.stats?.totalDownloads || 0,
+    totalUploads: plain.stats?.totalUploads || 0,
     lastViewedAt: plain.stats?.lastViewedAt || null,
     visitors: [...(plain.visitors || [])]
       .sort((a, b) => new Date(b.lastVisitAt) - new Date(a.lastVisitAt))
@@ -123,6 +133,7 @@ function toPayload(share, folderInfo) {
         lastVisitAt: visitor.lastVisitAt,
         visitCount: visitor.visitCount || 0,
         downloadCount: visitor.downloadCount || 0,
+        uploadCount: visitor.uploadCount || 0,
         isBanned: banned.has(visitor.email),
       })),
     bannedEmails: (plain.bannedEmails || []).map((ban) => ({
@@ -152,9 +163,13 @@ async function findShare(id, workspaceId) {
   return share;
 }
 
-/** Enregistre et renvoie l'accès tel que l'affiche la fenêtre de gestion. */
+/**
+ * Enregistre et renvoie l'accès tel que l'affiche la fenêtre de gestion. Les
+ * pages des visiteurs ouvertes se relisent (dossiers, accès retiré…).
+ */
 async function saveAndReturn(share, workspaceId) {
   await share.save();
+  publishDocumentShareChanged(share._id);
   return toPayload(share, await loadFolderAvailability(workspaceId));
 }
 
@@ -184,7 +199,7 @@ export default {
     createDocumentShare: shareGuard(async (_, args, context) => {
       await checkSubscriptionActive(context);
       const workspaceId = workspaceOf(args, context);
-      const { folderIds, name, password, expiresAt } = args.input;
+      const { folderIds, name, password, expiresAt, allowUploads } = args.input;
 
       const share = new DocumentShare({
         token: DocumentShare.generateToken(),
@@ -193,6 +208,7 @@ export default {
         createdBy: context.user.id,
         name: cleanName(name),
         expiresAt: checkExpiry(expiresAt ?? null),
+        allowUploads: Boolean(allowUploads),
       });
       if (password) {
         checkPassword(password);
@@ -217,6 +233,9 @@ export default {
       if (input.isActive !== undefined && input.isActive !== null) {
         share.isActive = input.isActive;
       }
+      if (input.allowUploads !== undefined && input.allowUploads !== null) {
+        share.allowUploads = input.allowUploads;
+      }
       if (input.password !== undefined) {
         if (input.password) checkPassword(input.password);
         await share.setPassword(input.password);
@@ -235,6 +254,7 @@ export default {
     deleteDocumentShare: shareGuard(async (_, args, context) => {
       const share = await findShare(args.id, workspaceOf(args, context));
       await share.deleteOne();
+      publishDocumentShareChanged(share._id);
       return true;
     }),
 
@@ -303,5 +323,29 @@ export default {
       });
       return payload;
     }),
+  },
+
+  Subscription: {
+    /**
+     * Page d'un visiteur : signal à chaque changement dans l'espace ou sur
+     * l'accès. Connexion anonyme, gardée par le lien et la session du
+     * visiteur, comme publicTaskUpdated au kanban. Aucun contenu ne passe
+     * ici : la page relit par la route publique.
+     */
+    publicDocumentShareChanged: {
+      subscribe: async (_, { token, session }) => {
+        const access = await findVisitorAccess(token, session);
+        if (!access) {
+          throw createNotFoundError("Accès client");
+        }
+        const iterator = getPubSub().asyncIterableIterator(
+          visitorChannels(access.share),
+        );
+        return visitorChangeStream(iterator, async () =>
+          Boolean(await findVisitorAccess(token, session)),
+        );
+      },
+      resolve: (payload) => payload,
+    },
   },
 };
