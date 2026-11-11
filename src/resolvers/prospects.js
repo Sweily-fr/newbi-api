@@ -7,6 +7,7 @@ import {
 import {
   isProspectGenerationEnabled,
   listProspectTrades,
+  listProspectActivities,
   searchProspectPlaces,
   searchProspects,
   unlockProspects,
@@ -40,6 +41,8 @@ const prospectsResolvers = {
         maxPerUnlock: MAX_UNLOCK_PER_REQUEST,
       };
     }),
+
+    prospectActivities: requireRead("clients")(() => listProspectActivities()),
 
     prospectPlaces: requireRead("clients")(async (_, args, context) =>
       searchProspectPlaces(workspaceOf(args, context), args.query),
