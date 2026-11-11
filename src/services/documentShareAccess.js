@@ -41,7 +41,7 @@ function isUnderOneOf(folder, ids, folderMap) {
 async function loadFolderMap(workspaceId) {
   const folders = await SharedFolder.find(
     { workspaceId },
-    { name: 1, parentId: 1, visibility: 1, trashedAt: 1, order: 1 },
+    { name: 1, parentId: 1, visibility: 1, trashedAt: 1, order: 1, color: 1 },
   ).lean();
   return new Map(folders.map((folder) => [String(folder._id), folder]));
 }
