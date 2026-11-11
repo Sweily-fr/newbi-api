@@ -73,6 +73,8 @@ router.use((req, res, next) => {
   next();
 });
 
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
 const text = (value, max) =>
   String(value ?? "")
     .trim()
@@ -253,6 +255,8 @@ router.get("/:token", async (req, res) => {
         name: folder.name,
         parentId: folder.parentId ? String(folder.parentId) : null,
         order: folder.order || 0,
+        // Couleur choisie dans Newbi (page du visiteur au même visuel)
+        color: HEX_COLOR.test(folder.color || "") ? folder.color : null,
       })),
       documents: documents.map((document) => ({
         id: String(document._id),

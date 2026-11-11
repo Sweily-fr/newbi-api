@@ -420,6 +420,19 @@ describe("Contenu d'un accès", () => {
     ]);
   });
 
+  it("donne la couleur des dossiers, seulement si c'est une couleur", async () => {
+    await SharedFolder.updateOne({ _id: ids.shared }, { color: "#22c55e" });
+    await SharedFolder.updateOne(
+      { _id: ids.sibling },
+      { color: "red;background:url(x)" },
+    );
+    const share = await createShare({ folderIds: [ids.shared, ids.sibling] });
+    const body = await getJson(share, await identify(share));
+    const colorOf = (id) => body.folders.find((f) => f.id === String(id)).color;
+    expect(colorOf(ids.shared)).toBe("#22c55e");
+    expect(colorOf(ids.sibling)).toBe(null);
+  });
+
   it("un sous-dossier choisi avec son parent n'est pas montré deux fois", async () => {
     const share = await createShare({ folderIds: [ids.shared, ids.child] });
     const body = await getJson(share, await identify(share));
