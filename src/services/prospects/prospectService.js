@@ -15,6 +15,12 @@ import {
   SEARCH_PAGE_SIZE,
 } from "./societeinfoClient.js";
 import { resolveNafCodes, PROSPECT_TRADES } from "./prospectTrades.js";
+import { NAF_SUBCLASSES } from "./nafCodes.js";
+import {
+  resolveRadiusArea,
+  isWithinArea,
+  ProspectAreaError,
+} from "./prospectArea.js";
 import { mapCompanyToClient } from "./prospectMapping.js";
 import { checkCommercialOpposition } from "./prospectOpposition.js";
 import {
@@ -106,7 +112,16 @@ async function existingClientsBySiren(workspaceId, sirens) {
 }
 
 export function listProspectTrades() {
-  return PROSPECT_TRADES.map(({ id, label }) => ({ id, label }));
+  return PROSPECT_TRADES.map(({ id, label, nafCodes }) => ({
+    id,
+    label,
+    nafCodes,
+  }));
+}
+
+/** Les 732 sous-classes NAF, pour chercher n'importe quelle activité. */
+export function listProspectActivities() {
+  return NAF_SUBCLASSES;
 }
 
 export async function searchProspectPlaces(workspaceId, query) {
@@ -192,6 +207,27 @@ function normalizeSearchInput(input = {}) {
   };
 }
 
+/**
+ * Critères complets : un rayon autour d'une ville remplace les zones
+ * choisies par les codes postaux du cercle.
+ */
+async function buildCriteria(input = {}) {
+  const criteria = normalizeSearchInput(input);
+  const radiusKm = Number(input.radiusKm) || 0;
+  if (radiusKm <= 0) return { ...criteria, area: null };
+  try {
+    const area = await resolveRadiusArea({
+      place: input.aroundPlace,
+      radiusKm,
+    });
+    return { ...criteria, placeIds: area.placeIds, area };
+  } catch (error) {
+    if (error instanceof ProspectAreaError)
+      throw validationError(error.message);
+    throw providerToAppError(error);
+  }
+}
+
 /** Une page chez le fournisseur : limites vérifiées, crédit journalisé. */
 async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
   await assertSearchAllowed(workspaceId);
@@ -219,9 +255,18 @@ async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
  */
 export async function searchProspects({ workspaceId, userId, input = {} }) {
   assertEnabled(workspaceId);
-  const criteria = normalizeSearchInput(input);
+  const criteria = await buildCriteria(input);
   const page = Math.min(Math.max(1, Number(input.page) || 1), MAX_PAGE);
-  const result = await fetchSearchPage({ workspaceId, userId, criteria, page });
+  const fetched = await fetchSearchPage({
+    workspaceId,
+    userId,
+    criteria,
+    page,
+  });
+  const result = {
+    ...fetched,
+    results: fetched.results.filter((r) => isWithinArea(r, criteria.area)),
+  };
 
   const existing = await existingClientsBySiren(
     workspaceId,
@@ -520,7 +565,6 @@ export async function generateProspects({
       `${MAX_UNLOCK_PER_REQUEST} prospects au maximum par génération.`,
     );
   }
-  const criteria = normalizeSearchInput(input);
   await resolveTargetList(workspaceId, { listId, newListName });
 
   const availability = await getProspectAvailability(workspaceId);
@@ -535,6 +579,9 @@ export async function generateProspects({
     );
   }
 
+  // Après le contrôle du quota : le rayon peut interroger la base des communes
+  const criteria = await buildCriteria(input);
+
   const chosen = [];
   const statuses = new Map();
   const seen = new Set();
@@ -542,6 +589,7 @@ export async function generateProspects({
   let totalPages = 1;
   let opposedCount = 0;
   let closedCount = 0;
+  let outOfRadiusCount = 0;
   let checks = 0;
 
   for (
@@ -559,7 +607,10 @@ export async function generateProspects({
     matching = result.total;
     totalPages = result.totalPages;
 
-    const sirens = result.results
+    // Hors du cercle : écartée avant toute vérification ou dépense
+    const inArea = result.results.filter((r) => isWithinArea(r, criteria.area));
+    outOfRadiusCount += result.results.length - inArea.length;
+    const sirens = inArea
       .map((r) => r.siren)
       .filter((s) => SIREN.test(s || "") && !seen.has(s));
     sirens.forEach((s) => seen.add(s));
@@ -587,7 +638,14 @@ export async function generateProspects({
     if (!result.results.length) break;
   }
 
-  const base = { requested: wanted, matching, opposedCount, closedCount };
+  const base = {
+    requested: wanted,
+    matching,
+    opposedCount,
+    closedCount,
+    outOfRadiusCount,
+    radiusKm: criteria.area?.radiusKm ?? null,
+  };
   if (!chosen.length) {
     return {
       ...base,

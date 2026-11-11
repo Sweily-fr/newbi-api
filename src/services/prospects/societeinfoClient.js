@@ -137,6 +137,9 @@ export async function searchCompanies({
       name: r.name,
       activity: r.activity || null,
       ...splitFormattedAddress(r.formatted_address),
+      // Coordonnées de l'établissement : filtre du rayon
+      lat: Number.isFinite(r.lat) ? r.lat : null,
+      lng: Number.isFinite(r.lng) ? r.lng : null,
     })),
   };
 }

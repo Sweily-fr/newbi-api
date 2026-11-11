@@ -28,6 +28,14 @@ vi.mock(
   },
 );
 
+vi.mock(
+  "../../src/services/prospects/prospectArea.js",
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    resolveRadiusArea: vi.fn(),
+  }),
+);
+
 vi.mock("../../src/services/prospects/prospectOpposition.js", () => ({
   checkCommercialOpposition: vi.fn(),
 }));
@@ -39,6 +47,10 @@ import {
   ProspectProviderError,
 } from "../../src/services/prospects/societeinfoClient.js";
 import { checkCommercialOpposition } from "../../src/services/prospects/prospectOpposition.js";
+import {
+  resolveRadiusArea,
+  ProspectAreaError,
+} from "../../src/services/prospects/prospectArea.js";
 import {
   pickBestEmail,
   formatFrenchPhone,
@@ -57,6 +69,8 @@ import {
   getProspectAvailability,
   resetProviderCreditsCache,
   isProspectGenerationEnabled,
+  listProspectTrades,
+  listProspectActivities,
 } from "../../src/services/prospects/prospectService.js";
 import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
@@ -189,6 +203,25 @@ describe("métiers", () => {
       "1623Z",
     ]);
     expect(resolveNafCodes({ nafCodes: ["43.32a"] })).toEqual(["4332A"]);
+    // N'importe quelle activité de la nomenclature, et les niveaux larges
+    expect(resolveNafCodes({ nafCodes: ["47.76Z", "43"] })).toEqual([
+      "4776Z",
+      "43",
+    ]);
+  });
+
+  it("refuse une sous-classe NAF qui n'existe pas", () => {
+    expect(() => resolveNafCodes({ nafCodes: ["9999Z"] })).toThrow(
+      /Code NAF inconnu/,
+    );
+  });
+
+  it("expose les codes de chaque métier et les 732 activités NAF", () => {
+    const menuisier = listProspectTrades().find((t) => t.id === "menuisier");
+    expect(menuisier.nafCodes).toEqual(["4332A", "4332B", "1623Z"]);
+    const activities = listProspectActivities();
+    expect(activities).toHaveLength(732);
+    expect(activities.find((a) => a.code === "4776Z").label).toMatch(/fleurs/);
   });
 
   it("refuse un code mal formé, un métier inconnu ou une recherche vide", () => {
@@ -562,6 +595,102 @@ describe("génération par nombre", () => {
       }),
     ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+});
+
+describe("rayon autour d'une ville", () => {
+  const poitiers = {
+    id: "lieu-poitiers",
+    label: "Poitiers, Vienne, Nouvelle-Aquitaine, FRANCE",
+    type: "locality",
+  };
+
+  it("cherche sur les zones du cercle et écarte sans frais les entreprises hors rayon", async () => {
+    resolveRadiusArea.mockResolvedValue({
+      placeIds: ["cp-86000", "cp-86180"],
+      center: { lat: 46.585, lng: 0.371 },
+      radiusKm: 10,
+      requestedRadiusKm: 10,
+    });
+    searchCompanies.mockResolvedValue({
+      total: 3,
+      page: 1,
+      totalPages: 1,
+      results: [
+        // Poitiers centre, Buxerolles (~4 km), Paris (~300 km)
+        { siren: "100000002", name: "A", lat: 46.58, lng: 0.34 },
+        { siren: "100000003", name: "B", lat: 46.61, lng: 0.37 },
+        { siren: "100000004", name: "C", lat: 48.86, lng: 2.35 },
+      ],
+    });
+
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: {
+        tradeIds: ["menuisier"],
+        placeIds: ["ignoree"],
+        radiusKm: 10,
+        aroundPlace: poitiers,
+      },
+      count: 3,
+    });
+
+    expect(resolveRadiusArea).toHaveBeenCalledWith({
+      place: poitiers,
+      radiusKm: 10,
+    });
+    expect(searchCompanies.mock.calls[0][0].placeIds).toEqual([
+      "cp-86000",
+      "cp-86180",
+    ]);
+    expect(result).toMatchObject({
+      unlockedCount: 2,
+      outOfRadiusCount: 1,
+      radiusKm: 10,
+    });
+    expect(getCompany.mock.calls.map(([s]) => s)).toEqual([
+      "100000002",
+      "100000003",
+    ]);
+  });
+
+  it("refuse un rayon impossible avant toute recherche", async () => {
+    resolveRadiusArea.mockRejectedValue(
+      new ProspectAreaError(
+        "Le rayon se compte autour d'une ville ou d'un code postal.",
+      ),
+    );
+    await expect(
+      generateProspects({
+        workspaceId,
+        user,
+        input: {
+          tradeIds: ["menuisier"],
+          radiusKm: 10,
+          aroundPlace: {
+            id: "x",
+            label: "Vienne",
+            type: "administrative_area_level_2",
+          },
+        },
+        count: 2,
+      }),
+    ).rejects.toThrow(/autour d'une ville/);
+    expect(searchCompanies).not.toHaveBeenCalled();
+  });
+
+  it("sans rayon, garde les zones choisies et ne consulte pas la base des communes", async () => {
+    searchCompanies.mockResolvedValue(page(["100000002"], 1));
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"], placeIds: ["lieu-vienne"] },
+      count: 1,
+    });
+    expect(resolveRadiusArea).not.toHaveBeenCalled();
+    expect(searchCompanies.mock.calls[0][0].placeIds).toEqual(["lieu-vienne"]);
+    expect(result).toMatchObject({ outOfRadiusCount: 0, radiusKm: null });
   });
 });
 
