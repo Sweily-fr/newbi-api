@@ -22,6 +22,9 @@ const defaultNotificationPreferences = {
   // Mention dans un commentaire de tâche (absente = activée, comme la
   // lecture faite par le resolver kanban)
   kanban_mention: { email: true, push: true },
+  // Calendrier : récap de la semaine le lundi par e-mail (désactivé par
+  // défaut ; pas de notification push)
+  calendar_weekly_digest: { email: false, push: false },
 };
 
 const notificationPreferencesResolvers = {

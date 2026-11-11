@@ -34,6 +34,8 @@ const notificationSchema = new mongoose.Schema(
         "ACCESS_REQUESTED", // Un membre demande l'accès à une page (rôles)
         "STORAGE_ALMOST_FULL", // Espace de stockage utilisé à 80 %
         "STORAGE_FULL", // Espace de stockage plein : nouveaux envois refusés
+        "SOCIAL_POST_PUBLISHED", // Post programmé publié sur les réseaux sociaux
+        "SOCIAL_POST_FAILED", // Post programmé en échec, publié en partie ou annulé
       ],
       index: true,
     },

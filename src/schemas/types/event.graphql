@@ -21,6 +21,8 @@ type Event {
   externalEventId: String
   calendarConnectionId: ID
   externalCalendarLinks: [ExternalCalendarLink]
+  "Réservation d'un événement APPOINTMENT (prise de rendez-vous)"
+  bookingId: ID
   createdAt: DateTime!
   updatedAt: DateTime!
 }
@@ -48,6 +50,8 @@ enum EventType {
   REMINDER
   CREDIT_NOTE_CREATED
   EXTERNAL
+  "Rendez-vous pris sur une page de réservation (géré depuis Communication)"
+  APPOINTMENT
 }
 
 enum EventSource {

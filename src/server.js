@@ -102,9 +102,14 @@ import bankingCacheRoutes from "./routes/banking-cache.js";
 import reconciliationRoutes from "./routes/reconciliation.js";
 import superpdpOAuthRoutes from "./routes/superpdp-oauth.js";
 import publicEInvoicingDirectoryRoutes from "./routes/publicEInvoicingDirectory.js";
+import publicBookingRoutes from "./routes/publicBooking.js";
 import sharedDocumentDownloadRoutes from "./routes/sharedDocumentDownload.js";
+import publicDocumentShareRoutes from "./routes/publicDocumentShare.js";
 import calendarConnectRoutes from "./routes/calendar-connect.js";
+import socialConnectRoutes from "./routes/social-connect.js";
+import socialMediaRoutes from "./routes/social-media.js";
 import calendarWebhookRoutes from "./routes/calendar-webhooks.js";
+import calendarFeedRoutes from "./routes/calendarFeed.js";
 import gmailConnectRoutes from "./routes/gmail-connect.js";
 import invoicePreviewPdfRoutes, {
   PREVIEW_BODY_LIMIT,
@@ -142,6 +147,10 @@ import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaym
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import { startStorageReconcileCron } from "./cron/storageReconcileCron.js";
+import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
+import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
+import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
+import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -448,12 +457,26 @@ async function startServer() {
 
   // Routes téléchargement documents partagés (ZIP dossiers)
   app.use("/api/shared-documents", sharedDocumentDownloadRoutes);
+  // Liens clients : consultation publique d'un dossier partagé
+  app.use("/api/public-documents", publicDocumentShareRoutes);
 
   // Routes connexion calendriers externes (OAuth Google/Microsoft)
   app.use("/calendar-connect", calendarConnectRoutes);
 
+  // Retour de la connexion d'un compte de réseau social (OAuth Zernio ou
+  // de nos propres applis ; publique, jeton à usage unique dans l'adresse)
+  app.use("/social-connect", socialConnectRoutes);
+
+  // Images des posts réseaux sociaux, lues par Instagram, Facebook et TikTok
+  // (publique, identifiant aléatoire ; jamais de redirection)
+  app.use("/social-media", socialMediaRoutes);
+
   // Routes webhooks calendriers (Google/Microsoft push notifications)
   app.use("/calendar-webhooks", calendarWebhookRoutes);
+
+  // Abonnement au calendrier (fichier .ics lu par Google Agenda, Apple
+  // Calendrier ou Outlook ; publique, jeton secret dans l'adresse)
+  app.use("/calendar/feed", calendarFeedRoutes);
 
   // Routes connexion Gmail pour import factures fournisseurs
   app.use("/gmail-connect", gmailConnectRoutes);
@@ -467,6 +490,10 @@ async function startServer() {
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
   app.use("/api/public/einvoicing", publicEInvoicingDirectoryRoutes);
+
+  // Prise de rendez-vous : pages publiques de réservation, gestion d'un
+  // rendez-vous par l'invité (sans compte, jeton secret, rate-limitée)
+  app.use("/api/public/booking", publicBookingRoutes);
 
   // Routes tracking d'ouverture d'email (publique, sans auth)
   app.use("/tracking", emailTrackingRoutes);
@@ -833,6 +860,22 @@ async function startServer() {
       // Réconciliation du compteur de stockage des espaces, toutes les
       // 30 minutes
       startStorageReconcileCron();
+
+      // Récap du calendrier le lundi à 8 h (no-op tant que
+      // CALENDAR_WEEKLY_DIGEST_MODE n'est pas « simulation » ou « live »)
+      startCalendarWeeklyDigestCron();
+
+      // Suivi des posts programmés sur les réseaux sociaux (no-op tant que
+      // ZERNIO_API_KEY n'est pas configurée)
+      startSocialPostSyncCron();
+
+      // Publication des posts par nos propres applis de réseaux, chaque
+      // minute (no-op tant qu'aucune appli n'est configurée)
+      startSocialDirectPublishCron();
+
+      // Rappels des rendez-vous (24 h et 1 h avant), toutes les 5 minutes
+      // (coupés si APPOINTMENT_REMINDERS_MODE=off)
+      startAppointmentReminderCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

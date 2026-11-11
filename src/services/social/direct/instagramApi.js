@@ -1,0 +1,231 @@
+import { classifyMetaError } from "./metaApi.js";
+import { DirectApiError, configError, directRequest } from "./directHttp.js";
+import { createInstagramPublisher } from "./instagramPublishing.js";
+
+/**
+ * Comptes Instagram professionnels par « Instagram API with Instagram
+ * Login » (produit Instagram de la même appli Meta, identifiants
+ * INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET affichés dans ce produit).
+ *
+ * Choisi plutôt que la connexion par Facebook : pas de Page Facebook liée
+ * à exiger du client, et pas de permissions publicitaires (ads_management,
+ * ads_read) quand son rôle sur la Page vient du Business Manager.
+ *
+ * Vidéo : publiée en Reel (media_type REELS, share_to_feed), en deux temps
+ * (le traitement chez Meta prend souvent plus d'une minute) : publish crée
+ * le conteneur, checkPublication lit son statut (une lecture par minute,
+ * conseil de Meta) et le publie quand il est prêt. Stories : photos ou une
+ * vidéo (instagramPublishing.js, commun avec la connexion via Facebook).
+ * Pas de son tendance : l'API Audio n'existe que pour la connexion via
+ * Facebook (instagramFacebookApi.js).
+ *
+ * Jeton utilisateur longue durée (60 jours), rafraîchi tant qu'il est
+ * valide et vieux d'au moins 24 h : on le rafraîchit 15 jours avant son
+ * expiration, même sans publication (cron).
+ * Doc : developers.facebook.com/docs/instagram-platform/
+ * instagram-api-with-instagram-login/business-login, /content-publishing
+ */
+
+export const NETWORK = "instagram";
+export const PLATFORMS = ["instagram"];
+
+const AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize";
+const TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const GRAPH_URL = "https://graph.instagram.com";
+const SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_content_publish",
+];
+// Au-delà, la vidéo est considérée comme non traitée par Meta
+export const MAX_PROCESSING_MS = 30 * 60 * 1000;
+// Rafraîchi 15 jours avant l'expiration (au-delà de 60 jours sans
+// rafraîchissement, le jeton est perdu)
+export const REFRESH_AHEAD_MS = 15 * 24 * 60 * 60 * 1000;
+
+export const isConfigured = () =>
+  Boolean(process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET);
+
+/**
+ * Erreurs de api.instagram.com (format « error_type / error_message ») et
+ * de graph.instagram.com (format Graph).
+ */
+function classifyInstagramError(response, data, label) {
+  if (data?.error_type || data?.error_message) {
+    const authInvalid =
+      response.status === 400 ||
+      response.status === 401 ||
+      response.status === 403;
+    return new DirectApiError(
+      `instagram ${label} : ${data.error_message || data.error_type}`,
+      {
+        network: NETWORK,
+        status: response.status,
+        code: data.code ?? null,
+        category: authInvalid ? "auth_expired" : null,
+        authInvalid,
+        transient: response.status >= 500,
+      },
+    );
+  }
+  return classifyMetaError(response, data, label, NETWORK);
+}
+
+const publisher = createInstagramPublisher({
+  network: NETWORK,
+  graphUrl: GRAPH_URL,
+  tokenIn: "header",
+  classify: classifyInstagramError,
+});
+const { graph } = publisher;
+
+// ── Connexion ──────────────────────────────────────────────────────────────
+
+export function buildAuthorizeUrl({ state, redirectUri }) {
+  if (!isConfigured()) throw configError(NETWORK, "INSTAGRAM_APP_ID absente");
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set("client_id", process.env.INSTAGRAM_APP_ID);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", SCOPES.join(","));
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+const expiresAt = (seconds, now = new Date()) =>
+  Number(seconds) > 0 ? new Date(now.getTime() + Number(seconds) * 1000) : null;
+
+/** Compte connecté (GET /me), à la connexion et au rafraîchissement. */
+async function readMe(accessToken) {
+  const { data } = await graph("GET", "me", {
+    token: accessToken,
+    query: { fields: "user_id,username,name,profile_picture_url,account_type" },
+  });
+  return data;
+}
+
+/** Pseudo, nom et photo relus (rafraîchissement régulier du compte). */
+export async function fetchProfile({ accessToken }) {
+  const me = await readMe(accessToken);
+  return {
+    externalAccountId: me?.user_id ? String(me.user_id) : undefined,
+    username: me?.username || null,
+    displayName: me?.name || me?.username || null,
+    avatarUrl: me?.profile_picture_url || null,
+  };
+}
+
+/** Code de retour → le compte Instagram professionnel connecté. */
+export async function exchangeCode({ code, redirectUri, now = new Date() }) {
+  if (!isConfigured()) throw configError(NETWORK, "INSTAGRAM_APP_ID absente");
+  // Instagram ajoute parfois « #_ » au code
+  const cleanCode = String(code || "").replace(/#_$/, "");
+  const { data } = await directRequest({
+    network: NETWORK,
+    method: "POST",
+    url: TOKEN_URL,
+    form: {
+      client_id: process.env.INSTAGRAM_APP_ID,
+      client_secret: process.env.INSTAGRAM_APP_SECRET,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+      code: cleanCode,
+    },
+    check: classifyInstagramError,
+  });
+  const short = Array.isArray(data?.data) ? data.data[0] : data;
+  if (!short?.access_token) {
+    throw new DirectApiError("instagram : jeton absent de la réponse", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const { data: long } = await directRequest({
+    network: NETWORK,
+    method: "GET",
+    url: `${GRAPH_URL}/access_token`,
+    query: {
+      grant_type: "ig_exchange_token",
+      client_secret: process.env.INSTAGRAM_APP_SECRET,
+      access_token: short.access_token,
+    },
+    check: classifyInstagramError,
+  });
+  const accessToken = long?.access_token || short.access_token;
+  const me = await readMe(accessToken);
+  // user_id : identifiant du compte professionnel (celui des publications)
+  const accountId = me?.user_id || short.user_id || me?.id;
+  if (!accountId) {
+    throw new DirectApiError("instagram : compte sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    accounts: [
+      {
+        platform: "instagram",
+        externalAccountId: String(accountId),
+        username: me?.username || null,
+        displayName: me?.name || me?.username || null,
+        avatarUrl: me?.profile_picture_url || null,
+        credentials: {
+          accessToken,
+          tokenExpiresAt: expiresAt(long?.expires_in, now),
+          scopes: Array.isArray(short.permissions)
+            ? short.permissions
+            : String(short.permissions || "")
+                .split(",")
+                .filter(Boolean),
+        },
+        credentialGroup: null,
+        platformData: { accountType: me?.account_type || null },
+      },
+    ],
+  };
+}
+
+/** Rafraîchit le jeton longue durée lui-même (pas de jeton de rafraîchissement). */
+export async function refreshCredentials({ accessToken, now = new Date() }) {
+  const { data } = await directRequest({
+    network: NETWORK,
+    method: "GET",
+    url: `${GRAPH_URL}/refresh_access_token`,
+    query: { grant_type: "ig_refresh_token", access_token: accessToken },
+    check: classifyInstagramError,
+  });
+  if (!data?.access_token) {
+    throw new DirectApiError("instagram : jeton rafraîchi absent", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    accessToken: data.access_token,
+    tokenExpiresAt: expiresAt(data.expires_in, now),
+  };
+}
+
+// ── Publication ────────────────────────────────────────────────────────────
+
+/** Photo, carrousel, Reel ou stories (instagramPublishing.js). */
+export const { publish, checkPublication } = publisher;
+
+export default {
+  NETWORK,
+  PLATFORMS,
+  usesPkce: false,
+  refreshAheadMs: REFRESH_AHEAD_MS,
+  // Le jeton d'accès se rafraîchit lui-même
+  refreshesAccessToken: true,
+  isConfigured,
+  buildAuthorizeUrl,
+  exchangeCode,
+  fetchProfile,
+  refreshCredentials,
+  publish,
+  checkPublication,
+  maxProcessingMs: MAX_PROCESSING_MS,
+};

@@ -62,6 +62,12 @@ let replSet;
 
 beforeAll(async () => {
   replSet = await startReplicaSet("rgpd_attendu");
+  // Modules chargés à la demande par deleteUserAccount (réseaux sociaux de
+  // l'espace supprimé) : leurs modèles sont enregistrés ici, sinon leurs
+  // collections et index naîtraient pendant la transaction du test suivant
+  // (« catalog changes »)
+  await import("../../src/services/social/socialMediaCleanup.js");
+  await import("../../src/services/social/socialPublishingService.js");
   // Collections et index créés avant la transaction de deleteUserAccount :
   // une collection créée pendant la transaction provoque, sous charge, un
   // LockTimeout qui ferait échouer le test pour une autre raison
@@ -79,8 +85,9 @@ beforeAll(async () => {
     "organization",
     "invitation",
     "subscription",
-    "kanbanprojects",
-    "kanbantasks",
+    // Tableaux, colonnes et cartes : modèles mongoose ci-dessus
+    "kanban_collab_docs",
+    "events",
     "calendar_feed_tokens",
     "calendar_digest_log",
   ]) {
@@ -189,40 +196,88 @@ describe("RGPD : abonnement Stripe", () => {
 
   it("seul membre d'un autre espace abonné : abonnement aussi résilié, abonnement résilié ignoré", async () => {
     const autre = buildOrganizationId();
-    await seedOrgMembership({ userId: leaver, organizationId: activeOrg, role: "owner", subscriptionStatus: null });
-    await seedOrgMembership({ userId: leaver, organizationId: autre, role: "owner", subscriptionStatus: null });
-    await db().collection("subscription").insertMany([
-      { referenceId: String(autre), status: "trialing", stripeSubscriptionId: "sub_autre" },
-      { referenceId: String(activeOrg), status: "canceled", stripeSubscriptionId: "sub_deja_resilie" },
-    ]);
+    await seedOrgMembership({
+      userId: leaver,
+      organizationId: activeOrg,
+      role: "owner",
+      subscriptionStatus: null,
+    });
+    await seedOrgMembership({
+      userId: leaver,
+      organizationId: autre,
+      role: "owner",
+      subscriptionStatus: null,
+    });
+    await db()
+      .collection("subscription")
+      .insertMany([
+        {
+          referenceId: String(autre),
+          status: "trialing",
+          stripeSubscriptionId: "sub_autre",
+        },
+        {
+          referenceId: String(activeOrg),
+          status: "canceled",
+          stripeSubscriptionId: "sub_deja_resilie",
+        },
+      ]);
 
     await deleteUserAccount(String(leaver), String(activeOrg));
 
-    const annules = stripeMock.subscriptions.cancel.mock.calls.map(([id]) => id);
+    const annules = stripeMock.subscriptions.cancel.mock.calls.map(
+      ([id]) => id,
+    );
     expect(annules).toContain("sub_autre");
     expect(annules).not.toContain("sub_deja_resilie");
-    expect(await db().collection("member").countDocuments({ userId: leaver })).toBe(0);
+    expect(
+      await db().collection("member").countDocuments({ userId: leaver }),
+    ).toBe(0);
   });
 });
 
 describe("RGPD : propriété à transférer", () => {
   it("super admin de l'espace actif qui a d'autres membres : refusé, rien n'est supprimé", async () => {
-    await seedOrgMembership({ userId: leaver, organizationId: sharedOrg, role: "owner" });
-    await seedOrgMembership({ userId: colleague, organizationId: sharedOrg, role: "member" });
+    await seedOrgMembership({
+      userId: leaver,
+      organizationId: sharedOrg,
+      role: "owner",
+    });
+    await seedOrgMembership({
+      userId: colleague,
+      organizationId: sharedOrg,
+      role: "member",
+    });
 
-    await expect(deleteUserAccount(String(leaver), String(sharedOrg))).rejects.toMatchObject({
+    await expect(
+      deleteUserAccount(String(leaver), String(sharedOrg)),
+    ).rejects.toMatchObject({
       details: { reason: "OWNER_TRANSFER_REQUIRED" },
     });
     expect(await User.collection.countDocuments({ _id: leaver })).toBe(1);
-    expect(await db().collection("member").countDocuments({ userId: leaver })).toBe(1);
+    expect(
+      await db().collection("member").countDocuments({ userId: leaver }),
+    ).toBe(1);
   });
 
   it("un autre super admin reste dans l'espace : suppression permise", async () => {
-    await seedOrgMembership({ userId: leaver, organizationId: sharedOrg, role: "owner" });
-    await seedOrgMembership({ userId: colleague, organizationId: sharedOrg, role: "owner" });
+    await seedOrgMembership({
+      userId: leaver,
+      organizationId: sharedOrg,
+      role: "owner",
+    });
+    await seedOrgMembership({
+      userId: colleague,
+      organizationId: sharedOrg,
+      role: "owner",
+    });
 
     await deleteUserAccount(String(leaver), String(sharedOrg));
     expect(await User.collection.countDocuments({ _id: leaver })).toBe(0);
-    expect(await db().collection("member").countDocuments({ organizationId: sharedOrg })).toBe(1);
+    expect(
+      await db()
+        .collection("member")
+        .countDocuments({ organizationId: sharedOrg }),
+    ).toBe(1);
   });
 });

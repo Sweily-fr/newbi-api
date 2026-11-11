@@ -4,9 +4,6 @@
  */
 
 import express from "express";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import convert from "heic-convert";
-import sharp from "sharp";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { getActiveOrganization } from "../middlewares/org-resolver.js";
 import { isObjectIdString } from "../utils/objectIdString.js";
@@ -23,43 +20,9 @@ import {
 import SharedDocument from "../models/SharedDocument.js";
 import logger from "../utils/logger.js";
 import {
-  filePreviewHeaders,
-  SHARED_PREVIEW_EXTRA_TYPES,
-} from "../utils/fileSignature.js";
-
-// Cache mémoire pour les previews HEIC convertis (LRU simple, max 50 entrées, TTL 30 min)
-const previewCache = new Map();
-const CACHE_MAX = 50;
-const CACHE_TTL = 30 * 60 * 1000;
-
-function getCachedPreview(key) {
-  const entry = previewCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL) {
-    previewCache.delete(key);
-    return null;
-  }
-  return entry.buffer;
-}
-
-function setCachedPreview(key, buffer) {
-  if (previewCache.size >= CACHE_MAX) {
-    // Supprimer la plus ancienne entrée
-    const oldest = previewCache.keys().next().value;
-    previewCache.delete(oldest);
-  }
-  previewCache.set(key, { buffer, ts: Date.now() });
-}
-
-// Configuration R2
-const s3Client = new S3Client({
-  region: "auto",
-  endpoint: process.env.R2_API_URL,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
-});
+  streamDocumentDownload,
+  streamDocumentPreview,
+} from "../services/sharedDocumentFileResponse.js";
 
 const router = express.Router();
 
@@ -507,27 +470,7 @@ router.get("/download-file/:documentId", async (req, res) => {
       fileKey: document.fileKey,
     });
 
-    const command = new GetObjectCommand({
-      Bucket: process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging",
-      Key: document.fileKey,
-    });
-
-    const response = await s3Client.send(command);
-
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(document.originalName || document.name)}"`,
-    );
-    res.setHeader(
-      "Content-Type",
-      document.mimeType || "application/octet-stream",
-    );
-    if (document.fileSize) {
-      res.setHeader("Content-Length", document.fileSize);
-    }
-    res.setHeader("Cache-Control", "no-cache");
-
-    response.Body.pipe(res);
+    await streamDocumentDownload(document, res);
 
     logger.info("✅ Fichier partagé téléchargé", {
       fileName: document.originalName,
@@ -603,93 +546,7 @@ router.get("/preview-file/:documentId", async (req, res) => {
       fileKey: document.fileKey,
     });
 
-    const command = new GetObjectCommand({
-      Bucket: process.env.SHARED_DOCUMENTS_BUCKET || "shared-documents-staging",
-      Key: document.fileKey,
-    });
-
-    const response = await s3Client.send(command);
-
-    const isHeic =
-      ["image/heic", "image/heif"].includes(document.mimeType?.toLowerCase()) ||
-      /\.(heic|heif)$/i.test(document.originalName || "");
-
-    if (isHeic) {
-      const cacheKey = `preview:${documentId}`;
-      let jpegBuffer = getCachedPreview(cacheKey);
-
-      if (!jpegBuffer) {
-        const chunks = [];
-        for await (const chunk of response.Body) {
-          chunks.push(chunk);
-        }
-        const inputBuffer = Buffer.concat(chunks);
-
-        // heic-convert pour décoder le HEIC, puis sharp pour resize/optimiser
-        const rawJpeg = await convert({
-          buffer: inputBuffer,
-          format: "JPEG",
-          quality: 0.85,
-        });
-
-        jpegBuffer = await sharp(rawJpeg)
-          .resize(1920, 1920, { fit: "inside", withoutEnlargement: true })
-          .jpeg({ quality: 80, progressive: true })
-          .toBuffer();
-
-        setCachedPreview(cacheKey, jpegBuffer);
-      }
-
-      const displayName = (document.originalName || document.name).replace(
-        /\.(heic|heif)$/i,
-        ".jpg",
-      );
-
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="${encodeURIComponent(displayName)}"`,
-      );
-      res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Length", jpegBuffer.length);
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader(
-        "Content-Security-Policy",
-        `frame-ancestors 'self' ${frontendUrl}`,
-      );
-      res.removeHeader("X-Frame-Options");
-
-      res.end(jpegBuffer);
-    } else {
-      const declaredType = document.originalName?.toLowerCase().endsWith(".pdf")
-        ? "application/pdf"
-        : document.mimeType;
-
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-      // Type annoncé à l'envoi : seuls les formats qui ne s'exécutent pas
-      // (PDF, images matricielles, audio, vidéo, texte brut) sont servis en
-      // ligne, sous ce type exact et sans détection par le navigateur. Le
-      // reste (SVG, HTML, XML…) part en téléchargement.
-      const headers = filePreviewHeaders({
-        contentType: declaredType,
-        filename: document.originalName || document.name,
-        frameAncestors: `'self' ${frontendUrl}`,
-        extraInlineTypes: SHARED_PREVIEW_EXTRA_TYPES,
-      });
-      for (const [name, value] of Object.entries(headers)) {
-        res.setHeader(name, value);
-      }
-      if (document.fileSize) {
-        res.setHeader("Content-Length", document.fileSize);
-      }
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.removeHeader("X-Frame-Options");
-
-      response.Body.pipe(res);
-    }
+    await streamDocumentPreview(document, res);
 
     logger.info("✅ Fichier partagé prévisualisé", {
       fileName: document.originalName,

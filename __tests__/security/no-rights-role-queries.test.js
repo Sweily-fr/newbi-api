@@ -70,6 +70,7 @@ const READABLE_WITHOUT_RIGHTS = {
     "getNotificationPreferences",
     "getNotifications",
     "getUnreadNotificationsCount",
+    "calendarWeeklyDigest",
     "getCalendarConnections",
     "getAvailableCalendars",
     "testEmailReminder",
@@ -91,6 +92,8 @@ const READABLE_WITHOUT_RIGHTS = {
     "activeTimers",
     // État du stockage de l'espace (détail réservé à « Voir l'abonnement »)
     "workspaceStorage",
+    // Fonctionnalités en accès anticipé ouvertes à l'espace (menus)
+    "workspaceFeatures",
   ],
   // État des intégrations et réglages par défaut des documents
   workspaceSettings: [

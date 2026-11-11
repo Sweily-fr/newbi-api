@@ -41,6 +41,7 @@ import importedInvoiceResolvers from "./importedInvoice.js";
 import importedQuoteResolvers from "./importedQuote.js";
 import reconciliationResolvers from "./reconciliationResolvers.js";
 import sharedDocumentResolvers from "./sharedDocument.js";
+import documentShareResolvers from "./documentShare.js";
 import storageResolvers from "./storage.js";
 import eInvoicingResolvers from "./eInvoicing.js";
 import publicBoardShareResolvers from "./publicBoardShare.js";
@@ -57,7 +58,10 @@ import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
 import gmailConnectionResolvers from "./gmailConnection.js";
 import calendarColorLabelsResolvers from "./calendarColorLabels.js";
+import calendarLinkedItemsResolvers from "./calendarLinkedItems.js";
+import vatDeclarationResolvers from "./vatDeclaration.js";
 import prospectsResolvers from "./prospects.js";
+import calendarFeedResolvers from "./calendarFeed.js";
 import documentAutomationResolvers from "./documentAutomation.js";
 import purchaseInvoiceResolvers from "./purchaseInvoice.js";
 import treasuryForecastResolvers from "./treasuryForecast.js";
@@ -75,6 +79,10 @@ import dashboardAggregationResolvers from "./dashboardAggregation.js";
 import receiptMatchingResolvers from "./receiptMatchingResolvers.js";
 import organizationRoleResolvers from "./organizationRole.js";
 import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
+import socialPublishingResolvers from "./socialPublishing.js";
+import appointmentsResolvers from "./appointments.js";
+import workspaceFeaturesResolvers from "./workspaceFeatures.js";
+import { gateFeatureResolvers } from "../utils/featureAccess.js";
 
 const resolvers = mergeResolvers([
   userResolvers,
@@ -119,6 +127,7 @@ const resolvers = mergeResolvers([
   importedQuoteResolvers,
   reconciliationResolvers,
   sharedDocumentResolvers,
+  gateFeatureResolvers("documentShares", documentShareResolvers),
   storageResolvers,
   eInvoicingResolvers,
   publicBoardShareResolvers,
@@ -135,7 +144,10 @@ const resolvers = mergeResolvers([
   calendarConnectionResolvers,
   gmailConnectionResolvers,
   calendarColorLabelsResolvers,
+  calendarLinkedItemsResolvers,
+  gateFeatureResolvers("vat", vatDeclarationResolvers),
   prospectsResolvers,
+  calendarFeedResolvers,
   documentAutomationResolvers,
   purchaseInvoiceResolvers,
   treasuryForecastResolvers,
@@ -152,6 +164,13 @@ const resolvers = mergeResolvers([
   dashboardAggregationResolvers,
   receiptMatchingResolvers,
   organizationRoleResolvers,
+  // socialPublishingStatus renvoie enabled: false à un espace sans accès :
+  // le site masque alors l'appli et l'onglet des posts
+  gateFeatureResolvers("socialPublishing", socialPublishingResolvers, {
+    except: ["socialPublishingStatus"],
+  }),
+  gateFeatureResolvers("appointments", appointmentsResolvers),
+  workspaceFeaturesResolvers,
 ]);
 
 // Contrôle d'abonnement différé (checkSubscriptionActive) : propre à chaque

@@ -31,6 +31,8 @@ const defaultNotificationPreferences = {
   // Kanban (mêmes défauts que resolvers/notificationPreferences.js)
   kanban_task_assigned: { email: true, push: true },
   kanban_mention: { email: true, push: true },
+  // Calendrier (récap du lundi, e-mail seulement)
+  calendar_weekly_digest: { email: false, push: false },
 };
 
 /**

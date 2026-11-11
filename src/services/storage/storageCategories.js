@@ -14,6 +14,7 @@ export const STORAGE_CATEGORIES = {
   importedDocuments: "Documents importés",
   branding: "Logos, images et signatures de mail",
   transfers: "Transferts de fichiers",
+  social: "Réseaux sociaux",
   other: "Autres fichiers",
 };
 

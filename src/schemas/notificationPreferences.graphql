@@ -22,6 +22,8 @@ type NotificationPreferences {
   # Kanban
   kanban_task_assigned: NotificationPreference
   kanban_mention: NotificationPreference
+  # Calendrier : récap de la semaine le lundi (e-mail seulement)
+  calendar_weekly_digest: NotificationPreference
 }
 
 input NotificationPreferenceInput {
@@ -46,6 +48,8 @@ input NotificationPreferencesInput {
   # Kanban
   kanban_task_assigned: NotificationPreferenceInput
   kanban_mention: NotificationPreferenceInput
+  # Calendrier : récap de la semaine le lundi (e-mail seulement)
+  calendar_weekly_digest: NotificationPreferenceInput
 }
 
 type NotificationPreferencesResponse {

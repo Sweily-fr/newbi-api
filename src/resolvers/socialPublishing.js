@@ -1,0 +1,319 @@
+// resolvers/socialPublishing.js
+import {
+  checkSubscriptionActive,
+  requireWorkspaceAction,
+  requireWorkspaceLevel,
+} from "../middlewares/rbac.js";
+import {
+  cancelPost,
+  createConnectUrl,
+  disconnectAccount,
+  getPostForUser,
+  getTikTokCreatorInfo,
+  isSocialPublishingEnabled,
+  listBoardPosts,
+  listTrendingSounds,
+  listWorkspaceAccounts,
+  refreshAccountsIfStale,
+  retryPost,
+  schedulePost,
+  serializeAccount,
+  syncAccounts,
+  updatePost,
+  uploadPostMedia,
+  assertSocialPublishingEnabled,
+} from "../services/social/socialPublishingService.js";
+import { toUserError } from "../services/social/socialPostMessages.js";
+import {
+  completeVideoUpload,
+  getPostMedia,
+  startVideoUpload,
+  uploadVideoChunk,
+} from "../services/social/socialVideoUpload.js";
+import {
+  availableConnectors,
+  availablePlatforms,
+} from "../services/social/socialProviders.js";
+import { isZernioConfigured } from "../services/social/providers/zernioProvider.js";
+import { getXPostQuota } from "../services/social/xPostQuota.js";
+// Médias des posts comptés dans le stockage de l'espace
+import "../services/social/socialStorageUsage.js";
+import {
+  assertStorageAvailable,
+  markStorageStale,
+} from "../services/storage/storageService.js";
+
+/**
+ * Publication programmée sur les réseaux sociaux depuis le kanban
+ * (schéma : schemas/socialPublishing.graphql).
+ *
+ * Droits :
+ * - comptes (connecter, déconnecter, actualiser) : « Applications et
+ *   banques » > Connecter et configurer, et abonnement actif ;
+ * - lecture : lecture du kanban, et accès au tableau comme la requête
+ *   `board` ; sons tendance d'un compte : lecture du kanban ;
+ * - programmer, téléverser une image ou une vidéo : création dans le
+ *   kanban ; modifier, annuler, réessayer : modification dans le kanban ;
+ *   abonnement actif ; suivi d'une vidéo : lecture du kanban.
+ * L'espace est toujours celui validé par RBAC (context.workspaceId).
+ */
+
+import { bindOAuthToBrowser } from "../utils/oauthBrowserBinding.js";
+import { isFeatureEnabled } from "../utils/featureAccess.js";
+import {
+  CONNECT_STATE_TTL_MS,
+  SOCIAL_CONNECT_COOKIE_PATH,
+} from "../services/social/socialConnectUrls.js";
+
+const subscriptionIsActive = async (context) => {
+  try {
+    await checkSubscriptionActive(context);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Écriture : abonnement actif exigé avant tout appel au fournisseur
+const withActiveSubscription =
+  (resolver) => async (parent, args, context, info) => {
+    await checkSubscriptionActive(context);
+    return resolver(parent, args, context, info);
+  };
+
+const socialPublishingResolvers = {
+  Query: {
+    socialPublishingStatus: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, __, context) => {
+      const { workspaceId, permissions } = context;
+      // Accès anticipé : fermé aux espaces hors de BETA_WORKSPACE_IDS
+      const enabled =
+        isSocialPublishingEnabled() &&
+        isFeatureEnabled("socialPublishing", workspaceId);
+      let accounts = [];
+      let xPostQuota = null;
+      if (enabled) {
+        // Comptes à jour (jeton expiré…) au plus toutes les 10 minutes, en
+        // arrière-plan : la requête ne dépend jamais du fournisseur
+        await refreshAccountsIfStale(workspaceId);
+        accounts = await listWorkspaceAccounts(workspaceId);
+        const quota = await getXPostQuota(workspaceId);
+        xPostQuota = { ...quota, resetsAt: quota.resetsAt.toISOString() };
+      }
+      const canSchedule =
+        Boolean(permissions?.hasPermission?.("kanban", "create")) &&
+        (await subscriptionIsActive(context));
+      return {
+        enabled,
+        // Réseaux connectables par cet espace (fournisseur configuré)
+        platforms: enabled ? availablePlatforms(workspaceId) : [],
+        // Façons de les connecter (Instagram via Facebook, TikTok Business…)
+        connectors: enabled ? availableConnectors(workspaceId) : [],
+        canManageAccounts: Boolean(
+          permissions?.hasPermission?.("integrations", "manage"),
+        ),
+        canSchedule,
+        accounts: accounts.map(serializeAccount),
+        xPostQuota,
+      };
+    }),
+
+    boardSocialPosts: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { boardId }, { workspaceId, user, permissions }) =>
+      listBoardPosts({ workspaceId, user, permissions, boardId }),
+    ),
+
+    socialPost: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { id }, { workspaceId, user, permissions }) =>
+      getPostForUser({ workspaceId, user, permissions, postId: id }),
+    ),
+
+    tiktokCreatorInfo: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { accountId }, { workspaceId }) =>
+      getTikTokCreatorInfo({ workspaceId, accountId }),
+    ),
+
+    socialTrendingSounds: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { accountId, search, kind }, { workspaceId }) =>
+      listTrendingSounds({ workspaceId, accountId, search, kind }),
+    ),
+
+    socialPostMedia: requireWorkspaceLevel(
+      "kanban",
+      "read",
+    )(async (_, { id }, { workspaceId }) =>
+      getPostMedia({ workspaceId, mediaId: id }),
+    ),
+  },
+
+  Mutation: {
+    connectSocialAccount: requireWorkspaceAction(
+      "integrations",
+      "manage",
+    )(
+      withActiveSubscription(
+        async (
+          _,
+          { platform, connector, returnTo },
+          { workspaceId, user, req },
+        ) =>
+          createConnectUrl({
+            workspaceId,
+            userId: user._id || user.id,
+            platform,
+            connector,
+            returnTo,
+            // Seul ce navigateur pourra terminer la connexion (cookie posé
+            // sur la réponse GraphQL, exigé au retour du réseau)
+            onState: (token) => {
+              if (!req?.res) return;
+              bindOAuthToBrowser(req.res, {
+                nonce: token,
+                path: SOCIAL_CONNECT_COOKIE_PATH,
+                ttlMs: CONNECT_STATE_TTL_MS,
+              });
+            },
+          }),
+      ),
+    ),
+
+    disconnectSocialAccount: requireWorkspaceAction(
+      "integrations",
+      "manage",
+    )(
+      withActiveSubscription(async (_, { accountId }, { workspaceId }) =>
+        disconnectAccount({ workspaceId, accountId }),
+      ),
+    ),
+
+    refreshSocialAccounts: requireWorkspaceAction(
+      "integrations",
+      "manage",
+    )(
+      withActiveSubscription(async (_, __, { workspaceId }) => {
+        assertSocialPublishingEnabled();
+        try {
+          // Comptes « direct » : rien à relire chez Zernio
+          const accounts = isZernioConfigured()
+            ? await syncAccounts(workspaceId)
+            : await listWorkspaceAccounts(workspaceId);
+          return accounts.map(serializeAccount);
+        } catch (error) {
+          throw toUserError(error, "account");
+        }
+      }),
+    ),
+
+    uploadSocialPostMedia: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(async (_, { file }, { workspaceId, user }) => {
+        // Espace de stockage plein : nouvel envoi refusé
+        await assertStorageAvailable(workspaceId, 0);
+        const media = await uploadPostMedia({
+          workspaceId,
+          userId: user._id || user.id,
+          file,
+        });
+        await markStorageStale(workspaceId);
+        return media;
+      }),
+    ),
+
+    startSocialVideoUpload: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(
+        async (_, { fileName, size, contentType }, { workspaceId, user }) => {
+          assertSocialPublishingEnabled();
+          await assertStorageAvailable(workspaceId, Number(size) || 0);
+          return startVideoUpload({
+            workspaceId,
+            userId: user._id || user.id,
+            fileName,
+            size,
+            contentType,
+          });
+        },
+      ),
+    ),
+
+    uploadSocialVideoChunk: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(
+        async (_, { mediaId, index, chunk }, { workspaceId }) => {
+          assertSocialPublishingEnabled();
+          return uploadVideoChunk({ workspaceId, mediaId, index, chunk });
+        },
+      ),
+    ),
+
+    completeSocialVideoUpload: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(async (_, { mediaId }, { workspaceId }) => {
+        assertSocialPublishingEnabled();
+        const media = await completeVideoUpload({ workspaceId, mediaId });
+        await markStorageStale(workspaceId);
+        return media;
+      }),
+    ),
+
+    scheduleSocialPost: requireWorkspaceAction(
+      "kanban",
+      "create",
+    )(
+      withActiveSubscription(
+        async (_, { input }, { workspaceId, user, permissions }) =>
+          schedulePost({ workspaceId, user, permissions, input }),
+      ),
+    ),
+
+    updateSocialPost: requireWorkspaceAction(
+      "kanban",
+      "edit",
+    )(
+      withActiveSubscription(
+        async (_, { id, input }, { workspaceId, user, permissions }) =>
+          updatePost({ workspaceId, user, permissions, postId: id, input }),
+      ),
+    ),
+
+    cancelSocialPost: requireWorkspaceAction(
+      "kanban",
+      "edit",
+    )(
+      withActiveSubscription(
+        async (_, { id }, { workspaceId, user, permissions }) =>
+          cancelPost({ workspaceId, user, permissions, postId: id }),
+      ),
+    ),
+
+    retrySocialPost: requireWorkspaceAction(
+      "kanban",
+      "edit",
+    )(
+      withActiveSubscription(
+        async (_, { id }, { workspaceId, user, permissions }) =>
+          retryPost({ workspaceId, user, permissions, postId: id }),
+      ),
+    ),
+  },
+};
+
+export default socialPublishingResolvers;

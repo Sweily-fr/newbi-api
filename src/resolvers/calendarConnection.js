@@ -491,7 +491,8 @@ const calendarConnectionResolvers = {
 
         // L'événement doit appartenir à l'espace actif (l'envoi modifie ses
         // liens vers les calendriers externes), et être visible de ce membre :
-        // ni l'événement privé d'un autre, ni une échéance cachée par son rôle
+        // ni l'événement privé d'un autre (rendez-vous et coordonnées de
+        // l'invité compris), ni une échéance cachée par son rôle
         const eventInWorkspace = await Event.exists(
           accessibleEventFilter({
             id: input.eventId,

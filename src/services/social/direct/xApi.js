@@ -1,0 +1,486 @@
+import storage, { ownVideoId } from "../socialMediaStorage.js";
+import { isVideoMedia } from "../socialPostRules.js";
+import {
+  DirectApiError,
+  configError,
+  directRequest,
+  readHeader,
+  timing,
+} from "./directHttp.js";
+
+/**
+ * X : OAuth 2.0 avec PKCE (client confidentiel, offline.access), envoi
+ * d'image par l'API média v2, post par POST /2/tweets.
+ *
+ * Chaque création de post est facturée à Sweily (0,015 $, 0,20 $ si le
+ * texte contient un lien) : limite mensuelle par offre dans xPostQuota.js,
+ * comptée sur les cibles X des posts (pas ici).
+ *
+ * Jeton d'accès de 2 h ; le jeton de rafraîchissement tourne (on garde
+ * toujours le dernier reçu, rafraîchissements sérialisés par compte).
+ * Vidéo : envoi en morceaux de l'API média v2 (initialize, append par
+ * morceaux de 4 Mo lus par plage dans R2, finalize), traitement suivi par
+ * STATUS : attendu sur place s'il est court, sinon post créé plus tard par
+ * checkPublication (media_id gardé dans processingRef).
+ *
+ * En local, X refuse « localhost » dans l'adresse de retour : utiliser
+ * NEXT_PUBLIC_API_URL=http://127.0.0.1:4000.
+ * Doc : docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code,
+ * /x-api/media/upload-media, /x-api/media/quickstart/media-upload-chunked,
+ * /x-api/posts/create-post
+ */
+
+export const NETWORK = "x";
+export const PLATFORMS = ["twitter"];
+
+const AUTHORIZE_URL = "https://x.com/i/oauth2/authorize";
+const API_URL = "https://api.x.com/2";
+const SCOPES = [
+  "tweet.read",
+  "tweet.write",
+  "users.read",
+  "media.write",
+  "offline.access",
+];
+const PUBLISH_TIMEOUT_MS = 30000;
+const UPLOAD_TIMEOUT_MS = 60000;
+// Morceaux de 5 Mo au plus (conseil de X)
+const VIDEO_SEGMENT_BYTES = 4 * 1024 * 1024;
+// Traitement attendu sur place jusqu'à ce délai, sinon au tour suivant
+const VIDEO_INLINE_WAIT_MS = 45 * 1000;
+const VIDEO_MIN_CHECK_MS = 30 * 1000;
+export const MAX_PROCESSING_MS = 30 * 60 * 1000;
+
+export const isConfigured = () =>
+  Boolean(process.env.X_CLIENT_ID && process.env.X_CLIENT_SECRET);
+
+// ── Erreurs ────────────────────────────────────────────────────────────────
+
+/** Délai avant la remise à zéro annoncée (x-rate-limit-reset, secondes). */
+function retryAfterFromReset(response) {
+  const reset = Number(readHeader(response, "x-rate-limit-reset"));
+  if (!Number.isFinite(reset) || reset <= 0) return null;
+  const delay = reset * 1000 - Date.now();
+  return delay > 0 ? delay : null;
+}
+
+/** Réponse X (format « Problem ») → DirectApiError classée. */
+export function classifyXError(response, data, label = "") {
+  if (response.ok && !(data?.errors && !data?.data)) return null;
+  const status = response.status;
+  const problem = Array.isArray(data?.errors) ? data.errors[0] : data;
+  const type = String(problem?.type || "");
+  const detail =
+    problem?.detail ||
+    problem?.message ||
+    data?.error_description ||
+    data?.title ||
+    data?.error ||
+    null;
+  const base = {
+    network: NETWORK,
+    status,
+    code: type || data?.error || null,
+    detail,
+  };
+  const make = (fields) =>
+    new DirectApiError(`x ${label} : ${detail || `HTTP ${status}`}`, {
+      ...base,
+      ...fields,
+    });
+
+  if (status === 401 || data?.error === "invalid_grant") {
+    return make({ category: "auth_expired", authInvalid: true });
+  }
+  if (
+    status === 402 ||
+    type.endsWith("/usage-capped") ||
+    /credit/i.test(detail || "")
+  ) {
+    // Crédits de Sweily épuisés ou plafond de dépense atteint
+    return make({ category: "quota_exhausted" });
+  }
+  if (status === 429) {
+    return make({
+      category: "platform_rate_limit",
+      transient: true,
+      retryAfterMs: retryAfterFromReset(response),
+    });
+  }
+  if (status === 403) {
+    if (/duplicate/i.test(detail || ""))
+      return make({ category: "user_content" });
+    // « This user is not allowed to post a video longer than … »
+    if (/video|media/i.test(detail || "")) {
+      return make({ category: "video_rejected" });
+    }
+    if (type.endsWith("/client-forbidden")) {
+      return make({ category: "platform_rejected" });
+    }
+    return make({ category: "auth_expired", authInvalid: true });
+  }
+  if (status === 400) return make({ category: "user_content" });
+  if (status >= 500) return make({ transient: true });
+  return make({ category: "platform_rejected" });
+}
+
+const basicAuth = () =>
+  `Basic ${Buffer.from(
+    `${process.env.X_CLIENT_ID}:${process.env.X_CLIENT_SECRET}`,
+  ).toString("base64")}`;
+
+// ── Connexion ──────────────────────────────────────────────────────────────
+
+export function buildAuthorizeUrl({ state, redirectUri, codeChallenge }) {
+  if (!isConfigured()) throw configError(NETWORK, "X_CLIENT_ID absente");
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", process.env.X_CLIENT_ID);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("scope", SCOPES.join(" "));
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", codeChallenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  return url.toString();
+}
+
+const secondsFromNow = (seconds, now) =>
+  Number(seconds) > 0 ? new Date(now.getTime() + Number(seconds) * 1000) : null;
+
+async function tokenRequest(form, now) {
+  const { data } = await directRequest({
+    network: NETWORK,
+    method: "POST",
+    url: `${API_URL}/oauth2/token`,
+    headers: { Authorization: basicAuth() },
+    form,
+    check: classifyXError,
+  });
+  if (!data?.access_token) {
+    throw new DirectApiError("x : jeton absent de la réponse", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || null,
+    tokenExpiresAt: secondsFromNow(data.expires_in || 7200, now),
+    refreshTokenExpiresAt: null,
+    scopes: String(data.scope || "")
+      .split(" ")
+      .filter(Boolean),
+  };
+}
+
+/** Compte connecté (GET /2/users/me, users.read). */
+async function readMe(accessToken) {
+  const { data } = await directRequest({
+    network: NETWORK,
+    url: `${API_URL}/users/me`,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    query: { "user.fields": "profile_image_url" },
+    check: classifyXError,
+  });
+  return data?.data;
+}
+
+/** Pseudo, nom et photo relus (rafraîchissement régulier du compte). */
+export async function fetchProfile({ accessToken }) {
+  const user = await readMe(accessToken);
+  return {
+    externalAccountId: user?.id ? String(user.id) : undefined,
+    username: user?.username || null,
+    displayName: user?.name || user?.username || null,
+    avatarUrl: user?.profile_image_url || null,
+  };
+}
+
+export async function exchangeCode({
+  code,
+  redirectUri,
+  codeVerifier,
+  now = new Date(),
+}) {
+  if (!isConfigured()) throw configError(NETWORK, "X_CLIENT_ID absente");
+  const credentials = await tokenRequest(
+    {
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    },
+    now,
+  );
+  const user = await readMe(credentials.accessToken);
+  if (!user?.id) {
+    throw new DirectApiError("x : compte sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    accounts: [
+      {
+        platform: "twitter",
+        externalAccountId: String(user.id),
+        username: user.username || null,
+        displayName: user.name || user.username || null,
+        avatarUrl: user.profile_image_url || null,
+        credentials,
+        credentialGroup: null,
+        platformData: null,
+      },
+    ],
+  };
+}
+
+export async function refreshCredentials({ refreshToken, now = new Date() }) {
+  if (!refreshToken) {
+    throw new DirectApiError("x : pas de jeton de rafraîchissement", {
+      network: NETWORK,
+      kind: "auth",
+      category: "auth_expired",
+      authInvalid: true,
+    });
+  }
+  return tokenRequest(
+    { grant_type: "refresh_token", refresh_token: refreshToken },
+    now,
+  );
+}
+
+/** Révocation à la déconnexion (au mieux). */
+export async function revoke({ accessToken, refreshToken }) {
+  for (const token of [refreshToken, accessToken].filter(Boolean)) {
+    await directRequest({
+      network: NETWORK,
+      method: "POST",
+      url: `${API_URL}/oauth2/revoke`,
+      headers: { Authorization: basicAuth() },
+      form: { token },
+      check: classifyXError,
+    });
+  }
+}
+
+// ── Publication ────────────────────────────────────────────────────────────
+
+async function uploadImage(token, media) {
+  const { buffer, contentType } = await storage.fetchImage(media.url);
+  const form = new FormData();
+  form.append(
+    "media",
+    new Blob([buffer], { type: contentType || "image/jpeg" }),
+    "image.jpg",
+  );
+  form.append("media_category", "tweet_image");
+  const { data } = await directRequest({
+    network: NETWORK,
+    method: "POST",
+    url: `${API_URL}/media/upload`,
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+    check: classifyXError,
+  });
+  const id = data?.data?.id || data?.data?.media_id || data?.media_id_string;
+  if (!id) {
+    throw new DirectApiError("x : média sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return String(id);
+}
+
+const mediaApi = (token, method, path, { json, body, query, timeoutMs } = {}) =>
+  directRequest({
+    network: NETWORK,
+    method,
+    url: `${API_URL}/media/upload${path}`,
+    headers: { Authorization: `Bearer ${token}` },
+    json,
+    body,
+    query,
+    timeoutMs: timeoutMs || UPLOAD_TIMEOUT_MS,
+    check: classifyXError,
+  });
+
+/** Dépose une vidéo en morceaux ; renvoie son media_id et son traitement. */
+async function uploadVideo(token, video) {
+  const size =
+    Number(video.size) || (await storage.videoSize(ownVideoId(video.url)));
+  if (!size) {
+    throw new DirectApiError("x : poids de la vidéo inconnu", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const { data } = await mediaApi(token, "POST", "/initialize", {
+    json: {
+      media_type: "video/mp4",
+      total_bytes: size,
+      media_category: "tweet_video",
+    },
+  });
+  const mediaId = data?.data?.id;
+  if (!mediaId) {
+    throw new DirectApiError("x : vidéo sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  const segments = Math.ceil(size / VIDEO_SEGMENT_BYTES);
+  for (let index = 0; index < segments; index += 1) {
+    const start = index * VIDEO_SEGMENT_BYTES;
+    const end = Math.min(size, start + VIDEO_SEGMENT_BYTES) - 1;
+    const bytes = await storage.readVideoRange(video.url, start, end);
+    const form = new FormData();
+    form.append("segment_index", String(index));
+    form.append("media", new Blob([bytes], { type: "video/mp4" }), "video.mp4");
+    await mediaApi(token, "POST", `/${mediaId}/append`, { body: form });
+  }
+  const { data: finalized } = await mediaApi(
+    token,
+    "POST",
+    `/${mediaId}/finalize`,
+  );
+  return {
+    mediaId: String(mediaId),
+    processing: finalized?.data?.processing_info || null,
+  };
+}
+
+/** Traitement d'une vidéo chez X (null : terminé). */
+async function videoStatus(token, mediaId) {
+  const { data } = await mediaApi(token, "GET", "", {
+    query: { command: "STATUS", media_id: mediaId },
+  });
+  return data?.data?.processing_info || null;
+}
+
+/** État du traitement : « ready », « pending » (délai conseillé) ou refus levé. */
+function processingState(info) {
+  const state = String(info?.state || "succeeded").toLowerCase();
+  if (state === "succeeded") return { ready: true };
+  if (state === "failed") {
+    throw new DirectApiError("x : vidéo refusée", {
+      network: NETWORK,
+      status: 422,
+      category: "video_rejected",
+      detail: info?.error?.message || info?.error?.name || null,
+    });
+  }
+  return {
+    ready: false,
+    delayMs: Math.max(1, Number(info?.check_after_secs) || 5) * 1000,
+  };
+}
+
+/** Crée le post (texte et médias). */
+async function createTweet({ account, accessToken, content, mediaIds }) {
+  const body = {};
+  if (content) body.text = content;
+  if (mediaIds.length) body.media = { media_ids: mediaIds };
+  const { data } = await directRequest({
+    network: NETWORK,
+    method: "POST",
+    url: `${API_URL}/tweets`,
+    headers: { Authorization: `Bearer ${accessToken}` },
+    json: body,
+    timeoutMs: PUBLISH_TIMEOUT_MS,
+    check: classifyXError,
+  });
+  const id = data?.data?.id;
+  if (!id) {
+    throw new DirectApiError("x : post sans identifiant", {
+      network: NETWORK,
+      status: 502,
+      transient: true,
+    });
+  }
+  return {
+    status: "published",
+    externalPostId: String(id),
+    platformPostUrl: account.username
+      ? `https://x.com/${account.username}/status/${id}`
+      : `https://x.com/i/web/status/${id}`,
+  };
+}
+
+/**
+ * Vidéo : déposée, traitement attendu sur place s'il est court ; sinon le
+ * post sera créé par checkPublication.
+ */
+async function publishVideo({ account, accessToken, content, video }) {
+  const { mediaId, processing } = await uploadVideo(accessToken, video);
+  let state = processingState(processing);
+  let waited = 0;
+  while (!state.ready && waited + state.delayMs <= VIDEO_INLINE_WAIT_MS) {
+    await timing.sleep(state.delayMs);
+    waited += state.delayMs;
+    state = processingState(await videoStatus(accessToken, mediaId));
+  }
+  if (!state.ready) {
+    return {
+      status: "publishing",
+      externalPostId: null,
+      processingRef: mediaId,
+      platformPostUrl: null,
+      nextCheckMs: Math.max(VIDEO_MIN_CHECK_MS, state.delayMs),
+    };
+  }
+  return createTweet({ account, accessToken, content, mediaIds: [mediaId] });
+}
+
+export async function publish({ account, accessToken, content, media }) {
+  if (media.length === 1 && isVideoMedia(media[0])) {
+    return publishVideo({ account, accessToken, content, video: media[0] });
+  }
+  const mediaIds = [];
+  for (const item of media) mediaIds.push(await uploadImage(accessToken, item));
+  return createTweet({ account, accessToken, content, mediaIds });
+}
+
+/** Suivi d'une vidéo en traitement : prête → post créé ; sinon à relire. */
+export async function checkPublication({
+  account,
+  accessToken,
+  processingRef,
+  content,
+}) {
+  const state = processingState(await videoStatus(accessToken, processingRef));
+  if (!state.ready) {
+    return {
+      status: "publishing",
+      nextCheckMs: Math.max(VIDEO_MIN_CHECK_MS, state.delayMs),
+    };
+  }
+  return createTweet({
+    account,
+    accessToken,
+    content,
+    mediaIds: [processingRef],
+  });
+}
+
+export default {
+  NETWORK,
+  PLATFORMS,
+  usesPkce: true,
+  isConfigured,
+  buildAuthorizeUrl,
+  exchangeCode,
+  fetchProfile,
+  refreshCredentials,
+  publish,
+  checkPublication,
+  maxProcessingMs: MAX_PROCESSING_MS,
+  revoke,
+};

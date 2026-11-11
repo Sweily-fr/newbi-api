@@ -33,6 +33,11 @@ function transporter() {
 
 const FROM =
   process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@newbi.fr";
+
+/** Envoie un e-mail déjà mis en page par renderEmail (même expéditeur). */
+export async function sendRenderedEmail({ to, subject, html, text }) {
+  await transporter().sendMail({ from: FROM, to, subject, html, text });
+}
 export const APP_URL = process.env.FRONTEND_URL || "https://www.newbi.fr";
 // L'abonnement (choix des plans) s'ouvre via la modale de paramètres du
 // dashboard, pilotée par les query params lus par OAuthCallbackHandler.
@@ -226,10 +231,14 @@ export function renderEmail({
 
           ${typo(bodyHtml)}
 
-          <!-- Bouton CTA -->
-          <a href="${String(ctaUrl).replace(/&/g, "&amp;")}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center; margin-top: 8px;">
+          <!-- Bouton CTA (facultatif) -->
+          ${
+            ctaUrl
+              ? `<a href="${String(ctaUrl).replace(/&/g, "&amp;")}" style="display: block; background-color: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 24px; border-radius: 6px; font-weight: 500; font-size: 15px; text-align: center; margin-top: 8px;">
             ${escapeHtml(ctaLabel)}
-          </a>
+          </a>`
+              : ""
+          }
         </div>
 
         ${

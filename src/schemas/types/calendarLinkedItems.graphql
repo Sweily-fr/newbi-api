@@ -1,0 +1,159 @@
+# Échéances des autres pages affichées dans le calendrier, relues dans les
+# documents à chaque affichage (rien n'est copié dans les événements)
+
+enum CalendarLinkedKind {
+  "Facture de vente : échéance de paiement"
+  INVOICE
+  "Facture d'achat : échéance de paiement"
+  PURCHASE_INVOICE
+  "Devis en attente : fin de validité"
+  QUOTE
+  "Tâche d'un projet : échéance"
+  TASK
+  "Facture récurrente : prochaine émission"
+  RECURRING_INVOICE
+  "Prévision de trésorerie : récurrence détectée ou saisie manuelle"
+  FORECAST
+  "Relance automatique d'une facture impayée (envoyée ou à venir)"
+  REMINDER
+  "Livraison prévue d'un bon de commande ou d'un bon de livraison"
+  DELIVERY
+  "Fin d'un lien de transfert de fichiers"
+  FILE_TRANSFER
+  "Échéance fiscale ou sociale, calculée depuis les informations légales"
+  FISCAL
+}
+
+enum CalendarLinkedState {
+  UPCOMING
+  OVERDUE
+  DONE
+}
+
+type CalendarLinkedItem {
+  id: ID!
+  kind: CalendarLinkedKind!
+  "Facture, devis, facture d'achat, tâche ou récurrence"
+  entityId: ID!
+  "Jour calendaire AAAA-MM-JJ (heure de Paris)"
+  day: String!
+  title: String!
+  "Numéro du document"
+  reference: String
+  "Client ou fournisseur"
+  counterparty: String
+  amount: Float
+  currency: String
+  state: CalendarLinkedState!
+  "Statut du document, ou colonne de la tâche"
+  documentStatus: String
+  boardId: ID
+  boardTitle: String
+  boardEmoji: String
+  boardColor: String
+  columnTitle: String
+  columnColor: String
+  priority: String
+  assignedMembersInfo: [AssignedMemberInfo!]
+  "Facture récurrente : facture modèle et rythme"
+  sourceInvoiceId: ID
+  frequency: String
+  interval: Int
+  "Tâche : dates exactes (glisser-déposer)"
+  startDate: DateTime
+  dueDate: DateTime
+  "Devis : signature électronique en attente"
+  signatureStatus: String
+  signatureSentAt: DateTime
+  "Prévision : INCOME ou EXPENSE, DETECTED ou MANUAL, catégorie"
+  flowType: String
+  forecastOrigin: String
+  category: String
+  "Relance : 1 ou 2, PLANNED, SENT, FAILED ou NO_EMAIL"
+  reminderStep: Int
+  reminderStatus: String
+  "Livraison : PURCHASE_ORDER ou DELIVERY_NOTE"
+  documentKind: String
+  "Transfert : nombre de téléchargements"
+  downloadCount: Int
+  "Échéance fiscale : page officielle qui la décrit"
+  infoUrl: String
+  "Échéance fiscale : date indicative, le jour exact dépend de l'entreprise"
+  isIndicative: Boolean
+  "Échéance fiscale : due seulement dans certains cas (voir la note)"
+  isConditional: Boolean
+  "Échéance fiscale : règle appliquée et conditions"
+  note: String
+  "Déclaration de TVA : période à ouvrir dans la page Déclaration de TVA"
+  vatPeriodKey: String
+  "Déclaration de TVA : confirmée dans Newbi"
+  isDeclared: Boolean
+}
+
+"Information légale qui manque pour calculer des échéances fiscales"
+type CalendarFiscalMissingInfo {
+  code: String!
+  "Ce qu'il faut compléter, en une phrase"
+  label: String!
+  "Échéances qui n'apparaissent pas tant qu'elle manque"
+  concerns: [String!]!
+}
+
+"Source Fiscal : ce qui manque dans les informations légales de l'espace"
+type CalendarFiscalSetup {
+  "Vrai quand rien ne manque"
+  complete: Boolean!
+  missing: [CalendarFiscalMissingInfo!]!
+}
+
+type CalendarLinkedItemsResult {
+  items: [CalendarLinkedItem!]!
+  "Sources que le rôle permet de voir"
+  kinds: [CalendarLinkedKind!]!
+  "Vrai si une source a atteint la limite d'éléments"
+  truncated: Boolean!
+  "Source Fiscal : informations légales manquantes (null sans la source)"
+  fiscalSetup: CalendarFiscalSetup
+}
+
+"Solde prévu en fin de journée"
+type CalendarTreasuryDay {
+  day: String!
+  income: Float!
+  expense: Float!
+  balance: Float!
+}
+
+type CalendarTreasury {
+  "Jour de Paris AAAA-MM-JJ"
+  today: String!
+  currentBalance: Float!
+  hasBankAccounts: Boolean!
+  "Du plus tard entre le début de la période et aujourd'hui jusqu'à la fin"
+  days: [CalendarTreasuryDay!]!
+  lowest: CalendarTreasuryDay
+  "Sources comptées dans la projection"
+  sources: [CalendarLinkedKind!]!
+  "Échéances déjà en retard, hors projection"
+  overdueIncome: Float!
+  overdueExpense: Float!
+}
+
+extend type Query {
+  "Période en jours AAAA-MM-JJ inclus, 100 jours au plus"
+  calendarLinkedItems(
+    workspaceId: ID
+    from: String!
+    to: String!
+  ): CalendarLinkedItemsResult!
+
+  "Tout ce qui est en retard, quelle que soit la date, du plus ancien au plus récent"
+  calendarOverdueItems(workspaceId: ID): CalendarLinkedItemsResult!
+
+  "Trésorerie au jour le jour (null sans accès à Prévision ou Analytiques)"
+  calendarTreasury(
+    workspaceId: ID
+    from: String!
+    to: String!
+  ): CalendarTreasury
+}

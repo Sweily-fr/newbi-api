@@ -36,6 +36,13 @@ extend type Query {
   getInvoiceReminderSettings: InvoiceReminderSettings
 }
 
+type InvoiceReminderNowResult {
+  success: Boolean!
+  message: String!
+}
+
 extend type Mutation {
   updateInvoiceReminderSettings(input: InvoiceReminderSettingsInput!): InvoiceReminderSettings
+  "Rappel de paiement envoyé tout de suite au client (modèle des relances automatiques)"
+  sendInvoiceReminderNow(invoiceId: ID!, workspaceId: ID): InvoiceReminderNowResult!
 }

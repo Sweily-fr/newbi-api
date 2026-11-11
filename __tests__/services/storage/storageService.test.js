@@ -323,11 +323,11 @@ describe("Stockage : recalcul complet", () => {
 
   it("accepte des collecteurs ajoutés par d'autres modules", async () => {
     registerStorageCollector("essai", async ({ workspaceId }) => [
-      { key: `extra/${workspaceId}`, size: 7, category: "transfers" },
+      { key: `extra/${workspaceId}`, size: 7, category: "social" },
     ]);
     try {
       const result = await computeWorkspaceStorage(ws);
-      expect(result.byCategory.transfers).toBe(7);
+      expect(result.byCategory.social).toBe(7);
     } finally {
       unregisterStorageCollector("essai");
     }

@@ -1,0 +1,347 @@
+import crypto from "crypto";
+import SocialAccount from "../../models/SocialAccount.js";
+import SocialConnectState from "../../models/SocialConnectState.js";
+import { decrypt, encrypt } from "../../utils/encryption.js";
+import logger from "../../utils/logger.js";
+import { toObjectIdOrNull } from "../../utils/objectIdString.js";
+import { userHasWorkspaceAction } from "../../utils/workspace-membership.js";
+import {
+  clearedCredentialFields,
+  credentialFields,
+  decryptTokens,
+  loadAccountWithTokens,
+} from "./socialAccountCredentials.js";
+import {
+  CONNECT_STATE_TTL_MS,
+  DEFAULT_RETURN_TO,
+  directRedirectUri,
+  frontendRedirect,
+  safeCode,
+  sanitizeReturnTo,
+} from "./socialConnectUrls.js";
+import {
+  connectorByKey,
+  directNetworkFor,
+  isDirectNetworkReady,
+} from "./socialProviders.js";
+
+/**
+ * Connexion d'un compte par notre propre appli chez le réseau (OAuth
+ * « direct ») : jeton d'état aléatoire à usage unique (SocialConnectState,
+ * 15 minutes, avec le vérificateur PKCE de X chiffré et la clé du
+ * connecteur), retour sur /social-connect/<connecteur>/callback (clé =
+ * réseau pour la connexion habituelle, ex. instagram_facebook ou
+ * tiktok_business sinon), échange du code, jetons chiffrés. Mêmes
+ * conventions de retour vers le site que Zernio.
+ */
+
+/** Adresse de retour OAuth d'un connecteur (celle déclarée chez le réseau). */
+const redirectUriOf = (entry) =>
+  entry.module.redirectUri?.() || directRedirectUri(entry.key);
+
+// Refus de l'utilisateur dans la fenêtre du réseau → « cancelled »
+const CANCEL_CODES = new Set([
+  "access_denied",
+  "user_cancelled_login",
+  "user_cancelled_authorize",
+  "user_denied",
+]);
+
+/**
+ * Adresse de la fenêtre d'autorisation du réseau.
+ * @param {object} params
+ * @param {string} [params.connector] - clé du connecteur (défaut : celui
+ *   du réseau)
+ */
+export async function createDirectConnectUrl({
+  workspaceId,
+  userId,
+  platform,
+  connector = null,
+  returnTo,
+  now = new Date(),
+  onState = null,
+}) {
+  const entry = connectorByKey(connector || platform);
+  const network = entry.module;
+  const token = crypto.randomBytes(24).toString("base64url");
+  // Lien du parcours au navigateur qui le lance (voir oauthBrowserBinding.js)
+  onState?.(token);
+  const codeVerifier = network.usesPkce
+    ? crypto.randomBytes(48).toString("base64url")
+    : null;
+  await SocialConnectState.create({
+    token,
+    workspaceId,
+    userId,
+    platform,
+    provider: "direct",
+    connector: entry.key,
+    codeVerifier: codeVerifier ? encrypt(codeVerifier) : null,
+    returnTo: sanitizeReturnTo(returnTo),
+    expiresAt: new Date(now.getTime() + CONNECT_STATE_TTL_MS),
+  });
+  return network.buildAuthorizeUrl({
+    state: token,
+    redirectUri: redirectUriOf(entry),
+    // LinkedIn : appli des pages ouverte à certains espaces seulement
+    workspaceId: String(workspaceId),
+    codeChallenge: codeVerifier
+      ? crypto.createHash("sha256").update(codeVerifier).digest("base64url")
+      : undefined,
+  });
+}
+
+/**
+ * Enregistre les comptes renvoyés par le réseau (jetons chiffrés). Un
+ * compte déjà actif dans un autre espace est ignoré ; un compte déconnecté
+ * d'un autre espace libère son identifiant (renommé) pour celui-ci. Un
+ * compte déjà présent dans cet espace est mis à jour, connecteur compris
+ * (un Instagram connecté par Instagram Login puis via Facebook bascule sur
+ * Facebook, jetons remplacés).
+ * @returns {Promise<{saved: number, taken: number}>}
+ */
+export async function saveDirectAccounts(
+  workspaceId,
+  accounts,
+  { connectedBy = null, now = new Date() } = {},
+) {
+  const connector = toObjectIdOrNull(String(connectedBy || ""));
+  let saved = 0;
+  let taken = 0;
+  for (const remote of accounts) {
+    let existing = await SocialAccount.findOne({
+      provider: "direct",
+      externalAccountId: remote.externalAccountId,
+    });
+    if (existing && String(existing.workspaceId) !== String(workspaceId)) {
+      if (!existing.deletedAt) {
+        logger.warn(
+          `[SocialDirect] Compte ${remote.platform} ${remote.externalAccountId} déjà connecté à un autre espace, ignoré`,
+        );
+        taken += 1;
+        continue;
+      }
+      await SocialAccount.updateOne(
+        { _id: existing._id, deletedAt: { $ne: null } },
+        {
+          $set: {
+            externalAccountId: `${existing.externalAccountId}#archive-${existing._id}`,
+          },
+        },
+      );
+      existing = null;
+    }
+    const fields = {
+      platform: remote.platform,
+      connector: remote.connector || null,
+      username: remote.username || null,
+      displayName: remote.displayName || null,
+      avatarUrl: remote.avatarUrl || null,
+      status: "active",
+      lastSyncedAt: now,
+      // Nom et photo tout juste lus : prochaine relecture dans 28 jours
+      profileRefreshedAt: now,
+      profileRefreshAttemptedAt: null,
+      deletedAt: null,
+      credentialGroup: remote.credentialGroup || null,
+      platformData: remote.platformData || null,
+      ...credentialFields(remote.credentials),
+    };
+    try {
+      if (existing) {
+        const reconnected = existing.deletedAt || existing.status !== "active";
+        await SocialAccount.updateOne(
+          { _id: existing._id },
+          {
+            $set: {
+              ...fields,
+              ...(connector && reconnected ? { connectedBy: connector } : {}),
+            },
+          },
+        );
+      } else {
+        await SocialAccount.create({
+          ...fields,
+          workspaceId,
+          provider: "direct",
+          externalAccountId: remote.externalAccountId,
+          connectedBy: connector,
+        });
+      }
+      saved += 1;
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      taken += 1;
+    }
+  }
+  return { saved, taken };
+}
+
+/**
+ * LinkedIn : les identifiants de membre sont propres à chaque appli. Un
+ * profil déjà connecté (et actif) par l'appli « profile » par le même
+ * utilisateur reste sur celle-ci : une connexion par l'appli « pages »
+ * n'ajoute alors que les pages, sans doublon du profil.
+ */
+async function withoutKnownLinkedInProfile(state, accounts) {
+  const isPagesProfile = (account) =>
+    account.platformData?.kind === "person" &&
+    account.platformData?.app === "pages";
+  if (!accounts.some(isPagesProfile)) return accounts;
+  const known = await SocialAccount.exists({
+    workspaceId: state.workspaceId,
+    provider: "direct",
+    platform: "linkedin",
+    status: "active",
+    deletedAt: null,
+    connectedBy: state.userId,
+    "platformData.kind": "person",
+    "platformData.app": { $ne: "pages" },
+  });
+  return known
+    ? accounts.filter((account) => !isPagesProfile(account))
+    : accounts;
+}
+
+// Aucun compte publiable renvoyé : code d'erreur transmis au site
+const NO_ACCOUNT_CODES = {
+  facebook: "no_facebook_pages",
+  instagram_facebook: "no_instagram_account",
+};
+
+/**
+ * Retour du navigateur après l'autorisation chez le réseau : jeton d'état à
+ * usage unique et du même connecteur, droit « Applications » toujours
+ * présent, échange du code, enregistrement des comptes (avec leur
+ * connecteur), puis adresse du site.
+ * @param {string} key - clé du connecteur (route /social-connect/<clé>/callback)
+ * @returns {Promise<string>} adresse de redirection
+ */
+export async function completeDirectConnect(
+  key,
+  query = {},
+  { now = new Date() } = {},
+) {
+  const entry = connectorByKey(key);
+  const platform = entry?.platform || key;
+  const token =
+    typeof query.state === "string" && query.state.length <= 64
+      ? query.state
+      : null;
+  const state = token
+    ? await SocialConnectState.findOneAndDelete({
+        token,
+        provider: "direct",
+        expiresAt: { $gt: now },
+      })
+    : null;
+  if (!entry || !state || (state.connector || state.platform) !== key) {
+    logger.warn(
+      `[SocialConnect] Retour OAuth ${key} avec un state inconnu, expiré ou d'un autre connecteur`,
+    );
+    return frontendRedirect(DEFAULT_RETURN_TO, {
+      social_error: "invalid_state",
+    });
+  }
+  const fail = (code) =>
+    frontendRedirect(state.returnTo, {
+      social_error: code,
+      social_platform: platform,
+    });
+
+  if (query.error) {
+    const code = String(query.error);
+    logger.warn(
+      `[SocialConnect] Connexion ${platform} refusée pour l'espace ${state.workspaceId} : ${code}`,
+    );
+    return fail(CANCEL_CODES.has(code) ? "cancelled" : safeCode(code));
+  }
+  const allowed = await userHasWorkspaceAction(
+    String(state.userId),
+    String(state.workspaceId),
+    "integrations",
+    "manage",
+  );
+  if (!allowed) return fail("forbidden");
+  // TikTok Business renvoie le code dans auth_code
+  const code = query.code || query.auth_code;
+  if (typeof code !== "string" || !code) return fail("connection_failed");
+  if (!isDirectNetworkReady(platform, entry.connector)) {
+    return fail("unavailable");
+  }
+
+  let result;
+  try {
+    result = await entry.module.exchangeCode({
+      code,
+      redirectUri: redirectUriOf(entry),
+      workspaceId: String(state.workspaceId),
+      codeVerifier: state.codeVerifier
+        ? decrypt(state.codeVerifier)
+        : undefined,
+      now,
+    });
+  } catch (error) {
+    logger.error(
+      `[SocialConnect] Échange du code ${key} impossible (espace ${state.workspaceId}) : ${error.message}`,
+    );
+    return fail("connection_failed");
+  }
+  const accounts = (result?.accounts || [])
+    .filter(
+      (account) => account.platform === platform && account.externalAccountId,
+    )
+    .map((account) => ({ ...account, connector: entry.connector }));
+  if (accounts.length === 0) return fail(NO_ACCOUNT_CODES[key] || "no_account");
+  const toSave = await withoutKnownLinkedInProfile(state, accounts);
+  if (toSave.length === 0) {
+    return frontendRedirect(state.returnTo, { social_connected: platform });
+  }
+  const { saved, taken } = await saveDirectAccounts(state.workspaceId, toSave, {
+    connectedBy: state.userId,
+    now,
+  });
+  if (saved === 0 && taken > 0) return fail("account_in_use");
+  logger.info(
+    `[SocialConnect] ${saved} compte(s) ${key} connecté(s) en direct pour l'espace ${state.workspaceId}`,
+  );
+  return frontendRedirect(state.returnTo, { social_connected: platform });
+}
+
+/**
+ * Déconnexion d'un compte « direct » : accès révoqué chez le réseau quand
+ * son API le permet et que le jeton n'est pas partagé avec un autre compte
+ * encore connecté (au mieux), puis jetons effacés.
+ */
+export async function disconnectDirectAccount(
+  account,
+  { now = new Date() } = {},
+) {
+  const network = directNetworkFor(account.platform, account.connector);
+  if (network?.revoke && network.isConfigured()) {
+    const shared =
+      account.credentialGroup &&
+      (await SocialAccount.exists({
+        _id: { $ne: account._id },
+        workspaceId: account.workspaceId,
+        provider: "direct",
+        credentialGroup: account.credentialGroup,
+        deletedAt: null,
+      }));
+    if (!shared) {
+      try {
+        const withTokens = await loadAccountWithTokens({ _id: account._id });
+        await network.revoke(decryptTokens(withTokens));
+      } catch (error) {
+        logger.warn(
+          `[SocialDirect] Accès ${account.platform} non révoqué chez le réseau (compte ${account._id}) : ${error.message}`,
+        );
+      }
+    }
+  }
+  await SocialAccount.updateOne(
+    { _id: account._id },
+    { $set: { deletedAt: now, ...clearedCredentialFields() } },
+  );
+}

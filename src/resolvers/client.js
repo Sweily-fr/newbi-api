@@ -53,6 +53,20 @@ function getRequestUser(context, userId) {
   return pending;
 }
 
+// Les champs de `Address` sont obligatoires dans le schéma GraphQL : une
+// adresse incomplète (client créé par une prise de rendez-vous, donnée
+// ancienne) faisait échouer toute la liste de clients pour une seule fiche.
+// Les champs manquants sont renvoyés vides, la base n'est pas modifiée.
+function completeAddress(address) {
+  return {
+    fullName: address?.fullName || null,
+    street: address?.street || "",
+    city: address?.city || "",
+    postalCode: address?.postalCode || "",
+    country: address?.country || "",
+  };
+}
+
 // Clés techniques d'un sous-document, absentes des entrées GraphQL
 const TECHNICAL_KEYS = new Set(["_id", "createdAt", "updatedAt"]);
 
@@ -1156,6 +1170,9 @@ const clientResolvers = {
       parent.updatedAt?.toISOString?.() || parent.updatedAt,
     blockedAt: (parent) =>
       parent.blockedAt?.toISOString?.() || parent.blockedAt,
+    address: (parent) => completeAddress(parent.address),
+    shippingAddress: (parent) =>
+      parent.shippingAddress ? completeAddress(parent.shippingAddress) : null,
     invoiceCount: async (parent, _args, context) => {
       const clientId = parent._id?.toString() || parent.id;
       const workspaceId = parent.workspaceId;

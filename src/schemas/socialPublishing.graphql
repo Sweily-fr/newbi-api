@@ -1,0 +1,356 @@
+# Publication programmée sur les réseaux sociaux depuis le kanban
+# (resolvers/socialPublishing.js). Plateformes : "instagram" | "facebook" |
+# "linkedin" | "twitter" | "tiktok". Dates : chaînes ISO UTC.
+
+type SocialAccount {
+  id: ID!
+  platform: String!
+  username: String
+  displayName: String
+  avatarUrl: String
+  "active | needs_reconnect"
+  status: String!
+  connectedAt: String
+  """
+  Mode de connexion : null (connexion habituelle du réseau), "facebook" (Instagram connecté via
+  Facebook, sons tendance), "business" (TikTok Business, sons tendance)
+  """
+  connector: String
+  capabilities: SocialAccountCapabilities!
+}
+
+type SocialAccountCapabilities {
+  "Stories possibles (Instagram et Facebook en direct)"
+  stories: Boolean!
+  "Son tendance possible (Instagram via Facebook, TikTok Business)"
+  sounds: Boolean!
+  "Envoi en brouillon possible (TikTok avec l'autorisation video.upload)"
+  drafts: Boolean!
+  "Compte TikTok qui pourrait envoyer en brouillon après une reconnexion"
+  draftsNeedReconnect: Boolean!
+}
+
+"Façon de connecter un réseau, proposée à cet espace"
+type SocialConnector {
+  "facebook | instagram | instagram_facebook | linkedin | tiktok | tiktok_business | twitter"
+  key: String!
+  platform: String!
+  "Libellé du bouton : « Instagram », « Instagram via Facebook », « TikTok Business »…"
+  label: String!
+  "Phrase d'aide (ex. « Permet d'ajouter un son tendance aux Reels »), null sinon"
+  description: String
+}
+
+type SocialPublishingStatus {
+  "Un fournisseur est configuré sur le serveur (Zernio ou une appli directe)"
+  enabled: Boolean!
+  """
+  Réseaux connectables par cet espace (au moins un connecteur disponible) :
+  "instagram", "facebook", "linkedin", "twitter", "tiktok". Les comptes déjà
+  connectés restent listés dans accounts.
+  """
+  platforms: [String!]!
+  "Façons de connecter chaque réseau proposées à cet espace, dans l'ordre d'affichage"
+  connectors: [SocialConnector!]!
+  "Droit « Applications et banques » > Connecter et configurer"
+  canManageAccounts: Boolean!
+  "Droit de création dans le kanban et abonnement actif"
+  canSchedule: Boolean!
+  accounts: [SocialAccount!]!
+  "Limite mensuelle de posts X de l'offre (null si la fonctionnalité est coupée)"
+  xPostQuota: SocialXPostQuota
+}
+
+type SocialXPostQuota {
+  "freelance | pme | entreprise"
+  plan: String!
+  monthlyQuota: Int!
+  "Envois à X du mois en cours (heure de Paris), nouveaux essais compris"
+  used: Int!
+  remaining: Int!
+  "Début du mois suivant, chaîne ISO UTC"
+  resetsAt: String!
+}
+
+type SocialPostMedia {
+  id: ID!
+  "image | video"
+  kind: String!
+  "uploading | processing | ready | failed (les images sont toujours ready)"
+  status: String!
+  "Message français si failed"
+  errorMessage: String
+  "Chaîne vide tant qu'une vidéo n'est pas prête"
+  url: String!
+  "Vidéo : image JPEG extraite (aperçu, couverture)"
+  thumbnailUrl: String
+  "Vidéo : après rotation"
+  width: Int
+  height: Int
+  "Vidéo : durée en millisecondes"
+  durationMs: Int
+  "Poids en octets (vidéo : après préparation, une fois prête)"
+  size: Int
+  contentType: String
+}
+
+type SocialVideoUpload {
+  media: SocialPostMedia!
+  "Taille de chaque morceau en octets (le dernier peut être plus petit)"
+  chunkSize: Int!
+  chunkCount: Int!
+}
+
+"Son proposé par un réseau (tendances ou recherche)"
+type SocialSound {
+  "Identifiant à renvoyer dans SocialPostSoundInput.id"
+  id: ID!
+  title: String!
+  artist: String
+  coverUrl: String
+  "Extrait à écouter (adresse temporaire chez le réseau, jamais gardée)"
+  previewUrl: String
+  durationMs: Int
+  "Rang dans les tendances (TikTok), null sinon"
+  rank: Int
+  "music | original_sound (Instagram), null sinon"
+  kind: String
+}
+
+type SocialPostSound {
+  id: ID!
+  title: String!
+  artist: String
+  coverUrl: String
+  "Volume de la musique, 0 à 100"
+  volume: Int!
+  "Volume du son d'origine de la vidéo, 0 à 100"
+  videoVolume: Int!
+}
+
+type SocialPostInstagramSettings {
+  "post | story"
+  format: String!
+  "Reel seulement, comptes connectés via Facebook"
+  sound: SocialPostSound
+}
+
+type SocialPostFacebookSettings {
+  "post | story"
+  format: String!
+}
+
+type SocialPostTarget {
+  "SocialAccount local (null si le compte a été supprimé)"
+  accountId: ID
+  platform: String!
+  username: String
+  displayName: String
+  "pending | publishing | published | failed | cancelled"
+  status: String!
+  platformPostUrl: String
+  "Message français prêt à afficher, traduit depuis la catégorie d'erreur"
+  errorMessage: String
+  publishedAt: String
+  "draft : envoyé dans les brouillons TikTok ; null sinon"
+  deliveredAs: String
+  "Stories déjà publiées (Instagram, Facebook), 0 sinon"
+  storyCount: Int!
+}
+
+type SocialPostTikTokSettings {
+  privacyLevel: String
+  allowComment: Boolean
+  "Votre marque (contenu promotionnel)"
+  brandOrganic: Boolean
+  "Contenu de marque (partenariat rémunéré)"
+  brandContent: Boolean
+  "Vidéo seulement : duos autorisés"
+  allowDuet: Boolean
+  "Vidéo seulement : collages (Stitch) autorisés"
+  allowStitch: Boolean
+  "direct | draft"
+  mode: String
+  "Comptes TikTok Business seulement"
+  sound: SocialPostSound
+}
+
+type SocialPost {
+  id: ID!
+  boardId: ID!
+  taskId: ID!
+  content: String!
+  media: [SocialPostMedia!]!
+  targets: [SocialPostTarget!]!
+  scheduledFor: String!
+  timezone: String!
+  "scheduled | publishing | published | partial | failed | cancelled"
+  status: String!
+  tiktokSettings: SocialPostTikTokSettings
+  instagramSettings: SocialPostInstagramSettings
+  facebookSettings: SocialPostFacebookSettings
+  createdBy: ID
+  createdAt: String
+  updatedAt: String
+}
+
+type TikTokPrivacyLevel {
+  value: String!
+  "Libellé français (Tout le monde, Amis, Abonnés, Moi uniquement)"
+  label: String!
+}
+
+type TikTokCreatorInfo {
+  "Nom d'utilisateur TikTok (@…), quand il est connu"
+  username: String
+  nickname: String
+  canPostMore: Boolean!
+  commentDisabled: Boolean!
+  "Duos coupés par le créateur dans TikTok (ou compte privé)"
+  duetDisabled: Boolean!
+  "Collages (Stitch) coupés par le créateur dans TikTok (ou compte privé)"
+  stitchDisabled: Boolean!
+  "Durée maximale d'une vidéo pour ce créateur (secondes), null si inconnue"
+  maxVideoPostDurationSec: Int
+  privacyLevels: [TikTokPrivacyLevel!]!
+}
+
+type ScheduleSocialPostPayload {
+  post: SocialPost!
+  "La carte créée, mêmes champs que createTask"
+  task: Task!
+}
+
+input SocialPostSoundInput {
+  id: ID!
+  title: String!
+  artist: String
+  coverUrl: String
+  volume: Int!
+  videoVolume: Int!
+}
+
+input SocialPostInstagramSettingsInput {
+  "post | story"
+  format: String!
+  sound: SocialPostSoundInput
+}
+
+input SocialPostFacebookSettingsInput {
+  format: String!
+}
+
+input SocialPostTikTokSettingsInput {
+  "Obligatoire en mode direct"
+  privacyLevel: String
+  "Obligatoire en mode direct"
+  allowComment: Boolean
+  "Votre marque (contenu promotionnel)"
+  brandOrganic: Boolean
+  "Contenu de marque (partenariat rémunéré) : interdit avec SELF_ONLY"
+  brandContent: Boolean
+  "Obligatoire avec une vidéo en mode direct : duos autorisés"
+  allowDuet: Boolean
+  "Obligatoire avec une vidéo en mode direct : collages (Stitch) autorisés"
+  allowStitch: Boolean
+  "Doit valoir true en mode direct"
+  consentGiven: Boolean
+  "direct (défaut) | draft"
+  mode: String
+  sound: SocialPostSoundInput
+}
+
+input ScheduleSocialPostInput {
+  boardId: ID!
+  "Défaut : première colonne du tableau"
+  columnId: ID
+  "SocialAccount locaux"
+  accountIds: [ID!]!
+  content: String!
+  "Renvoyés par uploadSocialPostMedia (images) ou startSocialVideoUpload (une vidéo prête)"
+  mediaIds: [ID!]
+  "Obligatoire sauf publishNow ; au moins 5 minutes dans le futur"
+  scheduledFor: String
+  publishNow: Boolean
+  "Défaut : Europe/Paris"
+  timezone: String
+  "Obligatoire si un compte TikTok est visé (au minimum { mode: \"draft\" })"
+  tiktokSettings: SocialPostTikTokSettingsInput
+  "Absent : { format: \"post\" } ; ignoré si Instagram n'est pas visé"
+  instagramSettings: SocialPostInstagramSettingsInput
+  "Absent : { format: \"post\" } ; ignoré si Facebook n'est pas visé"
+  facebookSettings: SocialPostFacebookSettingsInput
+}
+
+input UpdateSocialPostInput {
+  accountIds: [ID!]
+  content: String
+  mediaIds: [ID!]
+  scheduledFor: String
+  tiktokSettings: SocialPostTikTokSettingsInput
+  instagramSettings: SocialPostInstagramSettingsInput
+  facebookSettings: SocialPostFacebookSettingsInput
+}
+
+extend type Query {
+  socialPublishingStatus(workspaceId: ID): SocialPublishingStatus!
+  boardSocialPosts(boardId: ID!, workspaceId: ID): [SocialPost!]!
+  socialPost(id: ID!, workspaceId: ID): SocialPost
+  tiktokCreatorInfo(accountId: ID!, workspaceId: ID): TikTokCreatorInfo!
+  """
+  Sons proposés pour un compte (Instagram via Facebook ou TikTok Business) : tendances sans
+  `search`, recherche par mot (Instagram seulement). kind (Instagram) : music (défaut) |
+  original_sound. Erreur si le compte ne permet pas les sons.
+  """
+  socialTrendingSounds(
+    accountId: ID!
+    search: String
+    kind: String
+    workspaceId: ID
+  ): [SocialSound!]!
+  "Suivi de la préparation d'une vidéo (null si introuvable)"
+  socialPostMedia(id: ID!, workspaceId: ID): SocialPostMedia
+}
+
+extend type Mutation {
+  """
+  Renvoie l'adresse d'autorisation vers laquelle envoyer le navigateur.
+  connector : clé d'un SocialConnector (défaut : connexion habituelle du réseau)
+  """
+  connectSocialAccount(
+    platform: String!
+    connector: String
+    returnTo: String
+    workspaceId: ID
+  ): String!
+  disconnectSocialAccount(accountId: ID!, workspaceId: ID): Boolean!
+  refreshSocialAccounts(workspaceId: ID): [SocialAccount!]!
+  uploadSocialPostMedia(file: Upload!, workspaceId: ID): SocialPostMedia!
+  "Ouvre l'envoi d'une vidéo en morceaux (MP4, MOV, M4V, WebM, 500 Mo au plus)"
+  startSocialVideoUpload(
+    fileName: String!
+    size: Int!
+    contentType: String!
+    workspaceId: ID
+  ): SocialVideoUpload!
+  "Un morceau de la vidéo (index à partir de 0) ; renvoyer un morceau le remplace"
+  uploadSocialVideoChunk(
+    mediaId: ID!
+    index: Int!
+    chunk: Upload!
+    workspaceId: ID
+  ): Boolean!
+  "Assemble les morceaux et lance la préparation (asynchrone) : renvoie le média en processing"
+  completeSocialVideoUpload(mediaId: ID!, workspaceId: ID): SocialPostMedia!
+  scheduleSocialPost(
+    input: ScheduleSocialPostInput!
+    workspaceId: ID
+  ): ScheduleSocialPostPayload!
+  updateSocialPost(
+    id: ID!
+    input: UpdateSocialPostInput!
+    workspaceId: ID
+  ): SocialPost!
+  cancelSocialPost(id: ID!, workspaceId: ID): SocialPost!
+  retrySocialPost(id: ID!, workspaceId: ID): SocialPost!
+}

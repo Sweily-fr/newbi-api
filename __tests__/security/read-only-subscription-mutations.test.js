@@ -87,6 +87,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "exportMyData",
     "updateEmailPreferences",
     "updateNotificationPreferences",
+    "setCalendarWeeklyDigest",
     "sendTestEmail",
     "registerPushToken",
     "removePushToken",
@@ -99,6 +100,8 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "deleteCompanyLogo",
     "connectStripe",
     "linkInvitedUserToNewbi",
+    "regenerateCalendarFeedLink",
+    "disableCalendarFeedLink",
     "setTaskPresence",
   ],
   // Suggestions de la communauté Newbi (hors espace)
@@ -130,6 +133,10 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
   revokeAccess: [
     "deletePublicShare",
     "revokePublicShare",
+    "deleteDocumentShare",
+    "revokeDocumentShare",
+    "revokeDocumentShareVisitor",
+    "unbanDocumentShareVisitor",
     "revokeVisitorAccess",
     "banInvitedUserFromBoard",
     "unbanInvitedUserFromBoard",

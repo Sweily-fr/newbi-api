@@ -48,7 +48,7 @@ const HEAD_CONCURRENCY = 8;
 // Au-delà, on liste le préfixe de l'espace plutôt que de lire chaque objet
 const LIST_THRESHOLD = 10;
 
-// Collecteurs ajoutés par d'autres modules, pour
+// Collecteurs ajoutés par d'autres modules (ex. réseaux sociaux), pour
 // compter leurs fichiers sans que le stockage dépende de leur code
 const extraCollectors = new Map();
 
