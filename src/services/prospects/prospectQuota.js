@@ -1,21 +1,48 @@
 import mongoose from "mongoose";
 import ProspectCreditUsage from "../../models/ProspectCreditUsage.js";
+import ProspectCreditPurchase from "../../models/ProspectCreditPurchase.js";
 import { parisMonthBounds } from "../esignatureQuota.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 
 /**
- * Prospects offerts par plan.
- * - Freelance : 10 une seule fois (cadeau de bienvenue), pas de quota mensuel.
- * - TPE (« pme ») : 20 par mois. Entreprise : 50 par mois.
- * Rien pendant l'essai : seul un abonnement payé ouvre le quota, pour qu'on
- * ne puisse pas enchaîner les comptes d'essai pour récupérer des prospects.
- * Le quota mensuel repart à zéro le 1er (heure de Paris), sans report.
+ * Crédits de prospection d'un espace. 1 crédit = 1 page de 25 entreprises
+ * lue ou 1 prospect ajouté, le décompte même du fournisseur : le coût pour
+ * Newbi ne dépasse jamais les crédits offerts plus les crédits vendus.
+ *
+ * - Freelance : rien, la génération commence à l'offre TPE.
+ * - TPE (« pme ») : 20 crédits par mois ; pour plus, passer à Entreprise.
+ * - Entreprise : 50 crédits par mois ; pour plus, crédits achetés à l'unité.
+ * Rien pendant l'essai : seul un abonnement payé ouvre des crédits, pour
+ * qu'on ne puisse pas enchaîner les comptes d'essai.
+ * Les crédits du mois repartent le 1er (heure de Paris), sans report, et
+ * passent avant les crédits achetés, qui n'expirent pas.
  */
-export const PROSPECT_QUOTAS = {
-  freelance: { bucket: "welcome", amount: 10 },
-  pme: { bucket: "monthly", amount: 20 },
-  entreprise: { bucket: "monthly", amount: 50 },
+export const PROSPECT_MONTHLY_CREDITS = {
+  freelance: 0,
+  pme: 20,
+  entreprise: 50,
 };
+
+const PLAN_ORDER = ["freelance", "pme", "entreprise"];
+// Seule l'offre la plus haute achète des crédits : avant, on monte d'offre
+export const PURCHASE_PLAN = "entreprise";
+
+export const PLAN_LABELS = {
+  freelance: "Freelance",
+  pme: "TPE",
+  entreprise: "Entreprise",
+};
+
+/** Offre au-dessus qui donne plus de crédits, null pour la plus haute. */
+export function nextProspectPlan(plan) {
+  const from = plan ? PLAN_ORDER.indexOf(plan) : -1;
+  return (
+    PLAN_ORDER.slice(from + 1).find(
+      (p) =>
+        PROSPECT_MONTHLY_CREDITS[p] > (PROSPECT_MONTHLY_CREDITS[plan] || 0),
+    ) || null
+  );
+}
 
 // Statuts d'un abonnement réellement payé (« trialing » exclu)
 const PAID_STATUSES = ["active", "past_due"];
@@ -60,40 +87,120 @@ export async function getPaidPlan(workspaceId) {
         s.status === "canceled" && s.periodEnd && new Date(s.periodEnd) > now,
     );
   const plan = paid?.plan?.toLowerCase();
-  return plan in PROSPECT_QUOTAS ? plan : null;
+  return plan in PROSPECT_MONTHLY_CREDITS ? plan : null;
 }
 
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 
-export async function getProspectQuota(workspaceId, now = new Date()) {
+/**
+ * Solde de crédits de l'espace : offerts ce mois-ci (selon l'offre payée)
+ * plus achetés et pas encore dépensés.
+ */
+export async function getProspectBalance(workspaceId, now = new Date()) {
   const plan = await getPaidPlan(workspaceId);
   const { start, end } = parisMonthBounds(now);
-  if (!plan) {
-    return {
-      plan: null,
-      bucket: null,
-      quota: 0,
-      used: 0,
-      remaining: 0,
-      resetsAt: null,
-    };
-  }
+  const wid = toObjectId(workspaceId);
 
-  const { bucket, amount } = PROSPECT_QUOTAS[plan];
-  const used = await ProspectCreditUsage.countDocuments({
-    workspaceId: toObjectId(workspaceId),
-    kind: "unlock",
-    bucket,
-    ...(bucket === "monthly" ? { createdAt: { $gte: start, $lt: end } } : {}),
-  });
+  const [usage, purchases] = await Promise.all([
+    // Crédits du mois (tout sauf achetés) et crédits achetés déjà dépensés
+    ProspectCreditUsage.aggregate([
+      {
+        $match: {
+          workspaceId: wid,
+          $or: [
+            { source: "purchased" },
+            { createdAt: { $gte: start, $lt: end } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $cond: [{ $eq: ["$source", "purchased"] }, "purchased", "plan"],
+          },
+          credits: { $sum: "$credits" },
+        },
+      },
+    ]),
+    ProspectCreditPurchase.aggregate([
+      { $match: { workspaceId: wid, status: "paid" } },
+      { $group: { _id: null, credits: { $sum: "$credits" } } },
+    ]),
+  ]);
+  const spent = Object.fromEntries(usage.map((row) => [row._id, row.credits]));
+
+  const monthlyCredits = plan ? PROSPECT_MONTHLY_CREDITS[plan] : 0;
+  const monthlyUsed = spent.plan || 0;
+  const monthlyRemaining = Math.max(0, monthlyCredits - monthlyUsed);
+  const purchasedTotal = purchases[0]?.credits || 0;
+  const purchasedUsed = spent.purchased || 0;
+  const purchasedRemaining = Math.max(0, purchasedTotal - purchasedUsed);
+  const available = monthlyRemaining + purchasedRemaining;
+  const nextPlan = nextProspectPlan(plan);
+
   return {
     plan,
-    bucket,
-    quota: amount,
-    used,
-    remaining: Math.max(0, amount - used),
-    resetsAt: bucket === "monthly" ? end : null,
+    monthlyCredits,
+    monthlyUsed,
+    monthlyRemaining,
+    purchasedRemaining,
+    available,
+    // Par solde : deux dépenses simultanées ont pris le même dernier crédit
+    overdrawn: {
+      plan: monthlyUsed > monthlyCredits,
+      purchased: purchasedUsed > purchasedTotal,
+    },
+    resetsAt: plan ? end : null,
+    nextPlan,
+    nextPlanCredits: nextPlan ? PROSPECT_MONTHLY_CREDITS[nextPlan] : null,
+    canPurchase: plan === PURCHASE_PLAN,
+    // Champs du quota d'avant, lus par les versions du site déjà en ligne
+    bucket: plan ? "monthly" : null,
+    quota: monthlyCredits,
+    used: monthlyUsed,
+    remaining: available,
   };
+}
+
+/** Solde à débiter pour le prochain crédit, null s'il n'en reste aucun. */
+export function spendSource(balance) {
+  if (balance.monthlyRemaining > 0) return "plan";
+  if (balance.purchasedRemaining > 0) return "purchased";
+  return null;
+}
+
+const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
+
+/**
+ * Refus quand le solde ne couvre pas la dépense, avec la marche suivante :
+ * offre TPE pour un Freelance, offre Entreprise pour une TPE, achat de
+ * crédits pour une Entreprise.
+ */
+export function insufficientCreditsError(balance, needed, detail = "") {
+  const { plan, available, monthlyCredits, nextPlan, nextPlanCredits } =
+    balance;
+  let message;
+  let reason = "QUOTA_EXCEEDED";
+  if (!plan && available === 0) {
+    message = "La génération de prospects est réservée aux abonnements payés.";
+    reason = "PAID_PLAN_REQUIRED";
+  } else if (available === 0 && monthlyCredits === 0 && nextPlan) {
+    message = `La génération de prospects est incluse à partir de l'offre ${PLAN_LABELS[nextPlan]} (${nextPlanCredits} crédits par mois).`;
+    reason = "PLAN_UPGRADE_REQUIRED";
+  } else if (available === 0) {
+    message = nextPlan
+      ? `Vos ${monthlyCredits} crédits du mois sont utilisés. Passez à l'offre ${PLAN_LABELS[nextPlan]} pour en avoir ${nextPlanCredits} par mois.`
+      : `Vos ${monthlyCredits} crédits du mois sont utilisés. Achetez des crédits pour continuer.`;
+  } else {
+    message = `Il vous reste ${plural(available, "crédit")}${detail ? ` : ${detail}` : ""}.`;
+  }
+  return new AppError(message, ERROR_CODES.VALIDATION_ERROR, {
+    reason,
+    remaining: available,
+    needed,
+    nextPlan: nextPlan || null,
+    canPurchase: balance.canPurchase,
+  });
 }
 
 /** Crédits consommés par Newbi ce mois-ci, tous espaces confondus. */
