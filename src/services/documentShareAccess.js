@@ -9,6 +9,10 @@
 import SharedFolder from "../models/SharedFolder.js";
 import SharedDocument from "../models/SharedDocument.js";
 import DocumentShare, { shareFolderIds } from "../models/DocumentShare.js";
+import { isFeatureEnabled } from "../utils/featureAccess.js";
+import { readDocumentShareSession } from "../utils/documentShareAccessToken.js";
+
+const TOKEN_RE = /^[0-9a-f]{64}$/;
 
 const isClosed = (folder) =>
   Boolean(folder.trashedAt) || folder.visibility === "private";
@@ -125,6 +129,40 @@ export async function loadShareFolders(share) {
   return { roots, folders, folderIds };
 }
 
+/**
+ * Accès d'un lien, s'il peut encore servir.
+ * @returns {Promise<{share: object, folders: object} | {status: 404|410}>}
+ *   404 : lien inconnu, ou espace sans la fonctionnalité (accès anticipé) ;
+ *   410 : lien désactivé, expiré, ou plus aucun dossier ouvert
+ */
+export async function openShareByToken(token) {
+  const share = TOKEN_RE.test(String(token ?? ""))
+    ? await DocumentShare.findOne({ token })
+    : null;
+  if (!share || !isFeatureEnabled("documentShares", share.workspaceId)) {
+    return { status: 404 };
+  }
+  const folders = share.isValid() ? await loadShareFolders(share) : null;
+  if (!folders) return { status: 410 };
+  return { share, folders };
+}
+
+/**
+ * Accès ouvert à un visiteur identifié (session valable, non retiré) ;
+ * sinon null. Sert au flux temps réel, relu avant chaque événement.
+ */
+export async function findVisitorAccess(token, session) {
+  const opened = await openShareByToken(token);
+  if (!opened.share) return null;
+  const email = readDocumentShareSession(session, opened.share);
+  if (!email || opened.share.isBanned(email)) return null;
+  return { ...opened, email };
+}
+
+/** Document déposé par ce visiteur (seul cas où il peut le supprimer). */
+export const isVisitorUpload = (document, email) =>
+  Boolean(email) && document?.clientUpload?.email === email;
+
 /** Document de la portée de l'accès, hors corbeille ; sinon null. */
 export async function findShareDocument(share, shareFolders, documentId) {
   const document = await SharedDocument.findOne({
@@ -138,7 +176,11 @@ export async function findShareDocument(share, shareFolders, documentId) {
     : null;
 }
 
-/** Documents de la portée, sans rien d'interne (clé de stockage, auteur…). */
+/**
+ * Documents de la portée, sans rien d'interne (clé de stockage, auteur…).
+ * L'adresse du client qui a déposé un document ne sert qu'à dire au
+ * visiteur s'il en est l'auteur : elle n'est jamais renvoyée.
+ */
 export async function listShareDocuments(share, shareFolders) {
   return SharedDocument.find(
     {
@@ -146,7 +188,14 @@ export async function listShareDocuments(share, shareFolders) {
       folderId: { $in: [...shareFolders.folderIds] },
       trashedAt: null,
     },
-    { name: 1, mimeType: 1, fileSize: 1, folderId: 1, createdAt: 1 },
+    {
+      name: 1,
+      mimeType: 1,
+      fileSize: 1,
+      folderId: 1,
+      createdAt: 1,
+      "clientUpload.email": 1,
+    },
   )
     .sort({ name: 1 })
     .lean();

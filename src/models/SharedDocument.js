@@ -73,6 +73,20 @@ const SharedDocumentSchema = new mongoose.Schema(
       type: String,
     },
 
+    // Déposé par un client depuis son accès (documents partagés) : le
+    // visiteur dont l'adresse a été prouvée peut supprimer ce document.
+    // uploadedBy est alors le membre qui a créé l'accès.
+    clientUpload: {
+      type: new mongoose.Schema(
+        {
+          shareId: { type: mongoose.Schema.Types.ObjectId, required: true },
+          email: { type: String, required: true, lowercase: true, trim: true },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+
     // Statut et partage
     status: {
       type: String,

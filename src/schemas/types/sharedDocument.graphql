@@ -209,6 +209,7 @@ type DocumentShareVisitor {
   lastVisitAt: DateTime
   visitCount: Int!
   downloadCount: Int!
+  uploadCount: Int!
   isBanned: Boolean!
 }
 
@@ -234,10 +235,13 @@ type DocumentShare {
   isActive: Boolean!
   expiresAt: DateTime
   hasPassword: Boolean!
+  # Le client peut déposer des documents et supprimer ceux qu'il a déposés
+  allowUploads: Boolean!
   isFolderAvailable: Boolean!
   shareUrl: String!
   totalViews: Int!
   totalDownloads: Int!
+  totalUploads: Int!
   lastViewedAt: DateTime
   visitors: [DocumentShareVisitor!]!
   bannedEmails: [DocumentShareBan!]!
@@ -251,6 +255,7 @@ input CreateDocumentShareInput {
   name: String
   password: String
   expiresAt: DateTime
+  allowUploads: Boolean
 }
 
 # Champ absent : inchangé. expiresAt ou password à null : retiré.
@@ -260,6 +265,7 @@ input UpdateDocumentShareInput {
   password: String
   expiresAt: DateTime
   isActive: Boolean
+  allowUploads: Boolean
 }
 
 # Queries
@@ -459,6 +465,17 @@ type SharedDocumentsChangedPayload {
   workspaceId: ID!
 }
 
+# Page d'un visiteur (accès client) : CHANGED, la page relit son contenu ;
+# CLOSED, l'accès n'est plus permis (la page relit et affiche pourquoi)
+type PublicDocumentShareChange {
+  type: String!
+}
+
 extend type Subscription {
   sharedDocumentsChanged(workspaceId: ID!): SharedDocumentsChangedPayload!
+  # Connexion anonyme, gardée par le lien et la session du visiteur
+  publicDocumentShareChanged(
+    token: String!
+    session: String!
+  ): PublicDocumentShareChange!
 }
