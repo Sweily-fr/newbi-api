@@ -57,6 +57,10 @@ type ProspectSettings {
   trades: [ProspectTrade!]!
   quota: ProspectQuota!
   maxPerUnlock: Int!
+  "Pages de recherche parcourues au plus par génération (1 crédit chacune)"
+  maxSearchPages: Int!
+  "Codes NAF au plus par recherche"
+  maxNafCodes: Int!
 }
 
 "Aperçu d'une entreprise, sans ses coordonnées"
@@ -121,6 +125,8 @@ type ProspectUnlockResult {
   clients: [Client!]!
   "Fiches débloquées (décomptées du quota)"
   unlockedCount: Int!
+  "Crédits dépensés chez le fournisseur (fiches lues)"
+  creditsUsed: Int!
   skipped: [ProspectSkipped!]!
   listId: ID
   quota: ProspectQuota!
@@ -142,6 +148,10 @@ type ProspectGenerationResult {
   outOfRadiusCount: Int!
   "Rayon réellement couvert en km (réduit autour des grandes villes), null sans rayon"
   radiusKm: Int
+  "Pages de recherche parcourues (1 crédit chacune)"
+  searchCredits: Int!
+  "Crédits dépensés au total : pages de recherche + fiches lues"
+  creditsUsed: Int!
   clients: [Client!]!
   unlockedCount: Int!
   skipped: [ProspectSkipped!]!

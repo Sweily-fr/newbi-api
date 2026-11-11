@@ -56,7 +56,10 @@ export const PROSPECT_TRADES = [
   },
 ];
 
-const MAX_NAF_CODES = 10;
+// Le nombre de codes ne change pas le coût (1 crédit par page de 25) ;
+// la borne garde l'adresse de recherche courte, rayon de 150 zones compris
+// (testé chez Societeinfo : 150 zones et 50 codes passent)
+export const MAX_NAF_CODES = 50;
 // « 43 », « 43.3 », « 43.32 », « 4332A » : niveaux NAF acceptés par Societeinfo
 const NAF_CODE = /^\d{2}(\d{1,2})?[A-Z]?$/;
 const NAF_SUBCLASS = /^\d{4}[A-Z]$/;

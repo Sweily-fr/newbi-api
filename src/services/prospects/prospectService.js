@@ -14,7 +14,11 @@ import {
   ProspectProviderError,
   SEARCH_PAGE_SIZE,
 } from "./societeinfoClient.js";
-import { resolveNafCodes, PROSPECT_TRADES } from "./prospectTrades.js";
+import {
+  resolveNafCodes,
+  PROSPECT_TRADES,
+  MAX_NAF_CODES,
+} from "./prospectTrades.js";
 import { NAF_SUBCLASSES } from "./nafCodes.js";
 import {
   resolveRadiusArea,
@@ -405,6 +409,7 @@ export async function unlockProspects({
   const opposition =
     oppositionStatuses || (await checkCommercialOpposition(toUnlock));
   const created = [];
+  let creditsUsed = 0;
   let providerError = null;
 
   for (const siren of toUnlock) {
@@ -453,6 +458,9 @@ export async function unlockProspects({
     let company;
     try {
       company = await getCompany(siren);
+      // Fiche lue = 1 crédit dépensé chez le fournisseur, même si la fiche
+      // client échoue ensuite
+      creditsUsed++;
     } catch (error) {
       await ProspectCreditUsage.deleteOne({ _id: usage._id });
       if (error instanceof ProspectProviderError && error.isAccountIssue) {
@@ -530,12 +538,15 @@ export async function unlockProspects({
   return {
     clients,
     unlockedCount: created.length,
+    creditsUsed,
     skipped,
     listId: list?._id || null,
     quota: await freshAvailability(workspaceId),
     providerError: providerError?.message || null,
   };
 }
+
+export { MAX_NAF_CODES };
 
 // Pages parcourues au plus pour trouver le nombre demandé (1 crédit chacune)
 export const MAX_GENERATION_PAGES = 6;
@@ -590,6 +601,7 @@ export async function generateProspects({
   let opposedCount = 0;
   let closedCount = 0;
   let outOfRadiusCount = 0;
+  let searchCredits = 0;
   let checks = 0;
 
   for (
@@ -604,6 +616,7 @@ export async function generateProspects({
       criteria,
       page,
     });
+    searchCredits++;
     matching = result.total;
     totalPages = result.totalPages;
 
@@ -645,12 +658,14 @@ export async function generateProspects({
     closedCount,
     outOfRadiusCount,
     radiusKm: criteria.area?.radiusKm ?? null,
+    searchCredits,
   };
   if (!chosen.length) {
     return {
       ...base,
       clients: [],
       unlockedCount: 0,
+      creditsUsed: searchCredits,
       skipped: [],
       listId: listId || null,
       quota: await freshAvailability(workspaceId),
@@ -666,5 +681,10 @@ export async function generateProspects({
     newListName,
     oppositionStatuses: statuses,
   });
-  return { ...base, ...outcome };
+  // Total réel : pages de recherche + fiches lues
+  return {
+    ...base,
+    ...outcome,
+    creditsUsed: searchCredits + outcome.creditsUsed,
+  };
 }
