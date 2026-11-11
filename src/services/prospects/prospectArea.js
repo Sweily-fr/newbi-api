@@ -64,16 +64,18 @@ export function loadCommunes() {
   const promise = Promise.all([
     geo.get("/communes", {
       params: {
-        fields: "nom,codesPostaux,centre,codeDepartement,population",
+        fields: "nom,code,codesPostaux,centre,codeDepartement,population",
         format: "json",
       },
     }),
     geo.get("/departements", { params: { fields: "nom,code" } }),
-  ]).then(([communes, departements]) => ({
+    geo.get("/regions", { params: { fields: "nom,code" } }),
+  ]).then(([communes, departements, regions]) => ({
     communes: (communes.data || [])
       .filter((c) => c.centre?.coordinates?.length === 2)
       .map((c) => ({
         name: normalizePlaceName(c.nom),
+        code: c.code,
         postalCodes: c.codesPostaux || [],
         lng: c.centre.coordinates[0],
         lat: c.centre.coordinates[1],
@@ -82,6 +84,9 @@ export function loadCommunes() {
       })),
     departements: new Map(
       (departements.data || []).map((d) => [normalizePlaceName(d.nom), d.code]),
+    ),
+    regions: new Map(
+      (regions.data || []).map((r) => [normalizePlaceName(r.nom), r.code]),
     ),
   }));
   communesCache = { at: Date.now(), promise };
@@ -195,6 +200,22 @@ async function postalPlaceIds(codes) {
  * code postal, avec le centre et le rayon réellement couvert.
  */
 export async function resolveRadiusArea({ place, radiusKm }) {
+  const zone = await resolveRadiusZone({ place, radiusKm });
+  const placeIds = await postalPlaceIds(zone.searchPostalCodes);
+  return {
+    placeIds: placeIds.length ? placeIds : [place.id],
+    center: zone.center,
+    radiusKm: zone.radiusKm,
+    requestedRadiusKm: radiusKm,
+    postalCodes: zone.postalCodes,
+  };
+}
+
+/**
+ * Cercle sans appel au fournisseur : centre, rayon couvert, codes postaux
+ * à interroger (marge comprise) et codes postaux dans le rayon (compteur).
+ */
+export async function resolveRadiusZone({ place, radiusKm }) {
   if (!RADIUS_OPTIONS_KM.includes(radiusKm)) {
     throw new ProspectAreaError(
       `Rayon possible : ${RADIUS_OPTIONS_KM.join(", ")} km.`,
@@ -206,14 +227,7 @@ export async function resolveRadiusArea({ place, radiusKm }) {
     );
   }
 
-  let data;
-  try {
-    data = await loadCommunes();
-  } catch {
-    throw new ProspectAreaError(
-      "La recherche par rayon est momentanément indisponible. Réessayez dans quelques instants ou choisissez une zone sans rayon.",
-    );
-  }
+  const data = await communesOrAreaError();
   const center = findCenter(place, data);
   if (!center) {
     throw new ProspectAreaError(
@@ -227,14 +241,71 @@ export async function resolveRadiusArea({ place, radiusKm }) {
     around = around.slice(0, MAX_RADIUS_POSTAL_CODES);
     coveredKm = Math.max(1, Math.floor(around[around.length - 1].distance));
   }
-  const placeIds = await postalPlaceIds(around.map((a) => a.code));
-
+  const covered = Math.min(coveredKm, radiusKm);
   return {
-    placeIds: placeIds.length ? placeIds : [place.id],
     center: { lat: center.lat, lng: center.lng },
-    radiusKm: Math.min(coveredKm, radiusKm),
-    requestedRadiusKm: radiusKm,
+    radiusKm: covered,
+    searchPostalCodes: around.map((a) => a.code),
+    postalCodes: around.filter((a) => a.distance <= covered).map((a) => a.code),
   };
+}
+
+async function communesOrAreaError() {
+  try {
+    return await loadCommunes();
+  } catch {
+    throw new ProspectAreaError(
+      "La recherche par rayon est momentanément indisponible. Réessayez dans quelques instants ou choisissez une zone sans rayon.",
+    );
+  }
+}
+
+/**
+ * Zones choisies traduites en codes du registre public : code postal,
+ * commune (ville ou adresse), département, région. `unresolved` compte les
+ * zones qu'on n'a pas su traduire.
+ */
+export async function resolveRegistryZones(places = []) {
+  const zones = {
+    code_postal: new Set(),
+    code_commune: new Set(),
+    departement: new Set(),
+    region: new Set(),
+  };
+  let unresolved = 0;
+  if (!places.length) return { zones, unresolved };
+  const data = await loadCommunes();
+  for (const place of places) {
+    const parts = String(place?.label || "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const first = parts[0] || "";
+    let code = null;
+    if (place?.type === "postal_code" || /^\d{5}$/.test(first)) {
+      zones.code_postal.add(first);
+      continue;
+    }
+    if (place?.type === "locality") {
+      code = findCenter(place, data)?.code;
+      if (code) zones.code_commune.add(code);
+    } else if (place?.type === "prediction_address") {
+      // « Avenue de Longueil, Maisons-Laffitte, Yvelines, … » : sa commune
+      code = findCenter(
+        { label: parts.slice(1).join(", "), type: "locality" },
+        data,
+      )?.code;
+      if (code) zones.code_commune.add(code);
+    } else if (place?.type === "administrative_area_level_2") {
+      code = data.departements.get(normalizePlaceName(first));
+      if (code) zones.departement.add(code);
+    } else if (place?.type === "administrative_area_level_1") {
+      code = data.regions.get(normalizePlaceName(first));
+      if (code) zones.region.add(code);
+    }
+    if (!code) unresolved++;
+  }
+  return { zones, unresolved };
 }
 
 /** Entreprise dans le cercle (sans coordonnées connues : gardée, son code postal y est). */

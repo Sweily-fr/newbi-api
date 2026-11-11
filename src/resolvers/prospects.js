@@ -8,6 +8,7 @@ import {
   isProspectGenerationEnabled,
   listProspectTrades,
   listProspectActivities,
+  countProspects,
   searchProspectPlaces,
   searchProspects,
   unlockProspects,
@@ -45,6 +46,14 @@ const prospectsResolvers = {
         maxNafCodes: MAX_NAF_CODES,
       };
     }),
+
+    prospectCount: requireRead("clients")(async (_, args, context) =>
+      countProspects({
+        workspaceId: workspaceOf(args, context),
+        input: args.input,
+        places: args.places || [],
+      }),
+    ),
 
     prospectActivities: requireRead("clients")(() => listProspectActivities()),
 

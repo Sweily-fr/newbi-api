@@ -22,6 +22,18 @@ type ProspectTrade {
   nafCodes: [String!]!
 }
 
+"""
+Entreprises actives au registre public pour ces activités et cette zone
+(gratuit, ordre de grandeur : le nombre joignable par téléphone ou email
+est plus bas)
+"""
+type ProspectCount {
+  "null si le registre ne répond pas ou si une zone n'a pas pu être traduite"
+  total: Int
+  "Le registre plafonne ses totaux à 10 000"
+  capped: Boolean!
+}
+
 "Sous-classe de la nomenclature NAF rév. 2 (Insee)"
 type ProspectActivity {
   "Code sans point (ex. 4776Z)"
@@ -163,6 +175,13 @@ type ProspectGenerationResult {
 extend type Query {
   prospectSettings(workspaceId: String!): ProspectSettings!
   prospectPlaces(workspaceId: String!, query: String!): [ProspectPlace!]!
+  "Compteur gratuit avant de lancer (aucun crédit Societeinfo)"
+  prospectCount(
+    workspaceId: String!
+    input: ProspectSearchInput!
+    "Zones choisies (libellé et type), pour les traduire en codes du registre"
+    places: [ProspectPlaceInput!]
+  ): ProspectCount!
   "Toutes les activités NAF, pour la recherche par activité"
   prospectActivities(workspaceId: String!): [ProspectActivity!]!
 }
