@@ -14,6 +14,8 @@ import {
   generateProspects,
   getProspectAvailability,
   MAX_UNLOCK_PER_REQUEST,
+  MAX_GENERATION_PAGES,
+  MAX_NAF_CODES,
 } from "../services/prospects/prospectService.js";
 
 // Chercher et débloquer des prospects crée des fiches clients
@@ -39,6 +41,8 @@ const prospectsResolvers = {
         trades: listProspectTrades(),
         quota: await getProspectAvailability(workspaceId),
         maxPerUnlock: MAX_UNLOCK_PER_REQUEST,
+        maxSearchPages: MAX_GENERATION_PAGES,
+        maxNafCodes: MAX_NAF_CODES,
       };
     }),
 

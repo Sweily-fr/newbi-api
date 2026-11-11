@@ -210,6 +210,14 @@ describe("métiers", () => {
     ]);
   });
 
+  it("accepte jusqu'à 50 codes, pas un de plus", () => {
+    const codes = listProspectActivities().map((a) => a.code);
+    expect(resolveNafCodes({ nafCodes: codes.slice(0, 50) })).toHaveLength(50);
+    expect(() => resolveNafCodes({ nafCodes: codes.slice(0, 51) })).toThrow(
+      /50 codes/,
+    );
+  });
+
   it("refuse une sous-classe NAF qui n'existe pas", () => {
     expect(() => resolveNafCodes({ nafCodes: ["9999Z"] })).toThrow(
       /Code NAF inconnu/,
@@ -560,6 +568,9 @@ describe("génération par nombre", () => {
       requested: 3,
       unlockedCount: 3,
       opposedCount: 1,
+      // 2 pages de recherche + 3 fiches lues
+      searchCredits: 2,
+      creditsUsed: 5,
     });
     expect(getCompany.mock.calls.map(([s]) => s)).toEqual([
       "100000002",
