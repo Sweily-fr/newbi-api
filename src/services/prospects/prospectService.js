@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import Client from "../../models/Client.js";
 import ClientList from "../../models/ClientList.js";
 import ProspectCreditUsage from "../../models/ProspectCreditUsage.js";
+import ProspectSearchCursor from "../../models/ProspectSearchCursor.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import { isValidSIRET, isValidVATNumberEU } from "../../utils/validators.js";
 import logger from "../../utils/logger.js";
@@ -550,8 +552,38 @@ export { MAX_NAF_CODES };
 
 // Pages parcourues au plus pour trouver le nombre demandé (1 crédit chacune)
 export const MAX_GENERATION_PAGES = 6;
+// Entreprises gardées en réserve d'une génération à l'autre
+const MAX_PENDING = 100;
 const OPPOSITION_CHUNK = 5;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Empreinte des critères d'une génération, pour reprendre là où la
+ * précédente s'est arrêtée. Les dates de création sont prises au mois (le
+ * site les calcule depuis la date du jour) ; un rayon est repéré par son
+ * centre et sa distance plutôt que par ses zones.
+ */
+export function searchCursorKey(criteria) {
+  const month = (date) => (date ? String(date).slice(0, 6) : null);
+  const area = criteria.area
+    ? {
+        lat: Number(criteria.area.center.lat.toFixed(3)),
+        lng: Number(criteria.area.center.lng.toFixed(3)),
+        km: criteria.area.requestedRadiusKm ?? criteria.area.radiusKm,
+      }
+    : null;
+  const signature = JSON.stringify({
+    naf: [...criteria.nafCodes].sort(),
+    places: area ? null : [...(criteria.placeIds || [])].sort(),
+    area,
+    contact: criteria.contact,
+    minStaff: criteria.minStaff ?? null,
+    maxStaff: criteria.maxStaff ?? null,
+    after: month(criteria.minCreationDate),
+    before: month(criteria.maxCreationDate),
+  });
+  return createHash("sha256").update(signature).digest("hex").slice(0, 32);
+}
 
 /**
  * « Je veux 20 menuisiers dans la Vienne » : parcourt les pages de résultats
@@ -596,43 +628,28 @@ export async function generateProspects({
   const chosen = [];
   const statuses = new Map();
   const seen = new Set();
+  // Lues (donc payées) mais pas utilisées : gardées pour la fois suivante
+  const leftovers = [];
   let matching = 0;
-  let totalPages = 1;
   let opposedCount = 0;
   let closedCount = 0;
   let outOfRadiusCount = 0;
   let searchCredits = 0;
   let checks = 0;
 
-  for (
-    let page = 1;
-    chosen.length < wanted &&
-    page <= Math.min(totalPages, MAX_GENERATION_PAGES);
-    page++
-  ) {
-    const result = await fetchSearchPage({
-      workspaceId,
-      userId: user?.id,
-      criteria,
-      page,
-    });
-    searchCredits++;
-    matching = result.total;
-    totalPages = result.totalPages;
-
-    // Hors du cercle : écartée avant toute vérification ou dépense
-    const inArea = result.results.filter((r) => isWithinArea(r, criteria.area));
-    outOfRadiusCount += result.results.length - inArea.length;
-    const sirens = inArea
-      .map((r) => r.siren)
-      .filter((s) => SIREN.test(s || "") && !seen.has(s));
-    sirens.forEach((s) => seen.add(s));
-    const existing = await existingClientsBySiren(workspaceId, sirens);
-    const candidates = sirens.filter((s) => !existing.has(s));
+  /** Retient des entreprises nouvelles pour l'espace et libres de toute opposition. */
+  async function consider(sirensToCheck) {
+    const fresh = sirensToCheck.filter(
+      (s) => SIREN.test(s || "") && !seen.has(s),
+    );
+    fresh.forEach((s) => seen.add(s));
+    const existing = await existingClientsBySiren(workspaceId, fresh);
+    const candidates = fresh.filter((s) => !existing.has(s));
 
     // Vérification par petits paquets : on s'arrête dès que le compte y est
+    let i = 0;
     for (
-      let i = 0;
+      ;
       i < candidates.length && chosen.length < wanted;
       i += OPPOSITION_CHUNK
     ) {
@@ -646,10 +663,77 @@ export async function generateProspects({
         if (status === "ALLOWED" && chosen.length < wanted) chosen.push(siren);
         else if (status === "OPPOSED") opposedCount++;
         else if (status === "CLOSED") closedCount++;
+        // En trop, ou registre muet : retentée la fois suivante
+        else leftovers.push(siren);
       }
     }
-    if (!result.results.length) break;
+    leftovers.push(...candidates.slice(i));
   }
+
+  // Reprise : d'abord la réserve de la dernière génération (aucun crédit),
+  // puis les pages suivantes, avec retour à la page 1 après la dernière
+  const cursorKey = searchCursorKey(criteria);
+  const cursor = await ProspectSearchCursor.findOne({
+    workspaceId: toObjectId(workspaceId),
+    key: cursorKey,
+  }).lean();
+  if (cursor?.pending?.length) await consider(cursor.pending);
+
+  let totalPages = cursor?.totalPages || null;
+  const lastPage = () => Math.min(totalPages || MAX_PAGE, MAX_PAGE);
+  let page = cursor?.nextPage || 1;
+  if (page > lastPage()) page = 1;
+  const firstPage = page;
+  let pagesRead = 0;
+  let cycleDone = false;
+
+  while (
+    chosen.length < wanted &&
+    pagesRead < MAX_GENERATION_PAGES &&
+    !cycleDone
+  ) {
+    let result;
+    try {
+      result = await fetchSearchPage({
+        workspaceId,
+        userId: user?.id,
+        criteria,
+        page,
+      });
+    } catch (error) {
+      // Moins de résultats qu'à la dernière fois : on repart de la page 1
+      if (error?.details?.reason === "API_INVALID_PAGE" && page !== 1) {
+        page = 1;
+        totalPages = null;
+        continue;
+      }
+      throw error;
+    }
+    searchCredits++;
+    pagesRead++;
+    matching = result.total;
+    totalPages = result.totalPages || 1;
+
+    // Hors du cercle : écartée avant toute vérification ou dépense
+    const inArea = result.results.filter((r) => isWithinArea(r, criteria.area));
+    outOfRadiusCount += result.results.length - inArea.length;
+    await consider(inArea.map((r) => r.siren));
+
+    page = page >= lastPage() ? 1 : page + 1;
+    cycleDone = page === firstPage || !result.results.length;
+  }
+
+  await ProspectSearchCursor.updateOne(
+    { workspaceId: toObjectId(workspaceId), key: cursorKey },
+    {
+      $set: {
+        nextPage: page,
+        totalPages,
+        pending: [...new Set(leftovers)].slice(0, MAX_PENDING),
+      },
+    },
+    { upsert: true },
+  );
 
   const base = {
     requested: wanted,

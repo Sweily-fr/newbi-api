@@ -69,12 +69,14 @@ import {
   getProspectAvailability,
   resetProviderCreditsCache,
   isProspectGenerationEnabled,
+  searchCursorKey,
   listProspectTrades,
   listProspectActivities,
 } from "../../src/services/prospects/prospectService.js";
 import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
 import ProspectCreditUsage from "../../src/models/ProspectCreditUsage.js";
+import ProspectSearchCursor from "../../src/models/ProspectSearchCursor.js";
 import clientResolvers from "../../src/resolvers/client.js";
 
 const userId = buildUserId();
@@ -606,6 +608,85 @@ describe("génération par nombre", () => {
       }),
     ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+});
+
+describe("reprise d'une génération à l'autre", () => {
+  const generer = (count, input = { tradeIds: ["menuisier"] }) =>
+    generateProspects({ workspaceId, user, input, count });
+  const pagesLues = () => searchCompanies.mock.calls.map(([c]) => c.page);
+
+  it("utilise d'abord les entreprises déjà lues, puis reprend à la page suivante", async () => {
+    searchCompanies.mockImplementation(async ({ page: p }) =>
+      p === 1
+        ? page(["100000002", "100000003", "100000004"])
+        : page(["100000005", "100000006"]),
+    );
+
+    const premiere = await generer(1);
+    expect(premiere).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+
+    // Les deux autres entreprises de la page 1 sont déjà payées : aucune page relue
+    const deuxieme = await generer(2);
+    expect(deuxieme).toMatchObject({
+      unlockedCount: 2,
+      searchCredits: 0,
+      creditsUsed: 2,
+    });
+
+    // Réserve vide : page 2, jamais la page 1 une seconde fois
+    const troisieme = await generer(1);
+    expect(troisieme).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+    expect(pagesLues()).toEqual([1, 2]);
+  });
+
+  it("d'autres critères repartent de la page 1", async () => {
+    searchCompanies.mockResolvedValue(page(["100000002", "100000003"]));
+    await generer(1);
+    searchCompanies.mockResolvedValue(page(["100000007"]));
+    await generer(1, { tradeIds: ["plombier"] });
+    expect(pagesLues()).toEqual([1, 1]);
+  });
+
+  it("revient à la page 1 quand la page suivante n'existe plus", async () => {
+    await ProspectSearchCursor.create({
+      workspaceId,
+      key: searchCursorKey({
+        nafCodes: ["4332A", "4332B", "1623Z"],
+        placeIds: [],
+        contact: "phone",
+      }),
+      nextPage: 3,
+    });
+    searchCompanies.mockImplementation(async ({ page: p }) => {
+      if (p === 3) throw new ProspectProviderError("API_INVALID_PAGE");
+      return page(["100000002"], 1);
+    });
+
+    const result = await generer(1);
+    expect(pagesLues()).toEqual([3, 1]);
+    // La page refusée ne coûte rien
+    expect(result).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+  });
+
+  it("garde la même empreinte d'un jour à l'autre, pas d'un critère à l'autre", () => {
+    const base = {
+      nafCodes: ["4332B", "4332A"],
+      placeIds: ["b", "a"],
+      contact: "phone",
+      minCreationDate: "20231110",
+    };
+    expect(searchCursorKey(base)).toBe(
+      searchCursorKey({
+        ...base,
+        nafCodes: ["4332A", "4332B"],
+        placeIds: ["a", "b"],
+        minCreationDate: "20231111",
+      }),
+    );
+    expect(searchCursorKey(base)).not.toBe(
+      searchCursorKey({ ...base, contact: "email" }),
+    );
   });
 });
 
