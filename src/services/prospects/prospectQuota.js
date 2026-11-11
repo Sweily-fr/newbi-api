@@ -10,8 +10,8 @@ import { AppError, ERROR_CODES } from "../../utils/errors.js";
  * Newbi ne dépasse jamais les crédits offerts plus les crédits vendus.
  *
  * - Freelance : rien, la génération commence à l'offre TPE.
- * - TPE (« pme ») : 20 crédits par mois ; pour plus, passer à Entreprise.
- * - Entreprise : 50 crédits par mois ; pour plus, crédits achetés à l'unité.
+ * - TPE (« pme ») : 50 crédits par mois ; pour plus, passer à Entreprise.
+ * - Entreprise : 100 crédits par mois ; pour plus, crédits achetés à l'unité.
  * Rien pendant l'essai : seul un abonnement payé ouvre des crédits, pour
  * qu'on ne puisse pas enchaîner les comptes d'essai.
  * Les crédits du mois repartent le 1er (heure de Paris), sans report, et
@@ -19,8 +19,8 @@ import { AppError, ERROR_CODES } from "../../utils/errors.js";
  */
 export const PROSPECT_MONTHLY_CREDITS = {
   freelance: 0,
-  pme: 20,
-  entreprise: 50,
+  pme: 50,
+  entreprise: 100,
 };
 
 const PLAN_ORDER = ["freelance", "pme", "entreprise"];

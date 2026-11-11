@@ -286,33 +286,33 @@ describe("crédits de prospection par offre", () => {
       monthlyCredits: 0,
       available: 0,
       nextPlan: "pme",
-      nextPlanCredits: 20,
-      canPurchase: false,
-    });
-  });
-
-  it("TPE : 20 crédits par mois, puis l'offre Entreprise", async () => {
-    await spend(5);
-    expect(await getProspectBalance(workspaceId)).toMatchObject({
-      plan: "pme",
-      monthlyCredits: 20,
-      monthlyUsed: 5,
-      monthlyRemaining: 15,
-      available: 15,
-      nextPlan: "entreprise",
       nextPlanCredits: 50,
       canPurchase: false,
     });
   });
 
-  it("Entreprise : 50 crédits par mois, puis les crédits achetés", async () => {
+  it("TPE : 50 crédits par mois, puis l'offre Entreprise", async () => {
+    await spend(5);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      plan: "pme",
+      monthlyCredits: 50,
+      monthlyUsed: 5,
+      monthlyRemaining: 45,
+      available: 45,
+      nextPlan: "entreprise",
+      nextPlanCredits: 100,
+      canPurchase: false,
+    });
+  });
+
+  it("Entreprise : 100 crédits par mois, puis les crédits achetés", async () => {
     await setSubscription("entreprise");
-    await spend(50);
+    await spend(100);
     await buy(30);
     await buy(10, { status: "refunded" });
     await spend(4, "purchased");
     expect(await getProspectBalance(workspaceId)).toMatchObject({
-      monthlyCredits: 50,
+      monthlyCredits: 100,
       monthlyRemaining: 0,
       purchasedRemaining: 26,
       available: 26,
@@ -324,7 +324,7 @@ describe("crédits de prospection par offre", () => {
   it("les crédits du mois repartent le 1er, pas les crédits achetés", async () => {
     await setSubscription("entreprise");
     await buy(10);
-    const old = await spend(50);
+    const old = await spend(100);
     const oldPurchased = await spend(3, "purchased");
     await ProspectCreditUsage.collection.updateMany(
       { _id: { $in: [old._id, oldPurchased._id] } },
@@ -332,9 +332,9 @@ describe("crédits de prospection par offre", () => {
     );
     expect(await getProspectBalance(workspaceId)).toMatchObject({
       monthlyUsed: 0,
-      monthlyRemaining: 50,
+      monthlyRemaining: 100,
       purchasedRemaining: 7,
-      available: 57,
+      available: 107,
     });
   });
 
@@ -349,19 +349,19 @@ describe("crédits de prospection par offre", () => {
 
     await setSubscription("freelance");
     await expect(generer()).rejects.toThrow(
-      /à partir de l'offre TPE \(20 crédits par mois\)/,
+      /à partir de l'offre TPE \(50 crédits par mois\)/,
     );
 
     await setSubscription("pme");
-    await spend(20);
+    await spend(50);
     await expect(generer()).rejects.toThrow(
-      /Vos 20 crédits du mois sont utilisés\. Passez à l'offre Entreprise pour en avoir 50 par mois/,
+      /Vos 50 crédits du mois sont utilisés\. Passez à l'offre Entreprise pour en avoir 100 par mois/,
     );
 
     await setSubscription("entreprise");
-    await spend(30);
+    await spend(50);
     await expect(generer()).rejects.toThrow(
-      /Vos 50 crédits du mois sont utilisés\. Achetez des crédits/,
+      /Vos 100 crédits du mois sont utilisés\. Achetez des crédits/,
     );
     expect(searchCompanies).not.toHaveBeenCalled();
   });
@@ -474,7 +474,7 @@ describe("déblocage", () => {
 
     expect(result.unlockedCount).toBe(3);
     expect(result.skipped).toEqual([]);
-    expect(result.quota).toMatchObject({ monthlyUsed: 3, available: 17 });
+    expect(result.quota).toMatchObject({ monthlyUsed: 3, available: 47 });
 
     const sansEmail = await Client.findOne({
       "prospect.siren": "111111111",
@@ -544,6 +544,12 @@ describe("déblocage", () => {
   });
 
   it("refuse avant toute dépense quand le solde ne suffit pas", async () => {
+    // 20 crédits restants sur les 50 du mois
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 30,
+    });
     const sirens = Array.from({ length: 21 }, (_, i) => String(100000000 + i));
     await expect(
       unlockProspects({ workspaceId, user, sirens }),
@@ -607,7 +613,7 @@ const page = (sirens, totalPages = 3) => ({
 describe("solde du fournisseur", () => {
   it("n'entre jamais dans le solde affiché à l'espace", async () => {
     getKeyInfo.mockResolvedValue({ totalAvailableCredits: 8 });
-    expect((await getProspectBalance(workspaceId)).available).toBe(20);
+    expect((await getProspectBalance(workspaceId)).available).toBe(50);
   });
 
   it("refuse sans rien dépenser une génération qu'il ne couvre pas", async () => {
@@ -700,7 +706,7 @@ describe("génération par nombre", () => {
     await ProspectCreditUsage.create({
       workspaceId,
       kind: "search",
-      credits: 17,
+      credits: 47,
     });
     await expect(
       generateProspects({
@@ -720,7 +726,7 @@ describe("génération par nombre", () => {
     await ProspectCreditUsage.create({
       workspaceId,
       kind: "search",
-      credits: 16,
+      credits: 46,
     });
     let n = 0;
     searchCompanies.mockImplementation(async () =>
@@ -747,7 +753,7 @@ describe("génération par nombre", () => {
     await ProspectCreditUsage.create({
       workspaceId,
       kind: "search",
-      credits: 49,
+      credits: 99,
     });
     await ProspectCreditPurchase.create({
       workspaceId,
