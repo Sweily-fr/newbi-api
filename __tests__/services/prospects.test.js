@@ -33,8 +33,14 @@ vi.mock(
   async (importOriginal) => ({
     ...(await importOriginal()),
     resolveRadiusArea: vi.fn(),
+    resolveRadiusZone: vi.fn(),
+    resolveRegistryZones: vi.fn(),
   }),
 );
+
+vi.mock("../../src/services/prospects/prospectCount.js", () => ({
+  countRegistryCompanies: vi.fn(),
+}));
 
 vi.mock("../../src/services/prospects/prospectOpposition.js", () => ({
   checkCommercialOpposition: vi.fn(),
@@ -49,8 +55,11 @@ import {
 import { checkCommercialOpposition } from "../../src/services/prospects/prospectOpposition.js";
 import {
   resolveRadiusArea,
+  resolveRadiusZone,
+  resolveRegistryZones,
   ProspectAreaError,
 } from "../../src/services/prospects/prospectArea.js";
+import { countRegistryCompanies } from "../../src/services/prospects/prospectCount.js";
 import {
   pickBestEmail,
   formatFrenchPhone,
@@ -69,12 +78,15 @@ import {
   getProspectAvailability,
   resetProviderCreditsCache,
   isProspectGenerationEnabled,
+  searchCursorKey,
+  countProspects,
   listProspectTrades,
   listProspectActivities,
 } from "../../src/services/prospects/prospectService.js";
 import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
 import ProspectCreditUsage from "../../src/models/ProspectCreditUsage.js";
+import ProspectSearchCursor from "../../src/models/ProspectSearchCursor.js";
 import clientResolvers from "../../src/resolvers/client.js";
 
 const userId = buildUserId();
@@ -606,6 +618,139 @@ describe("génération par nombre", () => {
       }),
     ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+});
+
+describe("reprise d'une génération à l'autre", () => {
+  const generer = (count, input = { tradeIds: ["menuisier"] }) =>
+    generateProspects({ workspaceId, user, input, count });
+  const pagesLues = () => searchCompanies.mock.calls.map(([c]) => c.page);
+
+  it("utilise d'abord les entreprises déjà lues, puis reprend à la page suivante", async () => {
+    searchCompanies.mockImplementation(async ({ page: p }) =>
+      p === 1
+        ? page(["100000002", "100000003", "100000004"])
+        : page(["100000005", "100000006"]),
+    );
+
+    const premiere = await generer(1);
+    expect(premiere).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+
+    // Les deux autres entreprises de la page 1 sont déjà payées : aucune page relue
+    const deuxieme = await generer(2);
+    expect(deuxieme).toMatchObject({
+      unlockedCount: 2,
+      searchCredits: 0,
+      creditsUsed: 2,
+    });
+
+    // Réserve vide : page 2, jamais la page 1 une seconde fois
+    const troisieme = await generer(1);
+    expect(troisieme).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+    expect(pagesLues()).toEqual([1, 2]);
+  });
+
+  it("d'autres critères repartent de la page 1", async () => {
+    searchCompanies.mockResolvedValue(page(["100000002", "100000003"]));
+    await generer(1);
+    searchCompanies.mockResolvedValue(page(["100000007"]));
+    await generer(1, { tradeIds: ["plombier"] });
+    expect(pagesLues()).toEqual([1, 1]);
+  });
+
+  it("revient à la page 1 quand la page suivante n'existe plus", async () => {
+    await ProspectSearchCursor.create({
+      workspaceId,
+      key: searchCursorKey({
+        nafCodes: ["4332A", "4332B", "1623Z"],
+        placeIds: [],
+        contact: "phone",
+      }),
+      nextPage: 3,
+    });
+    searchCompanies.mockImplementation(async ({ page: p }) => {
+      if (p === 3) throw new ProspectProviderError("API_INVALID_PAGE");
+      return page(["100000002"], 1);
+    });
+
+    const result = await generer(1);
+    expect(pagesLues()).toEqual([3, 1]);
+    // La page refusée ne coûte rien
+    expect(result).toMatchObject({ unlockedCount: 1, searchCredits: 1 });
+  });
+
+  it("garde la même empreinte d'un jour à l'autre, pas d'un critère à l'autre", () => {
+    const base = {
+      nafCodes: ["4332B", "4332A"],
+      placeIds: ["b", "a"],
+      contact: "phone",
+      minCreationDate: "20231110",
+    };
+    expect(searchCursorKey(base)).toBe(
+      searchCursorKey({
+        ...base,
+        nafCodes: ["4332A", "4332B"],
+        placeIds: ["a", "b"],
+        minCreationDate: "20231111",
+      }),
+    );
+    expect(searchCursorKey(base)).not.toBe(
+      searchCursorKey({ ...base, contact: "email" }),
+    );
+  });
+});
+
+describe("compteur avant de lancer", () => {
+  const ml = {
+    id: "ml",
+    label: "Maisons-Laffitte, Yvelines, Île-de-France",
+    type: "locality",
+  };
+
+  it("compte au registre sans jamais appeler Societeinfo", async () => {
+    const zones = { code_commune: new Set(["78358"]) };
+    resolveRegistryZones.mockResolvedValue({ zones, unresolved: 0 });
+    countRegistryCompanies.mockResolvedValue({ total: 30, capped: false });
+
+    const result = await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"], maxStaff: 9 },
+      places: [ml],
+    });
+
+    expect(result).toEqual({ total: 30, capped: false });
+    expect(countRegistryCompanies).toHaveBeenCalledWith({
+      nafCodes: ["4334Z"],
+      zones,
+      minStaff: undefined,
+      maxStaff: 9,
+    });
+    expect(searchCompanies).not.toHaveBeenCalled();
+    expect(getCompany).not.toHaveBeenCalled();
+  });
+
+  it("avec un rayon, compte sur les codes postaux du cercle", async () => {
+    resolveRadiusZone.mockResolvedValue({ postalCodes: ["78600", "78500"] });
+    countRegistryCompanies.mockResolvedValue({ total: 474, capped: false });
+    await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"], radiusKm: 5, aroundPlace: ml },
+      places: [ml],
+    });
+    expect(countRegistryCompanies.mock.calls[0][0].zones).toEqual({
+      code_postal: ["78600", "78500"],
+    });
+  });
+
+  it("se tait si une zone n'a pas pu être traduite", async () => {
+    resolveRegistryZones.mockResolvedValue({ zones: {}, unresolved: 1 });
+    const result = await countProspects({
+      workspaceId,
+      input: { tradeIds: ["peintre"] },
+      places: [{ id: "x", label: "Quelque part", type: "route" }],
+    });
+    expect(result).toEqual({ total: null, capped: false });
+    expect(countRegistryCompanies).not.toHaveBeenCalled();
   });
 });
 
