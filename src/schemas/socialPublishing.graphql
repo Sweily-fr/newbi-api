@@ -12,8 +12,9 @@ type SocialAccount {
   status: String!
   connectedAt: String
   """
-  Mode de connexion : null (connexion habituelle du réseau), "facebook" (Instagram connecté via
-  Facebook, sons tendance), "business" (TikTok Business, sons tendance)
+  Mode de connexion : null (connexion habituelle du réseau), "unified" (Instagram par la
+  connexion unifiée de Meta, sans Page Facebook), "facebook" (Instagram connecté via Facebook,
+  sons tendance), "business" (TikTok Business, sons tendance)
   """
   connector: String
   capabilities: SocialAccountCapabilities!
@@ -32,7 +33,7 @@ type SocialAccountCapabilities {
 
 "Façon de connecter un réseau, proposée à cet espace"
 type SocialConnector {
-  "facebook | instagram | instagram_facebook | linkedin | tiktok | tiktok_business | twitter"
+  "facebook | instagram | instagram_unified | instagram_facebook | linkedin | tiktok | tiktok_business | twitter"
   key: String!
   platform: String!
   "Libellé du bouton : « Instagram », « Instagram via Facebook », « TikTok Business »…"

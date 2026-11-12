@@ -30,8 +30,8 @@ import {
  * « direct ») : jeton d'état aléatoire à usage unique (SocialConnectState,
  * 15 minutes, avec le vérificateur PKCE de X chiffré et la clé du
  * connecteur), retour sur /social-connect/<connecteur>/callback (clé =
- * réseau pour la connexion habituelle, ex. instagram_facebook ou
- * tiktok_business sinon), échange du code, jetons chiffrés. Mêmes
+ * réseau pour la connexion habituelle, ex. instagram_unified,
+ * instagram_facebook ou tiktok_business sinon), échange du code, jetons chiffrés. Mêmes
  * conventions de retour vers le site que Zernio.
  */
 
@@ -208,6 +208,7 @@ async function withoutKnownLinkedInProfile(state, accounts) {
 const NO_ACCOUNT_CODES = {
   facebook: "no_facebook_pages",
   instagram_facebook: "no_instagram_account",
+  instagram_unified: "no_instagram_selected",
 };
 
 /**
