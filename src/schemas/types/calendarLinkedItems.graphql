@@ -86,7 +86,9 @@ type CalendarLinkedItem {
   note: String
   "Déclaration de TVA : période à ouvrir dans la page Déclaration de TVA"
   vatPeriodKey: String
-  "Déclaration de TVA : confirmée dans Newbi"
+  "Déclaration Urssaf : période à ouvrir dans la page Déclaration Urssaf"
+  urssafPeriodKey: String
+  "Déclaration de TVA ou Urssaf : confirmée dans Newbi"
   isDeclared: Boolean
 }
 

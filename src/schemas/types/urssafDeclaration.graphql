@@ -1,0 +1,161 @@
+"Information légale qui manque pour préparer une déclaration Urssaf"
+type UrssafMissingInfo {
+  code: String!
+  label: String!
+}
+
+"Période à déclarer, déduite de la périodicité choisie auprès de l'Urssaf"
+type UrssafPeriod {
+  key: String!
+  label: String!
+  start: String!
+  end: String!
+  dueDate: String!
+  "Date tombant un samedi, un dimanche ou un jour férié (report possible)"
+  isIndicative: Boolean!
+  "IN_PROGRESS, TO_DECLARE, NOT_CONFIRMED ou DECLARED"
+  status: String!
+  "Déclarée : chiffre d'affaires déclaré"
+  revenue: Int
+  "Déclarée : total estimé payé"
+  totalToPay: Float
+  declaredAt: DateTime
+}
+
+type UrssafOverview {
+  "MICRO, NOT_MICRO ou INCOMPLETE"
+  situation: String!
+  legalForm: String
+  "Mensuelle ou trimestrielle"
+  frequencyLabel: String
+  "Nature de l'activité déclarée à l'Urssaf"
+  activity: String
+  activityLabel: String
+  "ACRE : null tant que la question n'a pas de réponse"
+  hasAcre: Boolean
+  "Dernier jour de l'ACRE"
+  acreEndDate: String
+  "Versement libératoire de l'impôt sur le revenu"
+  hasIncomeTaxWithholding: Boolean
+  "Le rythme de déclaration en clair"
+  rhythm: String
+  "Bloquant : sans ces informations, rien n'est calculé"
+  missing: [UrssafMissingInfo!]!
+  "Sans ces informations, le chiffre d'affaires est calculé mais pas les cotisations"
+  estimateMissing: [UrssafMissingInfo!]!
+  periods: [UrssafPeriod!]!
+  "Période à ouvrir par défaut"
+  defaultPeriodKey: String
+}
+
+type UrssafLine {
+  key: String!
+  label: String!
+  "Montant sur lequel s'applique le taux"
+  base: Float
+  "Taux en pourcentage"
+  rate: Float
+  amount: Float!
+  isTotal: Boolean!
+  note: String
+}
+
+type UrssafSection {
+  key: String!
+  title: String!
+  lines: [UrssafLine!]!
+}
+
+type UrssafCheckDocument {
+  id: ID
+  label: String!
+  amount: Float
+}
+
+"Point à vérifier avant de déclarer"
+type UrssafCheck {
+  code: String!
+  "WARNING : le montant peut être faux ; INFO : à savoir"
+  severity: String!
+  label: String!
+  count: Int!
+  amount: Float
+  documents: [UrssafCheckDocument!]!
+}
+
+type UrssafTotals {
+  "Chiffre d'affaires à déclarer, toutes cases confondues"
+  revenue: Int!
+  "Cotisations sociales estimées (null sans estimation)"
+  socialContributions: Float
+  "Contribution à la formation professionnelle"
+  trainingContribution: Float
+  "Taxe pour frais de chambre consulaire"
+  chamberTax: Float
+  "Versement libératoire de l'impôt sur le revenu"
+  incomeTax: Float
+  "Total estimé à payer avec la déclaration"
+  totalToPay: Float
+}
+
+"Montants ajoutés à la main, en euros entiers"
+type UrssafAdjustments {
+  sales: Int!
+  servicesBic: Int!
+  servicesBnc: Int!
+}
+
+"Situation retenue pour l'estimation"
+type UrssafSituation {
+  activityLabel: String
+  "Taux appliqués : date de la grille"
+  ratesLabel: String
+  acreApplied: Boolean
+  incomeTaxWithholding: Boolean
+  "Pourquoi les cotisations ne sont pas estimées"
+  estimateUnavailableReason: String
+}
+
+type UrssafDeclaration {
+  period: UrssafPeriod!
+  isNil: Boolean!
+  totals: UrssafTotals!
+  sections: [UrssafSection!]!
+  checks: [UrssafCheck!]!
+  adjustments: UrssafAdjustments!
+  situation: UrssafSituation!
+  "Nombre de documents pris en compte"
+  documentCount: Int!
+  "Pourquoi la période ne peut pas encore être confirmée"
+  cannotConfirmReason: String
+  declaredByName: String
+}
+
+"Montants encaissés hors factures Newbi, en euros entiers"
+input UrssafAdjustmentsInput {
+  sales: Int
+  servicesBic: Int
+  servicesBnc: Int
+}
+
+extend type Query {
+  "Situation de micro-entrepreneur, rythme et périodes à déclarer"
+  urssafOverview(workspaceId: ID): UrssafOverview!
+  "Calcul d'une période, ou déclaration figée si elle est déjà confirmée"
+  urssafDeclaration(
+    workspaceId: ID
+    periodKey: String!
+    adjustments: UrssafAdjustmentsInput
+  ): UrssafDeclaration!
+}
+
+extend type Mutation {
+  "Enregistre que la déclaration a été déposée sur autoentrepreneur.urssaf.fr"
+  confirmUrssafDeclaration(
+    workspaceId: ID
+    periodKey: String!
+    adjustments: UrssafAdjustmentsInput
+  ): UrssafDeclaration!
+  "Annule une confirmation faite par erreur (rien n'est changé à l'Urssaf)"
+  cancelUrssafDeclaration(workspaceId: ID, periodKey: String!): UrssafOverview!
+}

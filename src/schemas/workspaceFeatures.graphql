@@ -4,6 +4,8 @@
 type WorkspaceFeatures {
   "Déclaration de TVA"
   vat: Boolean!
+  "Déclaration Urssaf du micro-entrepreneur"
+  urssaf: Boolean!
   "Prise de rendez-vous"
   appointments: Boolean!
   "Liens clients des documents partagés"
