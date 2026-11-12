@@ -54,6 +54,7 @@ export const FISCAL_ORGANIZATION_FIELDS = {
   fiscalYearStartDate: 1,
   fiscalYearEndDate: 1,
   microDeclarationFrequency: 1,
+  microActivityStartDate: 1,
 };
 
 // Page officielle affichée dans la fiche de chaque échéance
@@ -546,8 +547,14 @@ export function analyzeFiscalProfile(organization) {
       (AUTO_ENTREPRENEUR_LABELS.has(rawLegalForm) && !REAL_REGIMES.has(regime));
     if (isMicro) {
       const frequency = frequencyOf(organization.microDeclarationFrequency);
-      if (frequency) profile.micro = { frequency };
-      else {
+      if (frequency) {
+        profile.micro = {
+          frequency,
+          activityStartDate: isDayString(organization.microActivityStartDate)
+            ? organization.microActivityStartDate
+            : null,
+        };
+      } else {
         addMissing(
           "MICRO_DECLARATION_FREQUENCY",
           "Indiquez la périodicité de vos déclarations de chiffre d'affaires à l'Urssaf (mensuelle ou trimestrielle).",
@@ -875,7 +882,7 @@ function cfeDeadlines(years) {
   }));
 }
 
-function urssafDeclaration({ day, period }) {
+function urssafDeclaration({ day, period, periodKey, periodStart, periodEnd }) {
   const postponable = isNonWorkingDay(day) && !URSSAF_NOT_POSTPONED.has(day);
   const weekendNote = URSSAF_NOT_POSTPONED.has(day)
     ? "Cette échéance n'est exceptionnellement pas reportée au jour ouvré suivant."
@@ -887,6 +894,9 @@ function urssafDeclaration({ day, period }) {
     day,
     title: "Déclaration de chiffre d'affaires (Urssaf)",
     reference: period,
+    periodKey,
+    periodStart,
+    periodEnd,
     counterparty: URSSAF,
     action: FISCAL_ACTIONS.DECLARATION_PAYMENT,
     infoUrl: FISCAL_INFO_URLS.URSSAF,
@@ -913,9 +923,9 @@ function urssafDeadlines(years, frequency) {
                 ? lastDayOfMonth(year + 1, 1)
                 : lastDayOfMonth(year, month + 1),
             period: monthLabel(year, month),
-          periodKey: `${year}-${pad(month)}`,
-          periodStart: dayString(year, month, 1),
-          periodEnd: lastDayOfMonth(year, month),
+            periodKey: `${year}-${pad(month)}`,
+            periodStart: dayString(year, month, 1),
+            periodEnd: lastDayOfMonth(year, month),
           }),
         );
       }
@@ -926,15 +936,82 @@ function urssafDeadlines(years, frequency) {
         dayString(year, 10, 31),
         dayString(year + 1, 1, 31),
       ];
-      dues.forEach((day, index) =>
+      dues.forEach((day, index) => {
+        const quarter = index + 1;
         deadlines.push(
-          urssafDeclaration({ day, period: quarterLabel(year, index + 1) }),
-        ),
-      );
+          urssafDeclaration({
+            day,
+            period: quarterLabel(year, quarter),
+            periodKey: `${year}-T${quarter}`,
+            periodStart: dayString(year, 3 * quarter - 2, 1),
+            periodEnd: lastDayOfMonth(year, 3 * quarter),
+          }),
+        );
+      });
     }
   }
   return deadlines;
 }
+
+// Dernier jour de la première déclaration (CSS, art. R. 613-12) : fin du
+// troisième mois civil qui suit le mois du début d'activité (mensuelle), fin
+// du trimestre civil qui suit celui du début d'activité (trimestrielle)
+function firstDeclarationEnd(activityStartDate, frequency) {
+  const year = yearOf(activityStartDate);
+  const month = monthOf(activityStartDate);
+  if (frequency === "monthly") {
+    const last = month + 3;
+    return lastDayOfMonth(
+      year + Math.floor((last - 1) / 12),
+      ((last - 1) % 12) + 1,
+    );
+  }
+  const nextQuarter = Math.floor((month - 1) / 3) + 2; // 2 à 5
+  return nextQuarter > 4
+    ? lastDayOfMonth(year + 1, 3)
+    : lastDayOfMonth(year, 3 * nextQuarter);
+}
+
+/**
+ * Début d'activité connu : pas de déclaration avant, et la première
+ * déclaration couvre plusieurs périodes (exemple de service-public : début
+ * le 6 mars 2026 en mensuel, première déclaration de mars à juin, au plus
+ * tard le 31 juillet). Elle prend l'échéance et la clé de sa dernière
+ * période.
+ */
+function withFirstDeclaration(deadlines, activityStartDate, frequency) {
+  if (!activityStartDate) return deadlines;
+  const firstEnd = firstDeclarationEnd(activityStartDate, frequency);
+  const kept = deadlines.filter((d) => d.periodEnd >= activityStartDate);
+  const merged = kept.filter((d) => d.periodEnd <= firstEnd);
+  if (!merged.length) return kept;
+  const last = merged[merged.length - 1];
+  const first = urssafDeclaration({
+    day: last.day,
+    period: `Première déclaration (${shortDate(activityStartDate)} au ${shortDate(firstEnd)})`,
+    periodKey: last.periodKey,
+    periodStart: activityStartDate,
+    periodEnd: firstEnd,
+  });
+  return [first, ...kept.filter((d) => d.periodEnd > firstEnd)];
+}
+
+/**
+ * Déclarations de chiffre d'affaires d'un micro-entrepreneur, avec leur
+ * période : le rythme du calendrier et celui de la page Déclaration Urssaf
+ * sont les mêmes.
+ */
+export function urssafReturnDeadlines(profile, years) {
+  if (!profile?.micro) return [];
+  const { frequency, activityStartDate } = profile.micro;
+  return withFirstDeclaration(
+    urssafDeadlines(years, frequency),
+    activityStartDate,
+    frequency,
+  );
+}
+
+const isUrssaf = (deadline) => deadline.code === "URSSAF_REVENUE";
 
 /**
  * Échéances fiscales et sociales de [from, to] (jours inclus) et
@@ -961,7 +1038,7 @@ export function computeFiscalDeadlines(organization, { from, to, today }) {
   }
   if (profile.cfe) deadlines.push(...cfeDeadlines(years));
   if (profile.micro) {
-    deadlines.push(...urssafDeadlines(years, profile.micro.frequency));
+    deadlines.push(...urssafReturnDeadlines(profile, years));
   }
 
   const items = deadlines
@@ -982,7 +1059,9 @@ export function computeFiscalDeadlines(organization, { from, to, today }) {
       isIndicative: deadline.isIndicative,
       isConditional: deadline.isConditional,
       note: deadline.note,
-      vatPeriodKey: deadline.periodKey ?? null,
+      // Période à ouvrir dans la page Déclaration de TVA ou Urssaf
+      vatPeriodKey: isUrssaf(deadline) ? null : (deadline.periodKey ?? null),
+      urssafPeriodKey: isUrssaf(deadline) ? deadline.periodKey : null,
       isDeclared: false,
     }))
     .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id));

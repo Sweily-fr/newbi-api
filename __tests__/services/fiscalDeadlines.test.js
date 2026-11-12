@@ -18,6 +18,7 @@ import {
   nextWorkingDay,
   normalizeLegalForm,
   nthWorkingDayOfMonth,
+  urssafReturnDeadlines,
   FISCAL_INFO_URLS,
 } from "../../src/services/calendar/fiscalDeadlines.js";
 
@@ -546,6 +547,135 @@ describe("micro-entrepreneur : déclarations Urssaf", () => {
       ["2027-01-31", "Décembre 2026"],
       ["2027-02-28", "Janvier 2027"],
       ["2027-03-31", "Février 2027"],
+    ]);
+  });
+
+  it("chaque échéance ouvre sa période dans la page Déclaration Urssaf", () => {
+    const quarterly = run(
+      { ...MICRO, microDeclarationFrequency: "trimestriel" },
+      "2026-10-01",
+      "2027-01-31",
+    );
+    expect(
+      quarterly.items
+        .filter((i) => i.entityId === "URSSAF_REVENUE")
+        .map((i) => [i.urssafPeriodKey, i.vatPeriodKey]),
+    ).toEqual([
+      ["2026-T3", null],
+      ["2026-T4", null],
+    ]);
+
+    const monthly = run(
+      { ...MICRO, microDeclarationFrequency: "mensuel" },
+      "2026-11-01",
+      "2026-11-30",
+    );
+    expect(find(monthly, "URSSAF_REVENUE", "2026-11-30")).toMatchObject({
+      urssafPeriodKey: "2026-10",
+      vatPeriodKey: null,
+      isDeclared: false,
+    });
+  });
+
+  it("périodes de la page Déclaration Urssaf : mêmes dates que le calendrier", () => {
+    const { profile } = analyzeFiscalProfile({
+      ...MICRO,
+      microDeclarationFrequency: "trimestriel",
+    });
+    const fourth = urssafReturnDeadlines(profile, [2026]).find(
+      (d) => d.periodKey === "2026-T4",
+    );
+    expect(fourth).toMatchObject({
+      day: "2027-01-31",
+      reference: "4e trimestre 2026",
+      periodStart: "2026-10-01",
+      periodEnd: "2026-12-31",
+    });
+
+    const monthlyProfile = analyzeFiscalProfile({
+      ...MICRO,
+      microDeclarationFrequency: "mensuel",
+    }).profile;
+    const february = urssafReturnDeadlines(monthlyProfile, [2027]).find(
+      (d) => d.periodKey === "2027-02",
+    );
+    expect(february).toMatchObject({
+      day: "2027-03-31",
+      periodStart: "2027-02-01",
+      periodEnd: "2027-02-28",
+    });
+
+    // Pas micro-entrepreneur : aucune période
+    expect(
+      urssafReturnDeadlines(analyzeFiscalProfile(SAS).profile, [2026]),
+    ).toEqual([]);
+  });
+
+  it("début d'activité : rien avant, première déclaration plus longue (R. 613-12)", () => {
+    // Exemple de service-public : début le 6 mars 2026, première déclaration
+    // au plus tard le 31 juillet
+    const monthly = analyzeFiscalProfile({
+      ...MICRO,
+      microDeclarationFrequency: "mensuel",
+      microActivityStartDate: "2026-03-06",
+    }).profile;
+    const months = urssafReturnDeadlines(monthly, [2026]);
+    expect(months[0]).toMatchObject({
+      day: "2026-07-31",
+      periodKey: "2026-06",
+      periodStart: "2026-03-06",
+      periodEnd: "2026-06-30",
+      reference: "Première déclaration (06/03/2026 au 30/06/2026)",
+    });
+    expect(months[1]).toMatchObject({
+      day: "2026-08-31",
+      periodKey: "2026-07",
+    });
+    expect(months).toHaveLength(7);
+
+    // Début le 12 avril en trimestriel : 2e et 3e trimestres, 31 octobre
+    const quarterly = analyzeFiscalProfile({
+      ...MICRO,
+      microDeclarationFrequency: "trimestriel",
+      microActivityStartDate: "2026-04-12",
+    }).profile;
+    expect(
+      urssafReturnDeadlines(quarterly, [2026]).map((d) => [
+        d.day,
+        d.periodKey,
+        d.periodStart,
+      ]),
+    ).toEqual([
+      ["2026-10-31", "2026-T3", "2026-04-12"],
+      ["2027-01-31", "2026-T4", "2026-10-01"],
+    ]);
+
+    // Début en novembre : la première déclaration passe sur l'année suivante
+    const november = analyzeFiscalProfile({
+      ...MICRO,
+      microDeclarationFrequency: "mensuel",
+      microActivityStartDate: "2026-11-20",
+    }).profile;
+    expect(urssafReturnDeadlines(november, [2026, 2027])[0]).toMatchObject({
+      day: "2027-03-31",
+      periodKey: "2027-02",
+      periodEnd: "2027-02-28",
+    });
+
+    // Le calendrier suit la même règle
+    const calendar = run(
+      {
+        ...MICRO,
+        microDeclarationFrequency: "mensuel",
+        microActivityStartDate: "2026-03-06",
+      },
+      "2026-01-01",
+      "2026-08-31",
+      "2026-02-01",
+    );
+    expect(days(calendar, "URSSAF_REVENUE")).toEqual([
+      "2026-07-31",
+      "2026-08-31",
     ]);
   });
 

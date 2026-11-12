@@ -4,6 +4,7 @@ import {
   computeFiscalDeadlines,
 } from "./fiscalDeadlines.js";
 import { declaredVatPeriodKeys } from "../vat/vatDeclarationService.js";
+import { declaredUrssafPeriodKeys } from "../urssaf/urssafDeclarationService.js";
 
 /**
  * Échéances fiscales et sociales dans le calendrier : calculées à chaque
@@ -21,12 +22,20 @@ export async function fiscalItems({ workspaceId, from, to, today, db }) {
     to,
     today,
   });
-  // Déclaration de TVA confirmée dans Newbi : l'échéance est faite
-  const declared = items.some((item) => item.vatPeriodKey)
-    ? await declaredVatPeriodKeys(workspaceId)
-    : new Set();
+  // Déclaration de TVA ou Urssaf confirmée dans Newbi : l'échéance est faite
+  const [declaredVat, declaredUrssaf] = await Promise.all([
+    items.some((item) => item.vatPeriodKey)
+      ? declaredVatPeriodKeys(workspaceId)
+      : new Set(),
+    items.some((item) => item.urssafPeriodKey)
+      ? declaredUrssafPeriodKeys(workspaceId)
+      : new Set(),
+  ]);
   for (const item of items) {
-    if (item.vatPeriodKey && declared.has(item.vatPeriodKey)) {
+    if (
+      (item.vatPeriodKey && declaredVat.has(item.vatPeriodKey)) ||
+      (item.urssafPeriodKey && declaredUrssaf.has(item.urssafPeriodKey))
+    ) {
       item.isDeclared = true;
       item.state = "DONE";
     }
