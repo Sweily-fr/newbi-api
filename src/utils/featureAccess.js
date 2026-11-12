@@ -4,7 +4,8 @@
  * les ouvrir à tous.
  *
  * BETA_FEATURES       fonctionnalités réservées, séparées par des virgules
- *                     (vat, appointments, documentShares, socialPublishing) ;
+ *                     (vat, urssaf, appointments, documentShares,
+ *                     socialPublishing) ;
  *                     « none » = aucune. Absente ou vide : toutes réservées
  *                     en production, aucune ailleurs (local, CI, staging),
  *                     pour qu'un oubli de variable n'ouvre rien à tout le
@@ -18,6 +19,7 @@ import { AppError, ERROR_CODES } from "./errors.js";
 
 export const BETA_FEATURE_KEYS = Object.freeze([
   "vat",
+  "urssaf",
   "appointments",
   "documentShares",
   "socialPublishing",

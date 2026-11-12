@@ -101,15 +101,17 @@ describe("isFeatureEnabled", () => {
 
 describe("workspaceFeatures", () => {
   it("donne l'accès de l'espace à chaque fonctionnalité", () => {
-    const env = prodEnv({ BETA_FEATURES: "vat,socialPublishing" });
+    const env = prodEnv({ BETA_FEATURES: "vat,urssaf,socialPublishing" });
     expect(workspaceFeatures(OTHER, env)).toEqual({
       vat: false,
+      urssaf: false,
       appointments: true,
       documentShares: true,
       socialPublishing: false,
     });
     expect(workspaceFeatures(BETA, env)).toEqual({
       vat: true,
+      urssaf: true,
       appointments: true,
       documentShares: true,
       socialPublishing: true,

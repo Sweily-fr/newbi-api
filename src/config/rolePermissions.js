@@ -160,6 +160,12 @@ export const MODULES = [
     label: "Déclaration de TVA",
     actions: [VIEW, action("edit", "Confirmer les déclarations")],
   },
+  {
+    key: "urssaf",
+    group: "pilotage",
+    label: "Déclaration Urssaf",
+    actions: [VIEW, action("edit", "Confirmer les déclarations")],
+  },
   // Ventes
   {
     key: "invoices",
@@ -635,6 +641,7 @@ const EDITOR_EXCLUDED = {
 
 const ACCOUNTANT_LEVELS = fill("read", {
   vat: "write",
+  urssaf: "write",
   invoicePayments: "write",
   importedInvoices: "write",
   importedQuotes: "write",
