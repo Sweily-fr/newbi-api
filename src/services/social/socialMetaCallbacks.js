@@ -18,7 +18,10 @@ import { apiPublicUrl } from "./socialConnectUrls.js";
  *
  * Comptes concernés : user_id de la charge = identifiant de l'utilisateur
  * pour l'appli (platformData.metaUserId) chez Facebook Login, identifiant
- * du compte (externalAccountId) chez Instagram Login. Désautorisation :
+ * du compte (externalAccountId) chez Instagram Login. Les comptes Instagram
+ * de la connexion unifiée (connecteur « unified ») vivent dans l'appli des
+ * Pages : visés par les rappels « meta » (et « instagram_facebook » quand
+ * celle-ci partage l'appli des Pages). Désautorisation :
  * comptes à reconnecter, jetons effacés. Suppression : comptes déconnectés
  * (deletedAt, jetons effacés ; les posts passés gardent leurs cibles),
  * demande gardée avec un code de suivi. Aucune autre donnée modifiée.
@@ -98,11 +101,12 @@ function accountsFilter(source, userId) {
   }
   const facebook = { platform: "facebook" };
   const instagramFacebook = { platform: "instagram", connector: "facebook" };
+  const instagramUnified = { platform: "instagram", connector: "unified" };
   const shared = instagramFacebookSharesMetaApp();
   const scopes =
     source === "meta"
-      ? [facebook, ...(shared ? [instagramFacebook] : [])]
-      : [instagramFacebook, ...(shared ? [facebook] : [])];
+      ? [facebook, instagramUnified, ...(shared ? [instagramFacebook] : [])]
+      : [instagramFacebook, ...(shared ? [facebook, instagramUnified] : [])];
   return {
     provider: "direct",
     "platformData.metaUserId": userId,

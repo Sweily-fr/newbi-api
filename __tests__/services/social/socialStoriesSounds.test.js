@@ -119,6 +119,7 @@ const ENV_TO_CLEAR = [
   "META_INSTAGRAM_FB_APP_ID",
   "META_INSTAGRAM_FB_APP_SECRET",
   "META_INSTAGRAM_LOGIN_CONFIG_ID",
+  "META_INSTAGRAM_UNIFIED_CONFIG_ID",
   "META_LOGIN_CONFIG_ID",
   "SOCIAL_DIRECT_WORKSPACE_IDS",
   "SOCIAL_PROVIDER_LINKEDIN",
@@ -350,6 +351,32 @@ describe("connecteurs et capacités", () => {
     expect(result.connectors.map((c) => c.key)).toContain("instagram_facebook");
     expect(result.connectors.map((c) => c.key)).not.toContain("instagram");
     expect(result.platforms).toContain("instagram");
+  });
+
+  it("connexion unifiée : proposée seulement avec sa configuration, avant celle via Facebook", async () => {
+    const status = () => Query.socialPublishingStatus(null, {}, ctx);
+    const keys = async () => (await status()).connectors.map((c) => c.key);
+    expect(await keys()).not.toContain("instagram_unified");
+
+    process.env.META_INSTAGRAM_UNIFIED_CONFIG_ID = "cfg_unified";
+    expect((await keys()).slice(0, 3)).toEqual([
+      "instagram",
+      "instagram_unified",
+      "instagram_facebook",
+    ]);
+    expect(
+      (await status()).connectors.find((c) => c.key === "instagram_unified"),
+    ).toEqual({
+      key: "instagram_unified",
+      platform: "instagram",
+      label: "Instagram",
+      description:
+        "Connexion avec votre compte Instagram professionnel, sans Page Facebook.",
+    });
+
+    // Instagram sur Zernio : jamais proposée
+    delete process.env.SOCIAL_PROVIDER_INSTAGRAM;
+    expect(await keys()).not.toContain("instagram_unified");
   });
 
   it("comptes : connecteur et capacités (stories, sons, brouillons)", async () => {
@@ -1465,6 +1492,43 @@ describe("rappels de Meta", () => {
     expect(response.status).toBe(200);
     expect((await withTokens(accounts.igLogin)).status).toBe("needs_reconnect");
     expect((await withTokens(accounts.igFacebook)).status).toBe("active");
+  });
+
+  it("connexion unifiée (appli des Pages) : comptes visés par les rappels « meta »", async () => {
+    const unified = await SocialAccount.create(
+      directAccount({
+        platform: "instagram",
+        connector: "unified",
+        externalAccountId: "17841400000000009",
+        credentialGroup: "meta-system-user:su_9",
+        platformData: { metaUserId: "su_9", businessId: "biz_9" },
+      }),
+    );
+    const response = await post(
+      "/meta/deauthorize",
+      sign({ algorithm: "HMAC-SHA256", user_id: "su_9" }, "meta_secret"),
+    );
+    expect(response.status).toBe(200);
+    expect(await withTokens(unified)).toMatchObject({
+      status: "needs_reconnect",
+      accessToken: null,
+    });
+    // Comptes d'un autre utilisateur Meta : intacts
+    expect((await withTokens(accounts.igFacebook)).status).toBe("active");
+
+    // Appli dédiée à Instagram via Facebook : ses rappels ne visent pas
+    // les comptes de l'appli des Pages
+    process.env.META_INSTAGRAM_FB_APP_ID = "ig_fb_app";
+    process.env.META_INSTAGRAM_FB_APP_SECRET = "ig_fb_secret";
+    await SocialAccount.updateOne(
+      { _id: unified._id },
+      { $set: { status: "active", accessToken: "token" } },
+    );
+    await post(
+      "/instagram_facebook/data-deletion",
+      sign({ user_id: "su_9" }, "ig_fb_secret"),
+    );
+    expect((await withTokens(unified)).deletedAt).toBeNull();
   });
 
   it("appli dédiée à Instagram via Facebook : son secret, ses comptes seulement", async () => {

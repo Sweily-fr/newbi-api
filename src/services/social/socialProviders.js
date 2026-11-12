@@ -1,5 +1,6 @@
 import instagramApi from "./direct/instagramApi.js";
 import instagramFacebookApi from "./direct/instagramFacebookApi.js";
+import instagramUnifiedApi from "./direct/instagramUnifiedApi.js";
 import linkedinApi from "./direct/linkedinApi.js";
 import metaApi from "./direct/metaApi.js";
 import tiktokApi from "./direct/tiktokApi.js";
@@ -27,12 +28,14 @@ import { SOCIAL_PLATFORMS, platformLabel } from "./socialPostRules.js";
  *
  * Connecteurs : façons de connecter un réseau en direct. Chaque réseau a
  * son connecteur habituel (clé = réseau) ; Instagram peut aussi passer par
- * Facebook (instagram_facebook, sons tendance) et TikTok par TikTok API for
- * Business (tiktok_business, sons tendance). Les connecteurs de plus
+ * la connexion unifiée de Meta (instagram_unified : compte Instagram seul,
+ * sans Page ni compte Facebook), par Facebook (instagram_facebook, sons
+ * tendance) et TikTok par TikTok API for Business (tiktok_business, sons
+ * tendance). Les connecteurs de plus
  * n'existent qu'en direct et suivent le même réglage
  * SOCIAL_PROVIDER_<RÉSEAU> / SOCIAL_DIRECT_WORKSPACE_IDS[_<RÉSEAU>].
  * Le compte garde son connecteur (SocialAccount.connector : null,
- * « facebook » ou « business »).
+ * « unified », « facebook » ou « business »).
  */
 
 const ENV_SUFFIX = {
@@ -55,6 +58,15 @@ const CONNECTORS = [
     module: instagramApi,
     label: "Instagram",
     description: null,
+  },
+  {
+    key: "instagram_unified",
+    platform: "instagram",
+    connector: "unified",
+    module: instagramUnifiedApi,
+    label: "Instagram",
+    description:
+      "Connexion avec votre compte Instagram professionnel, sans Page Facebook.",
   },
   {
     key: "instagram_facebook",
