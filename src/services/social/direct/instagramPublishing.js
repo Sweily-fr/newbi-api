@@ -11,8 +11,11 @@ import { DirectApiError, directRequest, timing } from "./directHttp.js";
  *   graph.facebook.com, jeton en paramètre, son tendance sur les Reels
  *   (audio_configuration, API Audio réservée à cette connexion).
  *
- * Photo et carrousel publiés tout de suite ; vidéo en Reel en deux temps
- * (conteneur, puis checkPublication) ; stories (media_type STORIES) : une
+ * Photo et carrousel de photos publiés tout de suite ; vidéo en Reel en
+ * deux temps (conteneur, puis checkPublication) ; carrousel avec au moins
+ * une vidéo (photos et vidéos mélangées, ou plusieurs vidéos) en deux temps
+ * aussi : éléments créés, assemblés en carrousel quand Instagram a traité
+ * toutes les vidéos, puis publiés ; stories (media_type STORIES) : une
  * story par photo, publiées à la suite avec la progression enregistrée
  * après chacune (saveProgress), ou une vidéo en deux temps comme le Reel.
  * Pas de légende ni de couverture pour une story (non prévues par l'API).
@@ -27,6 +30,12 @@ const PUBLISH_TIMEOUT_MS = 60000;
 // Reel et story vidéo : statut du conteneur lu une fois par minute (conseil
 // de Meta)
 export const VIDEO_CHECK_MS = 60 * 1000;
+// Carrousel avec vidéo : processingRef « carousel:<élément>,<élément>… »
+// tant que les éléments sont en traitement, puis l'identifiant du conteneur
+// CAROUSEL (suivi comme un Reel, publication jamais refaite)
+export const CAROUSEL_REF_PREFIX = "carousel:";
+// Conteneur CAROUSEL : prêt en quelques secondes une fois ses éléments prêts
+const CAROUSEL_CHECK_MS = 30 * 1000;
 
 /** Volume Meta : entier de 1 à 100 (0 est envoyé comme 1). */
 export const metaVolume = (value) =>
@@ -236,6 +245,85 @@ export function createInstagramPublisher({
   }
 
   /**
+   * Carrousel avec au moins une vidéo : un conteneur par élément, dans
+   * l'ordre (vidéo : media_type VIDEO, pas de légende ni de couverture sur
+   * un élément), assemblé plus tard par checkCarousel. Instagram va
+   * chercher chaque vidéo à notre adresse.
+   */
+  async function startCarousel({ account, accessToken, media }) {
+    const igUserId = account.externalAccountId;
+    const children = [];
+    for (const item of media) {
+      children.push(
+        await createContainer(
+          igUserId,
+          accessToken,
+          isVideoMedia(item)
+            ? {
+                media_type: "VIDEO",
+                video_url: item.url,
+                is_carousel_item: true,
+              }
+            : { image_url: item.url, is_carousel_item: true },
+        ),
+      );
+    }
+    return twoStepResult(`${CAROUSEL_REF_PREFIX}${children.join(",")}`);
+  }
+
+  /**
+   * Suivi des éléments d'un carrousel avec vidéo : tous prêts → conteneur
+   * CAROUSEL créé avec la légende (suivi ensuite comme un Reel) ; un élément
+   * en cours → à relire ; en erreur → refus (vidéo refusée si c'est une
+   * vidéo) ; expiré → publication à reprendre.
+   */
+  async function checkCarousel({
+    account,
+    accessToken,
+    processingRef,
+    content,
+    media,
+  }) {
+    const childIds = processingRef
+      .slice(CAROUSEL_REF_PREFIX.length)
+      .split(",")
+      .filter(Boolean);
+    for (const [index, childId] of childIds.entries()) {
+      const { data } = await graph("GET", childId, {
+        token: accessToken,
+        query: { fields: "status_code,status" },
+      });
+      const status = data?.status_code;
+      if (status === "FINISHED") continue;
+      if (status === "ERROR") {
+        throw containerError(data, { video: isVideoMedia(media?.[index]) });
+      }
+      if (status === "EXPIRED") {
+        throw new DirectApiError(`${network} : conteneur expiré`, {
+          network,
+          transient: true,
+          restart: true,
+        });
+      }
+      return { status: "publishing", nextCheckMs: VIDEO_CHECK_MS };
+    }
+    const containerId = await createContainer(
+      account.externalAccountId,
+      accessToken,
+      {
+        media_type: "CAROUSEL",
+        children: childIds.join(","),
+        ...(content ? { caption: content } : {}),
+      },
+    );
+    return {
+      status: "publishing",
+      processingRef: containerId,
+      nextCheckMs: CAROUSEL_CHECK_MS,
+    };
+  }
+
+  /**
    * Stories photo : une story par photo, dans l'ordre, en reprenant après
    * la dernière déjà publiée (progress.storyIds) ; progression enregistrée
    * après chaque story (un nouvel essai ne republie jamais une story).
@@ -289,18 +377,30 @@ export function createInstagramPublisher({
   }
 
   /**
-   * Suivi d'un Reel ou d'une story vidéo : conteneur prêt → publié ; en
-   * cours → à relire ; en erreur → refus ; expiré (jamais publié) →
-   * publication à reprendre.
+   * Suivi d'un Reel, d'une story vidéo ou d'un carrousel avec vidéo :
+   * conteneur prêt → publié ; en cours → à relire ; en erreur → refus ;
+   * expiré (jamais publié) → publication à reprendre. Carrousel encore en
+   * éléments (processingRef « carousel:… ») : voir checkCarousel.
    */
   async function checkPublication({
     account,
     accessToken,
     processingRef,
+    content = "",
+    media = [],
     instagramSettings = null,
     progress = null,
     saveProgress = null,
   }) {
+    if (String(processingRef || "").startsWith(CAROUSEL_REF_PREFIX)) {
+      return checkCarousel({
+        account,
+        accessToken,
+        processingRef: String(processingRef),
+        content,
+        media,
+      });
+    }
     const story = instagramSettings?.format === "story";
     const { data } = await graph("GET", processingRef, {
       token: accessToken,
@@ -345,9 +445,10 @@ export function createInstagramPublisher({
   }
 
   /**
-   * Publie une image ou un carrousel (2 à 10 images), lance un Reel (une
-   * vidéo), ou publie en story (instagramSettings.format « story »). Les
-   * médias doivent être à une adresse publique (Instagram va les chercher).
+   * Publie une image ou un carrousel de photos, lance un Reel (une vidéo)
+   * ou un carrousel avec vidéo (photos et vidéos, 2 à 10 éléments), ou
+   * publie en story (instagramSettings.format « story »). Les médias doivent
+   * être à une adresse publique (Instagram va les chercher).
    */
   async function publish({
     account,
@@ -378,6 +479,9 @@ export function createInstagramPublisher({
         video: media[0],
         sound: instagramSettings?.sound || null,
       });
+    }
+    if (media.some(isVideoMedia)) {
+      return startCarousel({ account, accessToken, media });
     }
     const igUserId = account.externalAccountId;
     const create = (json) => createContainer(igUserId, accessToken, json);

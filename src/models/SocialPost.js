@@ -85,7 +85,8 @@ const mediaSchema = new mongoose.Schema(
   {
     mediaId: { type: mongoose.Schema.Types.ObjectId, ref: "SocialPostMedia" },
     // « image » ou « video » (une seule vidéo par post, jamais avec des
-    // images) ; toujours prête au moment de programmer
+    // images, sauf carrousel Instagram) ; toujours prête au moment de
+    // programmer
     kind: { type: String, default: "image" },
     url: { type: String, required: true },
     width: { type: Number, default: null },
