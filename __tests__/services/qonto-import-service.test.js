@@ -86,6 +86,7 @@ import Supplier from "../../src/models/Supplier.js";
 import Quote from "../../src/models/Quote.js";
 import ImportedQuote from "../../src/models/ImportedQuote.js";
 import Notification from "../../src/models/Notification.js";
+import documentAutomationService from "../../src/services/documentAutomationService.js";
 import {
   importFromQonto,
   importClientInvoices,
@@ -246,6 +247,20 @@ describe("importClientInvoices (Qonto → factures importées)", () => {
     expect(notif.data.importedInvoiceId).toBe(String(doc._id));
     expect(notif.data.invoiceId).toBeUndefined();
     expect(publishNotificationMock).toHaveBeenCalledTimes(1);
+
+    // Automatisations « Facture importée » des documents partagés
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      documentAutomationService.executeAutomationsForExpense,
+    ).toHaveBeenCalledWith(
+      "INVOICE_IMPORTED",
+      expect.any(String),
+      expect.objectContaining({
+        documentId: String(doc._id),
+        documentType: "importedInvoice",
+      }),
+      String(userId),
+    );
   });
 
   it("est idempotent et met à jour le statut payé", async () => {
@@ -445,6 +460,20 @@ describe("importSupplierInvoices (Qonto → factures d'achat)", () => {
     expect(supplier.name).toBe("Fournisseur SARL");
     expect(account.importCursors.supplierInvoices.toISOString()).toBe(
       "2026-08-21T09:00:00.000Z",
+    );
+
+    // Automatisations « Facture d'achat à payer » des documents partagés
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      documentAutomationService.executeAutomationsForExpense,
+    ).toHaveBeenCalledWith(
+      "PURCHASE_INVOICE_TO_PAY",
+      expect.any(String),
+      expect.objectContaining({
+        documentId: String(pi._id),
+        documentType: "purchaseInvoice",
+      }),
+      String(userId),
     );
   });
 

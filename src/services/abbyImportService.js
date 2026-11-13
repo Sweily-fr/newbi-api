@@ -17,6 +17,7 @@ import { convertSingleImportedQuote } from "../resolvers/importedQuote.js";
 import { publishNotification } from "../resolvers/notification.js";
 import { sendNotificationPush } from "./notificationPushService.js";
 import logger from "../utils/logger.js";
+import { triggerImportedInvoiceAutomations } from "../utils/documentAutomationTriggers.js";
 
 /**
  * Sens Abby → Newbi.
@@ -324,6 +325,7 @@ export async function importClientInvoices(account, userId) {
       });
 
       result.imported++;
+      triggerImportedInvoiceAutomations(created, workspaceId, userId);
       logger.info(
         `[ABBY-IMPORT] Facture ${doc.number || abbyId} importée depuis Abby (org=${workspaceId})`,
       );
