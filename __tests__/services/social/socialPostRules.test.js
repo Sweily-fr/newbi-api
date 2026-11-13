@@ -17,9 +17,9 @@ import {
   validateTikTokSettings,
   validateTikTokVideoDuration,
   videoCoverOffsetMs,
-  MIXED_MEDIA_MESSAGE,
+  isVideoCarousel,
   SCHEDULE_TOO_SOON_MESSAGE,
-  SINGLE_VIDEO_MESSAGE,
+  STORY_MIXED_MEDIA_MESSAGE,
 } from "../../../src/services/social/socialPostRules.js";
 
 const image = (width = 1080, height = 1080) => ({ width, height });
@@ -152,22 +152,86 @@ describe("validatePostContent", () => {
   });
 });
 
+describe("carrousel avec vidéo (Instagram)", () => {
+  it("reconnaît un carrousel avec au moins une vidéo", () => {
+    expect(isVideoCarousel([image(), video()])).toBe(true);
+    expect(isVideoCarousel([video(), video()])).toBe(true);
+    expect(isVideoCarousel([video()])).toBe(false);
+    expect(isVideoCarousel([image(), image()])).toBe(false);
+    expect(isVideoCarousel([])).toBe(false);
+  });
+
+  it("Instagram seul, en publication : photos et vidéos mélangées acceptées", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "Les coulisses",
+        media: [image(), video(), image(1080, 1350)],
+      }),
+    ).toBeNull();
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video(), video()],
+      }),
+    ).toBeNull();
+  });
+
+  it("Instagram en story : refusé, avec la marche à suivre", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [image(), video()],
+        formats: { instagram: "story" },
+      }),
+    ).toBe(STORY_MIXED_MEDIA_MESSAGE);
+  });
+
+  it("10 éléments au plus, photos et vidéos comptées ensemble", () => {
+    const media = [...Array(9).fill(image()), video(), video()];
+    expect(
+      validatePostContent({ platforms: ["instagram"], content: "", media }),
+    ).toBe("Instagram accepte au maximum 10 photos ou vidéos.");
+  });
+
+  it("chaque vidéo respecte les limites Instagram, chaque photo son format", () => {
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [image(), video({ size: 400 * 1000 * 1000 })],
+      }),
+    ).toMatch(/trop lourde pour Instagram/);
+    expect(
+      validatePostContent({
+        platforms: ["instagram"],
+        content: "",
+        media: [video(), image(3000, 1000)],
+      }),
+    ).toMatch(/image n°1 ne convient pas à Instagram/);
+  });
+});
+
 describe("vidéo", () => {
-  it("une seule vidéo, jamais avec des photos", () => {
+  it("hors Instagram : une seule vidéo, jamais avec des photos", () => {
     expect(
       validatePostContent({
         platforms: ["facebook"],
         content: "x",
         media: [video(), image()],
       }),
-    ).toBe(MIXED_MEDIA_MESSAGE);
+    ).toBe(
+      "Seul Instagram publie un carrousel avec vidéo (photos et vidéos mélangées, ou plusieurs vidéos) : décochez Facebook, ou gardez soit des photos, soit une seule vidéo.",
+    );
     expect(
       validatePostContent({
-        platforms: ["facebook"],
+        platforms: ["instagram", "facebook", "twitter"],
         content: "x",
         media: [video(), video()],
       }),
-    ).toBe(SINGLE_VIDEO_MESSAGE);
+    ).toMatch(/décochez Facebook et X, ou gardez/);
     expect(
       validatePostContent({
         platforms: ["facebook", "linkedin", "twitter"],

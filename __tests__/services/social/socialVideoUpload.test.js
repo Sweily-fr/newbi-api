@@ -362,7 +362,7 @@ describe("programmer un post avec une vidéo", () => {
     expect(await SocialPost.countDocuments()).toBe(0);
   });
 
-  it("vidéo trop longue pour X, ou mêlée à des photos : refusée", async () => {
+  it("vidéo trop longue pour X, ou mêlée à des photos hors Instagram : refusée", async () => {
     const long = await readyVideo({ durationMs: 185 * 1000 });
     await expect(
       schedule({
@@ -381,12 +381,30 @@ describe("programmer un post avec une vidéo", () => {
     const video = await readyVideo();
     await expect(
       schedule({
-        accountIds: [String(instagram._id)],
+        accountIds: [String(instagram._id), String(twitter._id)],
         mediaIds: [String(image._id), String(video._id)],
       }),
     ).rejects.toThrow(
-      "Un post contient soit des photos, soit une vidéo, pas les deux.",
+      "Seul Instagram publie un carrousel avec vidéo (photos et vidéos mélangées, ou plusieurs vidéos) : décochez X, ou gardez soit des photos, soit une seule vidéo.",
     );
+  });
+
+  it("carrousel Instagram : photo et vidéo programmées ensemble, dans l'ordre", async () => {
+    const image = await SocialPostMedia.create({
+      workspaceId: organizationId,
+      url: "https://api.newbi.test/social-media/3b4e28ba-2fa1-11d2-883f-0016d3cca427.jpg",
+      width: 1080,
+      height: 1350,
+    });
+    const video = await readyVideo();
+    await schedule({
+      accountIds: [String(instagram._id)],
+      mediaIds: [String(video._id), String(image._id)],
+    });
+    const post = await SocialPost.findOne({ workspaceId: organizationId })
+      .sort({ _id: -1 })
+      .lean();
+    expect(post.media.map((m) => m.kind)).toEqual(["video", "image"]);
   });
 
   it("TikTok : duos et collages obligatoires, gardés avec le post", async () => {
