@@ -7,9 +7,11 @@
  * Même logique que NewbiV2/src/utils/social-post-rules.js (le site affiche les
  * compteurs et bloque avant l'envoi) ; l'API reste la source de vérité.
  *
- * Un post contient soit des images, soit une seule vidéo (jamais les deux).
- * Les limites vidéo par réseau s'appliquent à la vidéo préparée par le
- * serveur (socialVideoProcessing.js : MP4 H.264, durée, poids).
+ * Un post contient soit des images, soit une seule vidéo, sauf sur
+ * Instagram (fil) : carrousel qui mélange photos et vidéos, ou plusieurs
+ * vidéos (seul réseau dont l'API le permet). Les limites vidéo par réseau
+ * s'appliquent à chaque vidéo préparée par le serveur
+ * (socialVideoProcessing.js : MP4 H.264, durée, poids).
  *
  * Instagram et Facebook peuvent publier le post en story (format « story »,
  * comptes connectés directement) : média obligatoire, texte ignoré (les API
@@ -63,6 +65,15 @@ export const TIKTOK_BUSINESS_PUBLIC_VIDEO_MESSAGE =
 export const MIXED_MEDIA_MESSAGE =
   "Un post contient soit des photos, soit une vidéo, pas les deux.";
 export const SINGLE_VIDEO_MESSAGE = "Une seule vidéo par post.";
+export const STORY_MIXED_MEDIA_MESSAGE =
+  "Une story ne mélange pas photos et vidéos : choisissez « Publication » pour Instagram, ou gardez soit des photos, soit une seule vidéo.";
+
+// Carrousel avec vidéo (photos et vidéos mélangées, ou plusieurs vidéos) :
+// seul Instagram le publie par son API, dans le fil (pas en story). Doc :
+// developers.facebook.com/docs/instagram-platform/content-publishing/
+// (« Carousel posts »). Facebook, LinkedIn, TikTok et X : photos seules ou
+// une seule vidéo.
+export const MIXED_CAROUSEL_PLATFORMS = ["instagram"];
 
 // Limites publiées par chaque réseau (voir la doc Zernio, platforms/*, et la
 // doc de chaque API pour la vidéo). Poids des vidéos en octets décimaux
@@ -210,6 +221,31 @@ export function isInstagramRatioValid(width, height) {
 
 export const isVideoMedia = (media) => media?.kind === "video";
 
+/** Carrousel avec au moins une vidéo (plusieurs médias dont une vidéo). */
+export function isVideoCarousel(media = []) {
+  const items = (Array.isArray(media) ? media : []).filter(Boolean);
+  return items.length > 1 && items.some(isVideoMedia);
+}
+
+/** Ce réseau publie un carrousel avec vidéo dans ce format. */
+export const canPublishVideoCarousel = (platform, format) =>
+  MIXED_CAROUSEL_PLATFORMS.includes(platform) &&
+  !isStoryFormat(platform, format);
+
+/**
+ * Refus d'un carrousel avec vidéo pour les réseaux qui ne le publient pas :
+ * réseaux à décocher, ou story (Instagram) à repasser en publication.
+ * @param {string[]} blockers - réseaux visés qui ne le publient pas
+ */
+export function videoCarouselMessage(blockers = []) {
+  const others = blockers.filter(
+    (platform) => !MIXED_CAROUSEL_PLATFORMS.includes(platform),
+  );
+  if (others.length === 0) return STORY_MIXED_MEDIA_MESSAGE;
+  const labels = joinLabels(others.map(platformLabel));
+  return `Seul Instagram publie un carrousel avec vidéo (photos et vidéos mélangées, ou plusieurs vidéos) : décochez ${labels}, ou gardez soit des photos, soit une seule vidéo.`;
+}
+
 /**
  * Durée lisible : « 45 s », « 2 min 20 », « 3 min 05 », « 10 min ».
  * Une durée réelle est arrondie à la seconde supérieure (une vidéo de
@@ -337,14 +373,14 @@ export const videoCoverOffsetMs = (durationMs) =>
 /**
  * Contenu d'un post pour les réseaux visés : texte ou média, limites de
  * texte et d'images, média obligatoire (Instagram, TikTok), format des
- * images (Instagram, LinkedIn), une seule vidéo sans photo, durée et poids
- * de la vidéo par réseau.
+ * images (Instagram, LinkedIn), une seule vidéo sans photo (sauf carrousel
+ * Instagram), durée et poids de chaque vidéo par réseau.
  *
  * @param {object} params
  * @param {string[]} params.platforms - réseaux visés
  * @param {string} params.content - texte du post
  * @param {{kind?: string, width?: number, height?: number, durationMs?: number, size?: number}[]} params.media
- *   images ou vidéo (kind « video »)
+ *   images ou vidéos (kind « video »), dans l'ordre du post
  * @param {{instagram?: string, facebook?: string}} [params.formats] - « post »
  *   (défaut) ou « story » par réseau
  * @param {string|null} [params.tiktokMode] - « draft » : pas de limite de
@@ -372,9 +408,16 @@ export function validatePostContent({
   if (!text && items.length === 0) {
     return "Écrivez un texte ou ajoutez une image.";
   }
-  if (videos.length > 0 && images.length > 0) return MIXED_MEDIA_MESSAGE;
-  if (videos.length > 1) return SINGLE_VIDEO_MESSAGE;
-  const video = videos[0] || null;
+  // Carrousel avec vidéo : Instagram en publication seulement
+  const carousel = isVideoCarousel(items);
+  if (carousel) {
+    const blockers = targets.filter(
+      (platform) => !canPublishVideoCarousel(platform, formats?.[platform]),
+    );
+    if (blockers.length > 0) return videoCarouselMessage(blockers);
+  }
+  // Post d'une seule vidéo (Reel, vidéo de page, vidéo TikTok…)
+  const video = carousel ? null : videos[0] || null;
 
   for (const platform of targets) {
     const rules = PLATFORM_RULES[platform];
@@ -399,11 +442,14 @@ export function validatePostContent({
         return `${rules.label} exige une image ou une vidéo.`;
       }
     }
+    if (carousel && items.length > rules.maxImages) {
+      return `${rules.label} accepte au maximum ${rules.maxImages} photos ou vidéos.`;
+    }
     if (images.length > rules.maxImages) {
       return `${rules.label} accepte au maximum ${rules.maxImages} images.`;
     }
-    if (video) {
-      const error = validateVideoForPlatform(video, platform, {
+    for (const item of videos) {
+      const error = validateVideoForPlatform(item, platform, {
         format: formats?.[platform],
       });
       if (error) return error;

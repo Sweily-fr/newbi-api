@@ -163,6 +163,140 @@ describe("Instagram : Reel en deux temps", () => {
   });
 });
 
+describe("Instagram : carrousel avec vidéo", () => {
+  const account = {
+    platform: "instagram",
+    externalAccountId: "17841400000000001",
+  };
+  const IMAGE_URL =
+    "https://api.newbi.test/social-media/2b4e28ba-2fa1-11d2-883f-0016d3cca427.jpg";
+  const image = { kind: "image", url: IMAGE_URL, width: 1080, height: 1350 };
+
+  it("publish crée un élément par média, dans l'ordre, sans légende ni attente", async () => {
+    const fetchMock = stubFetch([
+      on(
+        "POST",
+        "/17841400000000001/media",
+        sequence(jsonResponse({ id: "e_1" }), jsonResponse({ id: "e_2" })),
+      ),
+    ]);
+    const result = await instagramApi.publish({
+      account,
+      accessToken: "ig_token",
+      content: "Les coulisses",
+      media: [image, video()],
+    });
+    expect(result).toMatchObject({
+      status: "publishing",
+      processingRef: "carousel:e_1,e_2",
+      externalPostId: null,
+      nextCheckMs: 60000,
+    });
+    const calls = callsTo(fetchMock, "POST", "/media");
+    expect(calls.map(jsonOf)).toEqual([
+      { image_url: IMAGE_URL, is_carousel_item: true },
+      { media_type: "VIDEO", video_url: VIDEO_URL, is_carousel_item: true },
+    ]);
+    expect(callsTo(fetchMock, "GET", "/e_")).toHaveLength(0);
+  });
+
+  it("suivi : vidéo en cours, puis carrousel assemblé avec la légende, puis publié", async () => {
+    const fetchMock = stubFetch([
+      on("GET", "/e_1?", jsonResponse({ status_code: "FINISHED" })),
+      on(
+        "GET",
+        "/e_2?",
+        sequence(
+          jsonResponse({ status_code: "IN_PROGRESS" }),
+          jsonResponse({ status_code: "FINISHED" }),
+        ),
+      ),
+      on(
+        "POST",
+        "/17841400000000001/media_publish",
+        jsonResponse({ id: "m_9" }),
+      ),
+      // Après media_publish (même début d'adresse)
+      on("POST", "/17841400000000001/media", jsonResponse({ id: "car_1" })),
+      on("GET", "/car_1?", jsonResponse({ status_code: "FINISHED" })),
+      on(
+        "GET",
+        "/m_9?",
+        jsonResponse({ permalink: "https://www.instagram.com/p/xyz/" }),
+      ),
+    ]);
+    const params = {
+      account,
+      accessToken: "ig_token",
+      processingRef: "carousel:e_1,e_2",
+      content: "Les coulisses",
+      media: [image, video()],
+    };
+    // Vidéo pas encore traitée : rien d'assemblé
+    expect(await instagramApi.checkPublication(params)).toEqual({
+      status: "publishing",
+      nextCheckMs: 60000,
+    });
+    expect(callsTo(fetchMock, "POST", "/media")).toHaveLength(0);
+    // Tout est prêt : conteneur CAROUSEL, suivi ensuite comme un Reel
+    expect(await instagramApi.checkPublication(params)).toEqual({
+      status: "publishing",
+      processingRef: "car_1",
+      nextCheckMs: 30000,
+    });
+    expect(jsonOf(callsTo(fetchMock, "POST", "/media")[0])).toEqual({
+      media_type: "CAROUSEL",
+      children: "e_1,e_2",
+      caption: "Les coulisses",
+    });
+    expect(callsTo(fetchMock, "POST", "/media_publish")).toHaveLength(0);
+    expect(
+      await instagramApi.checkPublication({
+        ...params,
+        processingRef: "car_1",
+      }),
+    ).toEqual({
+      status: "published",
+      externalPostId: "m_9",
+      platformPostUrl: "https://www.instagram.com/p/xyz/",
+    });
+    expect(jsonOf(callsTo(fetchMock, "POST", "/media_publish")[0])).toEqual({
+      creation_id: "car_1",
+    });
+  });
+
+  it("élément vidéo refusé : vidéo refusée ; élément expiré : publication à reprendre", async () => {
+    stubFetch([
+      on("GET", "/e_1?", jsonResponse({ status_code: "FINISHED" })),
+      on(
+        "GET",
+        "/e_2?",
+        sequence(
+          jsonResponse({
+            status_code: "ERROR",
+            status: "Error: Media upload has failed with error code 2207026",
+          }),
+          jsonResponse({ status_code: "EXPIRED" }),
+        ),
+      ),
+    ]);
+    const params = {
+      account,
+      accessToken: "ig_token",
+      processingRef: "carousel:e_1,e_2",
+      media: [image, video()],
+    };
+    const refused = await instagramApi.checkPublication(params).catch((e) => e);
+    expect(refused).toBeInstanceOf(DirectApiError);
+    expect(refused).toMatchObject({
+      category: "video_rejected",
+      transient: false,
+    });
+    const expired = await instagramApi.checkPublication(params).catch((e) => e);
+    expect(expired).toMatchObject({ transient: true, restart: true });
+  });
+});
+
 describe("Facebook : vidéo de page", () => {
   it("file_url vers notre route, description, adresse absolue", async () => {
     const fetchMock = stubFetch([
