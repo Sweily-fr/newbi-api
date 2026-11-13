@@ -2,6 +2,7 @@ import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireActiveSubscriptionREST } from "../middlewares/rbac.js";
 import logger from "../utils/logger.js";
+import { triggerInvoicePaidAutomations } from "../utils/documentAutomationTriggers.js";
 import {
   findReconciliationSuggestions,
   findTransactionsForInvoice,
@@ -254,6 +255,16 @@ router.post(
           { $pull: { linkedInvoiceIds: invoiceId } },
         );
         return res.status(404).json({ error: "Facture non trouvée" });
+      }
+
+      // Facture passée payée par le rapprochement : automatisations
+      // « Facture payée » des documents partagés (fire-and-forget)
+      if (targetInvoice.status !== "COMPLETED") {
+        triggerInvoicePaidAutomations(
+          invoice,
+          workspaceId,
+          auth.user?._id || auth.user?.id,
+        );
       }
 
       // TODO E-REPORTING: Décommenter quand l'API SuperPDP e-reporting sera disponible

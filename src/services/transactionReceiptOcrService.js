@@ -5,6 +5,7 @@ import hybridOcrService from "./hybridOcrService.js";
 import mistralIntelligentAnalysisService from "./mistralIntelligentAnalysisService.js";
 import Transaction from "../models/Transaction.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
+import { triggerPurchaseInvoiceAutomations } from "../utils/documentAutomationTriggers.js";
 import UserOcrQuota from "../models/UserOcrQuota.js";
 import { syncLinkedTransactionCategories } from "../utils/purchaseInvoiceCategorySync.js";
 import { resolvePurchaseInvoiceCategoryInput } from "../utils/categoryTaxonomy.js";
@@ -666,6 +667,8 @@ async function createPurchaseInvoiceFromProposal({
   }
 
   await invoice.save();
+  // Facture payée créée depuis le justificatif : automatisations du statut
+  triggerPurchaseInvoiceAutomations(invoice, workspaceId, userId);
   return invoice;
 }
 
@@ -913,11 +916,16 @@ async function attachReceiptToExistingPurchaseInvoice({
 
   // Update ciblé (pas de save()) : ne revalide pas tout le document, des
   // factures legacy peuvent avoir des champs hors enum.
-  return PurchaseInvoice.findOneAndUpdate(
+  const updated = await PurchaseInvoice.findOneAndUpdate(
     { _id: invoice._id, workspaceId: new mongoose.Types.ObjectId(workspaceId) },
     update,
     { new: true },
   );
+  // Facture passée payée par le justificatif : automatisations du statut
+  if (updated && updated.status !== invoice.status) {
+    triggerPurchaseInvoiceAutomations(updated, workspaceId);
+  }
+  return updated;
 }
 
 /**

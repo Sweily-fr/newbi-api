@@ -87,6 +87,18 @@ const SharedDocumentSchema = new mongoose.Schema(
       default: undefined,
     },
 
+    // Copie faite par une automatisation : document Newbi d'origine. Évite
+    // une seconde copie du même document dans le même dossier, quelle que
+    // soit l'automatisation (même supprimée) qui a fait la première.
+    sourceDocumentType: {
+      type: String,
+      default: undefined,
+    },
+    sourceDocumentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: undefined,
+    },
+
     // Statut et partage
     status: {
       type: String,
@@ -150,6 +162,11 @@ SharedDocumentSchema.index({ name: "text", description: "text", tags: "text" });
 SharedDocumentSchema.index({ workspaceId: 1, trashedAt: 1 });
 // Index pour la détection de doublons par contenu
 SharedDocumentSchema.index({ workspaceId: 1, fileHash: 1 });
+// Copies d'automatisation d'un même document (une seule par dossier)
+SharedDocumentSchema.index(
+  { workspaceId: 1, sourceDocumentId: 1 },
+  { partialFilterExpression: { sourceDocumentId: { $exists: true } } },
+);
 
 const SharedDocument = mongoose.model("SharedDocument", SharedDocumentSchema);
 

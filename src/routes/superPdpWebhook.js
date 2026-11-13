@@ -11,6 +11,7 @@ import {
   invoiceIsAddressedToOrganization,
 } from "../services/purchaseInvoiceReceptionService.js";
 import logger from "../utils/logger.js";
+import { triggerPurchaseInvoiceAutomations } from "../utils/documentAutomationTriggers.js";
 
 const router = express.Router();
 
@@ -275,6 +276,7 @@ router.post(
           purchaseInvoiceData.supplierId = supplier._id;
 
           const newPurchaseInvoice = await PurchaseInvoice.create(purchaseInvoiceData);
+          triggerPurchaseInvoiceAutomations(newPurchaseInvoice, workspaceId);
 
           logger.info(
             `✅ Facture d'achat créée depuis webhook SuperPDP: ${newPurchaseInvoice._id} (${purchaseInvoiceData.supplierName})`
@@ -306,11 +308,18 @@ router.post(
           `📊 Mise à jour statut facture d'achat ${purchaseInvoice._id}: ${purchaseInvoice.eInvoiceStatus} → ${newPurchaseStatus}`
         );
         purchaseInvoice.eInvoiceStatus = newPurchaseStatus;
+        const statusBefore = purchaseInvoice.status;
         if (newPurchaseStatus === "PAID") {
           purchaseInvoice.status = "PAID";
           purchaseInvoice.paymentDate = new Date();
         }
         await purchaseInvoice.save();
+        if (purchaseInvoice.status !== statusBefore) {
+          triggerPurchaseInvoiceAutomations(
+            purchaseInvoice,
+            purchaseInvoice.workspaceId,
+          );
+        }
         return res.status(200).json({
           received: true,
           type: "purchase_invoice",

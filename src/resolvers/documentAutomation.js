@@ -18,6 +18,7 @@ import {
 import { MODULES } from "../config/rolePermissions.js";
 import { assertPlanCapacity } from "../services/planLimits.js";
 import documentAutomationService, {
+  forgetAutomationLogs,
   getAutomationProgress,
 } from "../services/documentAutomationService.js";
 
@@ -367,11 +368,10 @@ const documentAutomationResolvers = {
 
         await DocumentAutomation.deleteOne({ _id: id, workspaceId });
 
-        // Nettoyer les logs associés
-        await DocumentAutomationLog.deleteMany({
-          automationId: id,
-          workspaceId,
-        });
+        // Nettoyer les logs associés ; les copies restent et gardent leur
+        // document d'origine (pas de seconde copie si l'automatisation est
+        // recréée)
+        await forgetAutomationLogs(id, workspaceId);
 
         return true;
       },
@@ -559,6 +559,26 @@ const documentAutomationResolvers = {
           };
         }
 
+        // Documents trouvés mais tous déjà dans leur dossier : le dire, plutôt
+        // que « aucun document »
+        if (
+          totalDocuments > 0 &&
+          stats.successCount === 0 &&
+          stats.failCount === 0 &&
+          stats.restoredCount === 0 &&
+          stats.alreadyInFolderCount > 0
+        ) {
+          return {
+            automationId: automation._id.toString(),
+            status: "COMPLETED",
+            totalDocuments,
+            message: "Tous les documents sont déjà dans le dossier",
+            successCount: 0,
+            failCount: 0,
+            firstError: null,
+          };
+        }
+
         if (
           totalDocuments === 0 ||
           (stats.successCount === 0 &&
@@ -577,9 +597,12 @@ const documentAutomationResolvers = {
         let message;
 
         const restoredNote =
-          stats.restoredCount > 0
+          (stats.restoredCount > 0
             ? `, ${stats.restoredCount} restauré(s) depuis la corbeille`
-            : "";
+            : "") +
+          (stats.alreadyInFolderCount > 0
+            ? `, ${stats.alreadyInFolderCount} déjà dans le dossier`
+            : "");
 
         if (stats.failCount === 0 && stats.successCount > 0) {
           status = "COMPLETED";
