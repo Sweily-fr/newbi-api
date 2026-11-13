@@ -39,6 +39,10 @@ import {
   createInternalServerError,
 } from "../utils/errors.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import {
+  triggerImportedInvoiceAutomations,
+  triggerPurchaseInvoiceAutomations,
+} from "../utils/documentAutomationTriggers.js";
 import PurchaseInvoice from "../models/PurchaseInvoice.js";
 import Supplier from "../models/Supplier.js";
 import { resolveSupplier } from "../utils/supplierResolution.js";
@@ -799,6 +803,11 @@ async function convertSingleImportedInvoice(
     workspaceId: workspaceObjectId,
     createdBy: userId,
   });
+  triggerPurchaseInvoiceAutomations(
+    purchaseInvoice,
+    importedInvoice.workspaceId,
+    userId,
+  );
 
   // Mark the imported invoice as VALIDATED
   importedInvoice.status = "VALIDATED";
@@ -1712,9 +1721,16 @@ const importedInvoiceResolvers = {
      * Valide une facture importée
      */
     validateImportedInvoice: requireWrite("importedInvoices")(
-      async (_, { id }, { workspaceId }) => {
+      async (_, { id }, { workspaceId, user }) => {
         const invoice = await checkInvoiceAccess(id, workspaceId);
-        return invoice.markValidated();
+        const statusBefore = invoice.status;
+        const validated = await invoice.markValidated();
+        // Facture vérifiée puis validée (OCR, scan Gmail) : automatisations
+        // « Facture importée » (sans effet si elle est déjà classée)
+        if (statusBefore !== "VALIDATED") {
+          triggerImportedInvoiceAutomations(validated, workspaceId, user?.id);
+        }
+        return validated;
       },
     ),
 

@@ -9,6 +9,7 @@ import EInvoicingSettingsService from "./eInvoicingSettingsService.js";
 import { publishNotification } from "../resolvers/notification.js";
 import { sendNotificationPush } from "./notificationPushService.js";
 import logger from "../utils/logger.js";
+import { triggerPurchaseInvoiceAutomations } from "../utils/documentAutomationTriggers.js";
 
 /**
  * Vérifier que la facture reçue est bien adressée à l'organisation (SIREN de
@@ -242,6 +243,7 @@ export async function importReceivedInvoices(workspaceId, userId, since) {
         purchaseInvoiceData.supplierId = supplier._id;
         const created = await PurchaseInvoice.create(purchaseInvoiceData);
         imported++;
+        triggerPurchaseInvoiceAutomations(created, workspaceId, userId);
 
         logger.info(
           `✅ Facture d'achat importée depuis SuperPDP: ${purchaseInvoiceData.invoiceNumber} (${purchaseInvoiceData.supplierName})`,

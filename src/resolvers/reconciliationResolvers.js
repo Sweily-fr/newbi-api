@@ -8,6 +8,7 @@ import Transaction from "../models/Transaction.js";
 import Invoice from "../models/Invoice.js";
 import ImportedInvoice from "../models/ImportedInvoice.js";
 import logger from "../utils/logger.js";
+import { triggerInvoicePaidAutomations } from "../utils/documentAutomationTriggers.js";
 import {
   findReconciliationSuggestions,
   findTransactionsForInvoice,
@@ -383,6 +384,12 @@ const reconciliationResolvers = {
           // } catch (eReportingError) {
           //   logger.error("Erreur e-reporting payment (rapprochement):", eReportingError);
           // }
+
+          // Facture passée payée par le rapprochement : automatisations
+          // « Facture payée » des documents partagés (fire-and-forget)
+          if (targetInvoice.status !== "COMPLETED") {
+            triggerInvoicePaidAutomations(invoice, workspaceId, user?.id);
+          }
 
           logger.info(
             `[RECONCILIATION-GQL] Rapprochement: Transaction ${transactionId} <-> Facture ${invoiceId}`,

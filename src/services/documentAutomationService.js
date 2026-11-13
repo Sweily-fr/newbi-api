@@ -249,6 +249,13 @@ function originalFileNameFor(documentType, sourceFile, extension = "pdf") {
   return name;
 }
 
+/** Extension d'un nom de fichier (« pdf », « jpg »…), sinon null */
+function extensionOf(name) {
+  if (!name || typeof name !== "string") return null;
+  const match = /\.([a-z0-9]{1,5})$/i.exec(name.trim());
+  return match ? match[1].toLowerCase() : null;
+}
+
 // Cache mémoire pour les sous-dossiers résolus (évite les requêtes DB répétées)
 const _folderCache = new Map();
 const FOLDER_CACHE_TTL = 60 * 1000; // 1 minute
@@ -348,6 +355,168 @@ async function resolveTargetFolder(
     `📁 [resolveTargetFolder] Résultat final: folderId=${currentParentId}`,
   );
   return currentParentId;
+}
+
+// Pièces d'achat et factures importées : anciens journaux de type « expense »
+const LEGACY_EXPENSE_TYPES = [
+  "importedInvoice",
+  "importedQuote",
+  "purchaseInvoice",
+];
+
+function logTypesFor(docType) {
+  return LEGACY_EXPENSE_TYPES.includes(docType)
+    ? [docType, "expense"]
+    : [docType];
+}
+
+/**
+ * Copies (hors corbeille) déjà présentes dans Documents partagés pour des
+ * documents Newbi, quelle que soit l'automatisation qui les a faites : copie
+ * marquée de son document d'origine, ou copie plus ancienne retrouvée par le
+ * journal de n'importe quelle automatisation de l'espace.
+ * @returns {Promise<Map<string, Array<{folderId: string|null, sharedDocumentId: string}>>>}
+ *   id du document Newbi → ses copies
+ */
+async function findLiveCopies(workspaceId, docType, documentIds) {
+  const copies = new Map();
+  const ids = [...new Set((documentIds || []).map(String))];
+  if (ids.length === 0) return copies;
+  const types = logTypesFor(docType);
+  const add = (sourceId, sharedDoc) => {
+    const key = String(sourceId);
+    if (!copies.has(key)) copies.set(key, []);
+    copies.get(key).push({
+      folderId: sharedDoc.folderId ? String(sharedDoc.folderId) : null,
+      sharedDocumentId: String(sharedDoc._id),
+    });
+  };
+
+  const stamped = await SharedDocument.find({
+    workspaceId,
+    sourceDocumentType: { $in: types },
+    sourceDocumentId: { $in: ids },
+    trashedAt: null,
+  })
+    .select("folderId sourceDocumentId")
+    .lean();
+  for (const doc of stamped) add(doc.sourceDocumentId, doc);
+
+  const logs = await DocumentAutomationLog.find({
+    workspaceId,
+    sourceDocumentType: { $in: types },
+    sourceDocumentId: { $in: ids },
+    status: "SUCCESS",
+    sharedDocumentId: { $ne: null },
+  })
+    .select("sourceDocumentId sharedDocumentId")
+    .lean();
+  if (logs.length > 0) {
+    const logged = await SharedDocument.find({
+      _id: { $in: logs.map((l) => l.sharedDocumentId) },
+      workspaceId,
+      trashedAt: null,
+    })
+      .select("folderId")
+      .lean();
+    const byId = new Map(logged.map((d) => [String(d._id), d]));
+    for (const log of logs) {
+      const doc = byId.get(String(log.sharedDocumentId));
+      if (doc) add(log.sourceDocumentId, doc);
+    }
+  }
+  return copies;
+}
+
+/** Copie d'un document déjà présente dans ce dossier (son id), sinon null */
+function copyInFolder(copies, documentId, folderId) {
+  const target = folderId ? String(folderId) : null;
+  const found = (copies.get(String(documentId)) || []).find(
+    (copy) => copy.folderId === target,
+  );
+  return found?.sharedDocumentId || null;
+}
+
+/** Même recherche pour un seul document */
+async function findCopyInFolder(workspaceId, docType, documentId, folderId) {
+  const copies = await findLiveCopies(workspaceId, docType, [documentId]);
+  return copyInFolder(copies, documentId, folderId);
+}
+
+/**
+ * Document déjà présent dans le dossier cible (copié par une autre
+ * automatisation, ou par celle-ci avant sa suppression) : l'automatisation
+ * le compte comme traité et le rattache à cette copie, sans en faire une
+ * nouvelle. Rien n'est supprimé.
+ */
+async function recordAlreadyInFolder(logData, sharedDocumentId) {
+  // Journal lisible : nom de la copie existante et de son dossier
+  const [copy, folder] = await Promise.all([
+    SharedDocument.findById(sharedDocumentId).select("name fileSize").lean(),
+    logData.targetFolderName || !logData.targetFolderId
+      ? null
+      : SharedFolder.findById(logData.targetFolderId).select("name").lean(),
+  ]);
+  const data = {
+    ...logData,
+    targetFolderName: logData.targetFolderName || folder?.name || "Inconnu",
+    fileName: copy?.name || "",
+    fileSize: copy?.fileSize || 0,
+    status: "SUCCESS",
+    sharedDocumentId,
+  };
+  try {
+    await DocumentAutomationLog.create(data);
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    await DocumentAutomationLog.updateOne(
+      {
+        sourceDocumentType: data.sourceDocumentType,
+        sourceDocumentId: data.sourceDocumentId,
+        automationId: data.automationId,
+        status: "FAILED",
+      },
+      { $set: data, $unset: { error: "" } },
+    );
+  }
+}
+
+/**
+ * Automatisation supprimée : son journal part avec elle, mais ses copies
+ * restent. Elles gardent la trace de leur document d'origine, pour qu'une
+ * automatisation recréée ne les copie pas une seconde fois.
+ */
+async function forgetAutomationLogs(automationId, workspaceId) {
+  const logs = await DocumentAutomationLog.find({
+    automationId,
+    workspaceId,
+    status: "SUCCESS",
+    sharedDocumentId: { $ne: null },
+  })
+    .select("sourceDocumentType sourceDocumentId sharedDocumentId")
+    .lean();
+  if (logs.length > 0) {
+    await SharedDocument.bulkWrite(
+      logs.map((log) => ({
+        updateOne: {
+          filter: {
+            _id: log.sharedDocumentId,
+            workspaceId,
+            sourceDocumentId: { $exists: false },
+          },
+          update: {
+            $set: {
+              sourceDocumentType: log.sourceDocumentType,
+              sourceDocumentId: log.sourceDocumentId,
+            },
+          },
+          timestamps: false,
+        },
+      })),
+      { ordered: false },
+    );
+  }
+  await DocumentAutomationLog.deleteMany({ automationId, workspaceId });
 }
 
 /**
@@ -497,13 +666,48 @@ const documentAutomationService = {
             status: "FAILED",
           });
 
+          // Déclenchement sans utilisateur (rapprochement, webhook, cron) :
+          // la copie est faite au nom du créateur de l'automatisation
+          const actorId = userId || automation.createdBy?.toString();
+
           // Résoudre le dossier cible
           const targetFolderId = await resolveTargetFolder(
             automation.actionConfig,
             workspaceId,
             documentContext,
-            userId,
+            actorId,
           );
+
+          // Déjà dans ce dossier (autre automatisation, ou celle-ci avant sa
+          // suppression) : pas de seconde copie
+          const existingCopyId = await findCopyInFolder(
+            workspaceId,
+            documentContext.documentType,
+            documentContext.documentId,
+            targetFolderId,
+          );
+          if (existingCopyId) {
+            await recordAlreadyInFolder(
+              {
+                automationId: automation._id,
+                workspaceId,
+                sourceDocumentType: documentContext.documentType,
+                sourceDocumentId: documentContext.documentId,
+                sourceDocumentNumber: documentContext.prefix
+                  ? `${documentContext.prefix}${documentContext.documentNumber}`
+                  : documentContext.documentNumber || "",
+                targetFolderId,
+              },
+              existingCopyId,
+            );
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+            });
+            continue;
+          }
 
           // Construire le nom du fichier (extension par défaut .pdf, corrigée pour les transactions)
           let fileName = buildFileName(
@@ -560,7 +764,7 @@ const documentAutomationService = {
             uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
               fileName,
-              userId,
+              actorId,
               "sharedDocuments",
               workspaceId,
             );
@@ -593,7 +797,7 @@ const documentAutomationService = {
             uploadResult = await cloudflareService.uploadImage(
               pdfBuffer,
               fileName,
-              userId,
+              actorId,
               "sharedDocuments",
               workspaceId,
             );
@@ -626,11 +830,13 @@ const documentAutomationService = {
             fileExtension: fileExt,
             workspaceId,
             folderId: targetFolderId,
-            uploadedBy: userId,
+            uploadedBy: actorId,
             uploadedByName: "Automatisation",
             status: automation.actionConfig.documentStatus || "classified",
             isSharedWithAccountant: true,
             tags: automation.actionConfig.tags || [],
+            sourceDocumentType: documentContext.documentType,
+            sourceDocumentId: documentContext.documentId,
           });
 
           await sharedDocument.save();
@@ -848,8 +1054,71 @@ const documentAutomationService = {
             status: "FAILED",
           });
 
-          // Récupérer le fichier : copie R2 serveur-à-serveur pour les documents importés,
-          // sinon téléchargement HTTP
+          // Déclenchement sans utilisateur (webhook, synchronisation, cron) :
+          // la copie est faite au nom du créateur de l'automatisation
+          const actorId = userId || automation.createdBy?.toString();
+
+          // Résoudre le dossier cible
+          const targetFolderId = await resolveTargetFolder(
+            automation.actionConfig,
+            workspaceId,
+            expenseContext,
+            actorId,
+          );
+
+          // Déjà dans ce dossier (autre automatisation, ou celle-ci avant sa
+          // suppression) : pas de seconde copie
+          const existingCopyId = await findCopyInFolder(
+            workspaceId,
+            logDocType,
+            expenseContext.documentId,
+            targetFolderId,
+          );
+          if (existingCopyId) {
+            await recordAlreadyInFolder(
+              {
+                automationId: automation._id,
+                workspaceId,
+                sourceDocumentType: logDocType,
+                sourceDocumentId: expenseContext.documentId,
+                sourceDocumentNumber: expenseContext.documentNumber || "",
+                targetFolderId,
+              },
+              existingCopyId,
+            );
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+            });
+            continue;
+          }
+
+          // Fichier relu sur le document lui-même, comme le lancement
+          // manuel : les appelants des factures d'achat transmettaient
+          // fileUrl alors que seul cloudflareUrl était lu, et chaque copie
+          // automatique échouait (« Aucune URL source pour le fichier »)
+          const sourceFile = await loadSourceFile(
+            logDocType,
+            expenseContext.documentId,
+          );
+          const fileExt =
+            extensionOf(
+              sourceFile?.originalFilename ||
+                sourceFile?.originalFileName ||
+                sourceFile?.filename,
+            ) ||
+            expenseContext.fileExtension ||
+            "pdf";
+          const fileMimeType =
+            sourceFile?.mimetype ||
+            sourceFile?.mimeType ||
+            expenseContext.mimeType ||
+            "application/pdf";
+
+          // Copie R2 serveur-à-serveur pour les documents importés, sinon
+          // téléchargement HTTP
           let fileBuffer = null;
           let fileSize = 0;
           let r2CopySource = null;
@@ -857,34 +1126,24 @@ const documentAutomationService = {
           const isImported =
             logDocType === "importedInvoice" || logDocType === "importedQuote";
 
-          if (isImported) {
-            // Copie R2 serveur-à-serveur (plus fiable, pas de téléchargement HTTP)
-            const ImportModel =
-              logDocType === "importedInvoice"
-                ? ImportedInvoice
-                : ImportedQuote;
-            const sourceDoc = await ImportModel.findById(
-              expenseContext.documentId,
-            )
-              .select("file")
-              .lean();
-            const sourceKey = sourceDoc?.file?.cloudflareKey;
-            if (sourceKey) {
-              r2CopySource = {
-                key: sourceKey,
-                bucket: cloudflareService.importedInvoicesBucketName,
-              };
-              fileSize = sourceDoc.file?.fileSize || 0;
-            }
+          if (isImported && sourceFile?.cloudflareKey) {
+            r2CopySource = {
+              key: sourceFile.cloudflareKey,
+              bucket: cloudflareService.importedInvoicesBucketName,
+            };
+            fileSize = sourceFile.fileSize || 0;
           }
 
-          // Fallback : téléchargement HTTP si pas de copie R2
           if (!r2CopySource) {
-            if (!expenseContext.cloudflareUrl) {
+            const sourceUrl =
+              sourceFile?.url ||
+              expenseContext.cloudflareUrl ||
+              expenseContext.fileUrl;
+            if (!sourceUrl) {
               throw new Error("Aucune URL source pour le fichier");
             }
             try {
-              const response = await axios.get(expenseContext.cloudflareUrl, {
+              const response = await axios.get(sourceUrl, {
                 responseType: "arraybuffer",
                 timeout: 30000,
               });
@@ -901,30 +1160,14 @@ const documentAutomationService = {
             }
           }
 
-          // Résoudre le dossier cible
-          const targetFolderId = await resolveTargetFolder(
-            automation.actionConfig,
-            workspaceId,
-            expenseContext,
-            userId,
-          );
-
           // Nom d'origine du fichier source ; sinon nom construit
-          const sourceFile = await loadSourceFile(
-            logDocType,
-            expenseContext.documentId,
-          );
           const fileName =
-            originalFileNameFor(
-              logDocType,
-              sourceFile,
-              expenseContext.fileExtension || "pdf",
-            ) ||
+            originalFileNameFor(logDocType, sourceFile, fileExt) ||
             buildFileName(
               automation.actionConfig.documentNaming ||
                 "{documentType}-{number}-{clientName}",
               expenseContext,
-              expenseContext.fileExtension || "pdf",
+              fileExt,
             );
 
           // Upload ou copie vers R2
@@ -940,7 +1183,7 @@ const documentAutomationService = {
             uploadResult = await cloudflareService.uploadImage(
               fileBuffer,
               fileName,
-              userId,
+              actorId,
               "sharedDocuments",
               workspaceId,
             );
@@ -956,16 +1199,18 @@ const documentAutomationService = {
             description: `Importé automatiquement par l'automatisation "${automation.name}"`,
             fileUrl: uploadResult.url,
             fileKey: uploadResult.key,
-            mimeType: expenseContext.mimeType || "application/pdf",
+            mimeType: fileMimeType,
             fileSize: fileSize,
-            fileExtension: expenseContext.fileExtension || "pdf",
+            fileExtension: fileExt,
             workspaceId,
             folderId: targetFolderId,
-            uploadedBy: userId,
+            uploadedBy: actorId,
             uploadedByName: "Automatisation",
             status: automation.actionConfig.documentStatus || "classified",
             isSharedWithAccountant: true,
             tags: automation.actionConfig.tags || [],
+            sourceDocumentType: logDocType,
+            sourceDocumentId: expenseContext.documentId,
           });
 
           await sharedDocument.save();
@@ -1683,6 +1928,36 @@ const documentAutomationService = {
         fileExt,
       );
 
+    // Déjà dans ce dossier (cette automatisation, une autre, ou une
+    // automatisation supprimée) : pas de seconde copie
+    const existingCopyId = await findCopyInFolder(
+      workspaceId,
+      documentType,
+      documentId,
+      targetFolderId,
+    );
+    if (existingCopyId) {
+      await recordAlreadyInFolder(
+        {
+          automationId: automation._id,
+          workspaceId,
+          sourceDocumentType: documentType,
+          sourceDocumentId: documentId,
+          sourceDocumentNumber: documentContext.prefix
+            ? `${documentContext.prefix}${documentContext.documentNumber}`
+            : documentContext.documentNumber || "",
+          targetFolderId,
+        },
+        existingCopyId,
+      );
+      return {
+        success: true,
+        skipped: true,
+        sharedDocumentId: existingCopyId,
+        fileName,
+      };
+    }
+
     // Upload ou copie vers R2
     let uploadResult;
     if (r2CopySource) {
@@ -1724,6 +1999,8 @@ const documentAutomationService = {
       status: automation.actionConfig.documentStatus || "classified",
       isSharedWithAccountant: true,
       tags: automation.actionConfig.tags || [],
+      sourceDocumentType: documentType,
+      sourceDocumentId: documentId,
     });
 
     await sharedDocument.save();
@@ -1936,6 +2213,15 @@ const documentAutomationService = {
         await SharedFolder.findById(preResolvedFolderId).lean();
       const preResolvedFolderName = preResolvedFolder?.name || "Inconnu";
 
+      // Copies déjà présentes dans Documents partagés, toutes automatisations
+      // confondues (une seule requête pour le lot)
+      const liveCopies = await findLiveCopies(
+        workspaceId,
+        config.docType,
+        docsToProcess.map((d) => d._id),
+      );
+      let alreadyInFolderCount = 0;
+
       const isR2Copy =
         config.docType === "importedInvoice" ||
         config.docType === "importedQuote";
@@ -1983,6 +2269,58 @@ const documentAutomationService = {
               prefix: doc.prefix || "",
               clientName: ctxClientName,
             };
+            const sourceDocumentNumber = documentContext.prefix
+              ? `${documentContext.prefix}${documentContext.documentNumber}`
+              : documentContext.documentNumber || "";
+
+            let targetFolderId = preResolvedFolderId;
+            let targetFolderName = preResolvedFolderName;
+            if (
+              automation.actionConfig.createSubfolder &&
+              automation.actionConfig.subfolderPattern
+            ) {
+              targetFolderId = await resolveTargetFolder(
+                automation.actionConfig,
+                workspaceId,
+                documentContext,
+                userId,
+              );
+              if (
+                targetFolderId.toString() !== preResolvedFolderId.toString()
+              ) {
+                const folder =
+                  await SharedFolder.findById(targetFolderId).lean();
+                targetFolderName = folder?.name || "Inconnu";
+              }
+            }
+
+            // Déjà dans ce dossier (autre automatisation, ou celle-ci avant
+            // sa suppression) : rattaché sans seconde copie
+            const existingCopyId = copyInFolder(
+              liveCopies,
+              doc._id,
+              targetFolderId,
+            );
+            if (existingCopyId) {
+              await recordAlreadyInFolder(
+                {
+                  automationId: automation._id,
+                  workspaceId,
+                  sourceDocumentType: config.docType,
+                  sourceDocumentId: doc._id,
+                  sourceDocumentNumber,
+                  targetFolderId,
+                  targetFolderName,
+                },
+                existingCopyId,
+              );
+              alreadyInFolderCount++;
+              _progressMap.set(automationIdStr, {
+                current: successCount + failCount + alreadyInFolderCount,
+                total: docsToProcess.length,
+              });
+              continue;
+            }
 
             let fileBuffer = null;
             let fileMimeType = "application/pdf";
@@ -2045,27 +2383,6 @@ const documentAutomationService = {
               throw new Error("Le fichier généré/récupéré est vide");
             }
 
-            let targetFolderId = preResolvedFolderId;
-            let targetFolderName = preResolvedFolderName;
-            if (
-              automation.actionConfig.createSubfolder &&
-              automation.actionConfig.subfolderPattern
-            ) {
-              targetFolderId = await resolveTargetFolder(
-                automation.actionConfig,
-                workspaceId,
-                documentContext,
-                userId,
-              );
-              if (
-                targetFolderId.toString() !== preResolvedFolderId.toString()
-              ) {
-                const folder =
-                  await SharedFolder.findById(targetFolderId).lean();
-                targetFolderName = folder?.name || "Inconnu";
-              }
-            }
-
             // Nom d'origine du fichier source ; sinon nom construit
             const fileName =
               originalFileNameFor(
@@ -2124,6 +2441,8 @@ const documentAutomationService = {
               status: automation.actionConfig.documentStatus || "classified",
               isSharedWithAccountant: true,
               tags: automation.actionConfig.tags || [],
+              sourceDocumentType: config.docType,
+              sourceDocumentId: doc._id,
             });
 
             await sharedDocument.save();
@@ -2149,9 +2468,7 @@ const documentAutomationService = {
                 workspaceId,
                 sourceDocumentType: config.docType,
                 sourceDocumentId: doc._id,
-                sourceDocumentNumber: documentContext.prefix
-                  ? `${documentContext.prefix}${documentContext.documentNumber}`
-                  : documentContext.documentNumber || "",
+                sourceDocumentNumber,
                 sharedDocumentId: sharedDocument._id,
                 targetFolderId,
                 targetFolderName,
@@ -2170,7 +2487,7 @@ const documentAutomationService = {
 
           // Mettre à jour la progression après chaque document
           _progressMap.set(automationIdStr, {
-            current: successCount + failCount,
+            current: successCount + failCount + alreadyInFolderCount,
             total: docsToProcess.length,
           });
         }
@@ -2196,7 +2513,8 @@ const documentAutomationService = {
       _progressMap.delete(automationIdStr);
       return {
         successCount,
-        skipCount,
+        skipCount: skipCount + alreadyInFolderCount,
+        alreadyInFolderCount,
         failCount,
         restoredCount,
         total: documents.length,
@@ -2346,5 +2664,5 @@ const documentAutomationService = {
 
 export { cacheDocumentPdf, generateDocumentPdf };
 
-export { recordAutomationSuccess };
+export { recordAutomationSuccess, findLiveCopies, forgetAutomationLogs };
 export default documentAutomationService;

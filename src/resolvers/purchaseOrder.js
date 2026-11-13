@@ -58,6 +58,10 @@ import { mapOrganizationToCompanyInfo } from "../utils/companyInfoMapper.js";
 import { refreshDraftDates } from "../utils/draftDates.js";
 import { assertCreationStatusAllowed } from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import {
+  salesDocumentContext,
+  statusTrigger,
+} from "../utils/documentAutomationTriggers.js";
 import { assertDocumentAppearance } from "../utils/documentAppearance.js";
 
 /**
@@ -1049,6 +1053,28 @@ const purchaseOrderResolvers = {
           }
 
           await po.save();
+
+          // Automatisations documents partagés (fire-and-forget) : brouillon
+          // validé depuis l'éditeur (DRAFT → CONFIRMED) via updatePurchaseOrder
+          if (po.status !== statusBeforeUpdate) {
+            const finalizeTrigger = statusTrigger("purchaseOrder", po.status);
+            if (finalizeTrigger) {
+              documentAutomationService
+                .executeAutomations(
+                  finalizeTrigger,
+                  workspaceId,
+                  salesDocumentContext("purchaseOrder", po),
+                  user._id.toString(),
+                )
+                .catch((err) =>
+                  console.error(
+                    "Erreur automatisation documents (PO finalisation):",
+                    err,
+                  ),
+                );
+            }
+          }
+
           return await po.populate("createdBy");
         },
       ),

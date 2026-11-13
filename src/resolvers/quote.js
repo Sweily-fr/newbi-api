@@ -65,6 +65,10 @@ import {
   normalizeInputPrefix,
 } from "../utils/creationStatus.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import {
+  salesDocumentContext,
+  statusTrigger,
+} from "../utils/documentAutomationTriggers.js";
 import { syncQuoteIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { syncQuoteIfNeeded as syncQuoteToAbbyIfNeeded } from "../services/abbySyncHelper.js";
@@ -1067,26 +1071,20 @@ const quoteResolvers = {
             }
           }
 
-          // Automatisations documents partagés pour les brouillons (fire-and-forget)
-          if (quote.status === "DRAFT") {
+          // Automatisations documents partagés (fire-and-forget) : brouillon,
+          // ou devis créé directement envoyé
+          const createTrigger = statusTrigger("quote", quote.status);
+          if (createTrigger) {
             documentAutomationService
               .executeAutomations(
-                "QUOTE_DRAFT",
+                createTrigger,
                 workspaceId,
-                {
-                  documentId: quote._id.toString(),
-                  documentType: "quote",
-                  documentNumber: quote.number,
-                  prefix: quote.prefix || "",
-                  clientName: quote.client?.name || "",
-                  issueDate: quote.issueDate || quote.createdAt,
-                  clientId: quote.client?._id || quote.clientId || null,
-                },
+                salesDocumentContext("quote", quote),
                 user._id.toString(),
               )
               .catch((err) =>
                 console.error(
-                  "Erreur automatisation documents (quote draft):",
+                  "Erreur automatisation documents (quote create):",
                   err,
                 ),
               );
@@ -1506,6 +1504,27 @@ const quoteResolvers = {
         }
 
         await quote.save();
+
+        // Automatisations documents partagés (fire-and-forget) : brouillon
+        // validé depuis l'éditeur (DRAFT → PENDING) via updateQuote
+        if (quote.status !== statusBeforeUpdate) {
+          const finalizeTrigger = statusTrigger("quote", quote.status);
+          if (finalizeTrigger) {
+            documentAutomationService
+              .executeAutomations(
+                finalizeTrigger,
+                workspaceId,
+                salesDocumentContext("quote", quote),
+                user._id.toString(),
+              )
+              .catch((err) =>
+                console.error(
+                  "Erreur automatisation documents (quote finalisation):",
+                  err,
+                ),
+              );
+          }
+        }
 
         // Sync Qonto (fire-and-forget) — envoi (DRAFT → PENDING) via updateQuote
         if (quote.status !== statusBeforeUpdate) {

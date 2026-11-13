@@ -64,6 +64,10 @@ import {
 import notificationService from "../services/notificationService.js";
 import { automationService } from "./clientAutomation.js";
 import documentAutomationService from "../services/documentAutomationService.js";
+import {
+  salesDocumentContext,
+  statusTrigger,
+} from "../utils/documentAutomationTriggers.js";
 import { syncInvoiceIfNeeded } from "../services/pennylaneSyncHelper.js";
 import { syncInvoiceIfNeeded as syncInvoiceToQontoIfNeeded } from "../services/qontoSyncHelper.js";
 import { syncInvoiceIfNeeded as syncInvoiceToAbbyIfNeeded } from "../services/abbySyncHelper.js";
@@ -1932,25 +1936,19 @@ const invoiceResolvers = {
             }
           }
 
-          // Automatisations documents partagés pour les brouillons (fire-and-forget)
-          if (invoice.status === "DRAFT") {
+          // Automatisations documents partagés (fire-and-forget) : brouillon,
+          // ou facture créée directement finalisée (« Créer la facture »)
+          const createTrigger = statusTrigger("invoice", invoice.status);
+          if (createTrigger) {
             documentAutomationService
               .executeAutomations(
-                "INVOICE_DRAFT",
+                createTrigger,
                 workspaceId,
-                {
-                  documentId: invoice._id.toString(),
-                  documentType: "invoice",
-                  documentNumber: invoice.number,
-                  prefix: invoice.prefix || "",
-                  clientName: invoice.client?.name || "",
-                  issueDate: invoice.issueDate || invoice.createdAt,
-                  clientId: invoice.client?._id || invoice.clientId || null,
-                },
+                salesDocumentContext("invoice", invoice),
                 user._id.toString(),
               )
               .catch((err) =>
-                console.error("Erreur automatisation documents (draft):", err),
+                console.error("Erreur automatisation documents (create):", err),
               );
           }
 
@@ -2804,6 +2802,28 @@ const invoiceResolvers = {
               updatedInvoice.status !== "DRAFT"
             ) {
               triggerInvoiceFacturXArchive(updatedInvoice, workspaceId);
+
+              // Automatisations documents partagés (fire-and-forget) : brouillon
+              // validé depuis l'éditeur (DRAFT → PENDING) via updateInvoice
+              const finalizeTrigger = statusTrigger(
+                "invoice",
+                updatedInvoice.status,
+              );
+              if (finalizeTrigger) {
+                documentAutomationService
+                  .executeAutomations(
+                    finalizeTrigger,
+                    workspaceId,
+                    salesDocumentContext("invoice", updatedInvoice),
+                    user._id.toString(),
+                  )
+                  .catch((err) =>
+                    console.error(
+                      "Erreur automatisation documents (finalisation):",
+                      err,
+                    ),
+                  );
+              }
 
               // Sync Pennylane / Qonto (fire-and-forget) — envoi d'un brouillon
               // depuis l'éditeur (DRAFT → PENDING) via updateInvoice.

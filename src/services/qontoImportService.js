@@ -19,6 +19,7 @@ import { cancelActiveQuoteSignatures } from "./quoteSignatureSync.js";
 import { syncQuoteIfNeeded as syncQuoteToPennylane } from "./pennylaneSyncHelper.js";
 import { syncPurchaseInvoiceIfNeeded as syncPurchaseInvoiceToPennylane } from "./pennylaneSyncHelper.js";
 import documentAutomationService from "./documentAutomationService.js";
+import { triggerPurchaseInvoiceAutomations } from "../utils/documentAutomationTriggers.js";
 import { reportPurchaseInvoicePaymentIfNeeded } from "../utils/purchaseInvoiceEInvoiceHelper.js";
 import { findPurchaseInvoiceDuplicates } from "../utils/purchaseInvoiceDuplicates.js";
 import logger from "../utils/logger.js";
@@ -664,6 +665,7 @@ export async function importSupplierInvoices(account, userId) {
         });
 
         result.imported++;
+        triggerPurchaseInvoiceAutomations(createdPurchase, workspaceId, userId);
         logger.info(
           `[QONTO-IMPORT] Facture fournisseur ${invoiceNumber} (${supplierName}) importée depuis Qonto (org=${workspaceId})`,
         );
