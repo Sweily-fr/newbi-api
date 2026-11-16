@@ -309,6 +309,15 @@ describe("renderCampaignEmail", () => {
     expect(html).not.toContain("<b>");
   });
 
+  it("texte saisi sans balises : « & » échappé, entités gardées", () => {
+    const { html } = renderCampaignEmail({
+      design: design([
+        { type: "text", html: "Prix &eacute;tudiant & co &amp; fils" },
+      ]),
+    });
+    expect(html).toContain("Prix &eacute;tudiant &amp; co &amp; fils");
+  });
+
   it("n'applique pas les variables aux adresses des boutons", () => {
     const { links } = renderCampaignEmail({
       design: design([

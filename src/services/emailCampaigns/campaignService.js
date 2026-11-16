@@ -100,7 +100,7 @@ export async function campaignSettings(workspaceId) {
   ]);
   return {
     senderEmail: campaignSenderEmail(),
-    defaultFromName: identity.companyName,
+    defaultFromName: singleLine(identity.companyName, 60),
     defaultReplyTo: identity.defaultReplyTo,
     companyAddress: identity.companyAddress,
     sendMode: campaignSendMode(),
@@ -202,7 +202,29 @@ export async function startSending(campaign, { from, now = new Date() }) {
   if (!locked) throw conflictError();
 
   try {
+    // Liens et expéditeur figés avant tout destinataire : un arrêt brutal
+    // pendant leur création laisse une campagne cohérente
     const identity = await loadWorkspaceIdentity(locked.workspaceId);
+    const { links } = renderCampaignEmail({
+      design: locked.design,
+      identity,
+    });
+    await EmailCampaign.updateOne(
+      { _id: locked._id, status: "SENDING" },
+      {
+        $set: {
+          links,
+          sendMode: campaignSendMode(),
+          snapshot: {
+            senderEmail: campaignSenderEmail(),
+            fromName: singleLine(locked.fromName, 60) || identity.companyName,
+            replyTo: singleLine(locked.replyTo) || identity.defaultReplyTo,
+            companyName: identity.companyName,
+            companyAddress: identity.companyAddress,
+          },
+        },
+      },
+    );
     const { recipients } = await resolveAudience(
       locked.workspaceId,
       locked.audience,
@@ -233,23 +255,10 @@ export async function startSending(campaign, { from, now = new Date() }) {
         ERROR_CODES.VALIDATION_ERROR,
       );
     }
-    const { links } = renderCampaignEmail({
-      design: locked.design,
-      identity,
-    });
     const updated = await EmailCampaign.findOneAndUpdate(
       { _id: locked._id, status: "SENDING" },
       {
         $set: {
-          links,
-          sendMode: campaignSendMode(),
-          snapshot: {
-            senderEmail: campaignSenderEmail(),
-            fromName: singleLine(locked.fromName, 60) || identity.companyName,
-            replyTo: singleLine(locked.replyTo) || identity.defaultReplyTo,
-            companyName: identity.companyName,
-            companyAddress: identity.companyAddress,
-          },
           "stats.recipients": recipients.length,
           lockedUntil: null,
         },
@@ -472,9 +481,17 @@ async function completeIfDone(campaignId, now) {
     status: "PENDING",
   });
   if (left > 0) return false;
+  const total = await EmailCampaignRecipient.countDocuments({ campaignId });
   const result = await EmailCampaign.updateOne(
     { _id: campaignId, status: "SENDING" },
-    { $set: { status: "SENT", completedAt: now, lockedUntil: null } },
+    {
+      $set: {
+        status: "SENT",
+        completedAt: now,
+        lockedUntil: null,
+        "stats.recipients": total,
+      },
+    },
   );
   if (result.modifiedCount) {
     logger.info(`[campagnes] campagne ${campaignId} terminée`);

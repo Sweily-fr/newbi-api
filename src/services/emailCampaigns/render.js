@@ -114,6 +114,13 @@ function hrefOf(attrs) {
   return match ? decodeEntities(match[1]).trim() : "";
 }
 
+// « & » saisi seul (texte sans balises) : écrit &amp;, les entités restent
+const escapeBareAmpersands = (text) =>
+  text.replace(
+    /&(?!(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});)/gi,
+    "&amp;",
+  );
+
 const textStyle = (ctx, { fontSize, lineHeight, color }) =>
   `font-family:${ctx.font};font-size:${fontSize}px;line-height:${Math.round(
     fontSize * lineHeight,
@@ -135,7 +142,7 @@ function renderRichHtml(html, ctx, options) {
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i];
     if (i % 2 === 0) {
-      if (part) out.push(substituteHtml(part, ctx.vars));
+      if (part) out.push(substituteHtml(escapeBareAmpersands(part), ctx.vars));
       continue;
     }
     const tag = parseTag(part);

@@ -235,6 +235,27 @@ describe("lancement", () => {
     expect(recipients[0]).toMatchObject({ status: "PENDING", attempts: 0 });
   });
 
+  it("arrêt pendant le lancement : liens et expéditeur déjà figés", async () => {
+    await seedClients(2);
+    const campaign = await createCampaign();
+    const insertMany = vi
+      .spyOn(EmailCampaignRecipient, "insertMany")
+      .mockImplementationOnce(async () => {
+        const saved = await EmailCampaign.findById(campaign._id).lean();
+        expect(saved.status).toBe("SENDING");
+        expect(saved.links).toEqual(["https://atelier.fr/nouveautes"]);
+        expect(saved.snapshot.companyName).toBe("Atelier Durand");
+        throw new Error("arrêt simulé");
+      });
+    await expect(requestSend(campaign, { userId, now: now() })).rejects.toThrow(
+      "arrêt simulé",
+    );
+    insertMany.mockRestore();
+    // Échec franc : la campagne revient en brouillon, sans destinataire
+    expect((await EmailCampaign.findById(campaign._id)).status).toBe("DRAFT");
+    expect(await EmailCampaignRecipient.countDocuments()).toBe(0);
+  });
+
   it("refuse au-delà du quota mensuel, sans rien créer", async () => {
     vi.stubEnv("EMAIL_CAMPAIGN_MONTHLY_QUOTAS", '{"pme":2}');
     await seedClients(3);
