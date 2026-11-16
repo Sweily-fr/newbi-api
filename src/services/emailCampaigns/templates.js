@@ -11,6 +11,14 @@ import { escapeHtml, parseHttpUrl } from "./html.js";
 
 const greeting = "<p>Bonjour {{prenom|à vous}},</p>";
 
+// « de » élidé devant une voyelle : « nouvelles d'Atelier Courcier », mais
+// « de Boulangerie Martin ». Le h reste « de » (muet ou aspiré, impossible
+// à deviner sur un nom propre).
+const deCompany = (name) =>
+  /^[aeiouyàâäéèêëîïôöùûüœæ]/i.test(String(name).trim())
+    ? `d'${name}`
+    : `de ${name}`;
+
 function logoBlock({ logoUrl, companyName }) {
   const logo = parseHttpUrl(logoUrl);
   if (logo) {
@@ -164,7 +172,7 @@ const TEMPLATES = {
       blocks: [
         makeBlock("text", {
           html:
-            `${greeting}<p>Je vous écris pour vous donner des nouvelles de ${escapeHtml(identity.companyName)} et vous présenter ce que nous préparons pour les prochaines semaines.</p>` +
+            `${greeting}<p>Je vous écris pour vous donner des nouvelles ${deCompany(escapeHtml(identity.companyName))} et vous présenter ce que nous préparons pour les prochaines semaines.</p>` +
             "<p>Si vous avez la moindre question, il vous suffit de répondre à cet e-mail.</p>" +
             `<p>Bien cordialement,<br>${escapeHtml(identity.companyName)}</p>`,
           padding: { top: 24, right: 24, bottom: 24, left: 24 },
