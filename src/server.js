@@ -95,6 +95,7 @@ import cleanupAdminRoutes from "./routes/cleanupAdmin.js";
 import backofficeAdminRoutes from "./routes/backofficeAdmin.js";
 import adminServiceRoutes from "./routes/adminService.js";
 import trialNudgeRoutes from "./routes/trialNudges.js";
+import emailCampaignRoutes from "./routes/emailCampaigns.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -151,6 +152,7 @@ import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.j
 import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
 import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
 import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
+import { startEmailCampaignCron } from "./cron/emailCampaignCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -486,6 +488,11 @@ async function startServer() {
 
   // Désinscription des relances d'essai (publique, jeton signé)
   app.use("/api/trial-nudges", trialNudgeRoutes);
+
+  // Campagnes e-mail : désinscription, pixel d'ouverture et redirection des
+  // clics (publiques, jeton signé, rate-limitées ; jamais fermées par
+  // l'accès anticipé)
+  app.use("/api/email-campaigns", emailCampaignRoutes);
 
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
@@ -876,6 +883,10 @@ async function startServer() {
       // Rappels des rendez-vous (24 h et 1 h avant), toutes les 5 minutes
       // (coupés si APPOINTMENT_REMINDERS_MODE=off)
       startAppointmentReminderCron();
+
+      // Campagnes e-mail : programmées arrivées à échéance et lots en cours,
+      // chaque minute (EMAIL_CAMPAIGN_SEND_MODE, EMAIL_CAMPAIGN_MAX_PER_MINUTE)
+      startEmailCampaignCron();
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
