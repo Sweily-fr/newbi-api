@@ -82,6 +82,7 @@ import organizationRoleResolvers from "./organizationRole.js";
 import invoiceRecurrenceResolvers from "./invoiceRecurrence.js";
 import socialPublishingResolvers from "./socialPublishing.js";
 import appointmentsResolvers from "./appointments.js";
+import emailCampaignsResolvers from "./emailCampaigns.js";
 import workspaceFeaturesResolvers from "./workspaceFeatures.js";
 import { gateFeatureResolvers } from "../utils/featureAccess.js";
 
@@ -172,6 +173,9 @@ const resolvers = mergeResolvers([
     except: ["socialPublishingStatus"],
   }),
   gateFeatureResolvers("appointments", appointmentsResolvers),
+  // Campagnes e-mail : les routes publiques (désinscription, suivi) ne sont
+  // jamais fermées, seul le tableau de bord l'est
+  gateFeatureResolvers("emailCampaigns", emailCampaignsResolvers),
   workspaceFeaturesResolvers,
 ]);
 
