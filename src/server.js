@@ -331,6 +331,12 @@ async function startServer() {
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Too many requests, please try again later." },
+    // Pixel et clics des campagnes e-mail : ils ont leur propre limite
+    // (routes/emailCampaigns.js), qui laisse toujours passer la
+    // redirection. Le proxy d'images de Gmail et les réseaux d'entreprise
+    // regroupent beaucoup de destinataires derrière une même adresse IP :
+    // un 429 ici renverrait une erreur à la place du site du lien.
+    skip: (req) => /^\/api\/email-campaigns\/(o|c)\//.test(req.path),
   });
   app.use(globalLimiter);
 
