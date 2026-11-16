@@ -343,6 +343,16 @@ describe("variables, audience, quota et mentions légales", () => {
     expect(quota.canSend).toBe(false);
   });
 
+  it("prospects générés parmi les destinataires : avertissement", () => {
+    const report = run({ audience: { prospects: 3 } });
+    expect(byId(report, "audience_prospects")).toMatchObject({
+      level: "WARNING",
+      title: "3 prospects générés parmi les destinataires",
+    });
+    expect(report.canSend).toBe(true);
+    expect(byId(run({}), "audience_prospects")).toBeUndefined();
+  });
+
   it("adresse de l'entreprise manquante : avertissement", () => {
     const report = run({ companyAddress: null });
     expect(byId(report, "legal").level).toBe("OK");

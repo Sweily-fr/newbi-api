@@ -863,6 +863,17 @@ function audienceChecks(count, quota) {
       ),
     );
   }
+  if (count.prospects > 0) {
+    checks.push(
+      check(
+        "audience_prospects",
+        CATEGORY.audience,
+        "WARNING",
+        `${plural(count.prospects, "prospect généré", "prospects générés")} parmi les destinataires`,
+        "Ces contacts ne vous connaissent pas encore : un e-mail commercial non sollicité est la première cause de signalement en spam, et leurs adresses sont parfois incertaines. Écrivez-leur plutôt un premier message personnel, ou retirez la liste « Prospects » des destinataires.",
+      ),
+    );
+  }
   if (count.sendable > 0 && !checks.some((c) => c.level === "ERROR")) {
     checks.push(
       check(

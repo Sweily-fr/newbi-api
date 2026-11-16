@@ -139,6 +139,7 @@ describe("resolveAudience", () => {
       duplicates: 1,
       excludedByList: 1,
       missingFirstName: 1,
+      prospects: 0,
     });
     expect(recipients.map((r) => r.email)).toEqual([
       "marie@exemple.fr",
@@ -185,6 +186,21 @@ describe("resolveAudience", () => {
     });
     expect(counts.total).toBe(0);
     expect(counts.sendable).toBe(0);
+  });
+
+  it("compte à part les prospects générés parmi les destinataires", async () => {
+    await Client.create([
+      individual("client@exemple.fr"),
+      {
+        ...individual("prospect@exemple.fr"),
+        prospect: { provider: "societeinfo", siren: "123456789" },
+      },
+    ]);
+    const { counts } = await resolveAudience(String(workspaceId), {
+      mode: "ALL",
+    });
+    expect(counts.sendable).toBe(2);
+    expect(counts.prospects).toBe(1);
   });
 
   it("exclut aussi par adresse un contact présent dans une liste exclue", async () => {

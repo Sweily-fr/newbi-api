@@ -13,6 +13,9 @@
  *   duplicates     adresse déjà retenue pour un autre contact
  *   sendable       destinataire
  * `missingFirstName` : destinataires sans prénom ({{prenom}} vide).
+ * `prospects` : destinataires issus de la génération de prospects (ils ne
+ * connaissent pas encore l'expéditeur : avertissement avant envoi). Compté
+ * à part, non exposé en GraphQL.
  */
 import Client from "../../models/Client.js";
 import ClientList from "../../models/ClientList.js";
@@ -41,6 +44,7 @@ export const emptyAudienceCount = () => ({
   duplicates: 0,
   excludedByList: 0,
   missingFirstName: 0,
+  prospects: 0,
 });
 
 /**
@@ -91,7 +95,7 @@ export async function resolveAudience(
   const [clients, excludedClients, suppressions] = await Promise.all([
     Client.find(filter)
       .select(
-        "type name firstName lastName email isBlocked address.city contacts.firstName contacts.lastName contacts.isPrimary",
+        "type name firstName lastName email isBlocked address.city contacts.firstName contacts.lastName contacts.isPrimary prospect.provider",
       )
       .sort({ _id: 1 })
       .lean(),
@@ -136,6 +140,7 @@ export async function resolveAudience(
       counts.sendable += 1;
       const vars = contactVariables({ ...client, email });
       if (!vars.prenom) counts.missingFirstName += 1;
+      if (client.prospect?.provider) counts.prospects += 1;
       if (withRecipients) {
         recipients.push({
           clientId: client._id,
