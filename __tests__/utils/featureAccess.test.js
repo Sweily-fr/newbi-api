@@ -108,6 +108,7 @@ describe("workspaceFeatures", () => {
       appointments: true,
       documentShares: true,
       socialPublishing: false,
+      emailCampaigns: true,
     });
     expect(workspaceFeatures(BETA, env)).toEqual({
       vat: true,
@@ -115,6 +116,7 @@ describe("workspaceFeatures", () => {
       appointments: true,
       documentShares: true,
       socialPublishing: true,
+      emailCampaigns: true,
     });
   });
 });
