@@ -72,8 +72,17 @@ export function parisMonthBounds(now = new Date()) {
  * Plan de l'abonnement de l'espace (freelance | pme | entreprise).
  */
 export async function getWorkspacePlan(workspaceId) {
+  const plan = await getLiveSubscriptionPlan(workspaceId);
+  return plan in ESIGNATURE_MONTHLY_QUOTAS ? plan : DEFAULT_PLAN;
+}
+
+/**
+ * Plan (en minuscules) de l'abonnement en cours de l'espace, ou null sans
+ * abonnement actif ni période payée en cours (essai géré par l'app).
+ */
+export async function getLiveSubscriptionPlan(workspaceId) {
   const db = mongoose.connection.db;
-  if (!db || !workspaceId) return DEFAULT_PLAN;
+  if (!db || !workspaceId) return null;
 
   const id = String(workspaceId);
   const refs = [{ referenceId: id }, { organizationId: id }];
@@ -98,8 +107,10 @@ export async function getWorkspacePlan(workspaceId) {
         s.status === "canceled" && s.periodEnd && new Date(s.periodEnd) > now,
     );
 
-  const plan = live?.plan?.toLowerCase();
-  return plan in ESIGNATURE_MONTHLY_QUOTAS ? plan : DEFAULT_PLAN;
+  if (!live) return null;
+  return typeof live.plan === "string" && live.plan
+    ? live.plan.toLowerCase()
+    : "";
 }
 
 /**
