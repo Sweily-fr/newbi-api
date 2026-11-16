@@ -751,7 +751,10 @@ const emailCampaignsResolvers = {
       });
     }),
 
+    // Rouvre l'envoi vers une adresse : abonnement actif exigé (l'ajout,
+    // lui, reste possible pour tout stopper)
     removeEmailSuppression: can("edit")(async (_, { id }, ctx) => {
+      await checkSubscriptionActive(ctx);
       const missing = () =>
         notFound("Adresse introuvable dans la liste d'exclusion.");
       if (!isObjectIdString(id)) throw missing();
