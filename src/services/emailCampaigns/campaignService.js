@@ -48,6 +48,7 @@ import {
   BATCH_SIZE,
   buildEmailPayload,
   campaignSendMode,
+  devRecipients,
   isRealSendAllowed,
   maxPerMinute,
   newbiSenderEmail,
@@ -130,11 +131,20 @@ export async function campaignSettings(
   };
 }
 
+/** Un e-mail réel peut-il partir dans ce mode d'envoi ? */
+function realSendsPossible(mode = campaignSendMode()) {
+  if (mode === "LIVE") return true;
+  if (mode !== "RESTRICTED") return false;
+  const { emails, domains } = devRecipients();
+  return emails.size > 0 || domains.size > 0;
+}
+
 /**
  * Adresse d'envoi d'une campagne pour la vérification avant envoi : domaine
  * du client validé (DKIM et SPF d'après Resend, DMARC lu dans le DNS), ou
- * adresse Newbi (domaine Newbi validé chez Resend ; sans objet en mode
- * simulation, où rien ne part).
+ * adresse Newbi (domaine Newbi validé chez Resend ; sans objet quand aucun
+ * e-mail réel ne peut partir : simulation, mode restreint sans adresse
+ * autorisée).
  */
 export async function inspectCampaignSender(workspaceId, { identity } = {}) {
   const sender = await resolveCampaignSender(workspaceId, { identity });
@@ -146,9 +156,7 @@ export async function inspectCampaignSender(workspaceId, { identity } = {}) {
       auth: { ...authenticationOf(sender.sendingDomain), dmarc: dns.dmarc },
     };
   }
-  if (campaignSendMode() === "SIMULATION") {
-    return { ...sender, available: true };
-  }
+  if (!realSendsPossible()) return { ...sender, available: true };
   const newbi = await checkNewbiSendingDomain();
   return { ...sender, available: newbi.available };
 }

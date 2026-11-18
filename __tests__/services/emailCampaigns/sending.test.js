@@ -761,14 +761,29 @@ describe("adresse d'envoi", () => {
     );
   });
 
-  it("mode simulation : le domaine Newbi n'est pas consulté", async () => {
-    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "simulation");
+  it("aucun envoi réel possible (simulation, mode restreint sans adresse autorisée) : domaine Newbi non consulté", async () => {
     resendMock.domains = [];
     await seedClients(1);
-    const campaign = await createCampaign();
-    const launched = await requestSend(campaign, { userId, now: now() });
-    expect(launched.status).toBe("SENDING");
+    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "simulation");
+    const simulated = await requestSend(await createCampaign(), {
+      userId,
+      now: now(),
+    });
+    expect(simulated.status).toBe("SENDING");
+    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "restricted");
+    vi.stubEnv("EMAIL_CAMPAIGN_DEV_RECIPIENTS", "");
+    const restricted = await requestSend(await createCampaign(), {
+      userId,
+      now: now(),
+    });
+    expect(restricted.status).toBe("SENDING");
     expect(resendMock.listCalls).toBe(0);
+    // Une adresse autorisée : envoi réel possible, domaine Newbi exigé
+    vi.stubEnv("EMAIL_CAMPAIGN_DEV_RECIPIENTS", "@exemple.fr");
+    await expect(
+      requestSend(await createCampaign(), { userId, now: now() }),
+    ).rejects.toThrow(SENDING_UNAVAILABLE_MESSAGE);
+    expect(resendMock.listCalls).toBe(1);
   });
 });
 

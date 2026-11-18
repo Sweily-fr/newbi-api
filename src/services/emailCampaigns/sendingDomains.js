@@ -482,7 +482,7 @@ export async function connectSendingDomain({
       .select("status resendDomainId createdAt")
       .lean(),
     EmailSendingDomain.findOne({ domain: sender.domain })
-      .select("workspaceId status")
+      .select("workspaceId status resendDomainId createdAt")
       .lean(),
   ]);
   const staleReservation = (doc) =>
@@ -499,6 +499,7 @@ export async function connectSendingDomain({
   if (
     taken &&
     taken.status !== "EXPIRED" &&
+    !staleReservation(taken) &&
     String(taken.workspaceId) !== String(wsId)
   ) {
     throw new AppError(
@@ -519,13 +520,15 @@ export async function connectSendingDomain({
     );
   }
 
-  // Domaines retirés (plus rien chez Resend) et réservation abandonnée de
-  // l'espace : place nette
+  // Domaines retirés (plus rien chez Resend) et réservations abandonnées
+  // (arrêt pendant une déclaration) : place nette
   await EmailSendingDomain.deleteMany({
     $or: [
       { status: "EXPIRED", workspaceId: wsId },
       { status: "EXPIRED", domain: sender.domain },
-      ...(staleReservation(current) ? [{ _id: current._id }] : []),
+      ...[current, taken]
+        .filter(staleReservation)
+        .map((doc) => ({ _id: doc._id, resendDomainId: null })),
     ],
   });
 

@@ -689,6 +689,37 @@ describe("connexion", () => {
     const domain = await connect(workspaceA, "contact@atelier.fr");
     expect(domain.resendDomainId).toBe("dom_1");
   });
+
+  it("réservation abandonnée d'un autre espace : le domaine reste libre", async () => {
+    await EmailSendingDomain.collection.insertOne({
+      workspaceId: workspaceB,
+      domain: "atelier.fr",
+      fromEmail: "contact@atelier.fr",
+      resendDomainId: null,
+      status: "NOT_STARTED",
+      records: [],
+      createdAt: at(-5 * MINUTE),
+      updatedAt: at(-5 * MINUTE),
+    });
+    const domain = await connect(workspaceA, "contact@atelier.fr");
+    expect(domain.workspaceId).toEqual(workspaceA);
+    expect(await EmailSendingDomain.countDocuments()).toBe(1);
+    // Réservation récente (connexion en cours) : domaine pris
+    await EmailSendingDomain.collection.insertOne({
+      workspaceId: workspaceB,
+      domain: "autre.fr",
+      fromEmail: "contact@autre.fr",
+      resendDomainId: null,
+      status: "NOT_STARTED",
+      records: [],
+      createdAt: at(-30 * 1000),
+      updatedAt: at(-30 * 1000),
+    });
+    await disconnectSendingDomain(workspaceA);
+    expect(await codeOf(connect(workspaceA, "contact@autre.fr"))).toBe(
+      "DOMAIN_ALREADY_CONNECTED",
+    );
+  });
 });
 
 describe("vérification", () => {
