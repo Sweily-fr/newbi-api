@@ -12,6 +12,8 @@ type WorkspaceFeatures {
   documentShares: Boolean!
   "Publication sur les réseaux sociaux depuis le kanban"
   socialPublishing: Boolean!
+  "Campagnes e-mail (envoi en masse aux contacts)"
+  emailCampaigns: Boolean!
 }
 
 extend type Query {

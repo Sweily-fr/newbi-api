@@ -392,6 +392,20 @@ export const MODULES = [
     label: "Prise de rendez-vous",
     actions: CRUD,
   },
+  {
+    // Campagnes de l'espace (communes à tous les membres), liste
+    // d'exclusion comprise
+    key: "emailCampaigns",
+    group: "communication",
+    label: "Campagnes e-mail",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      action("send", "Envoyer et programmer"),
+    ],
+  },
   // Compte
   {
     key: "team",
@@ -631,7 +645,13 @@ const PERSONAL_MODULES = new Set(["signatures", "appointments"]);
  *     contrôle de rôle : banque, rapprochement, calendrier, documents
  *     partagés et listes de clients ouverts à tout membre ; kanban et
  *     signatures fermés à l'écran ; transferts créés depuis les documents
- *     partagés). Prise de rendez-vous fermée (outil personnel).
+ *     partagés). Prise de rendez-vous fermée (outil personnel), campagnes
+ *     e-mail aussi (envoi commercial, sans rapport avec la comptabilité).
+ *
+ * Une grille enregistrée avant l'ajout d'une page (campagnes e-mail…) ne
+ * casse rien : rôle prédéfini ajusté, la page prend ses droits par défaut ;
+ * rôle personnalisé, elle reste fermée tant que le super admin ne l'ouvre
+ * pas (voir normalizeActions).
  */
 const EDITOR_EXCLUDED = {
   invoices: ["status", "reminders"],
@@ -655,6 +675,7 @@ const ACCOUNTANT_LEVELS = fill("read", {
   sharedDocuments: "delete",
   signatures: "none",
   appointments: "none",
+  emailCampaigns: "none",
   team: "read",
   billing: "read",
   orgSettings: "read",

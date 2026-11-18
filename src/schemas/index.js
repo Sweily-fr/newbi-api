@@ -46,6 +46,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/urssafDeclaration.graphql"),
   path.join(__dirname, "./types/prospects.graphql"), // Génération de prospects
   path.join(__dirname, "./types/appointments.graphql"), // Prise de rendez-vous
+  path.join(__dirname, "./types/emailCampaigns.graphql"), // Campagnes e-mail
   path.join(__dirname, "./types/documentAutomation.graphql"), // Chargement explicite du schéma Document Automation
   path.join(__dirname, "./purchaseInvoice.graphql"),
   path.join(__dirname, "./types/pennylane.graphql"),

@@ -1,0 +1,418 @@
+# Campagnes e-mail (Communication > Campagnes e-mail) : envoi en masse aux
+# contacts de l'espace, contenu en blocs (design, JSON partagé avec le site,
+# voir src/services/emailCampaigns/design.js), vérification avant envoi,
+# suivi des ouvertures et des clics, liste d'exclusion de l'espace.
+# Droits : module « emailCampaigns » (view, create, edit, delete, send).
+
+enum EmailCampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  PAUSED
+  SENT
+  CANCELED
+}
+
+enum EmailCampaignAudienceMode {
+  ALL
+  LISTS
+}
+
+enum EmailCampaignRecipientStatus {
+  PENDING
+  SENT
+  DELIVERED
+  BOUNCED
+  COMPLAINED
+  FAILED
+  SIMULATED
+  SKIPPED
+}
+
+enum EmailCampaignRecipientFilter {
+  ALL
+  OPENED
+  CLICKED
+  NOT_OPENED
+  BOUNCED
+  UNSUBSCRIBED
+  FAILED
+}
+
+enum EmailCampaignCheckLevel {
+  OK
+  INFO
+  WARNING
+  ERROR
+}
+
+type EmailCampaignAudience {
+  mode: EmailCampaignAudienceMode!
+  listIds: [ID!]!
+  excludeListIds: [ID!]!
+}
+
+input EmailCampaignAudienceInput {
+  mode: EmailCampaignAudienceMode!
+  listIds: [ID!]
+  excludeListIds: [ID!]
+}
+
+type EmailCampaignStats {
+  recipients: Int!
+  sent: Int!
+  simulated: Int!
+  delivered: Int!
+  "Destinataires uniques ayant ouvert"
+  opened: Int!
+  "Destinataires uniques ayant cliqué"
+  clicked: Int!
+  opens: Int!
+  clicks: Int!
+  bounced: Int!
+  complained: Int!
+  unsubscribed: Int!
+  failed: Int!
+}
+
+type EmailCampaign {
+  id: ID!
+  workspaceId: ID!
+  name: String!
+  status: EmailCampaignStatus!
+  subject: String!
+  preheader: String!
+  fromName: String!
+  replyTo: String!
+  "Adresse d'envoi réelle, lecture seule"
+  senderEmail: String!
+  design: JSON!
+  audience: EmailCampaignAudience!
+  trackOpens: Boolean!
+  trackClicks: Boolean!
+  scheduledAt: DateTime
+  startedAt: DateTime
+  completedAt: DateTime
+  "Raison d'une pause, ou d'un envoi programmé qui n'a pas pu partir (brouillon)"
+  pausedReason: String
+  stats: EmailCampaignStats!
+  createdByName: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type EmailCampaignPage {
+  items: [EmailCampaign!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+}
+
+type EmailCampaignAudienceCount {
+  total: Int!
+  sendable: Int!
+  noEmail: Int!
+  invalidEmail: Int!
+  blocked: Int!
+  "Désinscrits, rejets, plaintes, exclus à la main"
+  suppressed: Int!
+  duplicates: Int!
+  excludedByList: Int!
+  missingFirstName: Int!
+}
+
+type EmailCampaignQuota {
+  plan: String!
+  monthlyLimit: Int!
+  usedThisMonth: Int!
+  remaining: Int!
+}
+
+type EmailCampaignVariable {
+  key: String!
+  label: String!
+  example: String!
+}
+
+type EmailCampaignSettings {
+  "Adresse réellement utilisée : domaine connecté validé, sinon adresse Newbi"
+  senderEmail: String!
+  "Adresse Newbi de l'espace, ex. boulangerie-martin@envoi.newbi.fr"
+  newbiSenderEmail: String!
+  "Domaine connecté (null si aucun)"
+  sendingDomain: EmailSendingDomain
+  "Droit « Envoyer et programmer » : connecter, vérifier, déconnecter"
+  canManageSendingDomain: Boolean!
+  defaultFromName: String!
+  defaultReplyTo: String!
+  "null = adresse manquante (avertissement)"
+  companyAddress: String
+  "LIVE | SIMULATION | RESTRICTED"
+  sendMode: String!
+  quota: EmailCampaignQuota!
+  variables: [EmailCampaignVariable!]!
+}
+
+type EmailCampaignTemplate {
+  key: String!
+  name: String!
+  description: String!
+  design: JSON!
+}
+
+type EmailCampaignPreview {
+  subject: String!
+  preheader: String!
+  html: String!
+  text: String!
+}
+
+type EmailCampaignCheck {
+  id: String!
+  category: String!
+  level: EmailCampaignCheckLevel!
+  title: String!
+  detail: String
+}
+
+type EmailCampaignDeliverability {
+  score: Float!
+  canSend: Boolean!
+  checks: [EmailCampaignCheck!]!
+}
+
+type EmailCampaignRecipient {
+  id: ID!
+  email: String!
+  name: String
+  clientId: ID
+  status: EmailCampaignRecipientStatus!
+  sentAt: DateTime
+  deliveredAt: DateTime
+  openedAt: DateTime
+  clickedAt: DateTime
+  bouncedAt: DateTime
+  complainedAt: DateTime
+  unsubscribedAt: DateTime
+  openCount: Int!
+  clickCount: Int!
+  error: String
+}
+
+type EmailCampaignRecipientPage {
+  items: [EmailCampaignRecipient!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+}
+
+type EmailCampaignLinkStat {
+  url: String!
+  clicks: Int!
+  uniqueClicks: Int!
+}
+
+type EmailCampaignTestResult {
+  success: Boolean!
+  sentTo: [String!]!
+  simulated: Boolean!
+}
+
+type EmailSuppression {
+  id: ID!
+  email: String!
+  reason: String!
+  createdAt: DateTime!
+  campaignId: ID
+}
+
+type EmailSuppressionPage {
+  items: [EmailSuppression!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+}
+
+type EmailCampaignImage {
+  url: String!
+  key: String!
+}
+
+# Domaine d'envoi connecté par l'espace (« Connecter mon domaine ») : les
+# campagnes partent de son adresse une fois le domaine validé (VERIFIED),
+# sinon de l'adresse Newbi de l'espace. Voir
+# src/services/emailCampaigns/sendingDomains.js.
+# Erreurs (extensions.code) : INVALID_SENDER_EMAIL, FREE_EMAIL_PROVIDER,
+# RESERVED_DOMAIN, DOMAIN_ALREADY_CONNECTED, SENDING_DOMAIN_EXISTS,
+# SENDING_DOMAIN_IN_USE, SENDING_DOMAIN_UNAVAILABLE.
+
+"Statuts de Resend, plus EXPIRED (retiré automatiquement faute de validation)"
+enum EmailSendingDomainStatus {
+  NOT_STARTED
+  PENDING
+  VERIFIED
+  PARTIALLY_VERIFIED
+  PARTIALLY_FAILED
+  TEMPORARY_FAILURE
+  FAILED
+  EXPIRED
+}
+
+type EmailSendingDomainRecord {
+  "« record » de Resend : DKIM, SPF..."
+  kind: String!
+  "TXT, MX, CNAME"
+  type: String!
+  "Nom relatif à la zone, tel que Resend le donne"
+  name: String!
+  "Nom complet"
+  fqdn: String!
+  value: String!
+  priority: Int
+  "Statut Resend de la ligne, en majuscules"
+  status: String!
+}
+
+type EmailSendingDomain {
+  id: ID!
+  domain: String!
+  "Adresse d'envoi une fois le domaine validé"
+  fromEmail: String!
+  status: EmailSendingDomainStatus!
+  "status == VERIFIED"
+  active: Boolean!
+  records: [EmailSendingDomainRecord!]!
+  "Zone DNS où ajouter les lignes"
+  zone: String!
+  "OVH, Hostinger... ; null si inconnu"
+  dnsProvider: String
+  lastCheckedAt: DateTime
+  verifiedAt: DateTime
+  "Retrait automatique si le domaine n'est toujours pas validé"
+  expiresAt: DateTime
+  createdAt: DateTime!
+}
+
+input CreateEmailCampaignInput {
+  name: String!
+  templateKey: String
+}
+
+input UpdateEmailCampaignInput {
+  name: String
+  subject: String
+  preheader: String
+  fromName: String
+  replyTo: String
+  design: JSON
+  audience: EmailCampaignAudienceInput
+  trackOpens: Boolean
+  trackClicks: Boolean
+}
+
+extend type Query {
+  emailCampaigns(
+    workspaceId: ID!
+    status: EmailCampaignStatus
+    search: String
+    page: Int = 1
+    limit: Int = 20
+  ): EmailCampaignPage!
+  emailCampaign(workspaceId: ID!, id: ID!): EmailCampaign
+  emailCampaignSettings(workspaceId: ID!): EmailCampaignSettings!
+  emailCampaignTemplates(workspaceId: ID!): [EmailCampaignTemplate!]!
+  emailCampaignAudienceCount(
+    workspaceId: ID!
+    audience: EmailCampaignAudienceInput!
+  ): EmailCampaignAudienceCount!
+  "design/subject/preheader facultatifs : aperçu du brouillon en cours d'édition sans l'enregistrer"
+  emailCampaignPreview(
+    workspaceId: ID!
+    id: ID!
+    design: JSON
+    subject: String
+    preheader: String
+    clientId: ID
+  ): EmailCampaignPreview!
+  emailCampaignDeliverability(
+    workspaceId: ID!
+    id: ID!
+  ): EmailCampaignDeliverability!
+  emailCampaignRecipients(
+    workspaceId: ID!
+    campaignId: ID!
+    filter: EmailCampaignRecipientFilter = ALL
+    search: String
+    page: Int = 1
+    limit: Int = 50
+  ): EmailCampaignRecipientPage!
+  emailCampaignLinkStats(
+    workspaceId: ID!
+    campaignId: ID!
+  ): [EmailCampaignLinkStat!]!
+  emailSuppressions(
+    workspaceId: ID!
+    search: String
+    page: Int = 1
+    limit: Int = 50
+  ): EmailSuppressionPage!
+  "Domaine d'envoi connecté (null si aucun)"
+  emailSendingDomain(workspaceId: ID!): EmailSendingDomain
+}
+
+extend type Mutation {
+  createEmailCampaign(
+    workspaceId: ID!
+    input: CreateEmailCampaignInput!
+  ): EmailCampaign!
+  "Brouillon seulement"
+  updateEmailCampaign(
+    workspaceId: ID!
+    id: ID!
+    input: UpdateEmailCampaignInput!
+  ): EmailCampaign!
+  "Copie en brouillon, nom suivi de « (copie) »"
+  duplicateEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
+  "DRAFT, SCHEDULED, SENT, CANCELED (pas SENDING ni PAUSED)"
+  deleteEmailCampaign(workspaceId: ID!, id: ID!): Boolean!
+  "1 à 5 adresses, objet préfixé « [Test] »"
+  sendEmailCampaignTest(
+    workspaceId: ID!
+    id: ID!
+    emails: [String!]!
+    clientId: ID
+  ): EmailCampaignTestResult!
+  "Sans date = maintenant ; consent doit valoir true"
+  sendEmailCampaign(
+    workspaceId: ID!
+    id: ID!
+    scheduledAt: DateTime
+    consent: Boolean!
+  ): EmailCampaign!
+  "SCHEDULED → DRAFT"
+  unscheduleEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
+  "SENDING → PAUSED"
+  pauseEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
+  "PAUSED → SENDING (sauf pause de réputation : refus expliqué)"
+  resumeEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
+  "SENDING ou PAUSED → CANCELED, destinataires restants SKIPPED"
+  cancelEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
+  uploadEmailCampaignImage(workspaceId: ID!, file: Upload!): EmailCampaignImage!
+  addEmailSuppression(workspaceId: ID!, email: String!): EmailSuppression!
+  "Seulement les ajouts manuels"
+  removeEmailSuppression(workspaceId: ID!, id: ID!): Boolean!
+  "Déclare le domaine de l'adresse chez le service d'envoi"
+  connectEmailSendingDomain(
+    workspaceId: ID!
+    fromEmail: String!
+  ): EmailSendingDomain!
+  "Au plus une vérification toutes les 20 s (sinon l'état connu)"
+  verifyEmailSendingDomain(workspaceId: ID!): EmailSendingDomain!
+  "Même domaine seulement"
+  updateEmailSendingDomainSender(
+    workspaceId: ID!
+    fromEmail: String!
+  ): EmailSendingDomain!
+  "Refusé si une campagne en cours d'envoi ou programmée part de ce domaine"
+  disconnectEmailSendingDomain(workspaceId: ID!): Boolean!
+}

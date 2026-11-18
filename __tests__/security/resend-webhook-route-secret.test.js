@@ -10,6 +10,7 @@ import crypto from "crypto";
 
 const services = vi.hoisted(() => ({
   recordDeliveryEvent: vi.fn(async () => {}),
+  recordCampaignEmailEvent: vi.fn(async () => false),
   recordTrialNudgeEmailEvent: vi.fn(async () => false),
   markEmailLogOpened: vi.fn(async () => {}),
   findDocumentByResendId: vi.fn(async () => null),
@@ -25,6 +26,9 @@ vi.mock("../../src/services/documentDeliveryService.js", () => ({
 }));
 vi.mock("../../src/services/trialNudgeService.js", () => ({
   recordTrialNudgeEmailEvent: services.recordTrialNudgeEmailEvent,
+}));
+vi.mock("../../src/services/emailCampaigns/events.js", () => ({
+  recordCampaignEmailEvent: services.recordCampaignEmailEvent,
 }));
 vi.mock("../../src/services/documentEmailLogService.js", () => ({
   markEmailLogOpened: services.markEmailLogOpened,
@@ -91,6 +95,7 @@ describe("RESEND_WEBHOOK_SECRET défini", () => {
     expect(res.statusCode).toBe(401);
     expect(services.recordDeliveryEvent).not.toHaveBeenCalled();
     expect(services.recordTrialNudgeEmailEvent).not.toHaveBeenCalled();
+    expect(services.recordCampaignEmailEvent).not.toHaveBeenCalled();
   });
 
   it("signature fausse : refusé", async () => {
@@ -113,6 +118,29 @@ describe("RESEND_WEBHOOK_SECRET défini", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(services.recordDeliveryEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("e-mail d'une campagne", () => {
+  beforeEach(() => {
+    process.env.RESEND_WEBHOOK_SECRET = SECRET;
+  });
+
+  it("traité par les campagnes seulement, pas par les documents", async () => {
+    services.recordCampaignEmailEvent.mockResolvedValueOnce(true);
+    const ts = String(Math.floor(Date.now() / 1000));
+    const res = await post({
+      "svix-id": "msg_2",
+      "svix-timestamp": ts,
+      "svix-signature": sign("msg_2", ts),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(services.recordCampaignEmailEvent).toHaveBeenCalledWith(
+      "email.bounced",
+      expect.objectContaining({ email_id: "e-1" }),
+    );
+    expect(services.recordTrialNudgeEmailEvent).not.toHaveBeenCalled();
+    expect(services.recordDeliveryEvent).not.toHaveBeenCalled();
   });
 });
 
