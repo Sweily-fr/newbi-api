@@ -30,7 +30,7 @@ import logger from "../../utils/logger.js";
 import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { isValidEmail } from "../../utils/validators.js";
 import { notifyError } from "../errorAlertService.js";
-import { organizationalDomain } from "./deliverability.js";
+import { checkSenderDomain, organizationalDomain } from "./deliverability.js";
 import { detectDnsProvider } from "./dnsProvider.js";
 import { loadWorkspaceIdentity } from "./identity.js";
 import {
@@ -1005,7 +1005,10 @@ export async function newbiSendingDomainStatus({
 
 /**
  * Le domaine Newbi peut-il envoyer ? Sinon, alerte interne (une par heure) :
- * le client ne voit qu'un message générique.
+ * le client ne voit qu'un message générique. Validé, son DNS est relu pour
+ * l'équipe seulement (DMARC n'est pas contrôlé par Resend) : une ligne
+ * absente donne une alerte interne (une par jour), jamais un contrôle
+ * montré au client.
  */
 export async function checkNewbiSendingDomain({ now = Date.now() } = {}) {
   const result = await newbiSendingDomainStatus({ now });
@@ -1021,6 +1024,22 @@ export async function checkNewbiSendingDomain({ now = Date.now() } = {}) {
         Erreur: result.error ? describeError(result.error) : undefined,
       },
       cooldownSeconds: ALERT_COOLDOWN_SECONDS,
+    });
+    return { ...result, available };
+  }
+  const dns = await checkSenderDomain(result.domain, { now });
+  const missing = [
+    dns.dkim === false && `DKIM (resend._domainkey.${dns.domain})`,
+    dns.spf === false && `SPF (send.${dns.domain})`,
+    dns.dmarc === false &&
+      `DMARC (_dmarc.${dns.domain} ou _dmarc.${dns.organizationalDomain})`,
+  ].filter(Boolean);
+  if (missing.length) {
+    void notifyError({
+      source: "campagnes",
+      message: "Domaine d'envoi Newbi : authentification DNS incomplète",
+      context: { Domaine: result.domain, Absent: missing.join(", ") },
+      cooldownSeconds: 24 * 60 * 60,
     });
   }
   return { ...result, available };

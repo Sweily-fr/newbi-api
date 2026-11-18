@@ -201,6 +201,7 @@ import {
   providerFromNameServers,
   resetDnsProviderCache,
 } from "../../../src/services/emailCampaigns/dnsProvider.js";
+import { resetDnsCache } from "../../../src/services/emailCampaigns/deliverability.js";
 import { resetResendClient } from "../../../src/services/emailCampaigns/sender.js";
 import {
   CONNECT_ATTEMPTS_PER_DAY,
@@ -310,6 +311,7 @@ beforeEach(async () => {
   alerts.notifyError.mockClear();
   resetMemoryAttempts();
   resetDnsProviderCache();
+  resetDnsCache();
   resetNewbiDomainCache();
   resetResendClient();
   vi.stubEnv("EMAIL_CAMPAIGN_RESEND_API_KEY", "re_campagnes_test");
@@ -1127,7 +1129,46 @@ describe("domaine d'envoi Newbi chez Resend", () => {
     });
   });
 
+  const newbiDns = () => {
+    dnsMock.txt.set("resend._domainkey.envoi.newbi.fr", ["p=abc"]);
+    dnsMock.txt.set("send.envoi.newbi.fr", [
+      "v=spf1 include:amazonses.com ~all",
+    ]);
+    dnsMock.txt.set("_dmarc.newbi.fr", ["v=DMARC1; p=none"]);
+  };
+
+  it("validé avec un DNS complet : aucune alerte", async () => {
+    newbiDns();
+    await seedDomain({ domain: "envoi.newbi.fr", status: "VERIFIED" });
+    expect(await checkNewbiSendingDomain({ now: T0.getTime() })).toMatchObject({
+      status: "VERIFIED",
+      available: true,
+    });
+    expect(alerts.notifyError).not.toHaveBeenCalled();
+  });
+
+  it("validé mais DMARC absent : envoi possible, alerte interne seulement", async () => {
+    newbiDns();
+    dnsMock.txt.delete("_dmarc.newbi.fr");
+    await seedDomain({ domain: "envoi.newbi.fr", status: "VERIFIED" });
+    expect(
+      (await checkNewbiSendingDomain({ now: T0.getTime() })).available,
+    ).toBe(true);
+    expect(alerts.notifyError).toHaveBeenCalledTimes(1);
+    expect(alerts.notifyError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "campagnes",
+        message: "Domaine d'envoi Newbi : authentification DNS incomplète",
+        context: {
+          Domaine: "envoi.newbi.fr",
+          Absent: "DMARC (_dmarc.envoi.newbi.fr ou _dmarc.newbi.fr)",
+        },
+      }),
+    );
+  });
+
   it("Resend illisible après une première lecture : dernière liste gardée", async () => {
+    newbiDns();
     await seedDomain({ domain: "envoi.newbi.fr", status: "VERIFIED" });
     const now = T0.getTime();
     expect((await checkNewbiSendingDomain({ now })).available).toBe(true);
