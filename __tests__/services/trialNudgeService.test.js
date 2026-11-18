@@ -24,6 +24,7 @@ vi.mock("resend", () => ({
 }));
 
 import {
+  CARD_STEP,
   LOG_COLLECTION,
   OPTOUT_COLLECTION,
   SETTINGS_COLLECTION,
@@ -600,21 +601,176 @@ describe("désinscription et suivi", () => {
   });
 });
 
+/**
+ * Essai avec carte (Stripe, 7 jours) démarré il y a `startedDaysAgo` jours :
+ * espace en essai Stripe et son abonnement.
+ */
+let cardSeq = 0;
+async function seedCardTrialOrg({
+  startedDaysAgo,
+  startedAt = null,
+  lastSeenDaysAgo = null,
+  status = "trialing",
+  cancelAtPeriodEnd = false,
+} = {}) {
+  const { orgId, userId } = await seedTrialOrg({
+    startedDaysAgo,
+    startedAt,
+    lastSeenDaysAgo,
+    trialDays: 7,
+    email: `carte${++cardSeq}@exemple.fr`,
+  });
+  await db
+    .collection("organization")
+    .updateOne({ _id: orgId }, { $set: { stripeTrialActive: true } });
+  await db.collection("subscription").insertOne({
+    referenceId: String(orgId),
+    status,
+    cancelAtPeriodEnd,
+  });
+  return { orgId, userId };
+}
+
+describe("essais avec carte (7 jours)", () => {
+  const runCard = (now = NOW) => runTrialNudges({ now, steps: [CARD_STEP] });
+
+  it("relance à J+2 l'inscrit qui n'est pas revenu, une seule fois", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 2.05 });
+
+    const summary = await runCard();
+    expect(summary.sent).toBe(1);
+    const payload = sendMock.mock.calls[0][0];
+    expect(payload.subject).toBe("Bien démarrer avec Newbi");
+    expect(payload.html).toContain("Aucun prélèvement avant le");
+    expect(payload.html).toContain("Ne plus recevoir");
+
+    await runCard(new Date(NOW.getTime() + 10 * 60 * 1000));
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ne relance pas un inscrit revenu dans les dernières 24 h", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 2.05, lastSeenDaysAgo: 0.5 });
+
+    const summary = await runCard();
+    expect(summary.sent).toBe(0);
+    expect(summary.excluded.active).toBe(1);
+  });
+
+  it("n'attend pas J+2 pour rien : pas avant, ni après le rappel de Stripe", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 1.5 });
+    await seedCardTrialOrg({ startedDaysAgo: 3.2 });
+
+    const summary = await runCard();
+    expect(summary.sent).toBe(0);
+    // Rappel de Stripe (3 jours avant la fin) dans moins d'un jour
+    expect(summary.excluded.reminder_close).toBe(1);
+  });
+
+  it("écarte un abonnement déjà payé ou résilié pendant l'essai", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 2.05, status: "active" });
+    await seedCardTrialOrg({ startedDaysAgo: 2.05, cancelAtPeriodEnd: true });
+
+    const summary = await runCard();
+    expect(summary.sent).toBe(0);
+    expect(summary.excluded.not_trialing).toBe(2);
+  });
+
+  it("n'envoie pas la nuit : attend 9 h (Paris)", async () => {
+    await setMode("live");
+    const night = new Date("2026-10-14T21:00:00.000Z"); // 23 h à Paris
+    // J+2 tombe le 14/10 à 21 h (Paris)
+    await seedCardTrialOrg({ startedAt: "2026-10-12T19:00:00.000Z" });
+
+    expect((await runCard(night)).due).toBe(0);
+    const morning = new Date("2026-10-15T07:05:00.000Z"); // 9 h 05 à Paris
+    expect((await runCard(morning)).sent).toBe(1);
+  });
+
+  it("les relances des essais sans carte ne les concernent pas", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 0.01 });
+    await seedCardTrialOrg({ startedDaysAgo: 7.05 });
+
+    await runTrialNudges({ now: NOW, steps: ["welcome"] });
+    await runTrialNudges({ now: NOW });
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("continue sans ENABLE_APP_TRIAL, qui ne porte plus que les essais sans carte", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 2.05 });
+    await seedTrialOrg({ startedDaysAgo: 7.05 });
+    process.env.ENABLE_APP_TRIAL = "false";
+    try {
+      expect((await runTrialNudges({ now: NOW })).skipped).toBe(true);
+      expect((await runCard()).sent).toBe(1);
+    } finally {
+      process.env.ENABLE_APP_TRIAL = "true";
+    }
+  });
+
+  it("apparaît dans le calendrier de l'admin", async () => {
+    await setMode("live");
+    await seedCardTrialOrg({ startedDaysAgo: 1 });
+
+    const { items } = await listTrialNudgeSchedule({ now: NOW });
+    const item = items.find((i) => i.step === CARD_STEP);
+    expect(item).toMatchObject({ status: "upcoming" });
+    expect(items.some((i) => i.step === "inactive_d30")).toBe(false);
+  });
+});
+
+describe("inscriptions arrêtées au choix de l'offre ou à la carte", () => {
+  it("relance aussi après l'étape entreprise, avec le bon texte", async () => {
+    await setMode("live");
+    await seedIncompleteSignup({
+      signedUpDaysAgo: 1.05,
+      onboardingStep: "recap",
+    });
+
+    const summary = await runTrialNudges({ now: NOW, steps: [SIGNUP_STEP] });
+    expect(summary.sent).toBe(1);
+    const { html } = sendMock.mock.calls[0][0];
+    expect(html).toContain("choisir votre offre et enregistrer votre carte");
+    expect(html).toContain("aucun prélèvement n'a lieu pendant l'essai");
+    expect(html).not.toContain("SIRET");
+  });
+
+  it("à l'étape entreprise, mentionne aussi le choix de l'offre et le SIRET", () => {
+    const { html } = buildTrialNudgeEmail("signup_incomplete", {
+      onboardingStep: "workspace",
+    });
+    expect(html).toContain(
+      "renseigner votre entreprise, puis choisir votre offre",
+    );
+    expect(html).toContain("SIRET");
+    expect(html).not.toContain("30 jours");
+    expect(html).not.toContain("sans carte");
+  });
+});
+
 describe("gabarits", () => {
-  it.each(["welcome", "inactive_d7", "feedback_d14", "inactive_d30"])(
-    "%s : lien de désinscription, pas de tiret cadratin",
-    (step) => {
-      const { subject, html } = buildTrialNudgeEmail(step, {
-        orgName: "<Atelier>",
-        unsubscribeUrl: "https://api.example.test/u?t=a&b",
-      });
-      expect(subject).not.toContain("—");
-      expect(html).not.toContain("—");
-      expect(html).toContain("Ne plus recevoir");
-      expect(html).toContain("&lt;Atelier&gt;");
-      expect(html).toContain("Bonjour,");
-    },
-  );
+  it.each([
+    "welcome",
+    "inactive_d7",
+    "feedback_d14",
+    "inactive_d30",
+    "card_inactive_d2",
+  ])("%s : lien de désinscription, pas de tiret cadratin", (step) => {
+    const { subject, html } = buildTrialNudgeEmail(step, {
+      orgName: "<Atelier>",
+      unsubscribeUrl: "https://api.example.test/u?t=a&b",
+    });
+    expect(subject).not.toContain("—");
+    expect(html).not.toContain("—");
+    expect(html).toContain("Ne plus recevoir");
+    expect(html).toContain("&lt;Atelier&gt;");
+    expect(html).toContain("Bonjour,");
+  });
 
   it("signup_incomplete : lien de désinscription, pas de tiret cadratin", () => {
     const { subject, html } = buildTrialNudgeEmail("signup_incomplete", {

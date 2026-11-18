@@ -840,8 +840,8 @@ async function startServer() {
       // (no-op si ENABLE_APP_TRIAL=false ; vérifié dans startTrialCleanupCron)
       startTrialCleanupCron();
 
-      // Relances de l'essai (J+7 inactif, J+14 suggestions), mode réglé dans
-      // newbi-admin (no-op si ENABLE_APP_TRIAL=false)
+      // Relances de l'essai, mode réglé dans newbi-admin (celles des essais
+      // sans carte seulement sous ENABLE_APP_TRIAL)
       startTrialNudgeCron();
 
       // Démarrer le cron de suivi des statuts e-invoicing (SuperPDP, pas de webhook)

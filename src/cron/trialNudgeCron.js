@@ -1,36 +1,41 @@
 /**
- * Relances de l'essai gratuit : J+7 inactif et J+14 suggestions du lundi au
- * vendredi à 10:00 Europe/Paris (un samedi ou un dimanche, le lundi), bienvenue
- * toutes les 10 minutes, tous les jours (elle doit arriver juste après
- * l'onboarding), suivie de l'e-mail des inscriptions à finaliser. Le mode
- * (off / simulation / live) se
- * règle dans newbi-admin et se relit à chaque passage : rien à redémarrer.
+ * Relances de l'essai gratuit. Le mode (off / simulation / live) se règle
+ * dans newbi-admin et se relit à chaque passage : rien à redémarrer.
+ *
+ * Toutes les 10 minutes, tous les jours :
+ *   - bienvenue des essais sans carte (sous ENABLE_APP_TRIAL) ;
+ *   - inscriptions à finaliser (entreprise, offre ou carte) ;
+ *   - relance J+2 des essais avec carte (entre 9 h et 20 h, Paris).
+ * Du lundi au vendredi à 10:00 Europe/Paris (sous ENABLE_APP_TRIAL) : J+7
+ * inactif et J+14 suggestions des essais sans carte.
+ * La relance de fin d'essai sans carte part avec l'expiration
+ * (trialCleanupCron).
  *
  * Câblé dans server.js derrière le garde `instanceId === 0` (une seule
- * instance PM2) et derrière ENABLE_APP_TRIAL, comme trialCleanupCron.
- * La relance de fin d'essai part avec l'expiration (trialCleanupCron).
+ * instance PM2). Depuis le 18/11/2026, seules les relances des essais sans
+ * carte dépendent d'ENABLE_APP_TRIAL.
  */
 import cron from "node-cron";
 import logger from "../utils/logger.js";
 import { isAppTrialEnabled } from "../utils/featureFlags.js";
 import {
+  CARD_STEP,
   DAILY_RUN_HOUR,
   SIGNUP_STEP,
   runTrialNudges,
 } from "../services/trialNudgeService.js";
 
 export function startTrialNudgeCron() {
-  if (!isAppTrialEnabled()) {
-    logger.info("[trialNudgeCron] ENABLE_APP_TRIAL est OFF, cron non planifié");
-    return null;
-  }
+  const appTrial = isAppTrialEnabled();
   cron.schedule(
     "*/10 * * * *",
     async () => {
-      try {
-        await runTrialNudges({ steps: ["welcome"] });
-      } catch (error) {
-        logger.error(`[trialNudgeCron] bienvenue, erreur : ${error.message}`);
+      if (appTrial) {
+        try {
+          await runTrialNudges({ steps: ["welcome"] });
+        } catch (error) {
+          logger.error(`[trialNudgeCron] bienvenue, erreur : ${error.message}`);
+        }
       }
       try {
         await runTrialNudges({ steps: [SIGNUP_STEP] });
@@ -39,9 +44,22 @@ export function startTrialNudgeCron() {
           `[trialNudgeCron] inscriptions à finaliser, erreur : ${error.message}`,
         );
       }
+      try {
+        await runTrialNudges({ steps: [CARD_STEP] });
+      } catch (error) {
+        logger.error(
+          `[trialNudgeCron] essais avec carte, erreur : ${error.message}`,
+        );
+      }
     },
     { scheduled: true, timezone: "Europe/Paris" },
   );
+  if (!appTrial) {
+    logger.info(
+      "[trialNudgeCron] ENABLE_APP_TRIAL est OFF : relances des essais sans carte non planifiées (inscriptions à finaliser et essais avec carte toutes les 10 min)",
+    );
+    return null;
+  }
   const task = cron.schedule(
     `0 ${DAILY_RUN_HOUR} * * 1-5`,
     async () => {
@@ -54,7 +72,7 @@ export function startTrialNudgeCron() {
     { scheduled: true, timezone: "Europe/Paris" },
   );
   logger.info(
-    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue et inscriptions à finaliser toutes les 10 min)`,
+    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue, inscriptions à finaliser et essais avec carte toutes les 10 min)`,
   );
   return task;
 }
