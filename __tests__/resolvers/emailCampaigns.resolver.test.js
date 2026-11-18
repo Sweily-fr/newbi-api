@@ -179,7 +179,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv("JWT_SECRET", "secret-de-test");
   vi.stubEnv("BACKEND_URL", "https://api.exemple.test");
-  vi.stubEnv("EMAIL_CAMPAIGN_FROM_EMAIL", "campagnes@envoi.newbi.fr");
+  vi.stubEnv("EMAIL_CAMPAIGN_FROM_DOMAIN", "envoi.newbi.fr");
+  vi.stubEnv("EMAIL_CAMPAIGN_FROM_EMAIL", "");
+  vi.stubEnv("EMAIL_CAMPAIGN_RESEND_API_KEY", "");
   // Hors production, sans liste d'adresses autorisées : tout est simulé
   vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "");
   vi.stubEnv("EMAIL_CAMPAIGN_DEV_RECIPIENTS", "");
@@ -338,8 +340,9 @@ describe("brouillon", () => {
       createdByName: "Jean Dupont",
     });
     expect(campaign.design.blocks.length).toBeGreaterThan(3);
-    expect(Types.EmailCampaign.senderEmail(campaign)).toBe(
-      "campagnes@envoi.newbi.fr",
+    // Adresse Newbi au nom de l'entreprise tant que la campagne n'est pas partie
+    expect(await Types.EmailCampaign.senderEmail(campaign, {}, {})).toBe(
+      "atelier-durand@envoi.newbi.fr",
     );
     expect(Types.EmailCampaign.stats(campaign)).toMatchObject({
       recipients: 0,
@@ -659,7 +662,7 @@ describe("aperçu, vérification, audience", () => {
   it("réglages et modèles", async () => {
     const settings = await call(Query.emailCampaignSettings, viewer);
     expect(settings).toMatchObject({
-      senderEmail: "campagnes@envoi.newbi.fr",
+      senderEmail: "atelier-durand@envoi.newbi.fr",
       defaultFromName: "Atelier Durand",
       defaultReplyTo: "contact@test.fr",
       companyAddress: "1 rue du Test, 75001 Paris",

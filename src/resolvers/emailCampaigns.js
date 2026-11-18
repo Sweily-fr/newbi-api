@@ -58,7 +58,7 @@ import {
   contactVariables,
 } from "../services/emailCampaigns/personalize.js";
 import { renderCampaignEmail } from "../services/emailCampaigns/render.js";
-import { campaignSenderEmail } from "../services/emailCampaigns/sender.js";
+import { newbiSenderEmail } from "../services/emailCampaigns/sender.js";
 import {
   DEFAULT_TEMPLATE_KEY,
   isTemplateKey,
@@ -300,6 +300,24 @@ const RECIPIENT_FILTERS = {
 const asObject = (value) =>
   typeof value?.toObject === "function" ? value.toObject() : value || {};
 
+// Adresse d'envoi des campagnes pas encore lancées : calculée une fois par
+// requête GraphQL et par espace (une liste de campagnes n'en relit qu'une)
+const senderByRequest = new WeakMap();
+
+function plannedSenderEmail(ctx, workspaceId) {
+  const resolve = async () =>
+    newbiSenderEmail((await loadWorkspaceIdentity(workspaceId)).companyName);
+  if (!ctx || typeof ctx !== "object") return resolve();
+  let byWorkspace = senderByRequest.get(ctx);
+  if (!byWorkspace) {
+    byWorkspace = new Map();
+    senderByRequest.set(ctx, byWorkspace);
+  }
+  const key = String(workspaceId);
+  if (!byWorkspace.has(key)) byWorkspace.set(key, resolve());
+  return byWorkspace.get(key);
+}
+
 const emailCampaignsResolvers = {
   EmailCampaign: {
     id: (campaign) => String(campaign._id || campaign.id),
@@ -309,8 +327,10 @@ const emailCampaignsResolvers = {
     preheader: (campaign) => campaign.preheader || "",
     fromName: (campaign) => campaign.fromName || "",
     replyTo: (campaign) => campaign.replyTo || "",
-    senderEmail: (campaign) =>
-      campaign.snapshot?.senderEmail || campaignSenderEmail(),
+    // Figée au lancement ; avant, celle qui serait utilisée maintenant
+    senderEmail: (campaign, _, ctx) =>
+      campaign.snapshot?.senderEmail ||
+      plannedSenderEmail(ctx, campaign.workspaceId),
     // La liste ne charge pas le contenu : lu ici seulement s'il est demandé
     design: async (campaign) => {
       if (campaign.design !== undefined) {

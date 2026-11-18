@@ -94,7 +94,8 @@ import {
 
 const workspaceId = buildOrganizationId();
 const userId = buildUserId();
-const SENDER = "campagnes@envoi.newbi.fr";
+// Adresse Newbi de l'espace : nom de l'entreprise sur le domaine d'envoi
+const SENDER = "atelier-durand@envoi.newbi.fr";
 
 let clock;
 const now = () => new Date(clock);
@@ -182,7 +183,9 @@ beforeEach(async () => {
   vi.stubEnv("JWT_SECRET", "secret-de-test");
   vi.stubEnv("BACKEND_URL", "https://api.exemple.test");
   vi.stubEnv("RESEND_API_KEY", "re_test_aucun_envoi");
-  vi.stubEnv("EMAIL_CAMPAIGN_FROM_EMAIL", SENDER);
+  vi.stubEnv("EMAIL_CAMPAIGN_FROM_DOMAIN", "envoi.newbi.fr");
+  vi.stubEnv("EMAIL_CAMPAIGN_FROM_EMAIL", "");
+  vi.stubEnv("EMAIL_CAMPAIGN_RESEND_API_KEY", "");
   vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "live");
   vi.stubEnv("EMAIL_CAMPAIGN_DEV_RECIPIENTS", "");
   vi.stubEnv("EMAIL_CAMPAIGN_MAX_PER_MINUTE", "");

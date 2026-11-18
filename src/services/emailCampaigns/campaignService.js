@@ -46,9 +46,9 @@ import {
   BATCH_SIZE,
   buildEmailPayload,
   campaignSendMode,
-  campaignSenderEmail,
   isRealSendAllowed,
   maxPerMinute,
+  newbiSenderEmail,
   sendBatch,
   senderDomainOf,
 } from "./sender.js";
@@ -99,7 +99,7 @@ export async function campaignSettings(workspaceId) {
     getCampaignQuota(workspaceId),
   ]);
   return {
-    senderEmail: campaignSenderEmail(),
+    senderEmail: newbiSenderEmail(identity.companyName),
     defaultFromName: singleLine(identity.companyName, 60),
     defaultReplyTo: identity.defaultReplyTo,
     companyAddress: identity.companyAddress,
@@ -117,13 +117,13 @@ export async function campaignSettings(workspaceId) {
 /** Vérification avant envoi d'une campagne (voir deliverability.js). */
 export async function evaluateDeliverability(campaign, { identity } = {}) {
   const workspaceId = campaign.workspaceId;
-  const senderEmail = campaignSenderEmail();
-  const [resolvedIdentity, senderDomain, audience, quota] = await Promise.all([
+  const [resolvedIdentity, audience, quota] = await Promise.all([
     identity || loadWorkspaceIdentity(workspaceId),
-    checkSenderDomain(senderDomainOf(senderEmail)),
     resolveAudience(workspaceId, campaign.audience),
     getCampaignQuota(workspaceId),
   ]);
+  const senderEmail = newbiSenderEmail(resolvedIdentity.companyName);
+  const senderDomain = await checkSenderDomain(senderDomainOf(senderEmail));
   const sample = renderCampaignEmail({
     design: campaign.design,
     subject: campaign.subject,
@@ -216,7 +216,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
           links,
           sendMode: campaignSendMode(),
           snapshot: {
-            senderEmail: campaignSenderEmail(),
+            senderEmail: newbiSenderEmail(identity.companyName),
             fromName: singleLine(locked.fromName, 60) || identity.companyName,
             replyTo: singleLine(locked.replyTo) || identity.defaultReplyTo,
             companyName: identity.companyName,
@@ -552,7 +552,7 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
   });
   return buildEmailPayload({
     fromName: snapshot.fromName,
-    senderEmail: snapshot.senderEmail || campaignSenderEmail(),
+    senderEmail: snapshot.senderEmail || newbiSenderEmail(snapshot.companyName),
     to: recipient.email,
     replyTo: snapshot.replyTo,
     subject: rendered.subject,
@@ -918,7 +918,7 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
       buildEmailPayload({
         fromName:
           singleLine(campaign.fromName, 60) || resolvedIdentity.companyName,
-        senderEmail: campaignSenderEmail(),
+        senderEmail: newbiSenderEmail(resolvedIdentity.companyName),
         to,
         replyTo:
           singleLine(campaign.replyTo) || resolvedIdentity.defaultReplyTo,

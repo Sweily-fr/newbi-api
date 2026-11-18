@@ -10,10 +10,17 @@
  *               (ex. « dylan@x.fr,@sweily.fr »), simulé pour les autres.
  * Les e-mails de test suivent la même règle.
  *
- * Expéditeur : « Nom affiché <EMAIL_CAMPAIGN_FROM_EMAIL> » (repli
- * RESEND_FROM_EMAIL), jamais l'adresse du client (DMARC échouerait), et
- * l'adresse de l'entreprise en réponse. En-têtes de désinscription en un
- * clic (RFC 8058) sur chaque e-mail.
+ * Expéditeur par défaut : « Nom affiché <slug-entreprise@envoi.newbi.fr> »
+ * (domaine EMAIL_CAMPAIGN_FROM_DOMAIN), jamais une adresse de messagerie du
+ * client (DMARC échouerait), et l'adresse de l'entreprise en réponse. Un
+ * espace qui a connecté et validé son propre domaine envoie depuis son
+ * adresse (voir sendingDomains.js, resolveCampaignSender). En-têtes de
+ * désinscription en un clic (RFC 8058) sur chaque e-mail.
+ *
+ * Clé Resend des campagnes : EMAIL_CAMPAIGN_RESEND_API_KEY, repli
+ * RESEND_API_KEY (un compte Resend séparé isolera plus tard la réputation
+ * des campagnes de celle des e-mails de documents). Les domaines connectés
+ * par les espaces sont déclarés avec la même clé.
  *
  * Lots de 100 au plus (`resend.batch.send`, validation permissive : une
  * adresse refusée n'empêche pas les autres), avec une clé d'idempotence par
@@ -67,22 +74,101 @@ export function isRealSendAllowed(
   return emails.has(address) || domains.has(address.split("@")[1] || "");
 }
 
-export function campaignSenderEmail(env = process.env) {
-  return (
-    String(
-      env.EMAIL_CAMPAIGN_FROM_EMAIL ||
-        env.RESEND_FROM_EMAIL ||
-        "no-reply@newbi.fr",
-    )
-      .trim()
-      .toLowerCase() || "no-reply@newbi.fr"
-  );
-}
-
 export const senderDomainOf = (email) =>
   String(email || "")
     .split("@")[1]
-    ?.toLowerCase() || "";
+    ?.trim()
+    .toLowerCase() || "";
+
+// ─── Adresse d'envoi Newbi ────────────────────────────────────────────────
+
+export const DEFAULT_CAMPAIGN_FROM_DOMAIN = "envoi.newbi.fr";
+export const SENDER_SLUG_MAX = 40;
+export const DEFAULT_SENDER_LOCAL_PART = "contact";
+
+// Boîtes techniques réservées (RFC 2142 et usages courants) : jamais
+// utilisées comme expéditeur d'une campagne
+export const RESERVED_LOCAL_PARTS = Object.freeze([
+  "abuse",
+  "postmaster",
+  "hostmaster",
+  "webmaster",
+  "admin",
+  "administrator",
+  "root",
+  "security",
+  "mailer-daemon",
+  "noreply",
+  "no-reply",
+  "bounce",
+  "bounces",
+]);
+
+const HOSTNAME_RE =
+  /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/** Nom de domaine en minuscules, ou "" s'il n'en est pas un. */
+export function cleanDomain(value) {
+  const domain = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .replace(/\.$/, "");
+  return HOSTNAME_RE.test(domain) ? domain : "";
+}
+
+/**
+ * Domaine des adresses d'envoi Newbi : EMAIL_CAMPAIGN_FROM_DOMAIN, sinon
+ * celui de EMAIL_CAMPAIGN_FROM_EMAIL (ancienne variable), sinon
+ * envoi.newbi.fr. Jamais celui de RESEND_FROM_EMAIL (e-mails de documents).
+ */
+export function campaignFromDomain(env = process.env) {
+  return (
+    cleanDomain(env.EMAIL_CAMPAIGN_FROM_DOMAIN) ||
+    cleanDomain(senderDomainOf(env.EMAIL_CAMPAIGN_FROM_EMAIL)) ||
+    DEFAULT_CAMPAIGN_FROM_DOMAIN
+  );
+}
+
+// Ligatures que la décomposition Unicode ne sépare pas
+const LIGATURES = { œ: "oe", æ: "ae", ß: "ss", ø: "o", đ: "d", ł: "l" };
+
+/**
+ * Partie avant le @ de l'adresse Newbi : nom de l'entreprise en minuscules,
+ * sans accents, tout autre caractère que [a-z0-9] changé en tiret, tirets
+ * fusionnés et retirés aux bords, 40 caractères au plus (coupé sur un tiret
+ * quand c'est possible). Vide ou réservé : « contact ».
+ *
+ *   « Boulangerie Martin » → boulangerie-martin
+ */
+export function senderSlug(companyName) {
+  let slug = String(companyName ?? "")
+    .toLowerCase()
+    .replace(/[œæßøđł]/g, (char) => LIGATURES[char])
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (slug.length > SENDER_SLUG_MAX) {
+    // Coupe au dernier tiret des 41 premiers caractères (le 41e peut être
+    // le tiret qui suit un mot entier), s'il garde au moins la moitié
+    const lastDash = slug.slice(0, SENDER_SLUG_MAX + 1).lastIndexOf("-");
+    slug =
+      lastDash >= SENDER_SLUG_MAX / 2
+        ? slug.slice(0, lastDash)
+        : slug.slice(0, SENDER_SLUG_MAX);
+    slug = slug.replace(/-+$/, "");
+  }
+  if (!slug || RESERVED_LOCAL_PARTS.includes(slug)) {
+    return DEFAULT_SENDER_LOCAL_PART;
+  }
+  return slug;
+}
+
+/** Adresse d'envoi Newbi d'un espace, ex. boulangerie-martin@envoi.newbi.fr. */
+export function newbiSenderEmail(companyName, env = process.env) {
+  return `${senderSlug(companyName)}@${campaignFromDomain(env)}`;
+}
 
 export function maxPerMinute(env = process.env) {
   const value = Number.parseInt(env.EMAIL_CAMPAIGN_MAX_PER_MINUTE, 10);
@@ -103,18 +189,31 @@ export function fromHeader(name, email) {
   return display ? `${display} <${email}>` : email;
 }
 
-let client = null;
+/** Clé Resend des campagnes (et des domaines connectés), ou "". */
+export function campaignResendApiKey(env = process.env) {
+  return String(
+    env.EMAIL_CAMPAIGN_RESEND_API_KEY || env.RESEND_API_KEY || "",
+  ).trim();
+}
 
-/** Client Resend (null sans clé d'API). */
+let client = null;
+let clientKey = null;
+
+/** Client Resend des campagnes (null sans clé d'API). */
 export function resendClient() {
-  if (!process.env.RESEND_API_KEY) return null;
-  if (!client) client = new Resend(process.env.RESEND_API_KEY);
+  const key = campaignResendApiKey();
+  if (!key) return null;
+  if (!client || clientKey !== key) {
+    client = new Resend(key);
+    clientKey = key;
+  }
   return client;
 }
 
 /** Tests : oublie le client (nouvelle clé, module simulé). */
 export function resetResendClient() {
   client = null;
+  clientKey = null;
 }
 
 /** Corps d'un e-mail de campagne pour l'API Resend. */
@@ -212,7 +311,8 @@ export async function sendBatch(payloads, { idempotencyKey } = {}) {
       error: {
         kind: "CONFIG",
         name: "missing_api_key",
-        message: "RESEND_API_KEY non configurée",
+        message:
+          "Clé Resend des campagnes non configurée (EMAIL_CAMPAIGN_RESEND_API_KEY ou RESEND_API_KEY)",
       },
     };
   }
