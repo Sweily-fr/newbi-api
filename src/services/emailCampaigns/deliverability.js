@@ -422,7 +422,9 @@ function senderAddressChecks(sender) {
         CATEGORY.sender,
         "OK",
         `Adresse d'envoi : ${sender.email}`,
-        "Adresse de Newbi au nom de votre entreprise : vos clients vous répondent à votre adresse de réponse. Pour envoyer depuis votre propre adresse, connectez votre domaine dans « Adresse d'envoi ».",
+        sendingDomain
+          ? "Adresse de Newbi au nom de votre entreprise : vos clients vous répondent à votre adresse de réponse."
+          : "Adresse de Newbi au nom de votre entreprise : vos clients vous répondent à votre adresse de réponse. Pour envoyer depuis votre propre adresse, connectez votre domaine dans « Adresse d'envoi ».",
       ),
     );
   }
