@@ -24,7 +24,7 @@ vi.mock("../../src/config/redis.js", () => ({
   cacheDel: async () => {},
   getCacheClient: () => null,
 }));
-const resendMock = vi.hoisted(() => ({ calls: [] }));
+const resendMock = vi.hoisted(() => ({ calls: [], domains: [] }));
 vi.mock("resend", () => ({
   Resend: class {
     constructor() {
@@ -36,6 +36,13 @@ vi.mock("resend", () => ({
             error: null,
           };
         },
+      };
+      // Domaines du compte Resend (statut du domaine d'envoi Newbi)
+      this.domains = {
+        list: async () => ({
+          data: { object: "list", has_more: false, data: resendMock.domains },
+          error: null,
+        }),
       };
     }
   },
@@ -96,6 +103,7 @@ import EmailSuppression from "../../src/models/EmailSuppression.js";
 import emailCampaignsResolvers from "../../src/resolvers/emailCampaigns.js";
 import { resetDnsCache } from "../../src/services/emailCampaigns/deliverability.js";
 import { resetResendClient } from "../../src/services/emailCampaigns/sender.js";
+import { resetNewbiDomainCache } from "../../src/services/emailCampaigns/sendingDomains.js";
 import { getCampaignQuota } from "../../src/services/emailCampaigns/quota.js";
 
 const { Query, Mutation } = emailCampaignsResolvers;
@@ -175,7 +183,11 @@ beforeEach(async () => {
   resetMemoryAttempts();
   resetDnsCache();
   resetResendClient();
+  resetNewbiDomainCache();
   resendMock.calls = [];
+  resendMock.domains = [
+    { id: "dom_envoi", name: "envoi.newbi.fr", status: "verified" },
+  ];
   vi.clearAllMocks();
   vi.stubEnv("JWT_SECRET", "secret-de-test");
   vi.stubEnv("BACKEND_URL", "https://api.exemple.test");

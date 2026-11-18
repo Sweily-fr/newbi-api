@@ -4,7 +4,8 @@
  * de désinscription, erreurs partielles, clé d'idempotence stable d'une
  * reprise à l'autre, erreurs temporaires (3 essais), définitives et de
  * configuration, modes simulation et restreint, plafond par minute, pause,
- * reprise, annulation, envoi programmé, e-mails de test.
+ * reprise, annulation, envoi programmé, e-mails de test, adresse d'envoi
+ * (domaine connecté validé ou non, domaine Newbi non validé chez Resend).
  */
 import {
   describe,
@@ -17,7 +18,17 @@ import {
   vi,
 } from "vitest";
 
-const resendMock = vi.hoisted(() => ({ calls: [], responder: null }));
+const resendMock = vi.hoisted(() => ({
+  calls: [],
+  responder: null,
+  // Domaines du compte Resend (statut du domaine d'envoi Newbi)
+  domains: [],
+  listCalls: 0,
+}));
+const alerts = vi.hoisted(() => ({ notifyError: vi.fn(async () => true) }));
+vi.mock("../../../src/services/errorAlertService.js", () => ({
+  notifyError: alerts.notifyError,
+}));
 vi.mock("resend", () => ({
   Resend: class {
     constructor(key) {
@@ -41,6 +52,15 @@ vi.mock("resend", () => ({
       this.emails = {
         send: async () => {
           throw new Error("envoi unitaire inattendu");
+        },
+      };
+      this.domains = {
+        list: async () => {
+          resendMock.listCalls += 1;
+          return {
+            data: { object: "list", has_more: false, data: resendMock.domains },
+            error: null,
+          };
         },
       };
     }
@@ -74,6 +94,7 @@ import {
 import Client from "../../../src/models/Client.js";
 import EmailCampaign from "../../../src/models/EmailCampaign.js";
 import EmailCampaignRecipient from "../../../src/models/EmailCampaignRecipient.js";
+import EmailSendingDomain from "../../../src/models/EmailSendingDomain.js";
 import EmailSuppression from "../../../src/models/EmailSuppression.js";
 import {
   MAX_ATTEMPTS,
@@ -85,8 +106,12 @@ import {
   runEmailCampaignTick,
   sendCampaignTest,
 } from "../../../src/services/emailCampaigns/campaignService.js";
-import { resetDnsCache } from "../../../src/services/emailCampaigns/deliverability.js";
+import {
+  SENDING_UNAVAILABLE_MESSAGE,
+  resetDnsCache,
+} from "../../../src/services/emailCampaigns/deliverability.js";
 import { resetResendClient } from "../../../src/services/emailCampaigns/sender.js";
+import { resetNewbiDomainCache } from "../../../src/services/emailCampaigns/sendingDomains.js";
 import {
   TOKEN_KINDS,
   verifyCampaignToken,
@@ -163,6 +188,7 @@ beforeAll(async () => {
     EmailCampaign.init(),
     EmailCampaignRecipient.init(),
     EmailSuppression.init(),
+    EmailSendingDomain.init(),
   ]);
 });
 
@@ -176,8 +202,14 @@ beforeEach(async () => {
   invalidateSubCache();
   resetDnsCache();
   resetResendClient();
+  resetNewbiDomainCache();
   resendMock.calls = [];
   resendMock.responder = null;
+  resendMock.domains = [
+    { id: "dom_envoi", name: "envoi.newbi.fr", status: "verified" },
+  ];
+  resendMock.listCalls = 0;
+  alerts.notifyError.mockClear();
   sleeps.length = 0;
   clock = Date.parse("2026-11-16T10:00:00Z");
   vi.stubEnv("JWT_SECRET", "secret-de-test");
@@ -472,6 +504,13 @@ describe("envoi par lots", () => {
     await tick();
     const paused = await EmailCampaign.findById(campaign._id).lean();
     expect(paused).toMatchObject({ status: "PAUSED", pauseKind: "SERVICE" });
+    // L'équipe est prévenue (domaine ou clé refusés par Resend)
+    expect(alerts.notifyError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "campagnes",
+        context: expect.objectContaining({ Expéditeur: SENDER }),
+      }),
+    );
     const recipients = await recipientsOf(campaign._id);
     expect(recipients.map((r) => [r.status, r.attempts, r.lockedAt])).toEqual([
       ["PENDING", 0, null],
@@ -648,6 +687,88 @@ describe("envoi programmé", () => {
       /^L'envoi programmé n'a pas pu partir : Votre quota mensuel est atteint/,
     );
     expect(await EmailCampaignRecipient.countDocuments()).toBe(0);
+  });
+});
+
+describe("adresse d'envoi", () => {
+  const verifiedRecords = [
+    { record: "DKIM", type: "TXT", name: "resend._domainkey", value: "p=abc", status: "VERIFIED" },
+    { record: "SPF", type: "MX", name: "send", value: "feedback-smtp.eu-west-1.amazonses.com", priority: 10, status: "VERIFIED" },
+    { record: "SPF", type: "TXT", name: "send", value: "v=spf1 include:amazonses.com ~all", status: "VERIFIED" },
+  ];
+  const connectDomain = (status) =>
+    EmailSendingDomain.create({
+      workspaceId,
+      domain: "atelier.fr",
+      fromEmail: "contact@atelier.fr",
+      resendDomainId: "dom_atelier",
+      status,
+      zone: "atelier.fr",
+      records: verifiedRecords,
+    });
+
+  it("domaine connecté validé : campagne et e-mail de test partent de son adresse", async () => {
+    await connectDomain("VERIFIED");
+    dnsRecords.set("_dmarc.atelier.fr", ["v=DMARC1; p=none"]);
+    await seedClients(2);
+    const campaign = await createCampaign();
+    const launched = await requestSend(campaign, { userId, now: now() });
+    expect(launched.snapshot.senderEmail).toBe("contact@atelier.fr");
+    // Domaine du client : le domaine Newbi n'est pas consulté
+    expect(resendMock.listCalls).toBe(0);
+    await tick();
+    expect(resendMock.calls[0].payloads[0]).toMatchObject({
+      from: "Atelier Durand <contact@atelier.fr>",
+      replyTo: "contact@atelier.fr",
+    });
+    const draft = await createCampaign();
+    await sendCampaignTest(draft, ["moi@atelier.fr"], {});
+    expect(resendMock.calls.at(-1).payloads[0].from).toBe(
+      "Atelier Durand <contact@atelier.fr>",
+    );
+  });
+
+  it("domaine pas encore validé : adresse Newbi", async () => {
+    await connectDomain("PENDING");
+    await seedClients(1);
+    const campaign = await createCampaign();
+    const launched = await requestSend(campaign, { userId, now: now() });
+    expect(launched.snapshot.senderEmail).toBe(SENDER);
+  });
+
+  it("domaine Newbi non validé chez Resend : lancement et test refusés au message générique, équipe prévenue", async () => {
+    resendMock.domains = [
+      { id: "dom_envoi", name: "envoi.newbi.fr", status: "pending" },
+    ];
+    await seedClients(1);
+    const campaign = await createCampaign();
+    await expect(requestSend(campaign, { userId, now: now() })).rejects.toThrow(
+      SENDING_UNAVAILABLE_MESSAGE,
+    );
+    expect((await EmailCampaign.findById(campaign._id)).status).toBe("DRAFT");
+    await expect(
+      sendCampaignTest(campaign, ["moi@atelier.fr"], {}),
+    ).rejects.toThrow(SENDING_UNAVAILABLE_MESSAGE);
+    expect(resendMock.calls).toHaveLength(0);
+    expect(alerts.notifyError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "campagnes",
+        context: expect.objectContaining({
+          Domaine: "envoi.newbi.fr",
+          Statut: "PENDING",
+        }),
+      }),
+    );
+  });
+
+  it("mode simulation : le domaine Newbi n'est pas consulté", async () => {
+    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "simulation");
+    resendMock.domains = [];
+    await seedClients(1);
+    const campaign = await createCampaign();
+    const launched = await requestSend(campaign, { userId, now: now() });
+    expect(launched.status).toBe("SENDING");
+    expect(resendMock.listCalls).toBe(0);
   });
 });
 

@@ -5,9 +5,11 @@
  *   note = 10 − 3 × ERROR − 1 × WARNING − 0,25 × INFO, bornée à [0, 10],
  *   arrondie au demi-point ; envoi possible seulement sans ERROR.
  *
- * Le contrôle du domaine d'envoi lit le DNS (DKIM de Resend, SPF du
- * sous-domaine de retour, DMARC), mis en cache une heure par domaine.
- * Le reste est calculé sur le contenu, l'audience et le quota fournis.
+ * L'adresse d'envoi est décrite par l'appelant (campaignService.js) :
+ * adresse Newbi (statut du domaine Newbi chez Resend, jamais de détail DNS
+ * montré au client) ou domaine du client (DKIM et SPF d'après Resend, DMARC
+ * lu dans le DNS, mis en cache une heure par domaine). Le reste est calculé
+ * sur le contenu, l'audience et le quota fournis.
  */
 import dns from "node:dns";
 import { normalizeDesign, singleLine } from "./design.js";
@@ -314,66 +316,63 @@ const check = (id, category, level, title, detail = null) => ({
   detail,
 });
 
-function senderChecks({ senderDomain, fromName, replyTo, replyToValid }) {
+/** Valeur DMARC conseillée à un domaine qui n'en a pas. */
+export const RECOMMENDED_DMARC = "v=DMARC1; p=none;";
+
+/** Message bloquant quand le domaine d'envoi de Newbi pose problème. */
+export const SENDING_UNAVAILABLE_MESSAGE =
+  "L'envoi de campagnes est momentanément indisponible. Notre équipe a été prévenue.";
+
+/**
+ * Adresse d'envoi de la campagne.
+ *   Adresse Newbi : seul compte le statut du domaine Newbi chez Resend ;
+ *   un problème bloque l'envoi par un message générique (l'équipe est
+ *   prévenue à part), jamais par le détail DNS du domaine de Newbi.
+ *   Domaine du client validé : DKIM et SPF d'après Resend, DMARC lu dans
+ *   le DNS (absent : avertissement avec la valeur conseillée).
+ *   Domaine du client pas encore validé (ou retiré) : information.
+ */
+function senderAddressChecks(sender) {
+  if (!sender) return [];
   const checks = [];
-  const domain = senderDomain?.domain || "";
-  if (senderDomain) {
-    if (senderDomain.dkim === true) {
-      checks.push(
-        check(
-          "sender_domain_dkim",
-          CATEGORY.sender,
-          "OK",
-          "Domaine d'envoi authentifié (DKIM)",
-          `Les e-mails partent de ${domain}, signé par le service d'envoi.`,
-        ),
-      );
-    } else if (senderDomain.dkim === false) {
-      checks.push(
-        check(
-          "sender_domain_dkim",
-          CATEGORY.sender,
-          "ERROR",
-          "Domaine d'envoi non authentifié (DKIM)",
-          `La signature DKIM de ${domain} est introuvable : les messageries refuseraient vos e-mails. Contactez le support Newbi.`,
-        ),
-      );
-    } else {
-      checks.push(
-        check(
-          "sender_domain_dkim",
-          CATEGORY.sender,
-          "WARNING",
-          "Authentification du domaine d'envoi non vérifiée",
-          `La vérification DNS de ${domain} n'a pas abouti. Réessayez dans quelques minutes.`,
-        ),
-      );
-    }
-    if (senderDomain.spf === true) {
-      checks.push(
-        check(
-          "sender_domain_spf",
-          CATEGORY.sender,
-          "OK",
-          "Enregistrement SPF en place",
-        ),
-      );
-    } else {
-      checks.push(
-        check(
-          "sender_domain_spf",
-          CATEGORY.sender,
-          "WARNING",
-          senderDomain.spf === false
-            ? `SPF absent sur send.${domain}`
-            : "SPF non vérifié",
-          senderDomain.spf === false
-            ? `L'enregistrement SPF (include:amazonses.com) manque sur send.${domain}. Cette configuration relève de Newbi : vos e-mails partent, mais risquent davantage d'arriver en indésirables.`
-            : `La vérification DNS de send.${domain} n'a pas abouti. Réessayez dans quelques minutes.`,
-        ),
-      );
-    }
-    if (senderDomain.dmarc === true) {
+  const sendingDomain = sender.sendingDomain || null;
+  if (sender.custom && sendingDomain) {
+    const domain = sendingDomain.domain;
+    const auth = sender.auth || {};
+    checks.push(
+      auth.dkim
+        ? check(
+            "sender_domain_dkim",
+            CATEGORY.sender,
+            "OK",
+            `Domaine ${domain} authentifié (DKIM)`,
+            `Les e-mails partent de ${sender.email}, signés pour votre domaine.`,
+          )
+        : check(
+            "sender_domain_dkim",
+            CATEGORY.sender,
+            "WARNING",
+            `Signature DKIM de ${domain} à revoir`,
+            "Le service d'envoi ne retrouve plus la ligne DKIM de votre domaine : vérifiez-la dans « Adresse d'envoi ».",
+          ),
+    );
+    checks.push(
+      auth.spf
+        ? check(
+            "sender_domain_spf",
+            CATEGORY.sender,
+            "OK",
+            `SPF de ${domain} en place`,
+          )
+        : check(
+            "sender_domain_spf",
+            CATEGORY.sender,
+            "WARNING",
+            `SPF de ${domain} à revoir`,
+            "Le service d'envoi ne retrouve plus les lignes SPF de votre domaine : vérifiez-les dans « Adresse d'envoi ».",
+          ),
+    );
+    if (auth.dmarc === true) {
       checks.push(
         check(
           "sender_domain_dmarc",
@@ -382,25 +381,77 @@ function senderChecks({ senderDomain, fromName, replyTo, replyToValid }) {
           "Politique DMARC publiée",
         ),
       );
-    } else {
-      const parent =
-        senderDomain.organizationalDomain &&
-        senderDomain.organizationalDomain !== domain
-          ? ` ni sur ${senderDomain.organizationalDomain}`
-          : "";
+    } else if (auth.dmarc === false) {
       checks.push(
         check(
           "sender_domain_dmarc",
           CATEGORY.sender,
           "WARNING",
-          senderDomain.dmarc === false ? "DMARC absent" : "DMARC non vérifié",
-          senderDomain.dmarc === false
-            ? `Aucune politique DMARC sur _dmarc.${domain}${parent}. Gmail et Yahoo l'exigent pour les envois en nombre. Cette configuration relève de Newbi.`
-            : `La vérification DNS de _dmarc.${domain} n'a pas abouti. Réessayez dans quelques minutes.`,
+          `DMARC absent sur ${domain}`,
+          `Gmail et Yahoo l'exigent pour les envois en nombre : ajoutez chez votre hébergeur une ligne TXT nommée _dmarc.${domain}, avec la valeur ${RECOMMENDED_DMARC}`,
+        ),
+      );
+    } else {
+      checks.push(
+        check(
+          "sender_domain_dmarc",
+          CATEGORY.sender,
+          "WARNING",
+          "DMARC non vérifié",
+          `La vérification DNS de _dmarc.${domain} n'a pas abouti. Réessayez dans quelques minutes.`,
         ),
       );
     }
+    return checks;
   }
+
+  if (sender.available === false) {
+    checks.push(
+      check(
+        "sender_service",
+        CATEGORY.sender,
+        "ERROR",
+        SENDING_UNAVAILABLE_MESSAGE,
+        "Réessayez un peu plus tard : votre campagne reste enregistrée.",
+      ),
+    );
+  } else {
+    checks.push(
+      check(
+        "sender_address",
+        CATEGORY.sender,
+        "OK",
+        `Adresse d'envoi : ${sender.email}`,
+        "Adresse de Newbi au nom de votre entreprise : vos clients vous répondent à votre adresse de réponse. Pour envoyer depuis votre propre adresse, connectez votre domaine dans « Adresse d'envoi ».",
+      ),
+    );
+  }
+  if (sendingDomain?.status === "EXPIRED") {
+    checks.push(
+      check(
+        "sender_domain_expired",
+        CATEGORY.sender,
+        "INFO",
+        `Votre domaine ${sendingDomain.domain} a été retiré faute de validation : cette campagne partira de ${sender.newbiEmail || sender.email}.`,
+        "Connectez-le de nouveau dans « Adresse d'envoi » pour envoyer depuis votre adresse.",
+      ),
+    );
+  } else if (sendingDomain && sendingDomain.status !== "VERIFIED") {
+    checks.push(
+      check(
+        "sender_domain_pending",
+        CATEGORY.sender,
+        "INFO",
+        `Votre domaine ${sendingDomain.domain} n'est pas encore validé : cette campagne partira de ${sender.newbiEmail || sender.email}.`,
+        "Ajoutez les lignes DNS indiquées dans « Adresse d'envoi », puis cliquez sur Vérifier.",
+      ),
+    );
+  }
+  return checks;
+}
+
+function senderChecks({ sender, fromName, replyTo, replyToValid }) {
+  const checks = senderAddressChecks(sender);
 
   const name = singleLine(fromName);
   if (!name) {
@@ -934,7 +985,8 @@ export function scoreChecks(checks) {
  *
  * @param {object} input
  * @param {object} input.campaign subject, preheader, fromName, replyTo, design
- * @param {object|null} input.senderDomain résultat de checkSenderDomain
+ * @param {object|null} input.sender adresse d'envoi : { email, newbiEmail,
+ *   custom, available, sendingDomain, auth: { dkim, spf, dmarc } }
  * @param {boolean} input.replyToValid
  * @param {string|null} input.companyAddress
  * @param {object|null} input.audienceCount voir audience.js
@@ -943,7 +995,7 @@ export function scoreChecks(checks) {
  */
 export function buildDeliverability({
   campaign,
-  senderDomain,
+  sender,
   replyToValid,
   companyAddress,
   audienceCount,
@@ -954,7 +1006,7 @@ export function buildDeliverability({
   const preheader = singleLine(campaign.preheader);
   const checks = [
     ...senderChecks({
-      senderDomain,
+      sender,
       fromName: campaign.fromName,
       replyTo: singleLine(campaign.replyTo),
       replyToValid,

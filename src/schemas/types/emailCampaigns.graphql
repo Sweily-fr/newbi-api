@@ -135,7 +135,14 @@ type EmailCampaignVariable {
 }
 
 type EmailCampaignSettings {
+  "Adresse réellement utilisée : domaine connecté validé, sinon adresse Newbi"
   senderEmail: String!
+  "Adresse Newbi de l'espace, ex. boulangerie-martin@envoi.newbi.fr"
+  newbiSenderEmail: String!
+  "Domaine connecté (null si aucun)"
+  sendingDomain: EmailSendingDomain
+  "Droit « Envoyer et programmer » : connecter, vérifier, déconnecter"
+  canManageSendingDomain: Boolean!
   defaultFromName: String!
   defaultReplyTo: String!
   "null = adresse manquante (avertissement)"
@@ -231,6 +238,61 @@ type EmailCampaignImage {
   key: String!
 }
 
+# Domaine d'envoi connecté par l'espace (« Connecter mon domaine ») : les
+# campagnes partent de son adresse une fois le domaine validé (VERIFIED),
+# sinon de l'adresse Newbi de l'espace. Voir
+# src/services/emailCampaigns/sendingDomains.js.
+# Erreurs (extensions.code) : INVALID_SENDER_EMAIL, FREE_EMAIL_PROVIDER,
+# RESERVED_DOMAIN, DOMAIN_ALREADY_CONNECTED, SENDING_DOMAIN_EXISTS,
+# SENDING_DOMAIN_IN_USE, SENDING_DOMAIN_UNAVAILABLE.
+
+"Statuts de Resend, plus EXPIRED (retiré automatiquement faute de validation)"
+enum EmailSendingDomainStatus {
+  NOT_STARTED
+  PENDING
+  VERIFIED
+  PARTIALLY_VERIFIED
+  PARTIALLY_FAILED
+  TEMPORARY_FAILURE
+  FAILED
+  EXPIRED
+}
+
+type EmailSendingDomainRecord {
+  "« record » de Resend : DKIM, SPF..."
+  kind: String!
+  "TXT, MX, CNAME"
+  type: String!
+  "Nom relatif à la zone, tel que Resend le donne"
+  name: String!
+  "Nom complet"
+  fqdn: String!
+  value: String!
+  priority: Int
+  "Statut Resend de la ligne, en majuscules"
+  status: String!
+}
+
+type EmailSendingDomain {
+  id: ID!
+  domain: String!
+  "Adresse d'envoi une fois le domaine validé"
+  fromEmail: String!
+  status: EmailSendingDomainStatus!
+  "status == VERIFIED"
+  active: Boolean!
+  records: [EmailSendingDomainRecord!]!
+  "Zone DNS où ajouter les lignes"
+  zone: String!
+  "OVH, Hostinger... ; null si inconnu"
+  dnsProvider: String
+  lastCheckedAt: DateTime
+  verifiedAt: DateTime
+  "Retrait automatique si le domaine n'est toujours pas validé"
+  expiresAt: DateTime
+  createdAt: DateTime!
+}
+
 input CreateEmailCampaignInput {
   name: String!
   templateKey: String
@@ -294,6 +356,8 @@ extend type Query {
     page: Int = 1
     limit: Int = 50
   ): EmailSuppressionPage!
+  "Domaine d'envoi connecté (null si aucun)"
+  emailSendingDomain(workspaceId: ID!): EmailSendingDomain
 }
 
 extend type Mutation {
@@ -337,4 +401,18 @@ extend type Mutation {
   addEmailSuppression(workspaceId: ID!, email: String!): EmailSuppression!
   "Seulement les ajouts manuels"
   removeEmailSuppression(workspaceId: ID!, id: ID!): Boolean!
+  "Déclare le domaine de l'adresse chez le service d'envoi"
+  connectEmailSendingDomain(
+    workspaceId: ID!
+    fromEmail: String!
+  ): EmailSendingDomain!
+  "Au plus une vérification toutes les 20 s (sinon l'état connu)"
+  verifyEmailSendingDomain(workspaceId: ID!): EmailSendingDomain!
+  "Même domaine seulement"
+  updateEmailSendingDomainSender(
+    workspaceId: ID!
+    fromEmail: String!
+  ): EmailSendingDomain!
+  "Refusé si une campagne en cours d'envoi ou programmée part de ce domaine"
+  disconnectEmailSendingDomain(workspaceId: ID!): Boolean!
 }

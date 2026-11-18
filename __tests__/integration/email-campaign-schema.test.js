@@ -1,8 +1,9 @@
 /**
  * Campagnes e-mail : le schéma GraphQL complet se construit (typeDefs et
  * resolvers fusionnés, comme server.js) et respecte à la lettre le contrat
- * partagé avec le site : chaque type, champ, argument et valeur par défaut
- * du contrat existe avec exactement la même signature.
+ * partagé avec le site (spécification d'origine, puis adresse d'envoi Newbi
+ * et « Connecter mon domaine ») : chaque type, champ, argument et valeur par
+ * défaut du contrat existe avec exactement la même signature.
  */
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 
@@ -93,6 +94,39 @@ type EmailCampaignSettings {
   companyAddress: String
   sendMode: String!
   quota: EmailCampaignQuota!  variables: [EmailCampaignVariable!]!
+  newbiSenderEmail: String!
+  sendingDomain: EmailSendingDomain
+  canManageSendingDomain: Boolean!
+}
+
+enum EmailSendingDomainStatus {
+  NOT_STARTED PENDING VERIFIED PARTIALLY_VERIFIED PARTIALLY_FAILED
+  TEMPORARY_FAILURE FAILED EXPIRED
+}
+
+type EmailSendingDomainRecord {
+  kind: String!
+  type: String!
+  name: String!
+  fqdn: String!
+  value: String!
+  priority: Int
+  status: String!
+}
+
+type EmailSendingDomain {
+  id: ID!
+  domain: String!
+  fromEmail: String!
+  status: EmailSendingDomainStatus!
+  active: Boolean!
+  records: [EmailSendingDomainRecord!]!
+  zone: String!
+  dnsProvider: String
+  lastCheckedAt: DateTime
+  verifiedAt: DateTime
+  expiresAt: DateTime
+  createdAt: DateTime!
 }
 type EmailCampaignTemplate { key: String!  name: String!  description: String!  design: JSON! }
 type EmailCampaignPreview { subject: String!  preheader: String!  html: String!  text: String! }
@@ -128,6 +162,7 @@ extend type Query {
   emailCampaignRecipients(workspaceId: ID!, campaignId: ID!, filter: EmailCampaignRecipientFilter = ALL, search: String, page: Int = 1, limit: Int = 50): EmailCampaignRecipientPage!
   emailCampaignLinkStats(workspaceId: ID!, campaignId: ID!): [EmailCampaignLinkStat!]!
   emailSuppressions(workspaceId: ID!, search: String, page: Int = 1, limit: Int = 50): EmailSuppressionPage!
+  emailSendingDomain(workspaceId: ID!): EmailSendingDomain
 }
 
 extend type Mutation {
@@ -144,6 +179,10 @@ extend type Mutation {
   uploadEmailCampaignImage(workspaceId: ID!, file: Upload!): EmailCampaignImage!
   addEmailSuppression(workspaceId: ID!, email: String!): EmailSuppression!
   removeEmailSuppression(workspaceId: ID!, id: ID!): Boolean!
+  connectEmailSendingDomain(workspaceId: ID!, fromEmail: String!): EmailSendingDomain!
+  verifyEmailSendingDomain(workspaceId: ID!): EmailSendingDomain!
+  updateEmailSendingDomainSender(workspaceId: ID!, fromEmail: String!): EmailSendingDomain!
+  disconnectEmailSendingDomain(workspaceId: ID!): Boolean!
 }
 `;
 
@@ -272,8 +311,11 @@ describe("accès anticipé", () => {
     for (const [root, name] of [
       ["Query", "emailCampaigns"],
       ["Query", "emailCampaignSettings"],
+      ["Query", "emailSendingDomain"],
       ["Mutation", "createEmailCampaign"],
       ["Mutation", "sendEmailCampaign"],
+      ["Mutation", "connectEmailSendingDomain"],
+      ["Mutation", "disconnectEmailSendingDomain"],
     ]) {
       const error = await resolvers[root][name](
         null,

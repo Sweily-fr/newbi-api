@@ -28,10 +28,12 @@ import { checkSubscriptionActive } from "../../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import logger from "../../utils/logger.js";
 import { isValidEmail } from "../../utils/validators.js";
+import { notifyError } from "../errorAlertService.js";
 import { ensureIcons } from "../signatureAssets.js";
 import { resolveAudience } from "./audience.js";
 import { singleLine } from "./design.js";
 import {
+  SENDING_UNAVAILABLE_MESSAGE,
   buildDeliverability,
   checkSenderDomain,
   firstErrorTitle,
@@ -50,8 +52,12 @@ import {
   maxPerMinute,
   newbiSenderEmail,
   sendBatch,
-  senderDomainOf,
 } from "./sender.js";
+import {
+  authenticationOf,
+  checkNewbiSendingDomain,
+  resolveCampaignSender,
+} from "./sendingDomains.js";
 import {
   clickUrlBuilder,
   openPixelUrlFor,
@@ -92,14 +98,24 @@ function prepareSocialIcons(design) {
 
 // ─── Réglages et vérification ─────────────────────────────────────────────
 
-/** Réglages de l'espace pour l'éditeur (expéditeur, quota, variables). */
-export async function campaignSettings(workspaceId) {
+/**
+ * Réglages de l'espace pour l'éditeur : adresse d'envoi réelle (domaine
+ * connecté validé, sinon adresse Newbi), domaine connecté, quota, variables.
+ */
+export async function campaignSettings(
+  workspaceId,
+  { canManageSendingDomain = false } = {},
+) {
   const [identity, quota] = await Promise.all([
     loadWorkspaceIdentity(workspaceId),
     getCampaignQuota(workspaceId),
   ]);
+  const sender = await resolveCampaignSender(workspaceId, { identity });
   return {
-    senderEmail: newbiSenderEmail(identity.companyName),
+    senderEmail: sender.email,
+    newbiSenderEmail: sender.newbiEmail,
+    sendingDomain: sender.sendingDomain,
+    canManageSendingDomain: Boolean(canManageSendingDomain),
     defaultFromName: singleLine(identity.companyName, 60),
     defaultReplyTo: identity.defaultReplyTo,
     companyAddress: identity.companyAddress,
@@ -114,6 +130,29 @@ export async function campaignSettings(workspaceId) {
   };
 }
 
+/**
+ * Adresse d'envoi d'une campagne pour la vérification avant envoi : domaine
+ * du client validé (DKIM et SPF d'après Resend, DMARC lu dans le DNS), ou
+ * adresse Newbi (domaine Newbi validé chez Resend ; sans objet en mode
+ * simulation, où rien ne part).
+ */
+export async function inspectCampaignSender(workspaceId, { identity } = {}) {
+  const sender = await resolveCampaignSender(workspaceId, { identity });
+  if (sender.custom) {
+    const dns = await checkSenderDomain(sender.sendingDomain.domain);
+    return {
+      ...sender,
+      available: true,
+      auth: { ...authenticationOf(sender.sendingDomain), dmarc: dns.dmarc },
+    };
+  }
+  if (campaignSendMode() === "SIMULATION") {
+    return { ...sender, available: true };
+  }
+  const newbi = await checkNewbiSendingDomain();
+  return { ...sender, available: newbi.available };
+}
+
 /** Vérification avant envoi d'une campagne (voir deliverability.js). */
 export async function evaluateDeliverability(campaign, { identity } = {}) {
   const workspaceId = campaign.workspaceId;
@@ -122,8 +161,9 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
     resolveAudience(workspaceId, campaign.audience),
     getCampaignQuota(workspaceId),
   ]);
-  const senderEmail = newbiSenderEmail(resolvedIdentity.companyName);
-  const senderDomain = await checkSenderDomain(senderDomainOf(senderEmail));
+  const sender = await inspectCampaignSender(workspaceId, {
+    identity: resolvedIdentity,
+  });
   const sample = renderCampaignEmail({
     design: campaign.design,
     subject: campaign.subject,
@@ -143,7 +183,7 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
   const replyTo = singleLine(campaign.replyTo);
   return buildDeliverability({
     campaign,
-    senderDomain,
+    sender,
     replyToValid: !replyTo || isValidEmail(replyTo),
     companyAddress: resolvedIdentity.companyAddress,
     audienceCount: audience.counts,
@@ -205,6 +245,9 @@ export async function startSending(campaign, { from, now = new Date() }) {
     // Liens et expéditeur figés avant tout destinataire : un arrêt brutal
     // pendant leur création laisse une campagne cohérente
     const identity = await loadWorkspaceIdentity(locked.workspaceId);
+    const sender = await resolveCampaignSender(locked.workspaceId, {
+      identity,
+    });
     const { links } = renderCampaignEmail({
       design: locked.design,
       identity,
@@ -216,7 +259,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
           links,
           sendMode: campaignSendMode(),
           snapshot: {
-            senderEmail: newbiSenderEmail(identity.companyName),
+            senderEmail: sender.email,
             fromName: singleLine(locked.fromName, 60) || identity.companyName,
             replyTo: singleLine(locked.replyTo) || identity.defaultReplyTo,
             companyName: identity.companyName,
@@ -778,6 +821,16 @@ export async function sendNextBatch(
       logger.error(
         `[campagnes] configuration d'envoi refusée (${result.error.name} : ${result.error.message}) : campagne ${campaignId} en pause`,
       );
+      void notifyError({
+        source: "campagnes",
+        message: "Configuration d'envoi refusée par Resend : campagne en pause",
+        context: {
+          Campagne: String(campaignId),
+          Expéditeur: campaign.snapshot?.senderEmail,
+          Erreur: `${result.error.name} : ${result.error.message}`,
+        },
+        cooldownSeconds: 60 * 60,
+      });
     } else {
       await release(
         realIds,
@@ -898,6 +951,9 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
   const mode = campaignSendMode();
   const resolvedIdentity =
     identity || (await loadWorkspaceIdentity(campaign.workspaceId));
+  const sender = await resolveCampaignSender(campaign.workspaceId, {
+    identity: resolvedIdentity,
+  });
   const unsubscribeUrl = testUnsubscribeUrlFor(campaign._id);
   const rendered = renderCampaignEmail({
     design: campaign.design,
@@ -913,12 +969,20 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
   let delivered = [...simulated];
 
   if (real.length) {
+    // Adresse Newbi : son domaine doit être validé (sinon message générique,
+    // l'équipe est prévenue)
+    if (!sender.custom && !(await checkNewbiSendingDomain()).available) {
+      throw new AppError(
+        SENDING_UNAVAILABLE_MESSAGE,
+        ERROR_CODES.INTERNAL_ERROR,
+      );
+    }
     await prepareSocialIcons(campaign.design);
     const payloads = real.map((to) =>
       buildEmailPayload({
         fromName:
           singleLine(campaign.fromName, 60) || resolvedIdentity.companyName,
-        senderEmail: newbiSenderEmail(resolvedIdentity.companyName),
+        senderEmail: sender.email,
         to,
         replyTo:
           singleLine(campaign.replyTo) || resolvedIdentity.defaultReplyTo,

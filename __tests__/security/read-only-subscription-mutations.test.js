@@ -154,6 +154,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
   disconnect: [
     "disconnectAbby",
     "disconnectCalendar",
+    "disconnectEmailSendingDomain",
     "disconnectGmail",
     "disconnectPennylane",
     "disconnectQonto",

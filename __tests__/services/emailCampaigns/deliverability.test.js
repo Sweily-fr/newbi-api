@@ -1,7 +1,11 @@
 /**
- * Campagnes e-mail, vérification avant envoi : DNS du domaine d'envoi
- * (DKIM, SPF, DMARC, cache), objet, texte d'aperçu, contenu, images,
- * liens, variables, audience, quota, mentions légales, note sur 10.
+ * Campagnes e-mail, vérification avant envoi : adresse d'envoi (adresse
+ * Newbi sans détail DNS montré au client, message générique si le domaine
+ * Newbi pose problème ; domaine du client validé avec DKIM et SPF d'après
+ * Resend et DMARC en avertissement ; domaine pas encore validé en
+ * information), lecture DNS (DKIM, SPF, DMARC, cache), objet, texte
+ * d'aperçu, contenu, images, liens, variables, audience, quota, mentions
+ * légales, note sur 10.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -20,6 +24,8 @@ vi.mock("node:dns", () => {
 });
 
 import {
+  RECOMMENDED_DMARC,
+  SENDING_UNAVAILABLE_MESSAGE,
   buildDeliverability,
   checkSenderDomain,
   findSpamWords,
@@ -49,13 +55,26 @@ const baseCampaign = (overrides = {}) => ({
   ...overrides,
 });
 
+const NEWBI_EMAIL = "atelier-durand@envoi.newbi.fr";
+
+// Adresse Newbi, domaine Newbi validé chez Resend
 const senderOk = {
-  domain: DOMAIN,
-  organizationalDomain: "sweily.fr",
-  dkim: true,
-  spf: true,
-  dmarc: true,
+  email: NEWBI_EMAIL,
+  newbiEmail: NEWBI_EMAIL,
+  custom: false,
+  available: true,
+  sendingDomain: null,
 };
+
+// Domaine du client validé
+const customSender = (auth) => ({
+  email: "contact@atelier.fr",
+  newbiEmail: NEWBI_EMAIL,
+  custom: true,
+  available: true,
+  sendingDomain: { domain: "atelier.fr", status: "VERIFIED", records: [] },
+  auth,
+});
 
 const audienceOk = {
   total: 10,
@@ -72,7 +91,7 @@ const audienceOk = {
 const run = (overrides = {}) =>
   buildDeliverability({
     campaign: baseCampaign(overrides.campaign),
-    senderDomain: overrides.senderDomain ?? senderOk,
+    sender: overrides.sender ?? senderOk,
     replyToValid: overrides.replyToValid ?? true,
     companyAddress:
       "companyAddress" in overrides
@@ -95,24 +114,115 @@ beforeEach(() => {
   resetDnsCache();
 });
 
-describe("domaine d'envoi", () => {
-  it("DKIM présent, SPF et DMARC absents (cas de send.newbi.sweily.fr)", async () => {
+describe("adresse d'envoi", () => {
+  it("adresse Newbi : un seul contrôle, aucun détail DNS montré au client", () => {
+    const report = run();
+    expect(byId(report, "sender_address")).toMatchObject({
+      level: "OK",
+      title: `Adresse d'envoi : ${NEWBI_EMAIL}`,
+    });
+    const senderIds = report.checks
+      .filter((c) => c.id.startsWith("sender_"))
+      .map((c) => c.id);
+    expect(senderIds).toEqual(["sender_address"]);
+    const text = JSON.stringify(report.checks);
+    for (const word of ["SPF", "DKIM", "DMARC", "sweily", "send."]) {
+      expect(text).not.toContain(word);
+    }
+    expect(report).toMatchObject({ score: 10, canSend: true });
+  });
+
+  it("domaine Newbi indisponible : erreur bloquante au message générique", () => {
+    const report = run({ sender: { ...senderOk, available: false } });
+    expect(byId(report, "sender_service")).toMatchObject({
+      level: "ERROR",
+      title:
+        "L'envoi de campagnes est momentanément indisponible. Notre équipe a été prévenue.",
+    });
+    expect(SENDING_UNAVAILABLE_MESSAGE).toBe(
+      byId(report, "sender_service").title,
+    );
+    expect(byId(report, "sender_address")).toBeUndefined();
+    expect(report.canSend).toBe(false);
+    expect(firstErrorTitle(report.checks)).toBe(SENDING_UNAVAILABLE_MESSAGE);
+    expect(JSON.stringify(report.checks)).not.toMatch(/SPF|DKIM|DMARC/);
+  });
+
+  it("domaine du client validé : DKIM et SPF d'après Resend, DMARC absent en avertissement", () => {
+    const report = run({
+      sender: customSender({ dkim: true, spf: true, dmarc: false }),
+    });
+    expect(byId(report, "sender_domain_dkim")).toMatchObject({
+      level: "OK",
+      title: "Domaine atelier.fr authentifié (DKIM)",
+    });
+    expect(byId(report, "sender_domain_spf").level).toBe("OK");
+    const dmarc = byId(report, "sender_domain_dmarc");
+    expect(dmarc).toMatchObject({
+      level: "WARNING",
+      title: "DMARC absent sur atelier.fr",
+    });
+    expect(dmarc.detail).toContain("_dmarc.atelier.fr");
+    expect(dmarc.detail).toContain(RECOMMENDED_DMARC);
+    expect(RECOMMENDED_DMARC).toBe("v=DMARC1; p=none;");
+    expect(byId(report, "sender_address")).toBeUndefined();
+    expect(report).toMatchObject({ canSend: true, score: 9 });
+    const all = run({
+      sender: customSender({ dkim: true, spf: true, dmarc: true }),
+    });
+    expect(levels(all)).toEqual([]);
+  });
+
+  it("domaine du client : lignes à revoir et DMARC non vérifiable, sans blocage", () => {
+    const report = run({
+      sender: customSender({ dkim: false, spf: false, dmarc: null }),
+    });
+    expect(levels(report)).toEqual(
+      expect.arrayContaining([
+        "sender_domain_dkim:WARNING",
+        "sender_domain_spf:WARNING",
+        "sender_domain_dmarc:WARNING",
+      ]),
+    );
+    expect(byId(report, "sender_domain_dmarc").title).toBe("DMARC non vérifié");
+    expect(report.canSend).toBe(true);
+  });
+
+  it("domaine du client pas encore validé : information, envoi depuis l'adresse Newbi", () => {
+    const report = run({
+      sender: {
+        ...senderOk,
+        sendingDomain: { domain: "atelier.fr", status: "PENDING" },
+      },
+    });
+    expect(byId(report, "sender_address").level).toBe("OK");
+    expect(byId(report, "sender_domain_pending")).toMatchObject({
+      level: "INFO",
+      title: `Votre domaine atelier.fr n'est pas encore validé : cette campagne partira de ${NEWBI_EMAIL}.`,
+    });
+    expect(report.canSend).toBe(true);
+    const expired = run({
+      sender: {
+        ...senderOk,
+        sendingDomain: { domain: "atelier.fr", status: "EXPIRED" },
+      },
+    });
+    expect(byId(expired, "sender_domain_expired")).toMatchObject({
+      level: "INFO",
+      title: `Votre domaine atelier.fr a été retiré faute de validation : cette campagne partira de ${NEWBI_EMAIL}.`,
+    });
+    expect(byId(expired, "sender_domain_pending")).toBeUndefined();
+  });
+});
+
+describe("lecture DNS d'un domaine d'envoi", () => {
+  it("DKIM présent, SPF et DMARC absents, DMARC cherché sur le domaine organisationnel", async () => {
     dnsRecords.map.set(`resend._domainkey.${DOMAIN}`, [
       "p=MIGfMA0GCSqGSIb3DQEB",
     ]);
     const result = await checkSenderDomain(DOMAIN);
     expect(result).toMatchObject({ dkim: true, spf: false, dmarc: false });
-    // DMARC cherché aussi sur le domaine organisationnel
     expect(dnsRecords.calls).toContain("_dmarc.sweily.fr");
-    const report = run({ senderDomain: result });
-    expect(byId(report, "sender_domain_dkim").level).toBe("OK");
-    expect(byId(report, "sender_domain_spf")).toMatchObject({
-      level: "WARNING",
-      title: `SPF absent sur send.${DOMAIN}`,
-    });
-    expect(byId(report, "sender_domain_dmarc").level).toBe("WARNING");
-    expect(report.canSend).toBe(true);
-    expect(report.score).toBe(8);
   });
 
   it("tout en place, DMARC hérité du domaine organisationnel, résultat en cache", async () => {
@@ -126,23 +236,13 @@ describe("domaine d'envoi", () => {
     expect(dnsRecords.calls.length).toBe(calls);
   });
 
-  it("DKIM absent : erreur bloquante", async () => {
-    const result = await checkSenderDomain(DOMAIN);
-    const report = run({ senderDomain: result });
-    expect(byId(report, "sender_domain_dkim").level).toBe("ERROR");
-    expect(report.canSend).toBe(false);
-  });
-
-  it("DNS injoignable : avertissement, envoi possible", async () => {
+  it("DNS injoignable : valeurs inconnues (null)", async () => {
     const failure = Object.assign(new Error("panne"), { code: "ESERVFAIL" });
     dnsRecords.map.set(`resend._domainkey.${DOMAIN}`, failure);
     dnsRecords.map.set(`send.${DOMAIN}`, failure);
     dnsRecords.map.set(`_dmarc.${DOMAIN}`, failure);
     const result = await checkSenderDomain(DOMAIN);
     expect(result).toMatchObject({ dkim: null, spf: null, dmarc: null });
-    const report = run({ senderDomain: result });
-    expect(byId(report, "sender_domain_dkim").level).toBe("WARNING");
-    expect(report.canSend).toBe(true);
   });
 
   it("domaine organisationnel", () => {

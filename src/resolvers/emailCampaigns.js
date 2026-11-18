@@ -58,7 +58,7 @@ import {
   contactVariables,
 } from "../services/emailCampaigns/personalize.js";
 import { renderCampaignEmail } from "../services/emailCampaigns/render.js";
-import { newbiSenderEmail } from "../services/emailCampaigns/sender.js";
+import { resolveCampaignSender } from "../services/emailCampaigns/sendingDomains.js";
 import {
   DEFAULT_TEMPLATE_KEY,
   isTemplateKey,
@@ -305,8 +305,7 @@ const asObject = (value) =>
 const senderByRequest = new WeakMap();
 
 function plannedSenderEmail(ctx, workspaceId) {
-  const resolve = async () =>
-    newbiSenderEmail((await loadWorkspaceIdentity(workspaceId)).companyName);
+  const resolve = async () => (await resolveCampaignSender(workspaceId)).email;
   if (!ctx || typeof ctx !== "object") return resolve();
   let byWorkspace = senderByRequest.get(ctx);
   if (!byWorkspace) {
@@ -403,8 +402,13 @@ const emailCampaignsResolvers = {
       }).lean();
     }),
 
+    // Gestion du domaine d'envoi : droit « Envoyer et programmer »
     emailCampaignSettings: can("view")(async (_, __, ctx) =>
-      campaignSettings(ctx.workspaceId),
+      campaignSettings(ctx.workspaceId, {
+        canManageSendingDomain: Boolean(
+          ctx.permissions?.hasPermission?.(MODULE, "send"),
+        ),
+      }),
     ),
 
     emailCampaignTemplates: can("view")(async (_, __, ctx) =>
