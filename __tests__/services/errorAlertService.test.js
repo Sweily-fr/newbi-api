@@ -38,9 +38,7 @@ afterEach(() => {
 describe("alertes internes", () => {
   it("sans ERROR_ALERT_EMAILS : aucun e-mail", async () => {
     vi.stubEnv("ERROR_ALERT_EMAILS", "");
-    expect(await notifyError({ source: "test", message: "Panne" })).toBe(
-      false,
-    );
+    expect(await notifyError({ source: "test", message: "Panne" })).toBe(false);
     expect(mail.sendEmail).not.toHaveBeenCalled();
   });
 

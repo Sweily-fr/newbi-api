@@ -26,7 +26,11 @@ vi.mock("../../src/config/redis.js", () => ({
   getCacheClient: () => null,
 }));
 
-const resendMock = vi.hoisted(() => ({ calls: [], domains: new Map(), seq: 0 }));
+const resendMock = vi.hoisted(() => ({
+  calls: [],
+  domains: new Map(),
+  seq: 0,
+}));
 vi.mock("resend", () => ({
   Resend: class {
     constructor() {
@@ -86,7 +90,9 @@ vi.mock("resend", () => ({
           data: {
             object: "list",
             has_more: false,
-            data: [{ id: "dom_envoi", name: "envoi.newbi.fr", status: "verified" }],
+            data: [
+              { id: "dom_envoi", name: "envoi.newbi.fr", status: "verified" },
+            ],
           },
           error: null,
         }),
@@ -128,8 +134,11 @@ import { resetDnsProviderCache } from "../../src/services/emailCampaigns/dnsProv
 import { resetResendClient } from "../../src/services/emailCampaigns/sender.js";
 import { resetNewbiDomainCache } from "../../src/services/emailCampaigns/sendingDomains.js";
 
-const { Query, Mutation, EmailSendingDomain: DomainType } =
-  emailSendingDomainsResolvers;
+const {
+  Query,
+  Mutation,
+  EmailSendingDomain: DomainType,
+} = emailSendingDomainsResolvers;
 
 const workspaceId = buildOrganizationId();
 const otherWorkspace = buildOrganizationId();

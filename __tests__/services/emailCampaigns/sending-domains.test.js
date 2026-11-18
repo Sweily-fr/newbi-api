@@ -138,7 +138,7 @@ vi.mock("resend", () => ({
         list: (options = {}) =>
           call("list", [options], async () => {
             const all = [...resendMock.domains.values()].map(
-              ({ records, ...rest }) => rest,
+              ({ records: _records, ...rest }) => rest,
             );
             const start = options.after
               ? all.findIndex((domain) => domain.id === options.after) + 1
@@ -474,7 +474,10 @@ describe("zone et noms complets", () => {
       "rsend.envoi.newbi.fr",
     ]);
     expect(
-      dnsZoneOf("mail.atelier.co.uk", resendMock.recordsFor("mail.atelier.co.uk")),
+      dnsZoneOf(
+        "mail.atelier.co.uk",
+        resendMock.recordsFor("mail.atelier.co.uk"),
+      ),
     ).toBe("atelier.co.uk");
   });
 
@@ -556,10 +559,7 @@ describe("hébergeur DNS", () => {
 describe("connexion", () => {
   it("déclaré chez Resend (eu-west-1, suivi coupé, clé des campagnes), lignes, zone et hébergeur", async () => {
     dnsMock.ns.set("boulangerie-martin.fr", ["dns10.ovh.net", "ns10.ovh.net"]);
-    const domain = await connect(
-      workspaceA,
-      " Contact@Boulangerie-Martin.fr ",
-    );
+    const domain = await connect(workspaceA, " Contact@Boulangerie-Martin.fr ");
     const [create] = callsOf("create");
     expect(create.args[0]).toEqual({
       name: "boulangerie-martin.fr",
@@ -636,7 +636,8 @@ describe("connexion", () => {
         source: "campagnes-domaines",
         context: expect.objectContaining({
           Domaine: "atelier.fr",
-          Erreur: "validation_error : You have reached the maximum number of domains",
+          Erreur:
+            "validation_error : You have reached the maximum number of domains",
         }),
       }),
     );
@@ -985,11 +986,13 @@ describe("cron", () => {
       expired.resendDomainId,
     ]);
     expect(resendMock.domains.has(expired.resendDomainId)).toBe(false);
-    expect(await EmailSendingDomain.findById(expired._id).lean()).toMatchObject({
-      status: "EXPIRED",
-      records: [],
-      resendDomainId: null,
-    });
+    expect(await EmailSendingDomain.findById(expired._id).lean()).toMatchObject(
+      {
+        status: "EXPIRED",
+        records: [],
+        resendDomainId: null,
+      },
+    );
     expect(
       (await EmailSendingDomain.findById(lastMinute._id).lean()).status,
     ).toBe("VERIFIED");
@@ -1027,9 +1030,9 @@ describe("cron", () => {
     expect(alerts.notifyError).toHaveBeenCalledWith(
       expect.objectContaining({ source: "campagnes-domaines" }),
     );
-    expect(await EmailSendingDomain.countDocuments({ domain: "abandon.fr" })).toBe(
-      0,
-    );
+    expect(
+      await EmailSendingDomain.countDocuments({ domain: "abandon.fr" }),
+    ).toBe(0);
   });
 });
 

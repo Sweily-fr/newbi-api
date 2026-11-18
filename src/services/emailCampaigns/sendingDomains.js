@@ -81,8 +81,12 @@ const invalidSender = (
   message = "Saisissez une adresse e-mail valide, par exemple contact@votre-entreprise.fr.",
 ) => new AppError(message, E.INVALID_SENDER_EMAIL);
 const noDomain = () =>
-  new AppError("Aucun domaine n'est connecté à cet espace.", ERROR_CODES.NOT_FOUND);
-const unavailable = (message) => new AppError(message, E.SENDING_DOMAIN_UNAVAILABLE);
+  new AppError(
+    "Aucun domaine n'est connecté à cet espace.",
+    ERROR_CODES.NOT_FOUND,
+  );
+const unavailable = (message) =>
+  new AppError(message, E.SENDING_DOMAIN_UNAVAILABLE);
 
 const defaultSleep = (ms) =>
   new Promise((resolve) => {
@@ -144,7 +148,14 @@ export const FREE_EMAIL_DOMAINS = Object.freeze([
 ]);
 
 // Familles déclinées par pays : yahoo.fr, hotmail.co.uk, gmx.de...
-const FREE_EMAIL_FAMILIES = ["yahoo", "hotmail", "outlook", "live", "gmx", "yandex"];
+const FREE_EMAIL_FAMILIES = [
+  "yahoo",
+  "hotmail",
+  "outlook",
+  "live",
+  "gmx",
+  "yandex",
+];
 const SECOND_LEVEL = ["co", "com", "net", "org", "ne", "or"];
 
 export function isFreeEmailDomain(value) {
@@ -281,7 +292,9 @@ export function authenticationOf(sendingDomain) {
     );
     return (
       group.length > 0 &&
-      group.every((record) => String(record.status).toUpperCase() === "VERIFIED")
+      group.every(
+        (record) => String(record.status).toUpperCase() === "VERIFIED",
+      )
     );
   };
   return { dkim: verified("DKIM"), spf: verified("SPF") };
@@ -614,7 +627,10 @@ export async function connectSendingDomain({
  * Demande à Resend de vérifier les lignes DNS, puis relit le domaine. Au
  * plus une fois toutes les 20 s par espace : sinon, l'état connu.
  */
-export async function verifySendingDomain(workspaceId, { now = new Date() } = {}) {
+export async function verifySendingDomain(
+  workspaceId,
+  { now = new Date() } = {},
+) {
   const domain = await getSendingDomain(workspaceId);
   if (!domain) throw noDomain();
   if (domain.status === "EXPIRED") {

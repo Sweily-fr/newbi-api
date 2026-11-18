@@ -692,9 +692,28 @@ describe("envoi programmé", () => {
 
 describe("adresse d'envoi", () => {
   const verifiedRecords = [
-    { record: "DKIM", type: "TXT", name: "resend._domainkey", value: "p=abc", status: "VERIFIED" },
-    { record: "SPF", type: "MX", name: "send", value: "feedback-smtp.eu-west-1.amazonses.com", priority: 10, status: "VERIFIED" },
-    { record: "SPF", type: "TXT", name: "send", value: "v=spf1 include:amazonses.com ~all", status: "VERIFIED" },
+    {
+      record: "DKIM",
+      type: "TXT",
+      name: "resend._domainkey",
+      value: "p=abc",
+      status: "VERIFIED",
+    },
+    {
+      record: "SPF",
+      type: "MX",
+      name: "send",
+      value: "feedback-smtp.eu-west-1.amazonses.com",
+      priority: 10,
+      status: "VERIFIED",
+    },
+    {
+      record: "SPF",
+      type: "TXT",
+      name: "send",
+      value: "v=spf1 include:amazonses.com ~all",
+      status: "VERIFIED",
+    },
   ];
   const connectDomain = (status) =>
     EmailSendingDomain.create({

@@ -100,7 +100,9 @@ export async function notifyError({
       Date: new Date(now).toISOString(),
       ...context,
     })
-      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .filter(
+        ([, value]) => value !== undefined && value !== null && value !== "",
+      )
       .map(
         ([key, value]) =>
           `<tr><td style="padding:4px 12px 4px 0;color:#666;white-space:nowrap;vertical-align:top;">${escape(key)}</td><td style="padding:4px 0;">${escape(value)}</td></tr>`,
@@ -113,11 +115,12 @@ ${stack ? `<pre style="background:#f5f5f5;padding:12px;font-size:12px;white-spac
 <p style="color:#999;font-size:12px;">Alerte automatique de newbi-api, envoyée une fois par période pour un même incident.</p>
 </div>`;
 
-    const { default: emailReminderService } = await import(
-      "./emailReminderService.js"
-    );
+    const { default: emailReminderService } =
+      await import("./emailReminderService.js");
     const results = await Promise.allSettled(
-      recipients.map((to) => emailReminderService.sendEmail({ to, subject, html })),
+      recipients.map((to) =>
+        emailReminderService.sendEmail({ to, subject, html }),
+      ),
     );
     for (const result of results) {
       if (result.status === "rejected") {
