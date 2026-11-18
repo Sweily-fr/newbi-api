@@ -142,10 +142,19 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "unbanInvitedUserFromBoard",
     "unbanVisitor",
   ],
+  // Arrêter les envois d'une campagne e-mail ou exclure une adresse (jamais
+  // en lancer un) : un espace sans abonnement doit pouvoir tout stopper
+  stopSending: [
+    "pauseEmailCampaign",
+    "cancelEmailCampaign",
+    "unscheduleEmailCampaign",
+    "addEmailSuppression",
+  ],
   // Déconnecter une intégration ou une application
   disconnect: [
     "disconnectAbby",
     "disconnectCalendar",
+    "disconnectEmailSendingDomain",
     "disconnectGmail",
     "disconnectPennylane",
     "disconnectQonto",
@@ -164,6 +173,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "permanentlyDeleteFolders",
     "deleteSignatureImage",
     "abortMultipartUpload",
+    "deleteEmailCampaign",
   ],
   // Gestion de l'espace : rôles, propriété, coordonnées bancaires
   workspaceAdmin: [

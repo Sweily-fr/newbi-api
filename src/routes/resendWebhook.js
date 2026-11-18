@@ -9,6 +9,7 @@ import {
   recordDeliveryEvent,
 } from "../services/documentDeliveryService.js";
 import { markEmailLogOpened } from "../services/documentEmailLogService.js";
+import { recordCampaignEmailEvent } from "../services/emailCampaigns/events.js";
 
 const router = express.Router();
 
@@ -129,6 +130,18 @@ router.post("/", express.raw({ type: "*/*" }), async (req, res) => {
     logger.info(
       `[ResendWebhook] Événement reçu: ${type} (email_id: ${data.email_id})`,
     );
+
+    // Campagnes e-mail : remise, rejet, plainte, échec d'un destinataire
+    // (liste d'exclusion de l'espace, coupe-circuit de réputation)
+    try {
+      if (await recordCampaignEmailEvent(type, data)) {
+        return res.status(200).json({ received: true });
+      }
+    } catch (campaignError) {
+      logger.warn(
+        `[ResendWebhook] suivi de campagne e-mail en échec: ${campaignError.message}`,
+      );
+    }
 
     // Relances de l'essai gratuit (trial_nudge_log) : suivi à part des
     // documents, best-effort
