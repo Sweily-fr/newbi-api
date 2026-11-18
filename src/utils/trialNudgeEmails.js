@@ -1,10 +1,15 @@
 /**
  * Relances de l'essai gratuit (pilotées depuis newbi-admin, page Relances).
  *
- * Cinq e-mails, envoyés par services/trialNudgeService.js :
- *   - signup_incomplete : inscription restée à l'étape « entreprise », avec
- *                    le lien pour la finir et la même adresse que la
- *                    bienvenue si une fonctionnalité manque
+ * Six e-mails, envoyés par services/trialNudgeService.js :
+ *   - signup_incomplete : inscription pas terminée (entreprise, offre ou
+ *                    carte), avec le lien pour la finir et la même adresse
+ *                    que la bienvenue si une fonctionnalité manque
+ *   - card_inactive_d2 : essai avec carte (7 jours), J+2 si l'inscrit n'est
+ *                    pas revenu ; rappelle qu'aucun prélèvement n'a lieu
+ *                    avant la fin de l'essai
+ *   Les quatre suivants ne concernent que les essais sans carte de 30 jours
+ *   accordés avant le 18/11/2026 :
  *   - welcome      : bienvenue, au début de l'essai (fin d'onboarding), avec
  *                    l'adresse à qui écrire si une fonctionnalité manque
  *   - inactive_d7  : J+7, si l'espace est inactif depuis quelques jours
@@ -25,6 +30,7 @@ import {
 
 export const NUDGE_STEPS = [
   "signup_incomplete",
+  "card_inactive_d2",
   "welcome",
   "inactive_d7",
   "feedback_d14",
@@ -103,26 +109,65 @@ export function buildTrialNudgeEmail(step, data = {}) {
   // Pas de nom d'espace ici : celui de l'inscription est provisoire (le nom
   // de la personne, ou « Mon entreprise »)
   if (step === "signup_incomplete") {
+    // Arrêté à l'étape « entreprise », ou après (choix de l'offre, carte)
+    const atCompanyStep = !["plan", "recap"].includes(data.onboardingStep);
+    const remaining = atCompanyStep
+      ? "renseigner votre entreprise, puis choisir votre offre"
+      : "choisir votre offre et enregistrer votre carte";
     return {
       subject: "Finalisez votre inscription sur Newbi",
       html: renderEmail({
-        preheader:
-          "Il ne reste qu'à renseigner votre entreprise pour démarrer vos 30 jours d'essai gratuit.",
+        preheader: `Il ne reste qu'à ${remaining} pour démarrer vos 7 jours d'essai gratuit.`,
         badge: "INSCRIPTION",
-        iconLabel: "Plus qu'une étape",
+        iconLabel: atCompanyStep ? "Plus que deux étapes" : "Plus qu'une étape",
         iconBg: "#fef3c7",
         iconColor: "#92400e",
         title: "Finalisez votre inscription",
         bodyHtml: `
           ${greeting(data.firstName)}
-          ${paragraph(`Vous avez créé votre compte Newbi, mais votre inscription n'est pas tout à fait terminée\u00a0: il ne reste qu'à renseigner votre entreprise. C'est l'affaire d'une minute, et vos ${strong("30 jours d'essai gratuit")} démarrent aussitôt, sans carte bancaire ni engagement.`)}
-          ${paragraph(`${strong("Pas de numéro de SIRET sous la main\u00a0?")} Vous pouvez continuer sans et le renseigner plus tard, avant votre premier devis ou votre première facture.`)}
+          ${paragraph(`Vous avez créé votre compte Newbi, mais votre inscription n'est pas tout à fait terminée\u00a0: il ne reste qu'à ${remaining}. C'est l'affaire de quelques minutes, et vos ${strong("7 jours d'essai gratuit")} démarrent aussitôt.`)}
+          ${paragraph(`Votre carte bancaire est demandée sur la page sécurisée de Stripe, mais ${strong("aucun prélèvement n'a lieu pendant l'essai")}. Vous pouvez résilier à tout moment depuis vos paramètres, sans engagement.`)}
+          ${atCompanyStep ? paragraph(`${strong("Pas de numéro de SIRET sous la main\u00a0?")} Vous pouvez continuer sans et le renseigner plus tard, avant votre premier devis ou votre première facture.`) : ""}
           ${missingFeatureCallout(", y\u00a0compris si quelque chose vous a bloqué pendant l'inscription")}`,
         ctaLabel: "Finaliser l'inscription",
-        // Connecté, le tableau de bord renvoie à l'étape « entreprise » ;
-        // sinon il passe par la connexion, qui y ramène ensuite
+        // Connecté, le tableau de bord renvoie à l'étape en cours ; sinon il
+        // passe par la connexion, qui y ramène ensuite
         ctaUrl: `${APP_URL}/dashboard`,
         ...footerNote(data.unsubscribeUrl, "vous avez créé un compte Newbi"),
+      }),
+    };
+  }
+
+  if (step === "card_inactive_d2") {
+    const end = longDate(data.trialEndDate);
+    const days = Number.isFinite(data.daysRemaining)
+      ? Math.max(1, data.daysRemaining)
+      : null;
+    return {
+      subject: "Bien démarrer avec Newbi",
+      html: renderEmail({
+        preheader:
+          "Trois choses à faire en quelques minutes pendant votre essai gratuit.",
+        badge: "VOTRE ESSAI",
+        iconLabel: days
+          ? `Encore ${daysLabel(days)} d'essai`
+          : "Essai gratuit en cours",
+        iconBg: "#eef2ff",
+        iconColor: "#4338ca",
+        title: "Bien démarrer avec Newbi",
+        bodyHtml: `
+          ${greeting(data.firstName)}
+          ${paragraph(`Votre essai gratuit de l'espace ${org} a commencé il y a deux jours. Pour vous faire une idée avant la fin de l'essai, voici trois choses qui ne prennent que quelques minutes\u00a0:`)}
+          ${list([
+            `${strong("Créer votre premier devis ou votre première facture")}, avec votre logo et vos mentions légales.`,
+            `${strong("Connecter votre compte bancaire")} pour suivre votre trésorerie et rapprocher vos paiements.`,
+            `${strong("Déposer une facture fournisseur")}\u00a0: elle est lue automatiquement, sans ressaisie.`,
+          ])}
+          ${callout(`${end ? `${strong(`Aucun prélèvement avant le ${end}.`)} ` : ""}Si Newbi ne vous convient pas, résiliez depuis vos paramètres avant la fin de l'essai\u00a0: vous ne paierez rien. Nous vous enverrons un rappel trois jours avant.`)}
+          ${paragraph("Une question, un blocage\u00a0? Répondez simplement à cet e-mail, l'équipe vous répond.")}`,
+        ctaLabel: "Reprendre mon essai",
+        ctaUrl: `${APP_URL}/dashboard`,
+        ...footerNote(data.unsubscribeUrl),
       }),
     };
   }
