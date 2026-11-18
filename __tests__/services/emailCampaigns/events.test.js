@@ -2,7 +2,8 @@
  * Campagnes e-mail, événements de Resend (webhook) : remis, rejeté
  * (définitif ou non), plainte, échec, adresse bloquée ; compteurs sans
  * double comptage ; liste d'exclusion ; coupe-circuit de réputation (plus
- * de 5 % de rejets ou 0,3 % de plaintes après 100 envois).
+ * de 3 % de rejets ou 0,05 % de plaintes après 100 envois, sous les seuils
+ * du compte Resend : 4 % et 0,08 %).
  */
 import {
   describe,
@@ -33,7 +34,12 @@ import EmailCampaign from "../../../src/models/EmailCampaign.js";
 import EmailCampaignRecipient from "../../../src/models/EmailCampaignRecipient.js";
 import EmailSuppression from "../../../src/models/EmailSuppression.js";
 import resendWebhookRouter from "../../../src/routes/resendWebhook.js";
-import { recordCampaignEmailEvent } from "../../../src/services/emailCampaigns/events.js";
+import {
+  MAX_BOUNCE_RATE,
+  MAX_COMPLAINT_RATE,
+  REPUTATION_MIN_SENT,
+  recordCampaignEmailEvent,
+} from "../../../src/services/emailCampaigns/events.js";
 
 const workspaceId = buildOrganizationId();
 let campaign;
@@ -190,32 +196,48 @@ describe("événements d'un destinataire", () => {
 });
 
 describe("coupe-circuit de réputation", () => {
-  it("plus de 5 % de rejets après 100 envois : pause sans reprise", async () => {
+  it("seuils sous ceux du compte Resend (rejets 4 %, plaintes 0,08 %)", () => {
+    expect(REPUTATION_MIN_SENT).toBe(100);
+    expect(MAX_BOUNCE_RATE).toBe(0.03);
+    expect(MAX_BOUNCE_RATE).toBeLessThan(0.04);
+    expect(MAX_COMPLAINT_RATE).toBe(0.0005);
+    expect(MAX_COMPLAINT_RATE).toBeLessThan(0.0008);
+  });
+
+  it("plus de 3 % de rejets après 100 envois : pause sans reprise", async () => {
     await EmailCampaign.updateOne(
       { _id: campaign._id },
       { $set: { "stats.sent": 100 } },
     );
-    await addRecipients(6);
-    for (let i = 0; i < 5; i += 1) {
+    await addRecipients(4);
+    for (let i = 0; i < 3; i += 1) {
       await webhook("email.bounced", { email_id: `re_${i}` });
     }
+    // 3 % pile : sous le seuil
     expect((await campaignNow()).status).toBe("SENDING");
-    await webhook("email.bounced", { email_id: "re_5" });
+    await webhook("email.bounced", { email_id: "re_3" });
     const paused = await campaignNow();
     expect(paused).toMatchObject({ status: "PAUSED", pauseKind: "REPUTATION" });
     expect(paused.pausedReason).toMatch(
-      /^Envoi suspendu pour protéger votre réputation : 6\s%/u,
+      /^Envoi suspendu pour protéger votre réputation : 4\s% des e-mails ont été rejetés \(seuil : 3\s%\)/u,
     );
   });
 
-  it("plus de 0,3 % de plaintes : pause", async () => {
+  it("plus de 0,05 % de plaintes : pause", async () => {
     await EmailCampaign.updateOne(
       { _id: campaign._id },
-      { $set: { "stats.sent": 200 } },
+      { $set: { "stats.sent": 3000 } },
     );
-    await addRecipients(1);
+    await addRecipients(2);
+    // 1 sur 3 000 : 0,033 %, sous le seuil
     await webhook("email.complained", { email_id: "re_0" });
-    expect((await campaignNow()).pauseKind).toBe("REPUTATION");
+    expect((await campaignNow()).status).toBe("SENDING");
+    await webhook("email.complained", { email_id: "re_1" });
+    const paused = await campaignNow();
+    expect(paused.pauseKind).toBe("REPUTATION");
+    expect(paused.pausedReason).toMatch(
+      /^Envoi suspendu pour protéger votre réputation : 0,07\s% des destinataires ont signalé l'e-mail comme indésirable \(seuil : 0,05\s%\)/u,
+    );
   });
 
   it("moins de 100 envois : pas de pause", async () => {

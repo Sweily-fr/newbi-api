@@ -5,9 +5,9 @@
  *     adresse bloquée ;
  *   - liste d'exclusion de l'espace ;
  *   - coupe-circuit de réputation : après au moins 100 envois réels, plus
- *     de 5 % de rejets ou plus de 0,3 % de plaintes mettent la campagne en
- *     pause (elle ne reprend pas : la réputation du domaine d'envoi est
- *     commune à tous les clients de Newbi).
+ *     de 3 % de rejets ou plus de 0,05 % de plaintes mettent la campagne en
+ *     pause (elle ne reprend pas : la réputation du domaine d'envoi et du
+ *     compte Resend est commune à tous les clients de Newbi).
  *
  * Compteurs de la campagne en `$inc` atomiques, comptés une fois : la mise à
  * jour du destinataire est conditionnée à la date encore vide.
@@ -20,9 +20,14 @@ import logger from "../../utils/logger.js";
 import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { normalizeEmail } from "./audience.js";
 
+// Seuils sous ceux que Resend impose au compte entier (rejets sous 4 %,
+// plaintes sous 0,08 %, sous peine de pause des envois, voire de fermeture
+// du compte : https://resend.com/docs/knowledge-base/account-quotas-and-limits
+// et https://resend.com/legal/acceptable-use) : une campagne ne peut pas, à
+// elle seule, emmener le compte au-delà.
 export const REPUTATION_MIN_SENT = 100;
-export const MAX_BOUNCE_RATE = 0.05;
-export const MAX_COMPLAINT_RATE = 0.003;
+export const MAX_BOUNCE_RATE = 0.03;
+export const MAX_COMPLAINT_RATE = 0.0005;
 
 const REASON_RANK = { MANUAL: 0, UNSUBSCRIBED: 1, BOUNCED: 2, COMPLAINED: 3 };
 
@@ -165,7 +170,7 @@ export async function unsubscribeRecipient(
 const percent = (rate) =>
   new Intl.NumberFormat("fr-FR", {
     style: "percent",
-    maximumFractionDigits: 1,
+    maximumFractionDigits: 2,
   }).format(rate);
 
 /**
