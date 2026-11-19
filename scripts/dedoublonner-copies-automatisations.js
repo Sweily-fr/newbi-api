@@ -11,7 +11,10 @@
  * le même dossier.
  *
  * Un doublon = plusieurs copies, hors corbeille, du MÊME document Newbi dans
- * le MÊME dossier. Le document d'origine d'une copie est lu sur la copie
+ * le MÊME dossier. Depuis le 19/11/2026, une facture d'achat ou une
+ * transaction à plusieurs justificatifs a une copie par justificatif
+ * différent, marquée de son empreinte (sourceFileSignature) : seules les
+ * copies de la même empreinte sont des doublons. Le document d'origine d'une copie est lu sur la copie
  * (copies récentes) ou dans le journal des automatisations. Une copie sans
  * origine connue (automatisation supprimée avant le correctif) n'est rangée
  * avec un groupe que si elle porte exactement le même nom qu'une copie
@@ -96,6 +99,7 @@ export async function findDuplicateCopies({
         createdAt: 1,
         comments: 1,
         sourceDocumentId: 1,
+        sourceFileSignature: 1,
       },
     })
     .toArray();
@@ -121,9 +125,9 @@ export async function findDuplicateCopies({
     }
   }
 
-  // Copies d'origine connue, par dossier et document
+  // Copies d'origine connue, par dossier, document et justificatif
   const bySource = new Map();
-  // Nom → document d'origine, par dossier (pour rattacher les copies sans origine)
+  // Nom → groupe, par dossier (pour rattacher les copies sans origine)
   const sourceByName = new Map();
   const unknown = [];
   for (const copy of copies) {
@@ -132,22 +136,27 @@ export async function findDuplicateCopies({
       unknown.push(copy);
       continue;
     }
-    const groupKey = key(copy.workspaceId, copy.folderId, sourceId);
+    const groupKey = key(
+      copy.workspaceId,
+      copy.folderId,
+      sourceId,
+      copy.sourceFileSignature,
+    );
     if (!bySource.has(groupKey)) bySource.set(groupKey, []);
     bySource.get(groupKey).push(copy);
     const nameKey = key(copy.workspaceId, copy.folderId, copy.name);
     if (!sourceByName.has(nameKey)) sourceByName.set(nameKey, new Set());
-    sourceByName.get(nameKey).add(sourceId);
+    sourceByName.get(nameKey).add(groupKey);
   }
 
   const toReviewByName = new Map();
   for (const copy of unknown) {
     const nameKey = key(copy.workspaceId, copy.folderId, copy.name);
     const sources = sourceByName.get(nameKey);
-    // Même nom qu'une seule copie d'origine connue : même document
+    // Même nom qu'un seul groupe d'origine connue : même document
     if (sources?.size === 1) {
-      const [sourceId] = sources;
-      bySource.get(key(copy.workspaceId, copy.folderId, sourceId)).push(copy);
+      const [groupKey] = sources;
+      bySource.get(groupKey).push(copy);
     } else {
       if (!toReviewByName.has(nameKey)) toReviewByName.set(nameKey, []);
       toReviewByName.get(nameKey).push(copy);

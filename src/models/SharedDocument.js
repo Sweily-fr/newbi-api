@@ -98,6 +98,12 @@ const SharedDocumentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       default: undefined,
     },
+    // Justificatif copié (nom + taille) quand le document en porte plusieurs
+    // (facture d'achat, transaction) : chacun n'est copié qu'une fois
+    sourceFileSignature: {
+      type: String,
+      default: undefined,
+    },
 
     // Statut et partage
     status: {
