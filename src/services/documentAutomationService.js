@@ -20,8 +20,12 @@ import {
 } from "./storage/storageService.js";
 import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
 import {
+  MULTI_FILE_TYPES,
+  distinctSourceFiles,
   downloadFirstAvailableFile,
+  fileSignature,
   isNoSourceFileError,
+  planExtraCopies,
   sourceFilesOf,
 } from "../utils/automationSourceFile.js";
 import axios from "axios";
@@ -568,6 +572,224 @@ async function recordAutomationSuccess(logData, sharedDocument) {
   }
 }
 
+/** Empreinte du justificatif copié, pour les types à plusieurs fichiers */
+function signatureFor(documentType, file) {
+  return MULTI_FILE_TYPES.includes(documentType) && file
+    ? fileSignature(file)
+    : undefined;
+}
+
+/**
+ * Copies d'un document dans un dossier, corbeille comprise : copies marquées
+ * de leur origine, et copies plus anciennes retrouvées par le journal.
+ */
+async function findDocumentCopiesInFolder(
+  workspaceId,
+  docType,
+  documentId,
+  folderId,
+) {
+  const types = logTypesFor(docType);
+  const fields = "name originalName fileSize sourceFileSignature trashedAt";
+  const stamped = await SharedDocument.find({
+    workspaceId,
+    folderId,
+    sourceDocumentType: { $in: types },
+    sourceDocumentId: documentId,
+  })
+    .select(fields)
+    .lean();
+  const logs = await DocumentAutomationLog.find({
+    workspaceId,
+    sourceDocumentType: { $in: types },
+    sourceDocumentId: documentId,
+    status: "SUCCESS",
+    sharedDocumentId: { $ne: null },
+  })
+    .select("sharedDocumentId")
+    .lean();
+  const known = new Set(stamped.map((copy) => String(copy._id)));
+  const extraIds = logs
+    .map((log) => log.sharedDocumentId)
+    .filter((id) => !known.has(String(id)));
+  const logged = extraIds.length
+    ? await SharedDocument.find({
+        _id: { $in: extraIds },
+        workspaceId,
+        folderId,
+      })
+        .select(fields)
+        .lean()
+    : [];
+  return [...stamped, ...logged];
+}
+
+/**
+ * Justificatifs supplémentaires d'une facture d'achat ou d'une transaction :
+ * chaque justificatif différent qui n'est pas encore dans le dossier y est
+ * copié, à côté de la copie principale. Ne lève jamais : un justificatif
+ * illisible est seulement compté, la copie principale reste valable.
+ * @returns {Promise<{copied: number, restored: number, failed: number}>}
+ */
+async function copyExtraJustificatifs({
+  automation,
+  workspaceId,
+  documentType,
+  documentId,
+  targetFolderId,
+  actorId,
+  files,
+  documentContext = {},
+}) {
+  const result = { copied: 0, restored: 0, failed: 0 };
+  if (!MULTI_FILE_TYPES.includes(documentType) || !targetFolderId) {
+    return result;
+  }
+  try {
+    const distinct = distinctSourceFiles(
+      files || (await loadSourceFiles(documentType, documentId)),
+    );
+    if (distinct.length < 2) return result;
+
+    const copies = await findDocumentCopiesInFolder(
+      workspaceId,
+      documentType,
+      documentId,
+      targetFolderId,
+    );
+    const { toCopy, restore } = planExtraCopies(distinct, copies);
+
+    if (restore.length > 0) {
+      const restored = await SharedDocument.updateMany(
+        { _id: { $in: restore }, trashedAt: { $ne: null } },
+        { $set: { trashedAt: null }, $unset: { originalFolderId: "" } },
+      );
+      result.restored = restored.modifiedCount || 0;
+    }
+    if (toCopy.length === 0) return result;
+    if (!(await hasStorageAvailable(workspaceId, 0))) return result;
+
+    const uploaderId = actorId || automation.createdBy?.toString();
+    for (const file of toCopy) {
+      try {
+        const { buffer } = await downloadFirstAvailableFile([file]);
+        const fileExt =
+          extensionOf(
+            file.originalFilename || file.originalFileName || file.filename,
+          ) || "pdf";
+        const fileName =
+          originalFileNameFor(documentType, file, fileExt) ||
+          buildFileName(
+            automation.actionConfig?.documentNaming ||
+              "{documentType}-{number}-{clientName}",
+            { documentType, ...documentContext },
+            fileExt,
+          );
+        const uploadResult = await cloudflareService.uploadImage(
+          buffer,
+          fileName,
+          uploaderId,
+          "sharedDocuments",
+          workspaceId,
+        );
+        const sharedDocument = new SharedDocument({
+          name: fileName,
+          originalName: fileName,
+          description: `Importé automatiquement par l'automatisation "${automation.name}"`,
+          fileUrl: uploadResult.url,
+          fileKey: uploadResult.key,
+          mimeType: file.mimetype || file.mimeType || "application/pdf",
+          fileSize: buffer.length,
+          fileExtension: fileExt,
+          workspaceId,
+          folderId: targetFolderId,
+          uploadedBy: uploaderId,
+          uploadedByName: "Automatisation",
+          status: automation.actionConfig?.documentStatus || "classified",
+          isSharedWithAccountant: true,
+          tags: automation.actionConfig?.tags || [],
+          sourceDocumentType: documentType,
+          sourceDocumentId: documentId,
+          sourceFileSignature: fileSignature(file),
+        });
+        await sharedDocument.save();
+        await recordStoredFile({
+          workspaceId: sharedDocument.workspaceId,
+          key: sharedDocument.fileKey,
+          bucket: cloudflareService.sharedDocumentsBucketName,
+          size: sharedDocument.fileSize,
+          category: "sharedDocuments",
+          userId: sharedDocument.uploadedBy,
+        });
+        publishSharedDocsChanged(
+          sharedDocument.workspaceId,
+          "CREATED",
+          sharedDocument._id,
+        );
+        result.copied += 1;
+      } catch (error) {
+        result.failed += 1;
+        logger.warn(
+          `[DocumentAutomation] Justificatif supplémentaire non copié (${documentType} ${documentId}) : ${error.message}`,
+        );
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      `[DocumentAutomation] Justificatifs supplémentaires ignorés (${documentType} ${documentId}) : ${error.message}`,
+    );
+  }
+  return result;
+}
+
+/**
+ * Relance manuelle : justificatifs supplémentaires de tous les documents du
+ * lot (déjà classés ou classés à l'instant). Le dossier n'est résolu que si
+ * un document en porte plusieurs.
+ * @returns {Promise<number>} justificatifs copiés
+ */
+async function copyExtrasForDocuments({
+  automation,
+  workspaceId,
+  docType,
+  documents,
+  resolveFolder,
+  userId,
+}) {
+  if (!MULTI_FILE_TYPES.includes(docType)) return 0;
+  const candidates = documents.filter(
+    (doc) => distinctSourceFiles(sourceFilesOf(docType, doc)).length > 1,
+  );
+  if (candidates.length === 0) return 0;
+  const folderId = await resolveFolder();
+  let copied = 0;
+  for (const doc of candidates) {
+    const result = await copyExtraJustificatifs({
+      automation,
+      workspaceId,
+      documentType: docType,
+      documentId: doc._id,
+      targetFolderId: folderId,
+      actorId: userId,
+      files: sourceFilesOf(docType, doc),
+      documentContext: {
+        documentId: String(doc._id),
+        documentType: docType,
+        documentNumber:
+          docType === "purchaseInvoice"
+            ? doc.invoiceNumber || ""
+            : doc.externalId || "",
+        clientName:
+          docType === "purchaseInvoice"
+            ? doc.supplierName || ""
+            : doc.description || "",
+      },
+    });
+    copied += result.copied;
+  }
+  return copied;
+}
+
 const documentAutomationService = {
   /**
    * Exécute toutes les automatisations correspondant à un trigger
@@ -649,6 +871,28 @@ const documentAutomationService = {
               );
             }
 
+            // Document déjà classé : un justificatif ajouté depuis (nouveau
+            // dépôt sur la transaction) rejoint le dossier
+            if (MULTI_FILE_TYPES.includes(documentContext.documentType)) {
+              const actor = userId || automation.createdBy?.toString();
+              await copyExtraJustificatifs({
+                automation,
+                workspaceId,
+                documentType: documentContext.documentType,
+                documentId: documentContext.documentId,
+                targetFolderId:
+                  existingSuccessLog.targetFolderId ||
+                  (await resolveTargetFolder(
+                    automation.actionConfig,
+                    workspaceId,
+                    documentContext,
+                    actor,
+                  )),
+                actorId: actor,
+                documentContext,
+              });
+            }
+
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -700,6 +944,15 @@ const documentAutomationService = {
               },
               existingCopyId,
             );
+            await copyExtraJustificatifs({
+              automation,
+              workspaceId,
+              documentType: documentContext.documentType,
+              documentId: documentContext.documentId,
+              targetFolderId,
+              actorId,
+              documentContext,
+            });
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -734,6 +987,7 @@ const documentAutomationService = {
           let fileSize;
           let fileMimeType = "application/pdf";
           let fileExt = "pdf";
+          let primarySourceFile = null; // justificatif copié (transaction)
 
           if (documentContext.documentType === "transaction") {
             // Transaction : premier justificatif lisible (image ou PDF)
@@ -744,6 +998,7 @@ const documentAutomationService = {
               await downloadFirstAvailableFile(txn?.receiptFiles, {
                 emptyMessage: "Aucun justificatif pour cette transaction",
               });
+            primarySourceFile = receipt;
             fileMimeType = receipt.mimetype || "application/pdf";
             fileExt = receipt.filename?.split(".").pop() || "pdf";
             // Nom d'origine du justificatif ; sinon nom construit avec la
@@ -832,6 +1087,10 @@ const documentAutomationService = {
             tags: automation.actionConfig.tags || [],
             sourceDocumentType: documentContext.documentType,
             sourceDocumentId: documentContext.documentId,
+            sourceFileSignature: signatureFor(
+              documentContext.documentType,
+              primarySourceFile,
+            ),
           });
 
           await sharedDocument.save();
@@ -886,6 +1145,17 @@ const documentAutomationService = {
               "stats.lastExecutedAt": new Date(),
               "stats.lastDocumentId": sharedDocument._id,
             },
+          });
+
+          // Autres justificatifs de la transaction, à côté
+          await copyExtraJustificatifs({
+            automation,
+            workspaceId,
+            documentType: documentContext.documentType,
+            documentId: documentContext.documentId,
+            targetFolderId,
+            actorId,
+            documentContext,
           });
 
           results.push({
@@ -1044,6 +1314,28 @@ const documentAutomationService = {
               );
             }
 
+            // Document déjà classé : un justificatif ajouté depuis rejoint
+            // le dossier
+            if (MULTI_FILE_TYPES.includes(logDocType)) {
+              const actor = userId || automation.createdBy?.toString();
+              await copyExtraJustificatifs({
+                automation,
+                workspaceId,
+                documentType: logDocType,
+                documentId: expenseContext.documentId,
+                targetFolderId:
+                  existingSuccessLog.targetFolderId ||
+                  (await resolveTargetFolder(
+                    automation.actionConfig,
+                    workspaceId,
+                    expenseContext,
+                    actor,
+                  )),
+                actorId: actor,
+                documentContext: expenseContext,
+              });
+            }
+
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -1093,6 +1385,15 @@ const documentAutomationService = {
               },
               existingCopyId,
             );
+            await copyExtraJustificatifs({
+              automation,
+              workspaceId,
+              documentType: logDocType,
+              documentId: expenseContext.documentId,
+              targetFolderId,
+              actorId,
+              documentContext: expenseContext,
+            });
             results.push({
               automationId: automation._id,
               automationName: automation.name,
@@ -1215,6 +1516,7 @@ const documentAutomationService = {
             tags: automation.actionConfig.tags || [],
             sourceDocumentType: logDocType,
             sourceDocumentId: expenseContext.documentId,
+            sourceFileSignature: signatureFor(logDocType, sourceFile),
           });
 
           await sharedDocument.save();
@@ -1264,6 +1566,18 @@ const documentAutomationService = {
               "stats.lastExecutedAt": new Date(),
               "stats.lastDocumentId": sharedDocument._id,
             },
+          });
+
+          // Autres justificatifs de la facture d'achat, à côté
+          await copyExtraJustificatifs({
+            automation,
+            workspaceId,
+            documentType: logDocType,
+            documentId: expenseContext.documentId,
+            targetFolderId,
+            actorId,
+            files: sourceFiles,
+            documentContext: expenseContext,
           });
 
           results.push({
@@ -1960,6 +2274,16 @@ const documentAutomationService = {
         },
         existingCopyId,
       );
+      await copyExtraJustificatifs({
+        automation,
+        workspaceId,
+        documentType,
+        documentId,
+        targetFolderId,
+        actorId: userId,
+        files: sourceFilesOf(documentType, doc),
+        documentContext,
+      });
       return {
         success: true,
         skipped: true,
@@ -2011,6 +2335,7 @@ const documentAutomationService = {
       tags: automation.actionConfig.tags || [],
       sourceDocumentType: documentType,
       sourceDocumentId: documentId,
+      sourceFileSignature: signatureFor(documentType, usedSourceFile),
     });
 
     await sharedDocument.save();
@@ -2064,6 +2389,18 @@ const documentAutomationService = {
         "stats.lastExecutedAt": new Date(),
         "stats.lastDocumentId": sharedDocument._id,
       },
+    });
+
+    // Autres justificatifs (facture d'achat, transaction), à côté
+    await copyExtraJustificatifs({
+      automation,
+      workspaceId,
+      documentType,
+      documentId,
+      targetFolderId,
+      actorId: userId,
+      files: sourceFilesOf(documentType, doc),
+      documentContext,
     });
 
     return {
@@ -2185,12 +2522,37 @@ const documentAutomationService = {
       );
       skipCount = documents.length - docsToProcess.length;
 
+      // Justificatifs supplémentaires (facture d'achat, transaction) : la
+      // relance rattrape aussi les documents déjà classés
+      const resolveExtrasFolder = () =>
+        resolveTargetFolder(
+          automation.actionConfig,
+          workspaceId,
+          {
+            documentId: String(documents[0]._id),
+            documentType: config.docType,
+            documentNumber: "",
+            prefix: "",
+            clientName: "",
+          },
+          userId,
+        );
+
       if (docsToProcess.length === 0) {
+        const extraCount = await copyExtrasForDocuments({
+          automation,
+          workspaceId,
+          docType: config.docType,
+          documents,
+          resolveFolder: resolveExtrasFolder,
+          userId,
+        });
         return {
           successCount: 0,
           skipCount,
           failCount: 0,
           restoredCount,
+          extraCount,
           total: documents.length,
         };
       }
@@ -2441,6 +2803,7 @@ const documentAutomationService = {
               tags: automation.actionConfig.tags || [],
               sourceDocumentType: config.docType,
               sourceDocumentId: doc._id,
+              sourceFileSignature: signatureFor(config.docType, usedSourceFile),
             });
 
             await sharedDocument.save();
@@ -2497,6 +2860,16 @@ const documentAutomationService = {
         }
       }
 
+      // Autres justificatifs des documents du lot, à côté de leur copie
+      const extraCount = await copyExtrasForDocuments({
+        automation,
+        workspaceId,
+        docType: config.docType,
+        documents,
+        resolveFolder: async () => preResolvedFolderId,
+        userId,
+      });
+
       // Une seule mise à jour de stats à la fin
       const statsUpdate = {};
       if (successCount > 0) {
@@ -2520,6 +2893,7 @@ const documentAutomationService = {
         skipCount: skipCount + alreadyInFolderCount,
         alreadyInFolderCount,
         noFileCount,
+        extraCount,
         failCount,
         restoredCount,
         total: documents.length,

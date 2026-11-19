@@ -568,6 +568,29 @@ const documentAutomationResolvers = {
         const noFileNote =
           noFileCount > 0 ? `, ${noFileCount} sans fichier joint` : "";
 
+        // Justificatifs supplémentaires copiés (documents à plusieurs
+        // justificatifs, déjà classés ou classés à l'instant)
+        const extraCount = stats.extraCount || 0;
+        if (
+          extraCount > 0 &&
+          stats.successCount === 0 &&
+          stats.failCount === 0
+        ) {
+          const notes =
+            (stats.restoredCount > 0
+              ? `, ${stats.restoredCount} restauré(s) depuis la corbeille`
+              : "") + noFileNote;
+          return {
+            automationId: automation._id.toString(),
+            status: "COMPLETED",
+            totalDocuments,
+            message: `${extraCount} justificatif(s) supplémentaire(s) copié(s)${notes}`,
+            successCount: 0,
+            failCount: 0,
+            firstError: null,
+          };
+        }
+
         // Documents trouvés mais tous déjà dans leur dossier : le dire, plutôt
         // que « aucun document »
         if (
@@ -626,6 +649,9 @@ const documentAutomationResolvers = {
         let message;
 
         const restoredNote =
+          (extraCount > 0
+            ? `, ${extraCount} justificatif(s) supplémentaire(s)`
+            : "") +
           (stats.restoredCount > 0
             ? `, ${stats.restoredCount} restauré(s) depuis la corbeille`
             : "") +
