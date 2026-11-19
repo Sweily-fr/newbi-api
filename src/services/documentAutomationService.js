@@ -19,6 +19,11 @@ import {
   recordStoredFile,
 } from "./storage/storageService.js";
 import { readArchivedDocumentPdf } from "../utils/archivedDocumentPdf.js";
+import {
+  downloadFirstAvailableFile,
+  isNoSourceFileError,
+  sourceFilesOf,
+} from "../utils/automationSourceFile.js";
 import axios from "axios";
 
 // Suivi de progression en mémoire pour les automatisations en cours
@@ -185,20 +190,15 @@ function buildFileName(pattern, documentContext, extension = "pdf") {
  * généré par Newbi.
  */
 function sourceFileOf(documentType, doc) {
-  if (!doc) return null;
-  if (documentType === "transaction") return doc.receiptFiles?.[0] || null;
-  if (documentType === "purchaseInvoice") return doc.files?.[0] || null;
-  if (documentType === "importedInvoice" || documentType === "importedQuote")
-    return doc.file || null;
-  return null;
+  return sourceFilesOf(documentType, doc)[0] || null;
 }
 
 /**
- * Charge le fichier source d'un document à partir de son identifiant
- * (lecture minimale). Ne lève jamais : null en cas d'échec, le nom construit
- * servira de repli.
+ * Charge les fichiers joints d'un document à partir de son identifiant
+ * (lecture minimale), dans leur ordre. Ne lève jamais : liste vide en cas
+ * d'échec.
  */
-async function loadSourceFile(documentType, documentId) {
+async function loadSourceFiles(documentType, documentId) {
   try {
     const ModelMap = {
       importedInvoice: [ImportedInvoice, "file"],
@@ -207,12 +207,12 @@ async function loadSourceFile(documentType, documentId) {
       transaction: [Transaction, "receiptFiles"],
     };
     const entry = ModelMap[documentType];
-    if (!entry) return null;
+    if (!entry) return [];
     const [Model, field] = entry;
     const doc = await Model.findById(documentId).select(field).lean();
-    return sourceFileOf(documentType, doc);
+    return sourceFilesOf(documentType, doc);
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -736,25 +736,20 @@ const documentAutomationService = {
           let fileExt = "pdf";
 
           if (documentContext.documentType === "transaction") {
-            // Transaction : copier le 1er justificatif attaché (image ou PDF)
+            // Transaction : premier justificatif lisible (image ou PDF)
             const txn = await Transaction.findById(documentContext.documentId)
               .select("receiptFiles")
               .lean();
-            const firstReceipt = txn?.receiptFiles?.[0];
-            if (!firstReceipt?.url) {
-              throw new Error("Aucun justificatif pour cette transaction");
-            }
-            const response = await axios.get(firstReceipt.url, {
-              responseType: "arraybuffer",
-              timeout: 30000,
-            });
-            const fileBuffer = Buffer.from(response.data);
-            fileMimeType = firstReceipt.mimetype || "application/pdf";
-            fileExt = firstReceipt.filename?.split(".").pop() || "pdf";
+            const { file: receipt, buffer: fileBuffer } =
+              await downloadFirstAvailableFile(txn?.receiptFiles, {
+                emptyMessage: "Aucun justificatif pour cette transaction",
+              });
+            fileMimeType = receipt.mimetype || "application/pdf";
+            fileExt = receipt.filename?.split(".").pop() || "pdf";
             // Nom d'origine du justificatif ; sinon nom construit avec la
             // bonne extension
             fileName =
-              originalFileNameFor("transaction", firstReceipt, fileExt) ||
+              originalFileNameFor("transaction", receipt, fileExt) ||
               buildFileName(
                 automation.actionConfig.documentNaming ||
                   "{documentType}-{number}-{clientName}",
@@ -899,6 +894,18 @@ const documentAutomationService = {
             success: true,
           });
         } catch (error) {
+          // Transaction sans justificatif : rien à copier, pas un échec
+          if (isNoSourceFileError(error)) {
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+              noSourceFile: true,
+            });
+            continue;
+          }
+
           console.error(
             `❌ [DocumentAutomation] Erreur automation "${automation.name}" (${automation._id}):`,
             error.message,
@@ -1099,23 +1106,11 @@ const documentAutomationService = {
           // manuel : les appelants des factures d'achat transmettaient
           // fileUrl alors que seul cloudflareUrl était lu, et chaque copie
           // automatique échouait (« Aucune URL source pour le fichier »)
-          const sourceFile = await loadSourceFile(
+          const sourceFiles = await loadSourceFiles(
             logDocType,
             expenseContext.documentId,
           );
-          const fileExt =
-            extensionOf(
-              sourceFile?.originalFilename ||
-                sourceFile?.originalFileName ||
-                sourceFile?.filename,
-            ) ||
-            expenseContext.fileExtension ||
-            "pdf";
-          const fileMimeType =
-            sourceFile?.mimetype ||
-            sourceFile?.mimeType ||
-            expenseContext.mimeType ||
-            "application/pdf";
+          let sourceFile = sourceFiles[0] || null;
 
           // Copie R2 serveur-à-serveur pour les documents importés, sinon
           // téléchargement HTTP
@@ -1135,30 +1130,39 @@ const documentAutomationService = {
           }
 
           if (!r2CopySource) {
-            const sourceUrl =
-              sourceFile?.url ||
-              expenseContext.cloudflareUrl ||
-              expenseContext.fileUrl;
-            if (!sourceUrl) {
-              throw new Error("Aucune URL source pour le fichier");
-            }
-            try {
-              const response = await axios.get(sourceUrl, {
-                responseType: "arraybuffer",
-                timeout: 30000,
-              });
-              fileBuffer = Buffer.from(response.data);
-              fileSize = fileBuffer.length;
-            } catch (fetchError) {
-              throw new Error(
-                `Erreur récupération fichier: ${fetchError.message}`,
-              );
-            }
-
-            if (!fileBuffer || fileBuffer.length === 0) {
-              throw new Error("Le fichier source est vide");
+            // Premier justificatif lisible : un fichier retiré du stockage
+            // ne bloque plus la copie quand un autre est joint. L'URL du
+            // contexte ne sert que si le document n'en porte aucune.
+            const contextUrl =
+              expenseContext.cloudflareUrl || expenseContext.fileUrl;
+            const candidates = sourceFiles.some((file) => file?.url)
+              ? sourceFiles
+              : contextUrl
+                ? [{ url: contextUrl }]
+                : [];
+            const downloaded = await downloadFirstAvailableFile(candidates, {
+              emptyMessage: "Aucun fichier joint au document",
+            });
+            fileBuffer = downloaded.buffer;
+            fileSize = fileBuffer.length;
+            if (sourceFiles.includes(downloaded.file)) {
+              sourceFile = downloaded.file;
             }
           }
+
+          const fileExt =
+            extensionOf(
+              sourceFile?.originalFilename ||
+                sourceFile?.originalFileName ||
+                sourceFile?.filename,
+            ) ||
+            expenseContext.fileExtension ||
+            "pdf";
+          const fileMimeType =
+            sourceFile?.mimetype ||
+            sourceFile?.mimeType ||
+            expenseContext.mimeType ||
+            "application/pdf";
 
           // Nom d'origine du fichier source ; sinon nom construit
           const fileName =
@@ -1268,6 +1272,19 @@ const documentAutomationService = {
             success: true,
           });
         } catch (error) {
+          // Document sans fichier joint : rien à copier, pas un échec (ni
+          // journal FAILED, ni compteur d'échecs)
+          if (isNoSourceFileError(error)) {
+            results.push({
+              automationId: automation._id,
+              automationName: automation.name,
+              success: true,
+              skipped: true,
+              noSourceFile: true,
+            });
+            continue;
+          }
+
           console.error(
             `❌ [DocumentAutomation] Erreur automation expense "${automation.name}":`,
             error.message,
@@ -1808,6 +1825,7 @@ const documentAutomationService = {
     let fileExt = "pdf";
     let fileSize = 0;
     let r2CopySource = null; // Pour copie serveur-à-serveur R2
+    let usedSourceFile = null; // Justificatif réellement copié
 
     if (
       documentType === "importedInvoice" ||
@@ -1824,32 +1842,24 @@ const documentAutomationService = {
       fileMimeType = doc.file?.mimeType || "application/pdf";
       fileExt = doc.file?.originalFileName?.split(".").pop() || "pdf";
       fileSize = doc.file?.fileSize || 0;
-    } else if (documentType === "purchaseInvoice") {
-      // Facture d'achat : copie du premier fichier attaché
-      const sourceFile = doc.files?.[0];
-      if (!sourceFile?.url)
-        throw new Error("Aucun fichier attaché à la facture d'achat");
-      const response = await axios.get(sourceFile.url, {
-        responseType: "arraybuffer",
-        timeout: 30000,
-      });
-      fileBuffer = Buffer.from(response.data);
-      fileMimeType = sourceFile.mimetype || "application/pdf";
-      fileExt = sourceFile.filename?.split(".").pop() || "pdf";
-      fileSize = fileBuffer.length;
-    } else if (documentType === "transaction") {
-      // Transaction : copie du 1er justificatif (receiptFiles[0])
-      const firstReceipt = doc.receiptFiles?.[0];
-      const receiptUrl = firstReceipt?.url;
-      if (!receiptUrl)
-        throw new Error("Aucun justificatif pour cette transaction");
-      const response = await axios.get(receiptUrl, {
-        responseType: "arraybuffer",
-        timeout: 30000,
-      });
-      fileBuffer = Buffer.from(response.data);
-      fileMimeType = firstReceipt?.mimetype || "application/pdf";
-      fileExt = firstReceipt?.filename?.split(".").pop() || "pdf";
+    } else if (
+      documentType === "purchaseInvoice" ||
+      documentType === "transaction"
+    ) {
+      // Facture d'achat ou transaction : premier justificatif lisible
+      const { file, buffer } = await downloadFirstAvailableFile(
+        sourceFilesOf(documentType, doc),
+        {
+          emptyMessage:
+            documentType === "purchaseInvoice"
+              ? "Aucun fichier attaché à la facture d'achat"
+              : "Aucun justificatif pour cette transaction",
+        },
+      );
+      usedSourceFile = file;
+      fileBuffer = buffer;
+      fileMimeType = file.mimetype || "application/pdf";
+      fileExt = file.filename?.split(".").pop() || "pdf";
       fileSize = fileBuffer.length;
     } else if (acceptsClientPdf) {
       // PDF d'un brouillon fourni par le client : copie seulement, sans cache
@@ -1918,7 +1928,7 @@ const documentAutomationService = {
     const fileName =
       originalFileNameFor(
         documentType,
-        sourceFileOf(documentType, doc),
+        usedSourceFile || sourceFileOf(documentType, doc),
         fileExt,
       ) ||
       buildFileName(
@@ -2221,6 +2231,7 @@ const documentAutomationService = {
         docsToProcess.map((d) => d._id),
       );
       let alreadyInFolderCount = 0;
+      let noFileCount = 0;
 
       const isR2Copy =
         config.docType === "importedInvoice" ||
@@ -2316,7 +2327,8 @@ const documentAutomationService = {
               );
               alreadyInFolderCount++;
               _progressMap.set(automationIdStr, {
-                current: successCount + failCount + alreadyInFolderCount,
+                current:
+                  successCount + failCount + alreadyInFolderCount + noFileCount,
                 total: docsToProcess.length,
               });
               continue;
@@ -2327,6 +2339,7 @@ const documentAutomationService = {
             let fileExt = "pdf";
             let fileSize = 0;
             let r2CopySource = null;
+            let usedSourceFile = null;
 
             if (isR2Copy) {
               const sourceKey = doc.file?.cloudflareKey;
@@ -2340,30 +2353,15 @@ const documentAutomationService = {
               fileExt = doc.file?.originalFileName?.split(".").pop() || "pdf";
               fileSize = doc.file?.fileSize || 0;
             } else if (isFileCopy) {
-              // Facture d'achat ou transaction : récupérer le fichier existant via URL
-              let sourceUrl, sourceMime, sourceFilename;
-              if (config.docType === "purchaseInvoice") {
-                const sourceFile = doc.files?.[0];
-                if (!sourceFile?.url)
-                  throw new Error("Aucun fichier attaché à la facture d'achat");
-                sourceUrl = sourceFile.url;
-                sourceMime = sourceFile.mimetype || "application/pdf";
-                sourceFilename = sourceFile.filename || "";
-              } else {
-                const firstReceipt = doc.receiptFiles?.[0];
-                if (!firstReceipt?.url)
-                  throw new Error("Aucun justificatif pour cette transaction");
-                sourceUrl = firstReceipt.url;
-                sourceMime = firstReceipt.mimetype || "application/pdf";
-                sourceFilename = firstReceipt.filename || "";
-              }
-              const response = await axios.get(sourceUrl, {
-                responseType: "arraybuffer",
-                timeout: 30000,
-              });
-              fileBuffer = Buffer.from(response.data);
-              fileMimeType = sourceMime;
-              fileExt = sourceFilename.split(".").pop() || "pdf";
+              // Facture d'achat ou transaction : premier justificatif lisible
+              // (un fichier retiré du stockage passe au suivant)
+              const { file, buffer } = await downloadFirstAvailableFile(
+                sourceFilesOf(config.docType, doc),
+              );
+              usedSourceFile = file;
+              fileBuffer = buffer;
+              fileMimeType = file.mimetype || "application/pdf";
+              fileExt = (file.filename || "").split(".").pop() || "pdf";
               fileSize = fileBuffer.length;
             } else if (doc.cachedPdf?.key) {
               // Copie R2 serveur-à-serveur depuis le cache (instantanée)
@@ -2387,7 +2385,7 @@ const documentAutomationService = {
             const fileName =
               originalFileNameFor(
                 config.docType,
-                sourceFileOf(config.docType, doc),
+                usedSourceFile || sourceFileOf(config.docType, doc),
                 fileExt,
               ) ||
               buildFileName(
@@ -2481,13 +2479,19 @@ const documentAutomationService = {
 
             if (!duplicate) successCount++;
           } catch (error) {
-            if (!firstError) firstError = error.message;
-            failCount++;
+            // Aucun fichier joint : rien à copier, compté à part (pas un échec)
+            if (isNoSourceFileError(error)) {
+              noFileCount++;
+            } else {
+              if (!firstError) firstError = error.message;
+              failCount++;
+            }
           }
 
           // Mettre à jour la progression après chaque document
           _progressMap.set(automationIdStr, {
-            current: successCount + failCount + alreadyInFolderCount,
+            current:
+              successCount + failCount + alreadyInFolderCount + noFileCount,
             total: docsToProcess.length,
           });
         }
@@ -2515,6 +2519,7 @@ const documentAutomationService = {
         successCount,
         skipCount: skipCount + alreadyInFolderCount,
         alreadyInFolderCount,
+        noFileCount,
         failCount,
         restoredCount,
         total: documents.length,

@@ -351,7 +351,10 @@ const documentAutomationResolvers = {
           { runValidators: true },
         );
 
-        return await DocumentAutomation.findById(id).populate("createdBy", CREATED_BY_FIELDS);
+        return await DocumentAutomation.findById(id).populate(
+          "createdBy",
+          CREATED_BY_FIELDS,
+        );
       },
     ),
 
@@ -559,6 +562,12 @@ const documentAutomationResolvers = {
           };
         }
 
+        // Documents sans fichier joint (facture d'achat, transaction) : rien
+        // à copier, signalé à part plutôt que compté en échec
+        const noFileCount = stats.noFileCount || 0;
+        const noFileNote =
+          noFileCount > 0 ? `, ${noFileCount} sans fichier joint` : "";
+
         // Documents trouvés mais tous déjà dans leur dossier : le dire, plutôt
         // que « aucun document »
         if (
@@ -572,7 +581,27 @@ const documentAutomationResolvers = {
             automationId: automation._id.toString(),
             status: "COMPLETED",
             totalDocuments,
-            message: "Tous les documents sont déjà dans le dossier",
+            message: `Tous les documents sont déjà dans le dossier${noFileNote}`,
+            successCount: 0,
+            failCount: 0,
+            firstError: null,
+          };
+        }
+
+        // Rien de copié parce que les seuls documents restants n'ont pas de
+        // fichier : le dire, sinon l'écran annonce « aucun document »
+        if (
+          totalDocuments > 0 &&
+          stats.successCount === 0 &&
+          stats.failCount === 0 &&
+          stats.restoredCount === 0 &&
+          noFileCount > 0
+        ) {
+          return {
+            automationId: automation._id.toString(),
+            status: "COMPLETED",
+            totalDocuments,
+            message: `Aucun nouveau document à traiter${noFileNote}`,
             successCount: 0,
             failCount: 0,
             firstError: null,
@@ -602,21 +631,22 @@ const documentAutomationResolvers = {
             : "") +
           (stats.alreadyInFolderCount > 0
             ? `, ${stats.alreadyInFolderCount} déjà dans le dossier`
-            : "");
+            : "") +
+          noFileNote;
 
         if (stats.failCount === 0 && stats.successCount > 0) {
           status = "COMPLETED";
           message = `${stats.successCount} document(s) traité(s) avec succès${restoredNote}`;
         } else if (stats.successCount > 0 && stats.failCount > 0) {
           status = "PARTIAL";
-          message = `${stats.successCount} succès, ${stats.failCount} échec(s)${restoredNote}${stats.firstError ? ` — ${stats.firstError}` : ""}`;
+          message = `${stats.successCount} succès, ${stats.failCount} échec(s)${restoredNote}${stats.firstError ? `. ${stats.firstError}` : ""}`;
         } else if (stats.failCount > 0) {
           status = "FAILED";
           message =
             stats.firstError || `${stats.failCount} document(s) en échec`;
         } else if (stats.restoredCount > 0) {
           status = "COMPLETED";
-          message = `${stats.restoredCount} document(s) restauré(s) depuis la corbeille`;
+          message = `${stats.restoredCount} document(s) restauré(s) depuis la corbeille${noFileNote}`;
         } else {
           status = "COMPLETED";
           message = "Aucun nouveau document à traiter";
