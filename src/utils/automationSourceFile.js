@@ -88,3 +88,120 @@ export async function downloadFirstAvailableFile(
   }
   throw lastError;
 }
+
+// ---------------------------------------------------------------------------
+// Tous les justificatifs d'un document (demande du 19/11/2026)
+//
+// Une facture d'achat ou une transaction peut porter plusieurs justificatifs.
+// La copie principale (premier justificatif lisible) reste gérée par le
+// journal des automatisations ; les autres justificatifs DIFFÉRENTS sont
+// copiés à côté, dans le même dossier. Un même PDF déposé plusieurs fois
+// (même nom, même taille) n'est copié qu'une fois.
+// ---------------------------------------------------------------------------
+
+/** Types dont les justificatifs sont des fichiers déposés (pas un PDF généré) */
+export const MULTI_FILE_TYPES = ["purchaseInvoice", "transaction"];
+
+const baseName = (value) =>
+  String(value || "")
+    .split(/[\\/]/)
+    .pop()
+    .trim()
+    .toLowerCase();
+
+/**
+ * Empreinte d'un justificatif : nom d'origine + taille. Deux dépôts du même
+ * PDF ont la même empreinte ; sans taille connue, l'URL distingue le fichier.
+ * @param {object} file fichier joint (files[] ou receiptFiles[])
+ * @returns {string}
+ */
+export function fileSignature(file) {
+  const name = baseName(
+    file?.originalFilename || file?.originalFileName || file?.filename,
+  );
+  const size = file?.size ?? file?.fileSize;
+  if (name && size !== undefined && size !== null) return `${name}|${size}`;
+  return `url|${file?.url || ""}`;
+}
+
+/** Empreinte reconstituée d'une copie ancienne (sans empreinte enregistrée) */
+function copySignature(copy) {
+  return `${baseName(copy?.originalName || copy?.name)}|${copy?.fileSize}`;
+}
+
+/**
+ * Justificatifs différents d'un document, dans leur ordre d'ajout.
+ * @param {object[]} files
+ * @returns {object[]}
+ */
+export function distinctSourceFiles(files) {
+  const seen = new Set();
+  const out = [];
+  for (const file of files || []) {
+    if (!file?.url) continue;
+    const signature = fileSignature(file);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    out.push(file);
+  }
+  return out;
+}
+
+/**
+ * Justificatifs à copier en plus de ce qui est déjà dans le dossier.
+ *
+ * - Copie marquée de son empreinte : le justificatif correspondant est
+ *   couvert ; partie à la corbeille, elle est restaurée (comme la copie
+ *   principale à la relance).
+ * - Copie plus ancienne, sans empreinte : elle couvre le justificatif de même
+ *   nom et de même taille, sinon le premier justificatif non couvert (c'était
+ *   le seul copié jusque-là).
+ * - Aucune copie de ce document dans le dossier : rien, la copie principale
+ *   s'en charge d'abord.
+ *
+ * @param {object[]} files justificatifs différents (distinctSourceFiles)
+ * @param {object[]} copies copies du document dans le dossier
+ *   ({ _id, name, originalName, fileSize, sourceFileSignature, trashedAt })
+ * @returns {{ toCopy: object[], restore: Array }} restore : ids de copies
+ */
+export function planExtraCopies(files, copies) {
+  const live = (copies || []).filter((copy) => !copy.trashedAt);
+  if (live.length === 0 || (files || []).length === 0) {
+    return { toCopy: [], restore: [] };
+  }
+  const wanted = new Set(files.map(fileSignature));
+  const covered = new Set();
+
+  for (const copy of live) {
+    if (copy.sourceFileSignature) covered.add(copy.sourceFileSignature);
+  }
+  const unmatched = [];
+  for (const copy of live) {
+    if (copy.sourceFileSignature) continue;
+    const signature = copySignature(copy);
+    if (wanted.has(signature) && !covered.has(signature)) {
+      covered.add(signature);
+    } else {
+      unmatched.push(copy);
+    }
+  }
+  for (let i = 0; i < unmatched.length; i += 1) {
+    const next = files.find((file) => !covered.has(fileSignature(file)));
+    if (!next) break;
+    covered.add(fileSignature(next));
+  }
+
+  const restore = [];
+  for (const copy of copies || []) {
+    const signature = copy.sourceFileSignature;
+    if (!copy.trashedAt || !signature || covered.has(signature)) continue;
+    if (!wanted.has(signature)) continue;
+    covered.add(signature);
+    restore.push(copy._id);
+  }
+
+  return {
+    toCopy: files.filter((file) => !covered.has(fileSignature(file))),
+    restore,
+  };
+}
