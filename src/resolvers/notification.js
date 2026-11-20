@@ -5,6 +5,7 @@ import Notification from "../models/Notification.js";
 import logger from "../utils/logger.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { getPubSub } from "../config/redis.js";
+import { ensureFiscalDeadlineNotifications } from "../services/calendar/fiscalNotifications.js";
 
 const NOTIFICATION_RECEIVED = "NOTIFICATION_RECEIVED";
 
@@ -35,6 +36,12 @@ const notificationResolvers = {
         { user },
       ) => {
         try {
+          // Rappel des échéances fiscales du jour, créé à la lecture
+          await ensureFiscalDeadlineNotifications({
+            userId: user._id,
+            workspaceId,
+          });
+
           const query = {
             userId: user._id,
             workspaceId,
@@ -100,6 +107,10 @@ const notificationResolvers = {
     getUnreadNotificationsCount: isAuthenticated(
       async (_, { workspaceId }, { user }) => {
         try {
+          await ensureFiscalDeadlineNotifications({
+            userId: user._id,
+            workspaceId,
+          });
           const count = await Notification.countDocuments({
             userId: user._id,
             workspaceId,
