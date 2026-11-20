@@ -154,7 +154,7 @@ class JWKSValidator {
 
       if (response.url && response.url !== this.jwksUrl) {
         logger.warn(
-          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour FRONTEND_URL pour éviter ce détour.`,
+          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour AUTH_JWKS_URL (ou AUTH_EXPECTED_ISSUER) pour éviter ce détour.`,
         );
       }
 
