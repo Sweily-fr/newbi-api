@@ -8,6 +8,8 @@ type Event {
   color: String!
   location: String
   type: EventType!
+  "Événement Newbi de déclaration : TVA (impots.gouv.fr) ou Urssaf (autoentrepreneur.urssaf.fr)"
+  declarationKind: DeclarationKind
   invoiceId: ID
   invoice: Invoice
   clientId: ID
@@ -40,6 +42,12 @@ enum EventColor {
   purple
   pink
   yellow
+}
+
+"Déclaration à déposer sur un site officiel"
+enum DeclarationKind {
+  VAT
+  URSSAF
 }
 
 enum EventType {
@@ -75,6 +83,7 @@ input CreateEventInput {
   color: String = "sky"
   location: String
   type: EventType = MANUAL
+  declarationKind: DeclarationKind
   clientId: ID
   assignedMembers: [String!]
   emailReminder: EmailReminderInput
@@ -90,6 +99,8 @@ input UpdateEventInput {
   color: String
   location: String
   type: EventType
+  "null : redevient un événement ordinaire"
+  declarationKind: DeclarationKind
   assignedMembers: [String!]
   emailReminder: EmailReminderInput
 }
