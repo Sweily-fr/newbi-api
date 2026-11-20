@@ -10,6 +10,8 @@ type Event {
   type: EventType!
   "Événement Newbi de déclaration : TVA (impots.gouv.fr) ou Urssaf (autoentrepreneur.urssaf.fr)"
   declarationKind: DeclarationKind
+  "Type d'événement créé par l'espace (getCalendarEventTypes)"
+  eventTypeId: String
   invoiceId: ID
   invoice: Invoice
   clientId: ID
@@ -84,6 +86,7 @@ input CreateEventInput {
   location: String
   type: EventType = MANUAL
   declarationKind: DeclarationKind
+  eventTypeId: String
   clientId: ID
   assignedMembers: [String!]
   emailReminder: EmailReminderInput
@@ -101,6 +104,8 @@ input UpdateEventInput {
   type: EventType
   "null : redevient un événement ordinaire"
   declarationKind: DeclarationKind
+  "null : sans type personnalisé"
+  eventTypeId: String
   assignedMembers: [String!]
   emailReminder: EmailReminderInput
 }

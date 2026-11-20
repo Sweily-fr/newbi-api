@@ -66,6 +66,15 @@ const eventSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Type d'événement créé par l'espace (CalendarEventType), pour le
+    // retrouver sélectionné à la réouverture
+    eventTypeId: {
+      type: String,
+      trim: true,
+      maxlength: 40,
+      default: null,
+    },
+
     // Source de l'événement
     source: {
       type: String,

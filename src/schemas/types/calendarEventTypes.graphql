@@ -1,0 +1,32 @@
+"Type d'événement créé par l'espace (« Rendez-vous client »…)"
+type CalendarEventType {
+  id: ID!
+  name: String!
+  color: String!
+  allDay: Boolean!
+}
+
+input CalendarEventTypeInput {
+  id: ID!
+  name: String!
+  color: String!
+  allDay: Boolean
+}
+
+type CalendarEventTypesResponse {
+  success: Boolean!
+  message: String
+  types: [CalendarEventType!]!
+}
+
+extend type Query {
+  getCalendarEventTypes(workspaceId: ID): CalendarEventTypesResponse!
+}
+
+extend type Mutation {
+  "Remplace la liste des types d'événements de l'espace"
+  updateCalendarEventTypes(
+    types: [CalendarEventTypeInput!]!
+    workspaceId: ID
+  ): CalendarEventTypesResponse!
+}
