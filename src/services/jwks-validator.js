@@ -44,9 +44,23 @@ class JWKSValidator {
     this.keyCache = new Map(); // Cache des clés publiques
     this.cacheExpiry = 5 * 60 * 1000; // 5 minutes (hot cache)
     this.extendedCacheExpiry = 24 * 60 * 60 * 1000; // 24 hours (JWKS-down fallback, still crypto-strict)
-    this.jwksUrl = process.env.FRONTEND_URL
-      ? `${process.env.FRONTEND_URL}/api/auth/jwks`
-      : "http://localhost:3000/api/auth/jwks";
+    // Le JWKS est servi par Better Auth à sa baseURL (= issuer des JWT), pas
+    // forcément à FRONTEND_URL (qui peut pointer sur l'IP LAN en dev pour le
+    // mobile). Ordre : AUTH_JWKS_URL explicite > issuer > FRONTEND_URL.
+    const jwksBase =
+      process.env.AUTH_EXPECTED_ISSUER ||
+      process.env.FRONTEND_URL ||
+      "http://localhost:3000";
+    this.jwksUrl =
+      process.env.AUTH_JWKS_URL ||
+      `${jwksBase.replace(/\/$/, "")}/api/auth/jwks`;
+    this.fetchTimeoutMs = Number(process.env.JWKS_FETCH_TIMEOUT_MS) || 5000;
+    // Après un échec de fetch, on ne retente pas avant ce délai : sinon chaque
+    // requête GraphQL paie le timeout complet (5 s) tant que l'endpoint est
+    // injoignable, ce qui rend l'app inutilisable (fallback cookie très lent).
+    this.failureBackoffMs =
+      Number(process.env.JWKS_FAILURE_BACKOFF_MS) || 30_000;
+    this.lastFetchFailure = null; // { timestamp, message }
     this.cacheHits = 0;
     this.cacheMisses = 0;
 
@@ -93,9 +107,25 @@ class JWKSValidator {
    * Récupère les clés JWKS depuis l'endpoint Better Auth
    */
   async fetchJWKS() {
+    if (
+      this.lastFetchFailure &&
+      Date.now() - this.lastFetchFailure.timestamp < this.failureBackoffMs
+    ) {
+      const remaining = Math.ceil(
+        (this.failureBackoffMs -
+          (Date.now() - this.lastFetchFailure.timestamp)) /
+          1000,
+      );
+      throw new Error(
+        `JWKS indisponible (échec récent : ${this.lastFetchFailure.message}), nouvelle tentative dans ${remaining}s`,
+      );
+    }
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        this.fetchTimeoutMs,
+      );
 
       // ✅ AJOUT : Construction des headers avec bypass token
       const headers = {
@@ -124,7 +154,7 @@ class JWKSValidator {
 
       if (response.url && response.url !== this.jwksUrl) {
         logger.warn(
-          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour FRONTEND_URL pour éviter ce détour.`,
+          `JWKS récupéré via redirection: ${this.jwksUrl} → ${response.url}. Mettre à jour AUTH_JWKS_URL (ou AUTH_EXPECTED_ISSUER) pour éviter ce détour.`,
         );
       }
 
@@ -141,10 +171,12 @@ class JWKSValidator {
       }
 
       logger.debug(`JWKS récupéré avec succès: ${jwks.keys.length} clé(s)`);
+      this.lastFetchFailure = null;
       return jwks;
     } catch (error) {
+      this.lastFetchFailure = { timestamp: Date.now(), message: error.message };
       logger.error(
-        `Erreur récupération JWKS (${this.jwksUrl}) : ${error.message} — si cette erreur persiste, les utilisateurs paraîtront déconnectés (validation JWT impossible).`,
+        `Erreur récupération JWKS (${this.jwksUrl}) : ${error.message} — prochaine tentative dans ${Math.round(this.failureBackoffMs / 1000)}s ; si cette erreur persiste, les utilisateurs paraîtront déconnectés (validation JWT impossible).`,
       );
       throw error;
     }

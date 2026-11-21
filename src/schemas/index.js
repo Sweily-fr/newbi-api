@@ -41,6 +41,7 @@ const otherTypes = loadFilesSync([
   path.join(__dirname, "./types/calendarConnection.graphql"), // Chargement explicite du schéma Calendar Connection
   path.join(__dirname, "./types/gmailConnection.graphql"), // Chargement explicite du schéma Gmail Connection
   path.join(__dirname, "./types/calendarColorLabels.graphql"), // Chargement explicite du schéma Calendar Color Labels
+  path.join(__dirname, "./types/calendarEventTypes.graphql"),
   path.join(__dirname, "./types/calendarLinkedItems.graphql"),
   path.join(__dirname, "./types/vatDeclaration.graphql"),
   path.join(__dirname, "./types/urssafDeclaration.graphql"),

@@ -57,6 +57,24 @@ const eventSchema = new mongoose.Schema(
       default: "MANUAL",
     },
 
+    // Événement Newbi « Déclaration de TVA » ou « Déclaration Urssaf » : le
+    // site affiche le lien vers le site où la déposer (impots.gouv.fr,
+    // autoentrepreneur.urssaf.fr)
+    declarationKind: {
+      type: String,
+      enum: ["VAT", "URSSAF", null],
+      default: null,
+    },
+
+    // Type d'événement créé par l'espace (CalendarEventType), pour le
+    // retrouver sélectionné à la réouverture
+    eventTypeId: {
+      type: String,
+      trim: true,
+      maxlength: 40,
+      default: null,
+    },
+
     // Source de l'événement
     source: {
       type: String,
