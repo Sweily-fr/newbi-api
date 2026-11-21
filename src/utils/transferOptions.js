@@ -15,6 +15,12 @@ export const TRANSFER_PASSWORD_MAX_LENGTH = 128;
 export const TRANSFER_PAYMENT_MIN = 0.5;
 export const TRANSFER_PAYMENT_MAX = 100000;
 export const TRANSFER_PAYMENT_CURRENCIES = ["EUR", "USD", "GBP", "CHF"];
+// Moyens qu'un transfert payant peut proposer
+export const TRANSFER_PAYMENT_METHOD_KEYS = [
+  "stripe",
+  "paypal",
+  "bank_transfer",
+];
 
 // Taille maximale d'un fichier par offre, en Go (fileTransferMaxGB de
 // NewbiV2/src/lib/plan-limits.js)
@@ -162,6 +168,22 @@ export function normalizeTransferCreationOptions(input = {}) {
     }
   }
 
+  // Moyens proposés au destinataire (vérifiés ensuite pour l'espace par
+  // prepareTransferPayment) ; absents : tous ceux de l'espace
+  let paymentMethods;
+  if (isPaymentRequired && input?.paymentMethods != null) {
+    if (!Array.isArray(input.paymentMethods)) {
+      throw new UserInputError("Moyens de paiement invalides");
+    }
+    const unknown = input.paymentMethods.find(
+      (method) => !TRANSFER_PAYMENT_METHOD_KEYS.includes(method),
+    );
+    if (unknown !== undefined) {
+      throw new UserInputError(`Moyen de paiement inconnu : ${unknown}`);
+    }
+    paymentMethods = [...new Set(input.paymentMethods)];
+  }
+
   return {
     expiryDays,
     title,
@@ -172,5 +194,6 @@ export function normalizeTransferCreationOptions(input = {}) {
       ? paymentCurrency
       : "EUR",
     isPaymentRequired,
+    paymentMethods,
   };
 }

@@ -127,7 +127,9 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "logoutInvitedUser",
     "requestInvitedEmailCode",
     "createPaymentSessionForFileTransfer",
+    "confirmTransferPayment",
     "consumePaymentReturnToken",
+    "declareTransferBankPayment",
   ],
   // Retirer un accès ou un partage (jamais en ouvrir un)
   revokeAccess: [
@@ -157,6 +159,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "disconnectEmailSendingDomain",
     "disconnectGmail",
     "disconnectPennylane",
+    "disconnectPaypal",
     "disconnectQonto",
     "disconnectStripe",
     "uninstallApp",

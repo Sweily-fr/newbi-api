@@ -1,7 +1,11 @@
 import Stripe from "stripe";
 import Invoice from "../models/Invoice.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
-import stripeConnectService from "../services/stripeConnectService.js";
+import stripeConnectService, {
+  apiPublicUrl,
+  isDirectStripeAccount,
+} from "../services/stripeConnectService.js";
+import { getCacheClient } from "../config/redis.js";
 import { applyInvoicePaid } from "../resolvers/invoice.js";
 import logger from "../utils/logger.js";
 import { isInvoiceFullyCredited } from "../utils/invoiceCredit.js";
@@ -106,7 +110,11 @@ export const redirectToInvoicePayment = async (req, res) => {
       );
     }
 
-    const successUrl = `${FRONTEND_URL}/pay/invoice/${invoiceId}/success`;
+    // Compte du client (OAuth) : le retour passe par l'API, qui vérifie le
+    // paiement sur son compte avant d'afficher la page de succès
+    const successUrl = isDirectStripeAccount(account)
+      ? `${apiPublicUrl()}/pay/invoice/${invoiceId}/return?session_id={CHECKOUT_SESSION_ID}`
+      : `${FRONTEND_URL}/pay/invoice/${invoiceId}/success`;
     const cancelUrl = `${FRONTEND_URL}/pay/invoice/${invoiceId}/cancel${
       signed ? `?t=${encodeURIComponent(token)}` : ""
     }`;
@@ -173,60 +181,7 @@ export const handleInvoicePaymentWebhook = async (req, res) => {
     }
 
     try {
-      const { invoiceId } = session.metadata;
-      const invoice = await Invoice.findById(invoiceId);
-
-      const reference = invoice
-        ? `${invoice.prefix || ""}${invoice.prefix ? "-" : ""}${invoice.number}`
-        : invoiceId;
-
-      if (!invoice) {
-        result = { status: "error", message: "Facture non trouvée" };
-      } else if (
-        invoice.stripePaymentStatus === "paid" ||
-        invoice.status === "COMPLETED"
-      ) {
-        if (invoice.stripeCheckoutSessionId === session.id) {
-          // Idempotence : même session déjà traitée (Stripe rejoue l'événement)
-          result = {
-            status: "ignored",
-            message: "Facture déjà marquée comme payée",
-          };
-        } else {
-          // Facture déjà réglée (autre session ou paiement enregistré à la
-          // main) : ce second encaissement est à rembourser, on le signale.
-          logger.error(
-            `[invoice-payment] ANOMALIE : second paiement reçu pour la facture ${reference} déjà payée (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser`,
-          );
-          result = {
-            status: "anomaly",
-            message: "Facture déjà payée : second paiement à rembourser",
-          };
-        }
-      } else if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
-        // Facture annulée (ou repassée en brouillon) après l'ouverture de la
-        // session de paiement : elle reste en l'état, l'encaissement est
-        // signalé pour être remboursé ou réaffecté.
-        logger.error(
-          `[invoice-payment] ANOMALIE : paiement reçu pour la facture ${reference} au statut ${invoice.status} (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser ou réaffecter`,
-        );
-        result = {
-          status: "anomaly",
-          message: `Paiement reçu sur une facture au statut ${invoice.status} : non appliqué`,
-        };
-      } else {
-        await applyInvoicePaid(invoice, {
-          paymentDate: new Date(),
-          userId: invoice.createdBy,
-          workspaceId: invoice.workspaceId.toString(),
-          paymentMethod: "CARD",
-          stripe: {
-            paymentIntentId: session.payment_intent,
-            checkoutSessionId: session.id,
-          },
-        });
-        result = { status: "success", message: "Facture marquée comme payée" };
-      }
+      result = await applyInvoiceCheckoutSession(session);
     } catch (error) {
       logger.error("[invoice-payment] Erreur traitement webhook:", error);
       result = { status: "error", message: error.message };
@@ -234,4 +189,194 @@ export const handleInvoicePaymentWebhook = async (req, res) => {
   }
 
   res.status(200).json({ received: true, result });
+};
+
+// Une session n'est appliquée qu'une fois, même vue en même temps par le
+// retour du payeur et le webhook (instances PM2 distinctes : Redis)
+const SESSION_LOCK_TTL_MS = 60 * 1000;
+
+/**
+ * Applique une session Checkout de facture : webhook de la plateforme
+ * (ancien compte Express), webhook des comptes connectés ou retour du payeur
+ * (compte du client connecté par OAuth, `accountId`).
+ * @returns {Promise<{status: string, message: string}>}
+ */
+export async function applyInvoiceCheckoutSession(
+  session,
+  { accountId = null } = {},
+) {
+  if (session?.metadata?.type !== "invoice_payment") {
+    return { status: "ignored", message: "Session étrangère aux factures" };
+  }
+  // Moyen de paiement différé : appliqué à async_payment_succeeded
+  if (session.payment_status && session.payment_status !== "paid") {
+    return { status: "ignored", message: "Paiement pas encore confirmé" };
+  }
+
+  const { invoiceId } = session.metadata;
+  const invoice = OBJECT_ID.test(String(invoiceId || ""))
+    ? await Invoice.findById(invoiceId)
+    : null;
+
+  const reference = invoice
+    ? `${invoice.prefix || ""}${invoice.prefix ? "-" : ""}${invoice.number}`
+    : invoiceId;
+
+  if (!invoice) {
+    return { status: "error", message: "Facture non trouvée" };
+  }
+
+  // Session d'un compte connecté : ce doit être le compte de l'espace de la
+  // facture (un autre compte connecté pourrait sinon créer chez lui une
+  // session portant l'identifiant de cette facture)
+  if (accountId) {
+    const account = await StripeConnectAccount.findOne({
+      organizationId: invoice.workspaceId.toString(),
+    }).lean();
+    if (!account || account.accountId !== accountId) {
+      logger.warn(
+        `[invoice-payment] Session ${session.id} du compte ${accountId}, étranger à la facture ${reference}`,
+      );
+      return { status: "ignored", message: "Compte Stripe étranger" };
+    }
+  }
+
+  if (
+    invoice.stripePaymentStatus === "paid" ||
+    invoice.status === "COMPLETED"
+  ) {
+    if (invoice.stripeCheckoutSessionId === session.id) {
+      // Idempotence : même session déjà traitée (Stripe rejoue l'événement)
+      return {
+        status: "ignored",
+        message: "Facture déjà marquée comme payée",
+      };
+    }
+    // Facture déjà réglée (autre session ou paiement enregistré à la
+    // main) : ce second encaissement est à rembourser, on le signale.
+    logger.error(
+      `[invoice-payment] ANOMALIE : second paiement reçu pour la facture ${reference} déjà payée (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser`,
+    );
+    return {
+      status: "anomaly",
+      message: "Facture déjà payée : second paiement à rembourser",
+    };
+  }
+
+  if (invoice.status !== "PENDING" && invoice.status !== "OVERDUE") {
+    // Facture annulée (ou repassée en brouillon) après l'ouverture de la
+    // session de paiement : elle reste en l'état, l'encaissement est
+    // signalé pour être remboursé ou réaffecté.
+    logger.error(
+      `[invoice-payment] ANOMALIE : paiement reçu pour la facture ${reference} au statut ${invoice.status} (session ${session.id}, paiement ${session.payment_intent}, espace ${invoice.workspaceId}) : à rembourser ou réaffecter`,
+    );
+    return {
+      status: "anomaly",
+      message: `Paiement reçu sur une facture au statut ${invoice.status} : non appliqué`,
+    };
+  }
+
+  const apply = async () => {
+    await applyInvoicePaid(invoice, {
+      paymentDate: new Date(),
+      userId: invoice.createdBy,
+      workspaceId: invoice.workspaceId.toString(),
+      paymentMethod: "CARD",
+      stripe: {
+        paymentIntentId: session.payment_intent,
+        checkoutSessionId: session.id,
+      },
+    });
+    return { status: "success", message: "Facture marquée comme payée" };
+  };
+  // Compte du client : le retour du payeur et le webhook arrivent presque
+  // en même temps, sur des instances différentes
+  return accountId
+    ? withSessionLock(`invoice-payment:session:${session.id}`, apply)
+    : apply();
+}
+
+const localSessionLocks = new Set();
+
+/**
+ * Un seul traitement à la fois d'une même session (verrou Redis partagé
+ * entre les instances, relâché à la fin ; sans Redis, verrou du processus).
+ * La seconde arrivée est ignorée : la première applique le paiement.
+ */
+async function withSessionLock(key, fn) {
+  const busy = { status: "ignored", message: "Session en cours de traitement" };
+  const client = getCacheClient();
+  if (client) {
+    let acquired = true;
+    try {
+      acquired =
+        (await client.set(key, "1", "PX", SESSION_LOCK_TTL_MS, "NX")) === "OK";
+    } catch (error) {
+      // Redis en erreur : traitement sans verrou, comme avant
+      logger.warn(`[invoice-payment] Verrou indisponible : ${error.message}`);
+    }
+    if (!acquired) return busy;
+    try {
+      return await fn();
+    } finally {
+      client.del(key).catch(() => {});
+    }
+  }
+  if (localSessionLocks.has(key)) return busy;
+  localSessionLocks.add(key);
+  try {
+    return await fn();
+  } finally {
+    localSessionLocks.delete(key);
+  }
+}
+
+const CHECKOUT_SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]+$/;
+
+/**
+ * Retour du payeur après le paiement d'une facture sur le compte Stripe du
+ * client (connexion OAuth) : la session est relue sur ce compte et
+ * appliquée, puis le payeur arrive sur la page de succès. Le webhook des
+ * comptes connectés fait la même chose ; ce retour évite d'en dépendre.
+ * GET /pay/invoice/:invoiceId/return?session_id=cs_…
+ */
+export const handleInvoicePaymentReturn = async (req, res) => {
+  const { invoiceId } = req.params;
+  const successUrl = `${FRONTEND_URL}/pay/invoice/${
+    OBJECT_ID.test(invoiceId) ? invoiceId : ""
+  }/success`;
+  const sessionId =
+    typeof req.query?.session_id === "string" ? req.query.session_id : null;
+  if (
+    !OBJECT_ID.test(invoiceId) ||
+    !sessionId ||
+    !CHECKOUT_SESSION_ID.test(sessionId)
+  ) {
+    return res.redirect(successUrl);
+  }
+  try {
+    const invoice = await Invoice.findById(invoiceId)
+      .select("workspaceId")
+      .lean();
+    const account = invoice
+      ? await StripeConnectAccount.findOne({
+          organizationId: invoice.workspaceId.toString(),
+        }).lean()
+      : null;
+    if (account && isDirectStripeAccount(account)) {
+      const session = await stripe.checkout.sessions.retrieve(sessionId, {
+        stripeAccount: account.accountId,
+      });
+      if (session?.metadata?.invoiceId === invoiceId) {
+        await applyInvoiceCheckoutSession(session, {
+          accountId: account.accountId,
+        });
+      }
+    }
+  } catch (error) {
+    logger.warn(
+      `[invoice-payment] Retour de paiement de la facture ${invoiceId} : ${error.message}`,
+    );
+  }
+  return res.redirect(successUrl);
 };

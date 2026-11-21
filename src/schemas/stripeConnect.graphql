@@ -3,13 +3,81 @@
 # Type pour représenter un compte Stripe Connect
 type StripeConnectAccount {
   id: ID!
-  userId: ID!
+  # Membre qui a connecté le compte (absent sur de très anciens comptes)
+  userId: ID
   accountId: String!
   isOnboarded: Boolean!
   chargesEnabled: Boolean!
   payoutsEnabled: Boolean!
+  # « oauth » : compte Stripe du client (paiements créés sur son compte,
+  # rien ne passe par Newbi) ; « express » : ancien parcours
+  connectionType: String
+  displayName: String
+  accountEmail: String
   createdAt: DateTime!
   updatedAt: DateTime!
+}
+
+# Moyens d'encaissement de l'espace (réglages, transferts payants)
+type PaymentConnections {
+  stripe: StripePaymentConnection!
+  paypal: PaypalPaymentConnection!
+  bankTransfer: BankTransferPaymentConnection!
+}
+
+type StripePaymentConnection {
+  # Un compte Stripe est rattaché à l'espace (tous parcours)
+  connected: Boolean!
+  # Compte du client connecté par OAuth et prêt à encaisser (transferts)
+  ready: Boolean!
+  # Connecté par l'ancien parcours (Express) : à reconnecter pour les transferts
+  legacy: Boolean!
+  # « Connecter mon compte Stripe » possible pour cet espace
+  oauthAvailable: Boolean!
+  chargesEnabled: Boolean!
+  displayName: String
+  accountEmail: String
+}
+
+type PaypalPaymentConnection {
+  # PayPal configuré côté Newbi et ouvert à l'espace
+  available: Boolean!
+  connected: Boolean!
+  email: String
+}
+
+type BankTransferPaymentConnection {
+  # IBAN renseigné dans les informations de l'entreprise
+  available: Boolean!
+  ibanLast4: String
+  # Compte bancaire connecté à Newbi : les virements des transferts y sont
+  # repérés et débloquent le transfert tout seuls
+  autoDetect: Boolean!
+}
+
+# Annonce d'un virement par le payeur d'un transfert
+type TransferBankDeclarationResponse {
+  success: Boolean!
+  message: String
+  declaredAt: Date
+  # Adresse masquée qui recevra le lien au déblocage
+  notifyEmailHint: String
+}
+
+type PaypalConnectionResponse {
+  success: Boolean!
+  message: String
+  email: String
+}
+
+# Retour du payeur après un paiement en ligne
+type TransferPaymentConfirmation {
+  success: Boolean!
+  message: String
+  # paid | pending | unpaid
+  status: String
+  shareLink: String
+  accessKey: String
 }
 
 # Type pour la réponse de création d'un compte Stripe Connect
@@ -48,6 +116,9 @@ type StripePaymentSessionResponse {
 extend type Query {
   # Obtenir le compte Stripe Connect de l'utilisateur connecté
   myStripeConnectAccount: StripeConnectAccount
+
+  # Moyens d'encaissement de l'espace actif
+  paymentConnections: PaymentConnections!
 }
 
 # Étendre le type Mutation
@@ -69,16 +140,38 @@ extend type Mutation {
   # Générer un lien de connexion au tableau de bord Stripe Express
   generateStripeDashboardLink(accountId: String!): StripeOnboardingLinkResponse!
 
-  # Créer une session de paiement pour un transfert de fichiers
+  # Lancer le paiement d'un transfert (destinataire du lien) : provider
+  # « stripe » (carte, défaut) ou « paypal » ; sessionUrl à ouvrir
   createPaymentSessionForFileTransfer(
     transferId: ID!
     accessKey: String
+    provider: String
   ): StripePaymentSessionResponse!
 
-  # Consume a single-use payment return token (Stripe redirect callback)
-  consumePaymentReturnToken(
+  # Retour du payeur : paiement vérifié auprès du prestataire, transfert
+  # débloqué s'il est payé
+  confirmTransferPayment(
     token: String!
-  ): PaymentReturnTokenResponse!
+    provider: String
+    sessionId: String
+    orderId: String
+  ): TransferPaymentConfirmation!
+
+  # Ancien retour de Stripe (sessions ouvertes avant confirmTransferPayment)
+  consumePaymentReturnToken(token: String!): PaymentReturnTokenResponse!
+
+  # Page publique : le payeur annonce son virement (« J'ai fait le virement »),
+  # ou retire son annonce avec cancel
+  declareTransferBankPayment(
+    transferId: ID!
+    accessKey: String!
+    email: String
+    cancel: Boolean
+  ): TransferBankDeclarationResponse!
+
+  # Compte PayPal Business de l'espace (adresse e-mail seule)
+  connectPaypal(email: String!): PaypalConnectionResponse!
+  disconnectPaypal: PaypalConnectionResponse!
 }
 
 type PaymentReturnTokenResponse {

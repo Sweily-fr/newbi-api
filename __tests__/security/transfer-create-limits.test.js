@@ -60,6 +60,7 @@ import {
   invalidateSubCache,
 } from "../../src/middlewares/rbac.js";
 import FileTransfer from "../../src/models/FileTransfer.js";
+import StripeConnectAccount from "../../src/models/StripeConnectAccount.js";
 import chunkUploadR2Resolvers from "../../src/resolvers/chunkUploadR2.js";
 
 const { Mutation } = chunkUploadR2Resolvers;
@@ -284,6 +285,13 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
   });
 
   it("paiement de 19,99 € enregistré au centime", async () => {
+    // Compte Stripe du client connecté par OAuth, prêt à encaisser
+    await StripeConnectAccount.create({
+      organizationId: workspace.toString(),
+      accountId: "acct_test_create_limits",
+      connectionType: "oauth",
+      chargesEnabled: true,
+    });
     const { run } = await creer({
       paymentAmount: 19.99,
       paymentCurrency: "eur",
@@ -292,6 +300,52 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
     expect(fileTransfer.isPaymentRequired).toBe(true);
     expect(fileTransfer.paymentAmount).toBe(19.99);
     expect(fileTransfer.paymentCurrency).toBe("EUR");
+    // Sans précision, les moyens disponibles pour l'espace
+    expect(fileTransfer.paymentMethods).toEqual(["stripe"]);
+  });
+
+  it("paiement refusé sans moyen d'encaissement : aucun transfert impayable", async () => {
+    const { run } = await creer({ paymentAmount: 10 });
+    const error = await errorOf(run);
+    expect(error?.message).toMatch(/Connectez Stripe ou PayPal/);
+    expect(await FileTransfer.countDocuments()).toBe(0);
+  });
+
+  it("ancien compte Stripe Express : la carte n'est pas proposée", async () => {
+    await StripeConnectAccount.create({
+      organizationId: workspace.toString(),
+      accountId: "acct_test_express",
+      chargesEnabled: true,
+    });
+    const { run } = await creer({
+      paymentAmount: 10,
+      paymentMethods: ["stripe"],
+    });
+    const error = await errorOf(run);
+    expect(error?.message).toMatch(/Connectez votre compte Stripe/);
+    expect(await FileTransfer.countDocuments()).toBe(0);
+  });
+
+  it("paiement et filigrane refusés ensemble", async () => {
+    await StripeConnectAccount.create({
+      organizationId: workspace.toString(),
+      accountId: "acct_test_watermark",
+      connectionType: "oauth",
+      chargesEnabled: true,
+    });
+    const { run } = await creer({ paymentAmount: 10, hasWatermark: true });
+    const error = await errorOf(run);
+    expect(error?.message).toMatch(/filigrane/);
+    expect(await FileTransfer.countDocuments()).toBe(0);
+  });
+
+  it("moyen de paiement inconnu refusé", async () => {
+    const { run } = await creer({
+      paymentAmount: 10,
+      paymentMethods: ["bitcoin"],
+    });
+    const error = await errorOf(run);
+    expect(error?.message).toMatch(/Moyen de paiement inconnu/);
   });
 });
 

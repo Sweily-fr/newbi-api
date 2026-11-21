@@ -37,6 +37,8 @@ const notificationSchema = new mongoose.Schema(
         "SOCIAL_POST_PUBLISHED", // Post programmé publié sur les réseaux sociaux
         "SOCIAL_POST_FAILED", // Post programmé en échec, publié en partie ou annulé
         "FISCAL_DEADLINE", // Échéance fiscale du jour (déclaration de TVA, Urssaf…)
+        "TRANSFER_PAID", // Transfert de fichiers payé par son destinataire
+        "TRANSFER_BANK_DECLARED", // Virement annoncé par le destinataire d'un transfert payant
       ],
       index: true,
     },

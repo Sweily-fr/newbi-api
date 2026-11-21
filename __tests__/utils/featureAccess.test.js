@@ -109,6 +109,7 @@ describe("workspaceFeatures", () => {
       documentShares: true,
       socialPublishing: false,
       emailCampaigns: true,
+      transferPayments: true,
     });
     expect(workspaceFeatures(BETA, env)).toEqual({
       vat: true,
@@ -117,6 +118,7 @@ describe("workspaceFeatures", () => {
       documentShares: true,
       socialPublishing: true,
       emailCampaigns: true,
+      transferPayments: true,
     });
   });
 });

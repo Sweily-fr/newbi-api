@@ -42,6 +42,28 @@ type FileTransfer {
   paymentDate: Date
   paymentSessionId: String
   paymentSessionUrl: String
+  # Moyens proposés au destinataire : stripe | paypal | bank_transfer
+  paymentMethods: [String]
+  # Moyen utilisé : stripe | paypal | manual (marqué payé par l'expéditeur) |
+  # bank_transfer (virement repéré sur le compte bancaire connecté)
+  paymentProvider: String
+  paidAmount: Float
+  payerEmail: String
+  # Référence à indiquer sur un virement
+  paymentReference: String
+  # Paiement reçu par le prestataire, en attente de sa confirmation
+  paymentPending: Boolean
+  # Page publique : coordonnées de virement (transfert non payé)
+  bankTransferDetails: TransferBankTransferDetails
+  # Page publique : entreprise qui demande le paiement
+  sellerName: String
+  # Virement annoncé par le payeur (« J'ai fait le virement »)
+  bankTransferDeclaredAt: Date
+  # Vendeur seulement : e-mail laissé par le payeur en annonçant son virement
+  bankTransferDeclaredEmail: String
+  # Page publique seulement : adresse masquée prévenue au déblocage
+  # (« j•••@gmail.com »)
+  notifyEmailHint: String
   downloadCount: Int
   lastDownloadDate: Date
   recipientEmail: String
@@ -60,6 +82,15 @@ type FileTransfer {
   # depuis son tableau de bord sans déclencher la notification ni le compteur
   # de téléchargements, destinés aux destinataires
   ownerDownloadToken: String
+}
+
+# Coordonnées de virement d'un transfert payant
+type TransferBankTransferDetails {
+  holder: String
+  iban: String
+  bic: String
+  bankName: String
+  reference: String
 }
 
 # Type pour la réponse paginée des transferts de fichiers
@@ -95,6 +126,9 @@ input FileTransferInput {
   paymentAmount: Float = 0
   paymentCurrency: String = "EUR"
   currency: String = "EUR" # Alias pour paymentCurrency pour compatibilité avec le frontend
+  # Moyens proposés (stripe | paypal | bank_transfer) ; absent : tous ceux
+  # que l'espace peut proposer
+  paymentMethods: [String]
   recipientEmail: String
   message: String
   # Nouvelles options
@@ -152,6 +186,9 @@ extend type Mutation {
 
   # Renommer un transfert de fichiers (titre personnalisé)
   renameFileTransfer(id: ID!, title: String!): FileTransfer!
+
+  # Débloquer un transfert payant réglé autrement (virement, espèces…)
+  markFileTransferAsPaid(id: ID!): FileTransfer!
 
   # generateFileTransferPaymentLink retirée : schéma (id) et resolver
   # (shareLink/accessKey) ne correspondaient pas, aucun client ne l'appelait,
