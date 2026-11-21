@@ -36,6 +36,7 @@ const notificationSchema = new mongoose.Schema(
         "STORAGE_FULL", // Espace de stockage plein : nouveaux envois refusés
         "SOCIAL_POST_PUBLISHED", // Post programmé publié sur les réseaux sociaux
         "SOCIAL_POST_FAILED", // Post programmé en échec, publié en partie ou annulé
+        "FISCAL_DEADLINE", // Échéance fiscale du jour (déclaration de TVA, Urssaf…)
       ],
       index: true,
     },

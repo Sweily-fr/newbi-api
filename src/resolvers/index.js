@@ -58,6 +58,7 @@ import notificationResolvers from "./notification.js";
 import calendarConnectionResolvers from "./calendarConnection.js";
 import gmailConnectionResolvers from "./gmailConnection.js";
 import calendarColorLabelsResolvers from "./calendarColorLabels.js";
+import calendarEventTypesResolvers from "./calendarEventTypes.js";
 import calendarLinkedItemsResolvers from "./calendarLinkedItems.js";
 import vatDeclarationResolvers from "./vatDeclaration.js";
 import urssafDeclarationResolvers from "./urssafDeclaration.js";
@@ -147,6 +148,7 @@ const resolvers = mergeResolvers([
   calendarConnectionResolvers,
   gmailConnectionResolvers,
   calendarColorLabelsResolvers,
+  calendarEventTypesResolvers,
   calendarLinkedItemsResolvers,
   gateFeatureResolvers("vat", vatDeclarationResolvers),
   gateFeatureResolvers("urssaf", urssafDeclarationResolvers),
