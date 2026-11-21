@@ -159,11 +159,15 @@ export function buildTransferFilesAvailableEmail({
   url,
 }) {
   const seller = sellerName || "L'expéditeur";
-  const files = filesLabel(fileCount);
-  const what = transferTitle ? `« ${transferTitle} »` : files;
+  const single = fileCount === 1;
+  const named = transferTitle ? ` « ${transferTitle} »` : "";
+  // « Vos fichiers « Photos » sont disponibles », « Votre fichier est disponible »
+  const available = single
+    ? `Votre fichier${named} est disponible au téléchargement.`
+    : `Vos fichiers${named} sont disponibles au téléchargement.`;
   const until = expiryDate ? formatDate(expiryDate) : null;
-  const intro = `${seller} a bien reçu votre paiement de ${amount}. Vos fichiers (${what}) sont disponibles au téléchargement.`;
-  const introHtml = `${escapeHtml(seller)} a bien reçu votre paiement de <strong style="color: #1a1a1a;">${escapeHtml(amount)}</strong>. Vos fichiers (${escapeHtml(what)}) sont disponibles au téléchargement.`;
+  const intro = `${seller} a bien reçu votre paiement de ${amount}. ${available}`;
+  const introHtml = `${escapeHtml(seller)} a bien reçu votre paiement de <strong style="color: #1a1a1a;">${escapeHtml(amount)}</strong>. ${escapeHtml(available)}`;
   const deadline = until ? `Le lien est valable jusqu'au ${until}.` : null;
 
   return {
