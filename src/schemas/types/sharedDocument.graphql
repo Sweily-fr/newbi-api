@@ -235,7 +235,8 @@ type DocumentShare {
   isActive: Boolean!
   expiresAt: DateTime
   hasPassword: Boolean!
-  # Le client peut déposer des documents et supprimer ceux qu'il a déposés
+  # Le client peut déposer des documents, et renommer, déplacer, remplacer
+  # ou supprimer ceux qu'il a déposés
   allowUploads: Boolean!
   isFolderAvailable: Boolean!
   shareUrl: String!

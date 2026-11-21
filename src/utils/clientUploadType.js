@@ -104,6 +104,57 @@ export function cleanUploadedName(rawName) {
 }
 
 /**
+ * Extension du fichier d'un document (sans point, en minuscules), celle
+ * retenue au dépôt, sinon celle de son nom.
+ */
+export const documentExtension = (document) =>
+  String(document?.fileExtension || "").toLowerCase() ||
+  extensionOf(document?.originalName) ||
+  extensionOf(document?.name);
+
+/** `name` sans l'extension `extension` s'il la porte (casse ignorée). */
+export function withoutExtension(name, extension) {
+  const text = String(name ?? "");
+  const suffix = extension ? `.${String(extension).toLowerCase()}` : "";
+  return suffix && text.toLowerCase().endsWith(suffix)
+    ? text.slice(0, -suffix.length)
+    : text;
+}
+
+/**
+ * Nom qu'un client donne à l'un de ses documents : ni caractère de
+ * contrôle, ni séparateur de chemin (« Relevé 03/2026 » devient
+ * « Relevé 03-2026 »), ni point ou espace final, longueur bornée, et
+ * l'extension du fichier toujours gardée : « Relevé mars » comme
+ * « Relevé mars.PDF » donnent « Relevé mars.pdf ».
+ *
+ * @param {string} rawName nom saisi, ou nom actuel du document
+ * @param {string} extension extension du fichier (gardée)
+ * @param {string} [typedExtension] extension retirée du nom s'il la porte :
+ *   celle du fichier remplacé quand une nouvelle version change de format
+ * @returns {string|null} null si rien ne reste du nom
+ */
+export function clientDocumentName(
+  rawName,
+  extension,
+  typedExtension = extension,
+) {
+  const ext = String(extension || "").toLowerCase();
+  const trimEnd = (value) => value.replace(/[.\s]+$/, "");
+  let stem = String(rawName ?? "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[/\\]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+  stem = trimEnd(withoutExtension(stem, typedExtension).trim());
+  const max = ext ? NAME_MAX_LENGTH - ext.length - 1 : NAME_MAX_LENGTH;
+  stem = trimEnd(stem.slice(0, max)).trim();
+  if (!stem) return null;
+  return ext ? `${stem}.${ext}` : stem;
+}
+
+/**
  * @param {{ filename: string, buffer: Buffer }} file
  * @returns {{ ok: true, mime: string, extension: string }
  *   | { ok: false, status: number, message: string }}
