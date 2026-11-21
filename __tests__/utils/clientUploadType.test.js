@@ -2,8 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   checkClientUpload,
   cleanUploadedName,
+  clientDocumentName,
   CLIENT_UPLOAD_MAX_BYTES,
   CLIENT_VIDEO_MAX_BYTES,
+  documentExtension,
+  withoutExtension,
 } from "../../src/utils/clientUploadType.js";
 
 const bytes = (...values) => Buffer.from(values);
@@ -91,5 +94,73 @@ describe("cleanUploadedName", () => {
     expect(long).toHaveLength(200);
     expect(long.endsWith(".pdf")).toBe(true);
     expect(cleanUploadedName("")).toBe("document");
+  });
+});
+
+describe("clientDocumentName", () => {
+  it("garde toujours l'extension du fichier", () => {
+    expect(clientDocumentName("Relevé mars", "pdf")).toBe("Relevé mars.pdf");
+    expect(clientDocumentName("Relevé mars.PDF", "pdf")).toBe(
+      "Relevé mars.pdf",
+    );
+    // Une autre extension saisie ne change pas le format du fichier
+    expect(clientDocumentName("Relevé.docx", "pdf")).toBe("Relevé.docx.pdf");
+  });
+
+  it("nettoie le nom saisi", () => {
+    expect(clientDocumentName("  Relevé   de  mars  ", "pdf")).toBe(
+      "Relevé de mars.pdf",
+    );
+    expect(clientDocumentName("Relevé 03/2026", "pdf")).toBe(
+      "Relevé 03-2026.pdf",
+    );
+    expect(clientDocumentName("..\\..\\secret", "pdf")).toBe(
+      "..-..-secret.pdf",
+    );
+    expect(clientDocumentName("fac\u0000ture\n", "pdf")).toBe("facture.pdf");
+    // Ni point ni espace en fin de nom
+    expect(clientDocumentName("Relevé... ", "pdf")).toBe("Relevé.pdf");
+    expect(clientDocumentName("Relevé ..pdf", "pdf")).toBe("Relevé.pdf");
+  });
+
+  it("borne la longueur, extension comprise", () => {
+    const long = clientDocumentName("a".repeat(300), "pdf");
+    expect(long).toHaveLength(200);
+    expect(long.endsWith("a.pdf")).toBe(true);
+  });
+
+  it("refuse un nom vide", () => {
+    for (const name of ["", "   ", ".pdf", "...", " . ", null, undefined]) {
+      expect(clientDocumentName(name, "pdf")).toBeNull();
+    }
+  });
+
+  it("nouvelle version d'un autre format : l'ancienne extension s'en va", () => {
+    expect(clientDocumentName("Carte grise.png", "pdf", "png")).toBe(
+      "Carte grise.pdf",
+    );
+    // Nom sans extension (renommé dans Newbi) : l'extension s'ajoute
+    expect(clientDocumentName("Carte grise", "pdf", "png")).toBe(
+      "Carte grise.pdf",
+    );
+  });
+});
+
+describe("documentExtension et withoutExtension", () => {
+  it("lit l'extension retenue au dépôt, sinon celle du nom", () => {
+    expect(documentExtension({ fileExtension: "PDF", name: "a.png" })).toBe(
+      "pdf",
+    );
+    expect(documentExtension({ originalName: "scan.JPG", name: "Scan" })).toBe(
+      "jpg",
+    );
+    expect(documentExtension({ name: "note.txt" })).toBe("txt");
+    expect(documentExtension({ name: "sans extension" })).toBe("");
+  });
+
+  it("retire l'extension seulement si le nom la porte", () => {
+    expect(withoutExtension("Relevé.PDF", "pdf")).toBe("Relevé");
+    expect(withoutExtension("Relevé.png", "pdf")).toBe("Relevé.png");
+    expect(withoutExtension("Relevé", "")).toBe("Relevé");
   });
 });

@@ -43,9 +43,12 @@ vi.mock("../../src/utils/documentShareEmails.js", () => ({
   },
 }));
 
+// Fichiers lus sur R2 (téléchargements, aperçus)
+const s3 = vi.hoisted(() => ({ read: [] }));
 vi.mock("@aws-sdk/client-s3", () => ({
   S3Client: class {
     async send(command) {
+      s3.read.push(command.input.Key);
       return { Body: Readable.from([`contenu:${command.input.Key}`]) };
     }
   },
@@ -57,22 +60,26 @@ vi.mock("@aws-sdk/client-s3", () => ({
 }));
 vi.mock("heic-convert", () => ({ default: async () => Buffer.from("") }));
 vi.mock("sharp", () => ({ default: () => ({}) }));
-// Fichiers envoyés vers R2 par un dépôt du client
-const r2 = vi.hoisted(() => ({ uploads: [] }));
+// Fichiers envoyés vers R2 par un dépôt du client, et retirés. `during` :
+// ce qui se passe pendant un envoi (un membre supprime le document…)
+const r2 = vi.hoisted(() => ({ uploads: [], deleted: [], during: null }));
 vi.mock("../../src/services/cloudflareService.js", () => ({
   default: {
-    deleteImage: async () => {},
+    deleteImage: async (key) => {
+      r2.deleted.push(key);
+    },
     sharedDocumentsBucketName: "test",
     uploadImage: async (buffer, filename, userId, type, workspaceId) => {
       r2.uploads.push({ filename, userId, type, workspaceId, buffer });
       const key = `shared-documents/${workspaceId}/depot-${r2.uploads.length}`;
+      await r2.during?.();
       return { key, url: `https://r2.test/${key}` };
     },
   },
 }));
 
-// Stockage de l'espace : plein à la demande, envois enregistrés
-const storage = vi.hoisted(() => ({ full: false, recorded: [] }));
+// Stockage de l'espace : plein à la demande, envois et retraits enregistrés
+const storage = vi.hoisted(() => ({ full: false, recorded: [], deleted: [] }));
 vi.mock(
   "../../src/services/storage/storageService.js",
   async (importOriginal) => {
@@ -87,6 +94,9 @@ vi.mock(
       },
       recordStoredFile: async (file) => {
         storage.recorded.push(file);
+      },
+      recordStoredFileDeleted: async (file) => {
+        storage.deleted.push(file);
       },
     };
   },
@@ -263,9 +273,13 @@ beforeEach(async () => {
   mails.codes.clear();
   mails.approved.length = 0;
   mails.rejected.length = 0;
+  s3.read.length = 0;
   r2.uploads.length = 0;
+  r2.deleted.length = 0;
+  r2.during = null;
   storage.full = false;
   storage.recorded.length = 0;
+  storage.deleted.length = 0;
   await seedOrgMembership({
     userId: owner,
     organizationId: workspaceId,
@@ -1016,6 +1030,335 @@ describe("Dépôt de documents par le client", () => {
     await fetch(urlOf(share, "", `${q(session)}&refresh=1`));
     const saved = await DocumentShare.findById(share._id).lean();
     expect(saved.stats.totalViews).toBe(1);
+  });
+});
+
+const PDF_V2 = Buffer.from("%PDF-1.7\n% version corrigée\n%%EOF");
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+
+/** Renommage ou déplacement d'un document par le visiteur. */
+const editFile = (share, session, documentId, changes) =>
+  fetch(urlOf(share, `/files/${documentId}`), {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": clientIp,
+    },
+    body: JSON.stringify({ session, ...changes }),
+  });
+/** Nouvelle version d'un document (multipart, comme le navigateur). */
+const replaceFile = (share, session, documentId, file = {}) => {
+  const {
+    name = "scan-final.pdf",
+    content = PDF_V2,
+    type = "application/pdf",
+  } = file;
+  const form = new FormData();
+  form.append("file", new Blob([content], { type }), name);
+  return fetch(
+    urlOf(share, `/files/${documentId}/content`, session ? q(session) : ""),
+    { method: "PUT", body: form, headers: { "x-forwarded-for": clientIp } },
+  );
+};
+/** Accès ouvert au dépôt, visiteur identifié et un document déposé. */
+async function depositOne(file) {
+  const share = await createShare({ allowUploads: true });
+  const session = await identify(share);
+  const res = await upload(share, session, ids.shared, file);
+  expect(res.status).toBe(201);
+  const { document } = await res.json();
+  return { share, session, document };
+}
+/** Dépôts du client à la corbeille (le jeu de départ en a un de l'espace). */
+const trashedVersions = () =>
+  SharedDocument.find(
+    { trashedAt: { $ne: null }, "clientUpload.email": CLIENT },
+    null,
+    { sort: { createdAt: 1 } },
+  ).lean();
+
+describe("Modification de ses documents par le client", () => {
+  it("renomme ses documents : l'extension du fichier est gardée", async () => {
+    const { share, session, document } = await depositOne();
+
+    const res = await editFile(share, session, document.id, {
+      name: "  Relevé mars  ",
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).document).toMatchObject({
+      id: document.id,
+      name: "Relevé mars.pdf",
+      mine: true,
+    });
+
+    // Extension saisie (en majuscules) ou séparateur de chemin
+    await editFile(share, session, document.id, {
+      name: "Relevé 03/2026.PDF",
+    });
+    const saved = await SharedDocument.findById(document.id).lean();
+    expect(saved.name).toBe("Relevé 03-2026.pdf");
+    // Le téléchargement porte le nom choisi
+    expect(saved.originalName).toBe("Relevé 03-2026.pdf");
+    const download = await fetch(fileUrl(share, document.id, session));
+    expect(download.headers.get("content-disposition")).toContain(
+      "filename*=UTF-8''Relev%C3%A9%2003-2026.pdf",
+    );
+
+    const content = await getJson(share, session);
+    expect(content.documents.find((d) => d.id === document.id).name).toBe(
+      "Relevé 03-2026.pdf",
+    );
+
+    // Nom vide, réduit à l'extension, ou qui n'est pas un texte : refusé
+    for (const name of ["   ", ".pdf", "...", 42, null]) {
+      const refused = await editFile(share, session, document.id, { name });
+      expect(refused.status).toBe(400);
+    }
+    expect((await SharedDocument.findById(document.id).lean()).name).toBe(
+      "Relevé 03-2026.pdf",
+    );
+    // Rien à modifier
+    expect((await editFile(share, session, document.id, {})).status).toBe(400);
+  });
+
+  it("déplace ses documents dans un autre dossier de l'accès, jamais ailleurs", async () => {
+    const { share, session, document } = await depositOne();
+
+    const res = await editFile(share, session, document.id, {
+      folderId: String(ids.child),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).document.folderId).toBe(String(ids.child));
+
+    for (const folderId of [
+      String(ids.privateChild),
+      String(ids.underPrivate),
+      String(ids.trashedChild),
+      String(ids.sibling),
+      String(ids.otherWorkspace),
+      String(new ObjectId()),
+      "pas-un-dossier",
+      42,
+      null,
+    ]) {
+      const refused = await editFile(share, session, document.id, {
+        folderId,
+      });
+      expect(refused.status).toBe(404);
+    }
+    const saved = await SharedDocument.findById(document.id).lean();
+    expect(String(saved.folderId)).toBe(String(ids.child));
+    const content = await getJson(share, session);
+    expect(content.documents.find((d) => d.id === document.id).folderId).toBe(
+      String(ids.child),
+    );
+  });
+
+  it("ne touche ni aux documents d'un autre visiteur ni à ceux de l'espace", async () => {
+    const { share, session, document } = await depositOne();
+    const other = await identify(share, "associe@dupont.fr");
+
+    for (const [who, documentId, status] of [
+      [other, document.id, 403],
+      [session, docs.inShared, 403],
+      [session, docs.inChild, 403],
+      [session, docs.inSibling, 404],
+      [session, docs.inPrivate, 404],
+      [session, docs.trashed, 404],
+      [session, "pas-un-id", 404],
+    ]) {
+      const renamed = await editFile(share, who, documentId, { name: "Pris" });
+      expect(renamed.status).toBe(status);
+      const replaced = await replaceFile(share, who, documentId);
+      expect(replaced.status).toBe(status);
+    }
+    expect((await SharedDocument.findById(document.id).lean()).name).toBe(
+      "releve.pdf",
+    );
+    expect((await SharedDocument.findById(docs.inShared).lean()).name).toBe(
+      "devis.pdf",
+    );
+    // Seul le dépôt initial est parti vers R2
+    expect(r2.uploads).toHaveLength(1);
+  });
+
+  it("dépôt refermé, visiteur retiré ou sans session : refusé", async () => {
+    const { share, session, document } = await depositOne();
+
+    expect(
+      (await editFile(share, null, document.id, { name: "A" })).status,
+    ).toBe(401);
+    expect((await replaceFile(share, null, document.id)).status).toBe(401);
+
+    await DocumentShare.updateOne({ _id: share._id }, { allowUploads: false });
+    expect(
+      (await editFile(share, session, document.id, { name: "A" })).status,
+    ).toBe(403);
+    expect((await replaceFile(share, session, document.id)).status).toBe(403);
+
+    await DocumentShare.updateOne(
+      { _id: share._id },
+      { allowUploads: true, $push: { bannedEmails: { email: CLIENT } } },
+    );
+    expect(
+      (await editFile(share, session, document.id, { name: "A" })).status,
+    ).toBe(403);
+    expect((await replaceFile(share, session, document.id)).status).toBe(403);
+
+    expect((await SharedDocument.findById(document.id).lean()).name).toBe(
+      "releve.pdf",
+    );
+    expect(r2.uploads).toHaveLength(1);
+  });
+
+  it("abonnement échu : ni renommage, ni déplacement, ni nouvelle version", async () => {
+    const { share, session, document } = await depositOne();
+    await mongoose.connection.db.collection("subscription").deleteMany({});
+    invalidateSubCache(ws);
+
+    const renamed = await editFile(share, session, document.id, {
+      name: "Autre nom",
+    });
+    expect(renamed.status).toBe(403);
+    expect((await renamed.json()).message).toContain("ne peuvent pas être");
+    expect(
+      (
+        await editFile(share, session, document.id, {
+          folderId: String(ids.child),
+        })
+      ).status,
+    ).toBe(403);
+    expect((await replaceFile(share, session, document.id)).status).toBe(403);
+    expect(r2.uploads).toHaveLength(1);
+  });
+
+  it("remplace le fichier par une nouvelle version, l'ancienne part à la corbeille", async () => {
+    const { share, session, document } = await depositOne();
+    // Côté espace, un membre a annoté le document
+    await SharedDocument.updateOne(
+      { _id: document.id },
+      {
+        tags: ["à vérifier"],
+        $push: { comments: { text: "Il manque la page 2" } },
+      },
+    );
+    const before = await SharedDocument.findById(document.id).lean();
+
+    const res = await replaceFile(share, session, document.id);
+    expect(res.status).toBe(200);
+    expect((await res.json()).document).toMatchObject({
+      id: document.id,
+      name: "releve.pdf",
+      fileSize: PDF_V2.length,
+      folderId: String(ids.shared),
+      mine: true,
+    });
+
+    // Même document : nom, dossier, tags et commentaires gardés
+    const saved = await SharedDocument.findById(document.id).lean();
+    expect(saved).toMatchObject({
+      name: "releve.pdf",
+      fileKey: `shared-documents/${ws}/depot-2`,
+      fileSize: PDF_V2.length,
+      tags: ["à vérifier"],
+      trashedAt: null,
+    });
+    expect(saved.comments.map((c) => c.text)).toEqual(["Il manque la page 2"]);
+    expect(saved.fileHash).not.toBe(before.fileHash);
+    expect(storage.recorded.map((file) => file.size)).toEqual([
+      PDF.length,
+      PDF_V2.length,
+    ]);
+    expect(storage.deleted).toHaveLength(0);
+
+    // L'ancienne version, à la corbeille de l'espace (restaurable)
+    const [previous] = await trashedVersions();
+    expect(previous).toMatchObject({
+      name: "releve (ancienne version).pdf",
+      fileKey: before.fileKey,
+      fileSize: PDF.length,
+      fileHash: before.fileHash,
+      workspaceId,
+      originalFolderId: ids.shared,
+      uploadedByName: before.uploadedByName,
+      clientUpload: { shareId: share._id, email: CLIENT },
+    });
+    expect(previous.comments).toEqual([]);
+
+    // Le visiteur ne voit que la nouvelle version, et la télécharge
+    const content = await getJson(share, session);
+    const mine = content.documents.filter((d) => d.mine);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ id: document.id, fileSize: PDF_V2.length });
+    const download = await fetch(fileUrl(share, document.id, session));
+    expect(download.status).toBe(200);
+    expect(s3.read).toEqual([saved.fileKey]);
+
+    const stats = await DocumentShare.findById(share._id).lean();
+    expect(stats.stats.totalUploads).toBe(2);
+  });
+
+  it("une nouvelle version d'un autre format change l'extension du nom", async () => {
+    const { share, session, document } = await depositOne({
+      name: "IMG_2034.png",
+      content: PNG,
+      type: "image/png",
+    });
+    await editFile(share, session, document.id, { name: "Carte grise" });
+
+    const res = await replaceFile(share, session, document.id, {
+      name: "scan.pdf",
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).document).toMatchObject({
+      name: "Carte grise.pdf",
+      mimeType: "application/pdf",
+    });
+    const [previous] = await trashedVersions();
+    expect(previous).toMatchObject({
+      name: "Carte grise (ancienne version).png",
+      mimeType: "image/png",
+    });
+  });
+
+  it("nouvelle version refusée (format, contenu, espace plein) : rien ne change", async () => {
+    const { share, session, document } = await depositOne();
+    const html = Buffer.from("<html><script>alert(1)</script></html>");
+    const cases = [
+      [{ name: "page.html", content: html, type: "text/html" }, 415],
+      [{ name: "facture.pdf", content: html }, 415],
+      [{ name: "vide.pdf", content: Buffer.alloc(0) }, 400],
+    ];
+    for (const [file, status] of cases) {
+      expect(
+        (await replaceFile(share, session, document.id, file)).status,
+      ).toBe(status);
+    }
+    storage.full = true;
+    expect((await replaceFile(share, session, document.id)).status).toBe(507);
+
+    expect(r2.uploads).toHaveLength(1);
+    expect(await trashedVersions()).toHaveLength(0);
+    const saved = await SharedDocument.findById(document.id).lean();
+    expect(saved.fileSize).toBe(PDF.length);
+  });
+
+  it("document supprimé pendant l'envoi : le nouveau fichier est retiré", async () => {
+    const { share, session, document } = await depositOne();
+    r2.during = () =>
+      SharedDocument.updateOne({ _id: document.id }, { trashedAt: new Date() });
+
+    const res = await replaceFile(share, session, document.id);
+    expect(res.status).toBe(404);
+    const sent = `shared-documents/${ws}/depot-2`;
+    expect(r2.deleted).toEqual([sent]);
+    expect(storage.deleted).toMatchObject([
+      { workspaceId: ws, key: sent, size: PDF_V2.length },
+    ]);
+    // Aucune « ancienne version » : le document supprimé garde son fichier
+    const trashed = await trashedVersions();
+    expect(trashed).toHaveLength(1);
+    expect(trashed[0].fileKey).toBe(`shared-documents/${ws}/depot-1`);
   });
 });
 
