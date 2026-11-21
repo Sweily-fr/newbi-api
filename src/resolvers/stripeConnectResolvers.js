@@ -682,7 +682,7 @@ const stripeConnectResolvers = {
 
         const fileTransfer = await findTransferWithKey(transferId, accessKey);
         if (!fileTransfer) {
-          return { success: false, message: "Invalid credentials" };
+          return { success: false, message: "Lien de transfert invalide." };
         }
         if (fileTransfer.isExpired() || fileTransfer.status !== "active") {
           return { success: false, message: "Ce transfert a expiré." };
