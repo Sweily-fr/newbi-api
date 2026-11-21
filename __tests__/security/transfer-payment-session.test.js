@@ -283,7 +283,7 @@ describe("createPaymentSessionForFileTransfer : clé d'accès exigée", () => {
 
 describe("Site de retour du payeur", () => {
   const frontendInitial = process.env.FRONTEND_URL;
-  const LAN = "http://192.168.1.99:3000";
+  const LAN = "http://192.168.0.10:3000";
 
   beforeEach(() => {
     // Poste de développement : FRONTEND_URL sur l'adresse réseau (tests sur
