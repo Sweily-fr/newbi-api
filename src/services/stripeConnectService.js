@@ -141,6 +141,7 @@ export async function saveOAuthConnection({
         ? existing.accountId
         : null;
     Object.assign(existing, fields);
+    if (!existing.userId && userId) existing.userId = userId;
     await existing.save();
     // Autre compte Stripe du client connecté à la place : l'ancien accès est
     // retiré

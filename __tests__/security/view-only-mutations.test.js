@@ -123,6 +123,7 @@ const OPEN_TO_ANY_MEMBER = {
     "updateInvitedUserProfile",
     "logoutInvitedUser",
     "createPaymentSessionForFileTransfer",
+    "confirmTransferPayment",
     "consumePaymentReturnToken",
     // Code de vérification de l'adresse d'un visiteur (lien de partage)
     "requestInvitedEmailCode",

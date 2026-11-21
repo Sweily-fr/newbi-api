@@ -197,8 +197,12 @@ const stripeConnectResolvers = {
           ERROR_CODES.UNAUTHENTICATED,
         );
       }
-      if (!organizationId || !canSeePaymentConnections(permissionLevels)) {
-        return NO_PAYMENT_CONNECTIONS;
+      if (!organizationId) return NO_PAYMENT_CONNECTIONS;
+      if (!canSeePaymentConnections(permissionLevels)) {
+        throw new AppError(
+          "Votre rôle ne permet pas de voir les moyens d'encaissement",
+          ERROR_CODES.FORBIDDEN,
+        );
       }
       return getPaymentConnections(organizationId);
     },

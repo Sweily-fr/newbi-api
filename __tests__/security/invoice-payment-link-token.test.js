@@ -31,6 +31,9 @@ vi.mock("../../src/services/stripeConnectService.js", () => ({
   default: {
     createInvoicePaymentSession: (...args) => stripeSession.create(...args),
   },
+  // Ancien compte Express : retour sur la page de succès du site
+  isDirectStripeAccount: (account) => account?.connectionType === "oauth",
+  apiPublicUrl: () => "http://localhost:4000",
 }));
 
 process.env.STRIPE_SECRET_KEY = "sk_test_dummy";

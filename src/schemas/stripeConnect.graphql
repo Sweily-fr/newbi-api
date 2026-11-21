@@ -3,7 +3,8 @@
 # Type pour représenter un compte Stripe Connect
 type StripeConnectAccount {
   id: ID!
-  userId: ID!
+  # Membre qui a connecté le compte (absent sur de très anciens comptes)
+  userId: ID
   accountId: String!
   isOnboarded: Boolean!
   chargesEnabled: Boolean!
