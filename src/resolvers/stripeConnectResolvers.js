@@ -1,7 +1,11 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
-import stripeConnectService from "../services/stripeConnectService.js";
+import stripeConnectService, {
+  deauthorizeStripeAccount,
+  isDirectStripeAccount,
+} from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
+import PaypalMerchantAccount from "../models/PaypalMerchantAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import {
@@ -10,6 +14,39 @@ import {
 } from "../middlewares/rbac.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { isFeatureEnabled } from "../utils/featureAccess.js";
+import { isPaypalConfigured } from "../services/paypalService.js";
+import {
+  getPaymentConnections,
+  refreshTransferPayment,
+  startOnlinePayment,
+} from "../services/transferPaymentService.js";
+
+// Adresse PayPal : forme simple (PayPal vérifie le compte au paiement)
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+// Moyens d'encaissement : visibles par qui voit les applications ou crée
+// des transferts (le formulaire de création en a besoin)
+function canSeePaymentConnections(permissionLevels) {
+  return (
+    levelsAllowLevel(permissionLevels, "integrations", "read") ||
+    levelsAllowLevel(permissionLevels, "fileTransfers", "read")
+  );
+}
+
+const NO_PAYMENT_CONNECTIONS = {
+  stripe: {
+    connected: false,
+    ready: false,
+    legacy: false,
+    oauthAvailable: false,
+    chargesEnabled: false,
+    displayName: null,
+    accountEmail: null,
+  },
+  paypal: { available: false, connected: false, email: null },
+  bankTransfer: { available: false, ibanLast4: null },
+};
 
 // In-memory rate limit for payment session creation
 const RATE_LIMIT_IP_WINDOW = 60 * 1000; // 1 minute
@@ -143,6 +180,27 @@ const stripeConnectResolvers = {
           `Erreur lors de la récupération du compte Stripe Connect: ${error.message}`,
         );
       }
+    },
+
+    /**
+     * Moyens d'encaissement de l'espace actif : compte Stripe, compte
+     * PayPal, IBAN (réglages des applications, transferts payants).
+     */
+    paymentConnections: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
+      if (!user) {
+        throw new AppError(
+          "Vous devez être connecté pour accéder à cette ressource",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
+      }
+      if (!organizationId || !canSeePaymentConnections(permissionLevels)) {
+        return NO_PAYMENT_CONNECTIONS;
+      }
+      return getPaymentConnections(organizationId);
     },
   },
 
@@ -449,6 +507,10 @@ const stripeConnectResolvers = {
         } else {
           // Supprimer le compte
           await StripeConnectAccount.deleteOne({ organizationId });
+          // Compte du client connecté par OAuth : Newbi n'y a plus accès
+          if (isDirectStripeAccount(account)) {
+            await deauthorizeStripeAccount(account.accountId);
+          }
         }
 
         return {
@@ -469,7 +531,7 @@ const stripeConnectResolvers = {
      */
     createPaymentSessionForFileTransfer: async (
       _,
-      { transferId, accessKey },
+      { transferId, accessKey, provider },
       { req },
     ) => {
       try {
@@ -534,8 +596,8 @@ const stripeConnectResolvers = {
           return invalidCredentials;
         }
 
-        // Reject expired transfers
-        if (fileTransfer.isExpired()) {
+        // Transfert expiré ou supprimé : plus payable
+        if (fileTransfer.isExpired() || fileTransfer.status !== "active") {
           return {
             success: false,
             message: "Transfer expired",
@@ -550,54 +612,11 @@ const stripeConnectResolvers = {
           };
         }
 
-        // Récupérer le compte Stripe Connect du propriétaire du transfert
-        const stripeConnectAccount = await StripeConnectAccount.findOne({
-          userId: fileTransfer.userId,
-        });
-        if (!stripeConnectAccount) {
-          return {
-            success: false,
-            message:
-              "Le propriétaire du transfert n'a pas de compte Stripe Connect configuré",
-          };
-        }
-
-        // Generate single-use opaque return token (credentials stay out of Stripe logs)
-        const paymentReturnToken = crypto.randomBytes(16).toString("hex");
-        await FileTransfer.updateOne(
-          { _id: fileTransfer._id },
-          {
-            $set: {
-              paymentReturnToken,
-              paymentReturnTokenExpiresAt: new Date(
-                Date.now() + 60 * 60 * 1000,
-              ),
-              paymentReturnTokenConsumed: false,
-            },
-          },
-        );
-
-        // Build URLs with opaque token instead of shareLink+accessKey
-        const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-        const successUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=success`;
-        const cancelUrl = `${baseUrl}/transfer/return?token=${paymentReturnToken}&status=cancel`;
-
-        // Créer la session de paiement
-        const result = await stripeConnectService.createPaymentSession(
-          fileTransfer,
-          stripeConnectAccount.accountId,
-          successUrl,
-          cancelUrl,
-        );
-
-        // Si la création de la session a réussi, mettre à jour le transfert avec l'ID de session
-        if (result.success && result.sessionId) {
-          fileTransfer.paymentSessionId = result.sessionId;
-          fileTransfer.paymentSessionUrl = result.sessionUrl;
-          await fileTransfer.save();
-        }
-
-        return result;
+        // Paiement créé sur le compte du vendeur (compte Stripe de l'espace
+        // connecté par OAuth, ou son compte PayPal) : jeton de retour opaque,
+        // le lien et la clé du transfert restent hors des journaux des
+        // prestataires
+        return await startOnlinePayment(fileTransfer, provider || "stripe");
       } catch (error) {
         logger.error(
           "Erreur lors de la création de la session de paiement:",
@@ -605,9 +624,159 @@ const stripeConnectResolvers = {
         );
         return {
           success: false,
-          message: `Erreur lors de la création de la session de paiement: ${error.message}`,
+          message:
+            "Le paiement n'a pas pu être lancé. Réessayez dans quelques instants.",
         };
       }
+    },
+
+    /**
+     * Retour du payeur (Stripe ou PayPal) : paiement vérifié auprès du
+     * prestataire, transfert débloqué s'il est payé, lien et clé du
+     * transfert renvoyés pour y revenir. Le jeton reste valable jusqu'à son
+     * expiration (rechargement de la page de retour).
+     */
+    confirmTransferPayment: async (
+      _,
+      { token, provider, sessionId, orderId },
+    ) => {
+      const invalid = {
+        success: false,
+        message: "Lien de retour invalide ou expiré",
+      };
+      try {
+        if (typeof token !== "string" || !/^[a-f0-9]{32}$/.test(token)) {
+          return invalid;
+        }
+        const fileTransfer = await FileTransfer.findOne({
+          paymentReturnToken: token,
+        });
+        if (
+          !fileTransfer ||
+          (fileTransfer.paymentReturnTokenExpiresAt &&
+            new Date() > fileTransfer.paymentReturnTokenExpiresAt)
+        ) {
+          return invalid;
+        }
+        if (fileTransfer.isExpired() || fileTransfer.status !== "active") {
+          return { success: false, message: "Ce transfert a expiré" };
+        }
+
+        const result = await refreshTransferPayment(fileTransfer, {
+          force: true,
+          provider: ["stripe", "paypal"].includes(provider)
+            ? provider
+            : undefined,
+          sessionId: typeof sessionId === "string" ? sessionId : undefined,
+          orderId: typeof orderId === "string" ? orderId : undefined,
+        });
+        if (!fileTransfer.paymentReturnTokenConsumed) {
+          await FileTransfer.updateOne(
+            { _id: fileTransfer._id },
+            { $set: { paymentReturnTokenConsumed: true } },
+          );
+        }
+        return {
+          success: true,
+          message: result.message || null,
+          status: result.status === "free" ? "paid" : result.status,
+          shareLink: fileTransfer.shareLink,
+          accessKey: fileTransfer.accessKey,
+        };
+      } catch (error) {
+        logger.error(
+          "Erreur à la confirmation d'un paiement de transfert:",
+          error,
+        );
+        return { success: false, message: "Erreur interne" };
+      }
+    },
+
+    /**
+     * Compte PayPal Business de l'espace : son adresse e-mail suffit, PayPal
+     * verse l'argent directement sur ce compte.
+     */
+    connectPaypal: async (
+      _,
+      { email },
+      { user, organizationId, permissionLevels },
+    ) => {
+      if (!user) {
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
+      }
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+      if (!canManageIntegrations(permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de connecter PayPal",
+        };
+      }
+      if (!isFeatureEnabled("transferPayments", organizationId)) {
+        return {
+          success: false,
+          message:
+            "Cette fonctionnalité n'est pas encore disponible pour votre espace.",
+        };
+      }
+      if (!isPaypalConfigured()) {
+        return {
+          success: false,
+          message: "Le paiement par PayPal n'est pas encore disponible.",
+        };
+      }
+      const normalized = String(email || "")
+        .trim()
+        .toLowerCase();
+      if (normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
+        return {
+          success: false,
+          message: "Adresse e-mail PayPal invalide",
+        };
+      }
+      await PaypalMerchantAccount.findOneAndUpdate(
+        { organizationId: String(organizationId) },
+        {
+          $set: { email: normalized, connectedBy: user._id },
+          $setOnInsert: { organizationId: String(organizationId) },
+        },
+        { upsert: true, new: true },
+      );
+      return {
+        success: true,
+        message: "Compte PayPal connecté",
+        email: normalized,
+      };
+    },
+
+    disconnectPaypal: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
+      if (!user) {
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
+      }
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+      if (!canManageIntegrations(permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de déconnecter PayPal",
+        };
+      }
+      await PaypalMerchantAccount.deleteOne({
+        organizationId: String(organizationId),
+      });
+      return { success: true, message: "Compte PayPal déconnecté" };
     },
 
     /**
@@ -655,6 +824,7 @@ const stripeConnectResolvers = {
 const STRIPE_CONNECT_BLOCK = [
   "createStripeConnectAccount",
   "generateStripeOnboardingLink",
+  "connectPaypal",
 ];
 STRIPE_CONNECT_BLOCK.forEach((name) => {
   const original = stripeConnectResolvers.Mutation[name];
@@ -677,15 +847,21 @@ STRIPE_CONNECT_BLOCK.forEach((name) => {
 // les headers client (x-user-role / x-organization-id) par les valeurs vérifiées
 // par RBAC (context.organizationId et context.userRole). Empêche l'escalade de
 // rôle et la suppression du Stripe Connect d'une autre organisation.
-// createPaymentSessionForFileTransfer / consumePaymentReturnToken restent publics
-// (paiement par un client externe), donc volontairement non enveloppés.
-const STRIPE_CONNECT_ORG_SCOPED_QUERIES = ["myStripeConnectAccount"];
+// createPaymentSessionForFileTransfer / confirmTransferPayment /
+// consumePaymentReturnToken restent publics (paiement par un client
+// externe), donc volontairement non enveloppés.
+const STRIPE_CONNECT_ORG_SCOPED_QUERIES = [
+  "myStripeConnectAccount",
+  "paymentConnections",
+];
 const STRIPE_CONNECT_ORG_SCOPED_MUTATIONS = [
   "createStripeConnectAccount",
   "generateStripeOnboardingLink",
   "checkStripeConnectAccountStatus",
   "generateStripeDashboardLink",
   "disconnectStripe",
+  "connectPaypal",
+  "disconnectPaypal",
 ];
 STRIPE_CONNECT_ORG_SCOPED_QUERIES.forEach((name) => {
   const original = stripeConnectResolvers.Query[name];

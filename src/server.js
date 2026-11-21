@@ -71,7 +71,10 @@ import {
 import {
   redirectToInvoicePayment,
   handleInvoicePaymentWebhook,
+  handleInvoicePaymentReturn,
 } from "./controllers/invoicePaymentController.js";
+import { handleStripeConnectWebhook } from "./controllers/stripeConnectWebhookController.js";
+import stripeConnectOAuthRoutes from "./routes/stripe-connect-oauth.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
 import { createGracefulShutdown } from "./utils/gracefulShutdown.js";
@@ -369,6 +372,16 @@ async function startServer() {
     handleInvoicePaymentWebhook,
   );
 
+  // Webhook des comptes Stripe connectés par OAuth (paiements créés sur le
+  // compte du client : transferts payants, factures ; état des comptes).
+  // Endpoint Stripe « Connected accounts », secret propre :
+  // STRIPE_CONNECT_WEBHOOK_SECRET. Body brut, AVANT express.json.
+  app.post(
+    "/webhook/stripe-connect",
+    express.raw({ type: "application/json" }),
+    handleStripeConnectWebhook,
+  );
+
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
 
@@ -409,6 +422,16 @@ async function startServer() {
     invoicePaymentLimiter,
     redirectToInvoicePayment,
   );
+  // Retour de Stripe après le paiement d'une facture sur le compte du client
+  // (connexion OAuth) : paiement vérifié tout de suite, puis page de succès
+  app.get(
+    "/pay/invoice/:invoiceId/return",
+    invoicePaymentLimiter,
+    handleInvoicePaymentReturn,
+  );
+
+  // Connexion du compte Stripe du client par OAuth
+  app.use("/stripe-connect", stripeConnectOAuthRoutes);
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);

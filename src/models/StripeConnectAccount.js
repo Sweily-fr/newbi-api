@@ -35,6 +35,42 @@ const stripeConnectAccountSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Mode de connexion :
+    // - « express » (ancien parcours) : compte Express créé par Newbi ; les
+    //   paiements passent par le compte Stripe de Newbi (destination
+    //   charges), qui en paie les frais ;
+    // - « oauth » : compte Stripe du client rattaché par OAuth ; les
+    //   paiements sont créés directement sur son compte, frais Stripe à sa
+    //   charge, sans passer par le compte de Newbi.
+    // Les documents antérieurs n'ont pas le champ : ancien parcours.
+    connectionType: {
+      type: String,
+      enum: ["express", "oauth"],
+      default: "express",
+    },
+    livemode: {
+      type: Boolean,
+    },
+    // Nom et e-mail du compte, affichés dans les réglages
+    displayName: {
+      type: String,
+      trim: true,
+    },
+    accountEmail: {
+      type: String,
+      trim: true,
+    },
+    connectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    connectedAt: {
+      type: Date,
+    },
+    // Compte Express remplacé par la connexion OAuth (trace)
+    replacedAccountId: {
+      type: String,
+    },
   },
   { timestamps: true },
 );

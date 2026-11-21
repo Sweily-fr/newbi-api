@@ -41,6 +41,14 @@ import {
 } from "../utils/transferOptions.js";
 import { deleteTransferStorage } from "../utils/transferStorage.js";
 import {
+  getBankTransferDetails,
+  getSellerName,
+  markTransferPaidManually,
+  prepareTransferPayment,
+  refreshTransferPayment,
+  transferPaymentMethods,
+} from "../services/transferPaymentService.js";
+import {
   assertStorageAvailable,
   recordStoredFile,
   recordTransferRemoved,
@@ -245,7 +253,7 @@ const fileTransferResolvers = {
     // Obtenir les informations d'un transfert de fichiers par son lien de partage et sa clé d'accès
     getFileTransferByLink: async (_, { shareLink, accessKey }) => {
       try {
-        const fileTransfer = await FileTransfer.findOne({
+        let fileTransfer = await FileTransfer.findOne({
           shareLink,
           accessKey,
           status: "active",
@@ -267,6 +275,32 @@ const fileTransferResolvers = {
             fileTransfer: null,
           };
         }
+
+        // Paiement en ligne lancé et pas encore constaté (payeur parti avant
+        // le retour, capture PayPal en attente, webhook absent) : vérifié
+        // auprès du prestataire, au plus une fois par intervalle
+        let paymentStatus = null;
+        if (
+          fileTransfer.isPaymentRequired &&
+          !fileTransfer.isPaid &&
+          fileTransfer.paymentAttempt?.reference
+        ) {
+          try {
+            paymentStatus = (await refreshTransferPayment(fileTransfer)).status;
+            if (paymentStatus === "paid") {
+              fileTransfer =
+                (await FileTransfer.findById(fileTransfer._id)) || fileTransfer;
+            }
+          } catch (error) {
+            logger.warn(
+              `[FileTransfer] Vérification du paiement de ${fileTransfer._id} : ${error.message}`,
+            );
+          }
+        }
+        const paymentPending =
+          !fileTransfer.isPaid &&
+          (paymentStatus === "pending" ||
+            fileTransfer.paymentAttempt?.status === "pending");
 
         // Préparer les informations de paiement
         const paymentInfo = {
@@ -297,6 +331,14 @@ const fileTransferResolvers = {
           paymentAmount: fileTransfer.paymentAmount,
           paymentCurrency: fileTransfer.paymentCurrency,
           isPaid: fileTransfer.isPaid,
+          // Transfert payant : moyens proposés, paiement en attente de
+          // confirmation, vendeur, coordonnées de virement (non payé)
+          paymentMethods: transferPaymentMethods(fileTransfer),
+          paymentPending,
+          sellerName: fileTransfer.isPaymentRequired
+            ? await getSellerName(fileTransfer.workspaceId)
+            : null,
+          bankTransferDetails: await getBankTransferDetails(fileTransfer),
           status: fileTransfer.status,
           downloadCount: fileTransfer.downloadCount,
           message: passwordProtected ? null : fileTransfer.message || null,
@@ -344,6 +386,15 @@ const fileTransferResolvers = {
         user.id,
       );
     },
+    // Anciens transferts payants sans liste : carte seule
+    paymentMethods: (fileTransfer) =>
+      fileTransfer.isPaymentRequired
+        ? transferPaymentMethods(fileTransfer)
+        : [],
+    paymentPending: (fileTransfer) =>
+      fileTransfer.paymentPending ??
+      (!fileTransfer.isPaid &&
+        fileTransfer.paymentAttempt?.status === "pending"),
   },
 
   Mutation: {
@@ -484,6 +535,30 @@ const fileTransferResolvers = {
             "FILE_TRANSFER_RENAME_ERROR",
           );
         }
+      },
+    ),
+
+    // Débloquer un transfert payant réglé autrement (virement, espèces…) :
+    // même droit que le renommage, sur ses propres transferts
+    markFileTransferAsPaid: onTransferWorkspace(requireTransferAction("edit"))(
+      async (_, { id }, { user }) => {
+        const fileTransfer = await FileTransfer.findOne({
+          _id: id,
+          userId: user.id,
+          status: { $ne: "deleted" },
+        });
+        if (!fileTransfer) {
+          throw new UserInputError("Transfert de fichiers non trouvé");
+        }
+        if (!fileTransfer.isPaymentRequired) {
+          throw new UserInputError("Ce transfert ne demande pas de paiement");
+        }
+        if (fileTransfer.isPaid) return fileTransfer;
+        const result = await markTransferPaidManually(
+          fileTransfer,
+          user._id || user.id,
+        );
+        return result.transfer || fileTransfer;
       },
     ),
 
@@ -666,7 +741,17 @@ const fileTransferResolvers = {
             paymentAmount,
             paymentCurrency,
             isPaymentRequired,
+            paymentMethods: requestedPaymentMethods,
           } = normalizeTransferCreationOptions(input);
+          // Transfert payant : moyens d'encaissement de l'espace vérifiés
+          // avant de copier les documents
+          const { paymentMethods, paymentReference } =
+            await prepareTransferPayment({
+              workspaceId,
+              isPaymentRequired,
+              paymentMethods: requestedPaymentMethods,
+              hasWatermark: Boolean(input?.hasWatermark),
+            });
 
           // Destinataire unique et message borné ; e-mails plafonnés par jour
           const { recipientEmail, message } =
@@ -901,6 +986,8 @@ const fileTransferResolvers = {
             isPaymentRequired,
             paymentAmount,
             paymentCurrency,
+            paymentMethods,
+            paymentReference,
             recipientEmail,
             message,
             uploadMethod: "direct",
@@ -1001,6 +1088,9 @@ fileTransferResolvers.Mutation = Object.fromEntries(
 );
 
 // Envois hérités sans effet (voir retiredTransferUploads.js)
-retireTransferUploads(fileTransferResolvers, RETIRED_TRANSFER_UPLOADS.fileTransfer);
+retireTransferUploads(
+  fileTransferResolvers,
+  RETIRED_TRANSFER_UPLOADS.fileTransfer,
+);
 
 export default fileTransferResolvers;

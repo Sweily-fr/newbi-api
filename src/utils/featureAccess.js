@@ -5,7 +5,7 @@
  *
  * BETA_FEATURES       fonctionnalités réservées, séparées par des virgules
  *                     (vat, urssaf, appointments, documentShares,
- *                     socialPublishing, emailCampaigns) ;
+ *                     socialPublishing, emailCampaigns, transferPayments) ;
  *                     « none » = aucune. Absente ou vide : toutes réservées
  *                     en production, aucune ailleurs (local, CI, staging),
  *                     pour qu'un oubli de variable n'ouvre rien à tout le
@@ -24,6 +24,7 @@ export const BETA_FEATURE_KEYS = Object.freeze([
   "documentShares",
   "socialPublishing",
   "emailCampaigns",
+  "transferPayments",
 ]);
 
 export const FEATURE_NOT_AVAILABLE = "FEATURE_NOT_AVAILABLE";

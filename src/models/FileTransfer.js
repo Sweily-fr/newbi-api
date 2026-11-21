@@ -123,6 +123,60 @@ const FileTransferSchema = new Schema(
     paymentDate: {
       type: Date,
     },
+    // Moyens proposés au destinataire d'un transfert payant. Absent sur les
+    // transferts antérieurs (carte seulement).
+    paymentMethods: {
+      type: [
+        {
+          type: String,
+          enum: ["stripe", "paypal", "bank_transfer"],
+        },
+      ],
+      default: undefined,
+    },
+    // Moyen par lequel le transfert a été réglé (manual : marqué payé par
+    // l'expéditeur, virement ou autre)
+    paymentProvider: {
+      type: String,
+      enum: ["stripe", "paypal", "manual"],
+    },
+    paidAmount: {
+      type: Number,
+    },
+    paidCurrency: {
+      type: String,
+    },
+    payerEmail: {
+      type: String,
+      trim: true,
+    },
+    paymentMarkedBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    // Référence à indiquer sur un virement
+    paymentReference: {
+      type: String,
+      trim: true,
+    },
+    // Dernier paiement en ligne lancé par le destinataire : session Stripe
+    // Checkout (sur le compte du vendeur) ou commande PayPal. Sert à
+    // vérifier le paiement au retour, au webhook, ou à la visite suivante.
+    paymentAttempt: {
+      provider: {
+        type: String,
+        enum: ["stripe", "paypal"],
+      },
+      reference: { type: String },
+      accountId: { type: String },
+      captureId: { type: String },
+      status: {
+        type: String,
+        enum: ["open", "pending", "failed"],
+      },
+      createdAt: { type: Date },
+      checkedAt: { type: Date },
+    },
     status: {
       type: String,
       enum: ["active", "expired", "deleted"],
@@ -193,6 +247,9 @@ const FileTransferSchema = new Schema(
     timestamps: true,
   },
 );
+
+// Retour d'un paiement : le transfert est retrouvé par son jeton
+FileTransferSchema.index({ paymentReturnToken: 1 }, { sparse: true });
 
 // Middleware pre-save pour hasher le mot de passe
 FileTransferSchema.pre("save", async function (next) {
