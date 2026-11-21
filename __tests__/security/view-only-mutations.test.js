@@ -125,6 +125,7 @@ const OPEN_TO_ANY_MEMBER = {
     "createPaymentSessionForFileTransfer",
     "confirmTransferPayment",
     "consumePaymentReturnToken",
+    "declareTransferBankPayment",
     // Code de vérification de l'adresse d'un visiteur (lien de partage)
     "requestInvitedEmailCode",
   ],

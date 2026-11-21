@@ -534,6 +534,8 @@ describe("moyens d'encaissement de l'espace", () => {
     expect(connections.bankTransfer).toEqual({
       available: true,
       ibanLast4: "0189",
+      // Pas de compte bancaire synchronisé : virements marqués à la main
+      autoDetect: false,
     });
   });
 

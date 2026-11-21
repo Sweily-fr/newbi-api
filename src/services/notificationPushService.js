@@ -88,8 +88,14 @@ export function buildNotificationPushData(notification, extra = {}) {
  * @returns {string|null}
  */
 export function pushPreferenceKey(notification, extra = {}) {
-  // Transfert de fichiers payé par son destinataire = paiement reçu
-  if (notification?.type === "TRANSFER_PAID") return "payment_received";
+  // Transfert de fichiers payé par son destinataire, ou virement annoncé =
+  // paiement reçu
+  if (
+    notification?.type === "TRANSFER_PAID" ||
+    notification?.type === "TRANSFER_BANK_DECLARED"
+  ) {
+    return "payment_received";
+  }
   if (notification?.type !== "DOCUMENT_IMPORTED") return null;
   const documentType = notification.data?.documentType;
   // Événement stocké dans la notification, sauf précision explicite

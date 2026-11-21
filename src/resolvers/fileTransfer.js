@@ -44,6 +44,8 @@ import {
   getBankTransferDetails,
   getSellerName,
   markTransferPaidManually,
+  maskEmail,
+  payerNotificationEmail,
   prepareTransferPayment,
   refreshTransferPayment,
   transferPaymentMethods,
@@ -339,6 +341,14 @@ const fileTransferResolvers = {
             ? await getSellerName(fileTransfer.workspaceId)
             : null,
           bankTransferDetails: await getBankTransferDetails(fileTransfer),
+          // Virement annoncé par le payeur, adresse (masquée) qui recevra le
+          // lien au déblocage. L'adresse complète reste réservée au vendeur.
+          bankTransferDeclaredAt: fileTransfer.isPaid
+            ? null
+            : fileTransfer.bankTransferDeclaration?.declaredAt || null,
+          notifyEmailHint: fileTransfer.isPaymentRequired
+            ? maskEmail(payerNotificationEmail(fileTransfer))
+            : null,
           status: fileTransfer.status,
           downloadCount: fileTransfer.downloadCount,
           message: passwordProtected ? null : fileTransfer.message || null,
@@ -395,6 +405,16 @@ const fileTransferResolvers = {
       fileTransfer.paymentPending ??
       (!fileTransfer.isPaid &&
         fileTransfer.paymentAttempt?.status === "pending"),
+    // Page publique : posé par getFileTransferByLink ; vendeur : lu sur le
+    // transfert
+    bankTransferDeclaredAt: (fileTransfer) =>
+      fileTransfer.bankTransferDeclaredAt !== undefined
+        ? fileTransfer.bankTransferDeclaredAt
+        : fileTransfer.bankTransferDeclaration?.declaredAt || null,
+    // Vendeur seulement (la page publique ne transmet pas l'annonce complète)
+    bankTransferDeclaredEmail: (fileTransfer) =>
+      fileTransfer.bankTransferDeclaration?.email || null,
+    notifyEmailHint: (fileTransfer) => fileTransfer.notifyEmailHint ?? null,
   },
 
   Mutation: {

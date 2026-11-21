@@ -129,6 +129,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "createPaymentSessionForFileTransfer",
     "confirmTransferPayment",
     "consumePaymentReturnToken",
+    "declareTransferBankPayment",
   ],
   // Retirer un accès ou un partage (jamais en ouvrir un)
   revokeAccess: [

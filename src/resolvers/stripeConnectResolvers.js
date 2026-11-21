@@ -17,6 +17,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 import { isFeatureEnabled } from "../utils/featureAccess.js";
 import { isPaypalConfigured } from "../services/paypalService.js";
 import {
+  declareBankTransfer,
   getPaymentConnections,
   refreshTransferPayment,
   startOnlinePayment,
@@ -56,21 +57,55 @@ const RATE_LIMIT_TRANSFER_MAX = 5;
 const rateLimitIpMap = new Map();
 const rateLimitTransferMap = new Map();
 
+// Annonces de virement (« J'ai fait le virement ») : compteurs à part, pour
+// ne pas consommer ceux du paiement en ligne
+const DECLARATION_TRANSFER_MAX = 10;
+const declarationIpMap = new Map();
+const declarationTransferMap = new Map();
+
 // Periodic cleanup of expired rate limit entries (every 5 min)
 setInterval(
   () => {
     const now = Date.now();
-    for (const [key, entry] of rateLimitIpMap) {
-      if (now - entry.windowStart > RATE_LIMIT_IP_WINDOW)
-        rateLimitIpMap.delete(key);
+    for (const map of [rateLimitIpMap, declarationIpMap]) {
+      for (const [key, entry] of map) {
+        if (now - entry.windowStart > RATE_LIMIT_IP_WINDOW) map.delete(key);
+      }
     }
-    for (const [key, entry] of rateLimitTransferMap) {
-      if (now - entry.windowStart > RATE_LIMIT_TRANSFER_WINDOW)
-        rateLimitTransferMap.delete(key);
+    for (const map of [rateLimitTransferMap, declarationTransferMap]) {
+      for (const [key, entry] of map) {
+        if (now - entry.windowStart > RATE_LIMIT_TRANSFER_WINDOW) {
+          map.delete(key);
+        }
+      }
     }
   },
   5 * 60 * 1000,
 ).unref();
+
+/**
+ * Transfert désigné par la page publique (identifiant + clé d'accès). Null si
+ * la clé manque ou ne correspond pas, si l'identifiant est mal formé ou si le
+ * transfert n'existe pas : l'appelant répond de la même façon, sans rien
+ * révéler.
+ */
+async function findTransferWithKey(transferId, accessKey) {
+  if (!accessKey || typeof accessKey !== "string") return null;
+  if (!mongoose.isValidObjectId(transferId)) return null;
+  const fileTransfer = await FileTransfer.findById(transferId);
+  if (!fileTransfer || !fileTransfer.accessKey) return null;
+  // Comparaison à temps constant
+  const provided = Buffer.from(accessKey);
+  const expected = Buffer.from(fileTransfer.accessKey);
+  if (
+    provided.length !== expected.length ||
+    !crypto.timingSafeEqual(provided, expected)
+  ) {
+    logger.warn("accessKey mismatch", { transferId });
+    return null;
+  }
+  return fileTransfer;
+}
 
 // Connecter, configurer ou synchroniser une application : module
 // « Applications et banques » (rôle prédéfini ou personnalisé)
@@ -572,32 +607,9 @@ const stripeConnectResolvers = {
         // Stripe ramène au transfert (lien et clé), il ne doit être remis
         // qu'à qui détient déjà le lien complet. Transfert absent, identifiant
         // mal formé ou mauvaise clé : même réponse, pour ne rien révéler.
-        const invalidCredentials = {
-          success: false,
-          message: "Invalid credentials",
-        };
-        if (!accessKey || typeof accessKey !== "string") {
-          return invalidCredentials;
-        }
-        if (!mongoose.isValidObjectId(transferId)) {
-          return invalidCredentials;
-        }
-
-        // Récupérer le transfert de fichiers
-        const fileTransfer = await FileTransfer.findById(transferId);
-        if (!fileTransfer || !fileTransfer.accessKey) {
-          return invalidCredentials;
-        }
-
-        // Comparaison à temps constant
-        const provided = Buffer.from(accessKey);
-        const expected = Buffer.from(fileTransfer.accessKey);
-        if (
-          provided.length !== expected.length ||
-          !crypto.timingSafeEqual(provided, expected)
-        ) {
-          logger.warn("accessKey mismatch", { transferId });
-          return invalidCredentials;
+        const fileTransfer = await findTransferWithKey(transferId, accessKey);
+        if (!fileTransfer) {
+          return { success: false, message: "Invalid credentials" };
         }
 
         // Transfert expiré ou supprimé : plus payable
@@ -632,6 +644,65 @@ const stripeConnectResolvers = {
           success: false,
           message:
             "Le paiement n'a pas pu être lancé. Réessayez dans quelques instants.",
+        };
+      }
+    },
+
+    /**
+     * « J'ai fait le virement » (page publique, clé d'accès exigée) : le
+     * vendeur est prévenu, le payeur peut laisser son e-mail pour recevoir
+     * le lien au déblocage. cancel : retire l'annonce.
+     */
+    declareTransferBankPayment: async (
+      _,
+      { transferId, accessKey, email, cancel },
+      { req },
+    ) => {
+      const tooMany = {
+        success: false,
+        message: "Trop de tentatives, réessayez dans quelques minutes.",
+      };
+      try {
+        if (
+          isRateLimited(
+            declarationIpMap,
+            getClientIp(req),
+            RATE_LIMIT_IP_WINDOW,
+            RATE_LIMIT_IP_MAX,
+          ) ||
+          isRateLimited(
+            declarationTransferMap,
+            String(transferId),
+            RATE_LIMIT_TRANSFER_WINDOW,
+            DECLARATION_TRANSFER_MAX,
+          )
+        ) {
+          return tooMany;
+        }
+
+        const fileTransfer = await findTransferWithKey(transferId, accessKey);
+        if (!fileTransfer) {
+          return { success: false, message: "Invalid credentials" };
+        }
+        if (fileTransfer.isExpired() || fileTransfer.status !== "active") {
+          return { success: false, message: "Ce transfert a expiré." };
+        }
+        if (!fileTransfer.isPaymentRequired) {
+          return {
+            success: false,
+            message: "Ce transfert ne nécessite pas de paiement.",
+          };
+        }
+        return await declareBankTransfer(fileTransfer, {
+          email,
+          cancel: cancel === true,
+        });
+      } catch (error) {
+        logger.error("Erreur lors de l'annonce d'un virement:", error);
+        return {
+          success: false,
+          message:
+            "Impossible d'enregistrer votre virement. Réessayez dans quelques instants.",
         };
       }
     },
@@ -854,8 +925,8 @@ STRIPE_CONNECT_BLOCK.forEach((name) => {
 // par RBAC (context.organizationId et context.userRole). Empêche l'escalade de
 // rôle et la suppression du Stripe Connect d'une autre organisation.
 // createPaymentSessionForFileTransfer / confirmTransferPayment /
-// consumePaymentReturnToken restent publics (paiement par un client
-// externe), donc volontairement non enveloppés.
+// consumePaymentReturnToken / declareTransferBankPayment restent publics
+// (paiement par un client externe), donc volontairement non enveloppés.
 const STRIPE_CONNECT_ORG_SCOPED_QUERIES = [
   "myStripeConnectAccount",
   "paymentConnections",

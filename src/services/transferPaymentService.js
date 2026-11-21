@@ -22,6 +22,7 @@ import { UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import PaypalMerchantAccount from "../models/PaypalMerchantAccount.js";
+import AccountBanking from "../models/AccountBanking.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
@@ -43,7 +44,11 @@ import {
   isPaypalId,
   summarizePaypalOrder,
 } from "./paypalService.js";
-import { buildTransferPaidEmail } from "../utils/transferPaymentEmails.js";
+import {
+  buildTransferBankDeclaredEmail,
+  buildTransferFilesAvailableEmail,
+  buildTransferPaidEmail,
+} from "../utils/transferPaymentEmails.js";
 import { createOriginChecker } from "../utils/corsOrigins.js";
 import { sendRenderedEmail } from "../utils/trialEmails.js";
 
@@ -150,19 +155,37 @@ export async function getSellerName(workspaceId) {
 }
 
 /**
+ * Compte bancaire de l'espace synchronisé par Bridge : les virements des
+ * transferts payants y sont repérés (référence NB-…) et débloquent le
+ * transfert sans action du vendeur.
+ */
+export async function hasConnectedBank(workspaceId) {
+  const orgId = workspaceKey(workspaceId);
+  if (!orgId) return false;
+  const account = await AccountBanking.exists({
+    workspaceId: orgId,
+    provider: "bridge",
+    status: "active",
+  });
+  return Boolean(account);
+}
+
+/**
  * Moyens d'encaissement de l'espace (réglages, formulaire de création).
  */
 export async function getPaymentConnections(workspaceId) {
   const orgId = workspaceKey(workspaceId);
-  const [stripeAccount, paypalAccount, organization] = await Promise.all([
-    orgId
-      ? StripeConnectAccount.findOne({ organizationId: orgId }).lean()
-      : null,
-    orgId
-      ? PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
-      : null,
-    loadOrganization(orgId),
-  ]);
+  const [stripeAccount, paypalAccount, organization, bankConnected] =
+    await Promise.all([
+      orgId
+        ? StripeConnectAccount.findOne({ organizationId: orgId }).lean()
+        : null,
+      orgId
+        ? PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
+        : null,
+      loadOrganization(orgId),
+      hasConnectedBank(orgId),
+    ]);
   const featureOpen = orgId
     ? isFeatureEnabled("transferPayments", orgId)
     : false;
@@ -186,6 +209,7 @@ export async function getPaymentConnections(workspaceId) {
     bankTransfer: {
       available: Boolean(iban),
       ibanLast4: iban ? iban.slice(-4) : null,
+      autoDetect: Boolean(iban && bankConnected),
     },
   };
 }
@@ -337,12 +361,24 @@ export async function markTransferPaid(
         ),
       );
     }
+    // Virement (repéré ou marqué par le vendeur) : le payeur n'est pas sur
+    // la page, il reçoit le lien par e-mail
+    if (provider === "manual" || provider === "bank_transfer") {
+      await notifyPayerFilesAvailable(updated).catch((error) =>
+        logger.error(
+          `[transfer-payment] E-mail au payeur du transfert ${updated._id} : ${error.message}`,
+        ),
+      );
+    }
     return { status: "paid", transfer: updated, newlyPaid: true };
   }
 
   const current = await FileTransfer.findById(transfer._id);
+  // Virement repéré après un « Marquer comme payé » : même paiement. Un
+  // second paiement en ligne, lui, est remboursé (ou signalé)
   const duplicate =
     provider !== "manual" &&
+    provider !== "bank_transfer" &&
     Boolean(paymentId) &&
     current?.paymentId !== paymentId;
   if (duplicate) {
@@ -405,6 +441,181 @@ export async function markTransferPaidManually(transfer, userId) {
 }
 
 // ---------------------------------------------------------------------------
+// Virement : annonce du payeur, repérage sur le compte du vendeur
+// ---------------------------------------------------------------------------
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Adresse masquée montrée sur la page publique : « j•••@gmail.com ». */
+export function maskEmail(email) {
+  const value = String(email || "").trim();
+  const at = value.lastIndexOf("@");
+  if (at < 1 || at === value.length - 1) return null;
+  return `${value[0]}•••${value.slice(at)}`;
+}
+
+/** Adresse prévenue au déblocage : celle laissée par le payeur, sinon le destinataire. */
+export function payerNotificationEmail(transfer) {
+  return (
+    transfer?.bankTransferDeclaration?.email || transfer?.recipientEmail || null
+  );
+}
+
+/**
+ * « J'ai fait le virement » (page publique, clé d'accès vérifiée par
+ * l'appelant) : le vendeur est prévenu une fois, un paiement en ligne encore
+ * ouvert est fermé (pas de second paiement), l'e-mail éventuel du payeur sert
+ * à lui envoyer le lien au déblocage. `cancel` retire l'annonce.
+ * @returns {Promise<{success: boolean, message?: string, declaredAt?: Date|null, notifyEmailHint?: string|null}>}
+ */
+export async function declareBankTransfer(
+  transfer,
+  { email, cancel = false } = {},
+) {
+  if (transfer.isPaid) return fail("Ce transfert est déjà payé.");
+  if (!transferPaymentMethods(transfer).includes("bank_transfer")) {
+    return fail(
+      "Le paiement par virement n'est pas proposé pour ce transfert.",
+    );
+  }
+
+  if (cancel) {
+    const reverted = await FileTransfer.findOneAndUpdate(
+      { _id: transfer._id, isPaid: { $ne: true } },
+      { $unset: { bankTransferDeclaration: 1 } },
+      { new: true },
+    );
+    if (!reverted) return fail("Ce transfert est déjà payé.");
+    return {
+      success: true,
+      declaredAt: null,
+      notifyEmailHint: maskEmail(payerNotificationEmail(reverted)),
+    };
+  }
+
+  let cleanEmail = null;
+  if (email != null && String(email).trim()) {
+    cleanEmail = String(email).trim().toLowerCase();
+    if (cleanEmail.length > 254 || !EMAIL_PATTERN.test(cleanEmail)) {
+      return fail("Adresse e-mail invalide.");
+    }
+  }
+
+  // Première annonce : posée atomiquement, le vendeur n'est prévenu qu'une fois
+  let updated = await FileTransfer.findOneAndUpdate(
+    {
+      _id: transfer._id,
+      isPaid: { $ne: true },
+      "bankTransferDeclaration.declaredAt": null,
+    },
+    {
+      $set: definedOnly({
+        "bankTransferDeclaration.declaredAt": new Date(),
+        "bankTransferDeclaration.email": cleanEmail || undefined,
+      }),
+    },
+    { new: true },
+  );
+  const firstDeclaration = Boolean(updated);
+  if (!updated) {
+    updated = cleanEmail
+      ? await FileTransfer.findOneAndUpdate(
+          { _id: transfer._id, isPaid: { $ne: true } },
+          { $set: { "bankTransferDeclaration.email": cleanEmail } },
+          { new: true },
+        )
+      : await FileTransfer.findOne({
+          _id: transfer._id,
+          isPaid: { $ne: true },
+        });
+  }
+  if (!updated) return fail("Ce transfert est déjà payé.");
+
+  if (firstDeclaration) {
+    await closeOpenAttempt(updated);
+    await notifyBankTransferDeclared(updated).catch((error) =>
+      logger.error(
+        `[transfer-payment] Annonce du virement de ${updated._id} : ${error.message}`,
+      ),
+    );
+  }
+  return {
+    success: true,
+    declaredAt: updated.bankTransferDeclaration?.declaredAt || null,
+    notifyEmailHint: maskEmail(payerNotificationEmail(updated)),
+  };
+}
+
+// Libellé bancaire comparable : majuscules, lettres et chiffres seulement
+// (« NB-7K3QXA », « nb 7k3qxa » et « NB7K3QXA » se valent)
+const compactLabel = (value) =>
+  String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+
+/**
+ * Virements reçus sur le compte bancaire synchronisé de l'espace : chaque
+ * crédit qui porte la référence d'un transfert payant non payé (et au moins
+ * son montant, dans sa devise) le débloque. Appelé après chaque
+ * synchronisation Bridge.
+ * @returns {Promise<string[]>} identifiants des transferts débloqués
+ */
+export async function detectTransferBankPayments(workspaceId, transactions) {
+  const orgId = workspaceKey(workspaceId);
+  if (!orgId || !Array.isArray(transactions)) return [];
+  const credits = transactions.filter((t) => Number(t?.amount) > 0);
+  if (!credits.length) return [];
+
+  const candidates = await FileTransfer.find({
+    workspaceId: orgId,
+    isPaymentRequired: true,
+    isPaid: { $ne: true },
+    status: "active",
+    paymentMethods: "bank_transfer",
+    paymentReference: { $type: "string" },
+  });
+  if (!candidates.length) return [];
+
+  const labelled = credits.map((transaction) => ({
+    transaction,
+    label: compactLabel(
+      `${transaction.reference || ""} ${transaction.description || ""}`,
+    ),
+  }));
+
+  const unlocked = [];
+  for (const transfer of candidates) {
+    const code = compactLabel(transfer.paymentReference);
+    if (code.length < 8) continue;
+    const currency = String(transfer.paymentCurrency || "EUR").toUpperCase();
+    const match = labelled.find(
+      ({ transaction, label }) =>
+        label.includes(code) &&
+        String(transaction.currency || "EUR").toUpperCase() === currency &&
+        toCents(transaction.amount) >= toCents(transfer.paymentAmount),
+    )?.transaction;
+    if (!match) continue;
+
+    const result = await markTransferPaid(transfer, {
+      provider: "bank_transfer",
+      paymentId: `bank:${match.externalId || match._id || transfer.paymentReference}`,
+      amount: Number(match.amount),
+      currency,
+      payerEmail: transfer.bankTransferDeclaration?.email || undefined,
+    });
+    if (result.newlyPaid) {
+      // Paiement en ligne encore ouvert : plus payable
+      await closeOpenAttempt(transfer);
+      unlocked.push(String(transfer._id));
+      logger.info(
+        `[transfer-payment] Virement ${transfer.paymentReference} repéré : transfert ${transfer._id} débloqué`,
+      );
+    }
+  }
+  return unlocked;
+}
+
+// ---------------------------------------------------------------------------
 // Paiement en ligne
 // ---------------------------------------------------------------------------
 
@@ -460,6 +671,12 @@ export async function startOnlinePayment(
       provider === "paypal"
         ? "Le paiement par PayPal n'est pas proposé pour ce transfert."
         : "Le paiement par carte n'est pas proposé pour ce transfert.",
+    );
+  }
+  // Virement annoncé : pas de second paiement en ligne
+  if (transfer.bankTransferDeclaration?.declaredAt) {
+    return fail(
+      "Vous avez indiqué avoir payé par virement. Si ce n'est pas le cas, annulez cette indication pour payer autrement.",
     );
   }
 
@@ -868,57 +1085,140 @@ export function formatTransferAmount(amount, currency = "EUR") {
   }
 }
 
-/** E-mail, notification dans l'appli et push au créateur du transfert. */
-export async function notifyTransferPaid(transfer) {
+const TRANSFERS_PAGE = "/dashboard/outils/transferts-fichiers";
+
+/** Notification dans l'appli (et push) au créateur du transfert. */
+async function notifySellerInApp(transfer, { type, title, message, amount }) {
+  const orgId = workspaceKey(transfer.workspaceId);
+  if (!orgId || !mongoose.Types.ObjectId.isValid(orgId)) return;
+  try {
+    const notification = await Notification.create({
+      userId: transfer.userId,
+      workspaceId: new mongoose.Types.ObjectId(orgId),
+      type,
+      title,
+      message,
+      data: { url: TRANSFERS_PAGE, amountTTC: amount },
+    });
+    const [{ publishNotification }, { sendNotificationPush }] =
+      await Promise.all([
+        import("../resolvers/notification.js"),
+        import("./notificationPushService.js"),
+      ]);
+    await publishNotification(notification).catch(() => {});
+    await sendNotificationPush(notification);
+  } catch (error) {
+    logger.warn(
+      `[transfer-payment] Notification in-app non créée : ${error.message}`,
+    );
+  }
+}
+
+/** Créateur du transfert, s'il accepte les e-mails « paiement reçu ». */
+async function sellerEmailRecipient(transfer) {
   const owner = await User.findById(transfer.userId)
     .select("email notificationPreferences")
     .lean();
-  if (!owner) return;
+  if (!owner?.email) return null;
+  if (owner.notificationPreferences?.payment_received?.email === false) {
+    return null;
+  }
+  return owner.email;
+}
+
+/** E-mail, notification dans l'appli et push au créateur du transfert. */
+export async function notifyTransferPaid(transfer) {
   const amount = formatTransferAmount(
     transfer.paidAmount ?? transfer.paymentAmount,
     transfer.paidCurrency || transfer.paymentCurrency,
   );
   const label = transfer.title ? `« ${transfer.title} »` : "votre transfert";
   const payer = transfer.payerEmail || "Votre client";
-  const url = "/dashboard/outils/transferts-fichiers";
 
-  const orgId = workspaceKey(transfer.workspaceId);
-  if (orgId && mongoose.Types.ObjectId.isValid(orgId)) {
-    try {
-      const notification = await Notification.create({
-        userId: transfer.userId,
-        workspaceId: new mongoose.Types.ObjectId(orgId),
-        type: "TRANSFER_PAID",
-        title: "Paiement reçu",
-        message: `${payer} a payé ${amount} pour ${label}. Les fichiers sont débloqués.`,
-        data: { url, amountTTC: transfer.paidAmount ?? transfer.paymentAmount },
-      });
-      const [{ publishNotification }, { sendNotificationPush }] =
-        await Promise.all([
-          import("../resolvers/notification.js"),
-          import("./notificationPushService.js"),
-        ]);
-      await publishNotification(notification).catch(() => {});
-      await sendNotificationPush(notification);
-    } catch (error) {
-      logger.warn(
-        `[transfer-payment] Notification in-app non créée : ${error.message}`,
-      );
-    }
-  }
+  await notifySellerInApp(transfer, {
+    type: "TRANSFER_PAID",
+    title: "Paiement reçu",
+    message:
+      transfer.paymentProvider === "bank_transfer"
+        ? `Le virement de ${amount} pour ${label} est arrivé sur votre compte. Les fichiers sont débloqués.`
+        : `${payer} a payé ${amount} pour ${label}. Les fichiers sont débloqués.`,
+    amount: transfer.paidAmount ?? transfer.paymentAmount,
+  });
 
-  if (
-    owner.email &&
-    owner.notificationPreferences?.payment_received?.email !== false
-  ) {
+  const to = await sellerEmailRecipient(transfer);
+  if (to) {
     const email = buildTransferPaidEmail({
       amount,
       transferTitle: transfer.title || null,
       payerEmail: transfer.payerEmail || null,
       provider: transfer.paymentProvider,
       fileCount: transfer.files?.length || 0,
-      url: `${frontendUrl()}${url}`,
+      url: `${frontendUrl()}${TRANSFERS_PAGE}`,
     });
-    await sendRenderedEmail({ to: owner.email, ...email });
+    await sendRenderedEmail({ to, ...email });
   }
+}
+
+/** Virement annoncé par le payeur : notification et e-mail au vendeur. */
+export async function notifyBankTransferDeclared(transfer) {
+  const amount = formatTransferAmount(
+    transfer.paymentAmount,
+    transfer.paymentCurrency,
+  );
+  const label = transfer.title ? `« ${transfer.title} »` : "votre transfert";
+  const payerEmail = transfer.bankTransferDeclaration?.email || null;
+  const reference = transfer.paymentReference || null;
+  const autoDetect = await hasConnectedBank(transfer.workspaceId);
+
+  await notifySellerInApp(transfer, {
+    type: "TRANSFER_BANK_DECLARED",
+    title: "Virement annoncé",
+    message: `${payerEmail || "Votre client"} indique avoir payé ${amount} par virement pour ${label}${reference ? ` (réf. ${reference})` : ""}. ${
+      autoDetect
+        ? "Le transfert se débloquera dès que le virement arrivera sur votre compte."
+        : "Vérifiez votre compte, puis débloquez le transfert."
+    }`,
+    amount: transfer.paymentAmount,
+  });
+
+  const to = await sellerEmailRecipient(transfer);
+  if (to) {
+    const email = buildTransferBankDeclaredEmail({
+      amount,
+      transferTitle: transfer.title || null,
+      payerEmail,
+      reference,
+      autoDetect,
+      url: `${frontendUrl()}${TRANSFERS_PAGE}`,
+    });
+    await sendRenderedEmail({ to, ...email });
+  }
+}
+
+/**
+ * Transfert débloqué après un virement : le payeur reçoit le lien (adresse
+ * laissée en annonçant le virement, sinon celle du destinataire).
+ * @returns {Promise<boolean>} vrai si l'e-mail est parti
+ */
+export async function notifyPayerFilesAvailable(transfer) {
+  const to = payerNotificationEmail(transfer);
+  if (!to || !transfer.shareLink || !transfer.accessKey) return false;
+  const sellerName = await getSellerName(transfer.workspaceId);
+  const email = buildTransferFilesAvailableEmail({
+    sellerName,
+    amount: formatTransferAmount(
+      transfer.paidAmount ?? transfer.paymentAmount,
+      transfer.paidCurrency || transfer.paymentCurrency,
+    ),
+    transferTitle: transfer.title || null,
+    fileCount: transfer.files?.length || 0,
+    expiryDate: transfer.expiryDate || null,
+    url: `${frontendUrl()}/transfer/${encodeURIComponent(transfer.shareLink)}?key=${encodeURIComponent(transfer.accessKey)}`,
+  });
+  await sendRenderedEmail({ to, ...email });
+  await FileTransfer.updateOne(
+    { _id: transfer._id },
+    { $set: { payerNotifiedAt: new Date() } },
+  );
+  return true;
 }

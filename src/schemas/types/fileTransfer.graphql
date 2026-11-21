@@ -44,7 +44,8 @@ type FileTransfer {
   paymentSessionUrl: String
   # Moyens proposés au destinataire : stripe | paypal | bank_transfer
   paymentMethods: [String]
-  # Moyen utilisé : stripe | paypal | manual (marqué payé par l'expéditeur)
+  # Moyen utilisé : stripe | paypal | manual (marqué payé par l'expéditeur) |
+  # bank_transfer (virement repéré sur le compte bancaire connecté)
   paymentProvider: String
   paidAmount: Float
   payerEmail: String
@@ -56,6 +57,13 @@ type FileTransfer {
   bankTransferDetails: TransferBankTransferDetails
   # Page publique : entreprise qui demande le paiement
   sellerName: String
+  # Virement annoncé par le payeur (« J'ai fait le virement »)
+  bankTransferDeclaredAt: Date
+  # Vendeur seulement : e-mail laissé par le payeur en annonçant son virement
+  bankTransferDeclaredEmail: String
+  # Page publique seulement : adresse masquée prévenue au déblocage
+  # (« j•••@gmail.com »)
+  notifyEmailHint: String
   downloadCount: Int
   lastDownloadDate: Date
   recipientEmail: String

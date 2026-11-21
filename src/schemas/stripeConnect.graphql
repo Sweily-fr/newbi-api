@@ -50,6 +50,18 @@ type BankTransferPaymentConnection {
   # IBAN renseigné dans les informations de l'entreprise
   available: Boolean!
   ibanLast4: String
+  # Compte bancaire connecté à Newbi : les virements des transferts y sont
+  # repérés et débloquent le transfert tout seuls
+  autoDetect: Boolean!
+}
+
+# Annonce d'un virement par le payeur d'un transfert
+type TransferBankDeclarationResponse {
+  success: Boolean!
+  message: String
+  declaredAt: Date
+  # Adresse masquée qui recevra le lien au déblocage
+  notifyEmailHint: String
 }
 
 type PaypalConnectionResponse {
@@ -146,9 +158,16 @@ extend type Mutation {
   ): TransferPaymentConfirmation!
 
   # Ancien retour de Stripe (sessions ouvertes avant confirmTransferPayment)
-  consumePaymentReturnToken(
-    token: String!
-  ): PaymentReturnTokenResponse!
+  consumePaymentReturnToken(token: String!): PaymentReturnTokenResponse!
+
+  # Page publique : le payeur annonce son virement (« J'ai fait le virement »),
+  # ou retire son annonce avec cancel
+  declareTransferBankPayment(
+    transferId: ID!
+    accessKey: String!
+    email: String
+    cancel: Boolean
+  ): TransferBankDeclarationResponse!
 
   # Compte PayPal Business de l'espace (adresse e-mail seule)
   connectPaypal(email: String!): PaypalConnectionResponse!
