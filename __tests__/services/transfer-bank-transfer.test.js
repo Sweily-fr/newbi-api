@@ -426,6 +426,27 @@ describe("Déblocage manuel et moyens d'encaissement", () => {
     ).toBeNull();
   });
 
+  it("e-mail au payeur refusé une fois (débit du serveur d'envoi) : renvoyé", async () => {
+    const owner = await vendeur();
+    const t = await transfertVirement(owner, {
+      recipientEmail: "client@exemple.fr",
+    });
+    mailer.send.mockRejectedValueOnce(
+      new Error("550 5.7.0 Too many emails per second"),
+    );
+
+    await markTransferPaidManually(t, owner._id);
+
+    expect(mailer.send).toHaveBeenCalledTimes(2);
+    expect(mailer.send.mock.calls.map(([mail]) => mail.to)).toEqual([
+      "client@exemple.fr",
+      "client@exemple.fr",
+    ]);
+    const relu = await FileTransfer.findById(t._id).lean();
+    expect(relu.isPaid).toBe(true);
+    expect(relu.payerNotifiedAt).toBeInstanceOf(Date);
+  });
+
   it("banque connectée : déblocage automatique annoncé au vendeur", async () => {
     const workspaceId = new mongoose.Types.ObjectId();
     await mongoose.connection.db.collection("organization").insertOne({

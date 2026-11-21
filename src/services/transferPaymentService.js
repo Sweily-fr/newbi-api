@@ -1086,6 +1086,8 @@ export function formatTransferAmount(amount, currency = "EUR") {
 }
 
 const TRANSFERS_PAGE = "/dashboard/outils/transferts-fichiers";
+// Pause avant le second essai de l'e-mail au payeur
+const PAYER_EMAIL_RETRY_DELAY_MS = 2000;
 
 /** Notification dans l'appli (et push) au créateur du transfert. */
 async function notifySellerInApp(transfer, { type, title, message, amount }) {
@@ -1215,7 +1217,21 @@ export async function notifyPayerFilesAvailable(transfer) {
     expiryDate: transfer.expiryDate || null,
     url: `${frontendUrl()}/transfer/${encodeURIComponent(transfer.shareLink)}?key=${encodeURIComponent(transfer.accessKey)}`,
   });
-  await sendRenderedEmail({ to, ...email });
+  try {
+    await sendRenderedEmail({ to, ...email });
+  } catch (error) {
+    // Seul moyen de prévenir le payeur : un refus passager du serveur
+    // d'envoi (débit limité, coupure) ne doit pas le priver de son lien.
+    // L'e-mail au vendeur, parti juste avant, suffit à dépasser certaines
+    // limites (une par seconde).
+    logger.warn(
+      `[transfer-payment] E-mail au payeur de ${transfer._id} refusé (${error.message}) : nouvel essai`,
+    );
+    await new Promise((resolve) =>
+      setTimeout(resolve, PAYER_EMAIL_RETRY_DELAY_MS),
+    );
+    await sendRenderedEmail({ to, ...email });
+  }
   await FileTransfer.updateOne(
     { _id: transfer._id },
     { $set: { payerNotifiedAt: new Date() } },
