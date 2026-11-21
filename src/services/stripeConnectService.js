@@ -8,6 +8,172 @@ import { creditedTTC } from "../utils/invoiceCredit.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// ---------------------------------------------------------------------------
+// Compte Stripe du client rattaché par OAuth
+// ---------------------------------------------------------------------------
+//
+// Le client connecte son propre compte Stripe (existant ou créé pendant le
+// parcours) : les paiements sont créés directement sur son compte (direct
+// charges), Stripe lui facture ses frais, et rien ne passe par le compte de
+// Newbi, qui ne prend aucune commission. L'ancien parcours (compte Express
+// créé par Newbi, destination charges) reste en place pour les espaces qui
+// l'utilisent déjà.
+//
+// Prérequis : OAuth activé dans les réglages Connect du compte Stripe de
+// Newbi, STRIPE_CONNECT_CLIENT_ID (ca_…, différent en test et en
+// production) et l'adresse de retour déclarée chez Stripe :
+// <API>/stripe-connect/callback.
+
+/** Compte rattaché par OAuth : paiements créés sur le compte du client. */
+export const isDirectStripeAccount = (account) =>
+  account?.connectionType === "oauth";
+
+export function isStripeOAuthConfigured(env = process.env) {
+  return Boolean(env.STRIPE_CONNECT_CLIENT_ID && env.STRIPE_SECRET_KEY);
+}
+
+/** Adresse publique de l'API, sans barre finale. */
+export function apiPublicUrl(env = process.env) {
+  return String(
+    env.API_URL ||
+      env.NEXT_PUBLIC_API_URL ||
+      env.BACKEND_URL ||
+      "http://localhost:4000",
+  ).replace(/\/+$/, "");
+}
+
+export function stripeOAuthRedirectUri(env = process.env) {
+  return (
+    env.STRIPE_CONNECT_REDIRECT_URI ||
+    `${apiPublicUrl(env)}/stripe-connect/callback`
+  );
+}
+
+/** Adresse de la page Stripe où le client autorise Newbi. */
+export function buildStripeOAuthUrl({ state, email, businessName }) {
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: process.env.STRIPE_CONNECT_CLIENT_ID,
+    scope: "read_write",
+    redirect_uri: stripeOAuthRedirectUri(),
+    state,
+  });
+  // Formulaire d'inscription prérempli pour qui n'a pas encore de compte
+  if (email) params.set("stripe_user[email]", email);
+  if (businessName) params.set("stripe_user[business_name]", businessName);
+  params.set("stripe_user[country]", "FR");
+  return `https://connect.stripe.com/oauth/authorize?${params.toString()}`;
+}
+
+export async function exchangeStripeOAuthCode(code) {
+  return stripe.oauth.token({ grant_type: "authorization_code", code });
+}
+
+/** Retire à Newbi l'accès au compte du client (déconnexion). */
+export async function deauthorizeStripeAccount(accountId) {
+  if (!process.env.STRIPE_CONNECT_CLIENT_ID || !accountId) return false;
+  try {
+    await stripe.oauth.deauthorize({
+      client_id: process.env.STRIPE_CONNECT_CLIENT_ID,
+      stripe_user_id: accountId,
+    });
+    return true;
+  } catch (error) {
+    // Déjà retiré côté Stripe (le client l'a fait lui-même) : rien à faire
+    logger.warn(
+      `[stripe-connect] Déconnexion OAuth de ${accountId} non confirmée : ${error.message}`,
+    );
+    return false;
+  }
+}
+
+/** Champs enregistrés d'un compte Stripe (objet `account` de l'API). */
+export function describeStripeAccount(stripeAccount) {
+  return {
+    chargesEnabled: Boolean(stripeAccount?.charges_enabled),
+    payoutsEnabled: Boolean(stripeAccount?.payouts_enabled),
+    isOnboarded: Boolean(
+      stripeAccount?.details_submitted && stripeAccount?.charges_enabled,
+    ),
+    displayName:
+      stripeAccount?.settings?.dashboard?.display_name ||
+      stripeAccount?.business_profile?.name ||
+      null,
+    accountEmail: stripeAccount?.email || null,
+  };
+}
+
+/**
+ * Rattache à l'espace le compte autorisé par OAuth. Un compte déjà rattaché
+ * à un autre espace est refusé ; l'ancien compte Express de l'espace est
+ * remplacé (gardé en trace).
+ * @returns {Promise<{ok: true, account: object}|{ok: false, error: string}>}
+ */
+export async function saveOAuthConnection({
+  organizationId,
+  userId,
+  accountId,
+  livemode,
+}) {
+  const elsewhere = await StripeConnectAccount.findOne({
+    accountId,
+    organizationId: { $nin: [organizationId] },
+  }).lean();
+  if (elsewhere) return { ok: false, error: "already_connected" };
+
+  const stripeAccount = await stripe.accounts.retrieve(accountId);
+  const fields = {
+    ...describeStripeAccount(stripeAccount),
+    accountId,
+    connectionType: "oauth",
+    livemode: Boolean(livemode),
+    connectedBy: userId || undefined,
+    connectedAt: new Date(),
+  };
+
+  const existing = await StripeConnectAccount.findOne({ organizationId });
+  if (existing) {
+    if (existing.accountId !== accountId && !isDirectStripeAccount(existing)) {
+      fields.replacedAccountId = existing.accountId;
+    }
+    const previousOAuthAccount =
+      isDirectStripeAccount(existing) && existing.accountId !== accountId
+        ? existing.accountId
+        : null;
+    Object.assign(existing, fields);
+    if (!existing.userId && userId) existing.userId = userId;
+    await existing.save();
+    // Autre compte Stripe du client connecté à la place : l'ancien accès est
+    // retiré
+    if (previousOAuthAccount) {
+      await deauthorizeStripeAccount(previousOAuthAccount);
+    }
+    return { ok: true, account: existing };
+  }
+
+  const account = await StripeConnectAccount.create({
+    organizationId,
+    userId: userId || undefined,
+    ...fields,
+  });
+  return { ok: true, account };
+}
+
+/** Mise à jour depuis un événement account.updated (compte connecté). */
+export async function syncStripeAccountFromEvent(stripeAccount) {
+  if (!stripeAccount?.id) return { status: "ignored" };
+  const result = await StripeConnectAccount.updateOne(
+    { accountId: stripeAccount.id },
+    { $set: describeStripeAccount(stripeAccount) },
+  );
+  return {
+    status: result.matchedCount ? "success" : "ignored",
+    message: result.matchedCount
+      ? "Compte Stripe mis à jour"
+      : "Compte inconnu",
+  };
+}
+
 /**
  * Service pour gérer les interactions avec Stripe Connect
  */
@@ -224,84 +390,9 @@ const stripeConnectService = {
     }
   },
 
-  /**
-   * Crée une session de paiement Stripe Checkout pour un transfert de fichiers
-   * @param {Object} fileTransfer - Transfert de fichiers
-   * @param {string} accountId - ID du compte Stripe Connect du destinataire
-   * @param {string} successUrl - URL de succès après le paiement
-   * @param {string} cancelUrl - URL d'annulation du paiement
-   * @returns {Promise<Object>} - Réponse avec l'URL de la session de paiement
-   */
-  async createPaymentSession(fileTransfer, accountId, successUrl, cancelUrl) {
-    try {
-      // Vérifier si le compte existe et est configuré pour les paiements
-      const account = await StripeConnectAccount.findOne({ accountId });
-      if (!account || !account.chargesEnabled) {
-        return {
-          success: false,
-          message:
-            "Le compte Stripe Connect n'est pas configuré pour recevoir des paiements",
-        };
-      }
-
-      // Calculer la commission de la plateforme (10% par exemple)
-      // Centimes entiers : 19,99 * 100 donne 1998,9999… en virgule flottante
-      const amount = Math.round(fileTransfer.paymentAmount * 100);
-      const applicationFee = Math.round(amount * 0.1); // 10% de commission
-
-      // Créer une session de paiement Stripe Checkout
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price_data: {
-              currency: fileTransfer.paymentCurrency.toLowerCase(),
-              product_data: {
-                name: `Téléchargement de fichiers - ${fileTransfer.files.length} fichier(s)`,
-                description: "Accès aux fichiers partagés",
-              },
-              unit_amount: amount,
-            },
-            quantity: 1,
-          },
-        ],
-        mode: "payment",
-        success_url: `${successUrl}`,
-        cancel_url: `${cancelUrl}`,
-        payment_intent_data: {
-          application_fee_amount: applicationFee,
-          transfer_data: {
-            destination: accountId,
-          },
-          metadata: {
-            fileTransferId: fileTransfer.id.toString(),
-            userId: fileTransfer.userId.toString(),
-          },
-        },
-        metadata: {
-          transferId: fileTransfer.id.toString(),
-          fileTransferId: fileTransfer.id.toString(),
-          userId: fileTransfer.userId.toString(),
-        },
-      });
-
-      return {
-        success: true,
-        sessionId: session.id,
-        sessionUrl: session.url,
-        message: "Session de paiement créée avec succès",
-      };
-    } catch (error) {
-      logger.error(
-        "Erreur lors de la création de la session de paiement:",
-        error,
-      );
-      return {
-        success: false,
-        message: `Erreur lors de la création de la session de paiement: ${error.message}`,
-      };
-    }
-  },
+  // Paiement des transferts de fichiers : voir transferPaymentService.js
+  // (session créée sur le compte Stripe du client, sans commission). L'ancienne
+  // session à 10 % de commission sur le compte de Newbi est retirée.
 
   /**
    * Crée une session de paiement Stripe Checkout pour une facture Newbi.
@@ -346,7 +437,7 @@ const stripeConnectService = {
         type: "invoice_payment",
       };
 
-      const session = await stripe.checkout.sessions.create({
+      const sessionParams = {
         payment_method_types: ["card"],
         line_items: [
           {
@@ -372,20 +463,31 @@ const stripeConnectService = {
         mode: "payment",
         success_url: successUrl,
         cancel_url: cancelUrl,
-        // Destination charge SANS application_fee_amount => 100% au vendeur
-        payment_intent_data: {
-          transfer_data: {
-            destination: accountId,
-          },
-          metadata,
-        },
+        // Compte Stripe du client (connexion OAuth) : le paiement est créé
+        // sur son compte, frais Stripe à sa charge, rien ne passe par le
+        // compte de Newbi. Ancien compte Express : destination charge SANS
+        // application_fee_amount (100 % au vendeur, frais payés par Newbi).
+        payment_intent_data: isDirectStripeAccount(account)
+          ? { metadata }
+          : {
+              transfer_data: {
+                destination: accountId,
+              },
+              metadata,
+            },
         metadata,
-      });
+      };
+      const session = isDirectStripeAccount(account)
+        ? await stripe.checkout.sessions.create(sessionParams, {
+            stripeAccount: accountId,
+          })
+        : await stripe.checkout.sessions.create(sessionParams);
 
       return {
         success: true,
         sessionId: session.id,
         sessionUrl: session.url,
+        direct: isDirectStripeAccount(account),
         message: "Session de paiement créée avec succès",
       };
     } catch (error) {
@@ -487,7 +589,6 @@ export const {
   createConnectAccount,
   generateOnboardingLink,
   checkAccountStatus,
-  createPaymentSession,
   createInvoicePaymentSession,
   transferToStripeConnect,
 } = stripeConnectService;

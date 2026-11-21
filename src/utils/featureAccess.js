@@ -5,12 +5,18 @@
  *
  * BETA_FEATURES       fonctionnalités réservées, séparées par des virgules
  *                     (vat, urssaf, appointments, documentShares,
- *                     socialPublishing, emailCampaigns) ;
+ *                     socialPublishing, emailCampaigns, transferPayments) ;
  *                     « none » = aucune. Absente ou vide : toutes réservées
  *                     en production, aucune ailleurs (local, CI, staging),
  *                     pour qu'un oubli de variable n'ouvre rien à tout le
  *                     monde.
  * BETA_WORKSPACE_IDS  espaces qui ont accès aux fonctionnalités réservées.
+ * BETA_WORKSPACE_IDS_<FONCTIONNALITÉ>
+ *                     liste propre à une fonctionnalité, qui remplace la
+ *                     précédente pour elle seule ; nom en majuscules avec
+ *                     tirets bas, ex. BETA_WORKSPACE_IDS_TRANSFER_PAYMENTS
+ *                     pour transferPayments. Sert à réserver une
+ *                     fonctionnalité à moins d'espaces que les autres.
  *
  * Ouvrir une fonctionnalité à tous = la retirer de BETA_FEATURES puis
  * recharger l'API, sans nouvelle version.
@@ -24,6 +30,7 @@ export const BETA_FEATURE_KEYS = Object.freeze([
   "documentShares",
   "socialPublishing",
   "emailCampaigns",
+  "transferPayments",
 ]);
 
 export const FEATURE_NOT_AVAILABLE = "FEATURE_NOT_AVAILABLE";
@@ -55,11 +62,26 @@ export function isFeatureRestricted(feature, env = process.env) {
   return restrictedFeatures(env).has(feature);
 }
 
+/** Nom de la liste propre à une fonctionnalité : transferPayments → BETA_WORKSPACE_IDS_TRANSFER_PAYMENTS. */
+export const featureWorkspaceIdsVariable = (feature) =>
+  `BETA_WORKSPACE_IDS_${feature.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}`;
+
+/**
+ * Espaces qui ont accès à une fonctionnalité réservée : sa liste propre si
+ * elle est renseignée, sinon la liste commune.
+ */
+export function featureWorkspaceIds(feature, env = process.env) {
+  const own = env[featureWorkspaceIdsVariable(feature)];
+  return parseList(
+    own != null && String(own).trim() !== "" ? own : env.BETA_WORKSPACE_IDS,
+  );
+}
+
 /** Vrai si l'espace a accès à la fonctionnalité. */
 export function isFeatureEnabled(feature, workspaceId, env = process.env) {
   if (!isFeatureRestricted(feature, env)) return true;
   if (workspaceId == null || workspaceId === "") return false;
-  return parseList(env.BETA_WORKSPACE_IDS).includes(String(workspaceId));
+  return featureWorkspaceIds(feature, env).includes(String(workspaceId));
 }
 
 /** Accès de l'espace à chaque fonctionnalité, ex. { vat: true, … }. */

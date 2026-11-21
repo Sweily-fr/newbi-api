@@ -1210,6 +1210,18 @@ export class BridgeProvider extends BankingProvider {
           );
         }
       }
+
+      // Transferts payants par virement : un crédit qui porte la référence
+      // NB-… d'un transfert débloque celui-ci (sans bloquer la synchro)
+      try {
+        const { detectTransferBankPayments } =
+          await import("../../transferPaymentService.js");
+        await detectTransferBankPayments(workspaceStringId, transactions);
+      } catch (error) {
+        logger.warn(
+          `[transfer-payment] Repérage des virements de l'espace ${workspaceStringId} : ${error.message}`,
+        );
+      }
     } catch (error) {
       console.error("❌ Erreur sauvegarde transactions:", error.message);
       throw error;

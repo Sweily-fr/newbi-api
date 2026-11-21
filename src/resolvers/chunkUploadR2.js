@@ -16,6 +16,7 @@ import {
 } from "../utils/chunkUploadR2Utils.js";
 import cloudflareTransferService from "../services/cloudflareTransferService.js";
 import FileTransfer from "../models/FileTransfer.js";
+import { prepareTransferPayment } from "../services/transferPaymentService.js";
 import { v4 as uuidv4 } from "uuid";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { cacheGet, cacheSet, cacheDel } from "../config/redis.js";
@@ -937,7 +938,30 @@ const chunkUploadR2Resolvers = {
           paymentAmount,
           paymentCurrency,
           isPaymentRequired,
+          paymentMethods: requestedPaymentMethods,
         } = normalizeTransferCreationOptions(input);
+        // Transfert payant : espace, accès anticipé, moyens d'encaissement de
+        // l'espace (Stripe, PayPal, IBAN) et incompatibilité avec le
+        // filigrane vérifiés avant tout
+        if (
+          isPaymentRequired &&
+          input?.workspaceId &&
+          !(await userBelongsToWorkspace(
+            String(user.id || user._id),
+            String(input.workspaceId),
+          ))
+        ) {
+          throw new UserInputError(
+            "Accès non autorisé à cet espace de travail",
+          );
+        }
+        const { paymentMethods, paymentReference } =
+          await prepareTransferPayment({
+            workspaceId: input?.workspaceId || null,
+            isPaymentRequired,
+            paymentMethods: requestedPaymentMethods,
+            hasWatermark: Boolean(input?.hasWatermark),
+          });
         try {
           // Vérifier que les IDs de fichiers sont fournis
           if (!fileIds || fileIds.length === 0) {
@@ -1020,6 +1044,8 @@ const chunkUploadR2Resolvers = {
             isPaymentRequired,
             paymentAmount,
             paymentCurrency,
+            paymentMethods,
+            paymentReference,
             recipientEmail,
             message,
             uploadMethod: "chunk",
@@ -1268,6 +1294,9 @@ Object.keys(chunkUploadR2Resolvers.Mutation).forEach((name) => {
 });
 
 // Envois hérités sans effet (voir retiredTransferUploads.js)
-retireTransferUploads(chunkUploadR2Resolvers, RETIRED_TRANSFER_UPLOADS.chunkUploadR2);
+retireTransferUploads(
+  chunkUploadR2Resolvers,
+  RETIRED_TRANSFER_UPLOADS.chunkUploadR2,
+);
 
 export default chunkUploadR2Resolvers;

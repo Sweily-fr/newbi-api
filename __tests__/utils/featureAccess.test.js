@@ -8,6 +8,7 @@ import {
   BETA_FEATURE_KEYS,
   FEATURE_NOT_AVAILABLE,
   assertFeatureForRequest,
+  featureWorkspaceIdsVariable,
   gateFeatureResolvers,
   isFeatureEnabled,
   restrictedFeatures,
@@ -97,6 +98,42 @@ describe("isFeatureEnabled", () => {
   it("refuse une fonctionnalité inconnue (faute de frappe dans le code)", () => {
     expect(() => isFeatureEnabled("tva", BETA, prodEnv())).toThrow(/inconnue/);
   });
+
+  it("liste propre à une fonctionnalité : elle seule est réservée à moins d'espaces", () => {
+    // Prod du 21/11/2026 : deux espaces bêta, transferts payants pour un seul
+    const env = prodEnv({
+      BETA_WORKSPACE_IDS: `${BETA},${OTHER}`,
+      BETA_FEATURES: "emailCampaigns,transferPayments",
+      BETA_WORKSPACE_IDS_TRANSFER_PAYMENTS: BETA,
+    });
+    expect(isFeatureEnabled("transferPayments", BETA, env)).toBe(true);
+    expect(isFeatureEnabled("transferPayments", OTHER, env)).toBe(false);
+    // Les autres fonctionnalités gardent la liste commune
+    expect(isFeatureEnabled("emailCampaigns", OTHER, env)).toBe(true);
+    expect(workspaceFeatures(OTHER, env)).toMatchObject({
+      emailCampaigns: true,
+      transferPayments: false,
+    });
+  });
+
+  it("liste propre vide : la liste commune s'applique", () => {
+    const env = prodEnv({
+      BETA_FEATURES: "transferPayments",
+      BETA_WORKSPACE_IDS_TRANSFER_PAYMENTS: " ",
+    });
+    expect(isFeatureEnabled("transferPayments", BETA, env)).toBe(true);
+    expect(isFeatureEnabled("transferPayments", OTHER, env)).toBe(false);
+  });
+
+  it("nom de la liste propre de chaque fonctionnalité", () => {
+    expect(featureWorkspaceIdsVariable("transferPayments")).toBe(
+      "BETA_WORKSPACE_IDS_TRANSFER_PAYMENTS",
+    );
+    expect(featureWorkspaceIdsVariable("vat")).toBe("BETA_WORKSPACE_IDS_VAT");
+    expect(featureWorkspaceIdsVariable("emailCampaigns")).toBe(
+      "BETA_WORKSPACE_IDS_EMAIL_CAMPAIGNS",
+    );
+  });
 });
 
 describe("workspaceFeatures", () => {
@@ -109,6 +146,7 @@ describe("workspaceFeatures", () => {
       documentShares: true,
       socialPublishing: false,
       emailCampaigns: true,
+      transferPayments: true,
     });
     expect(workspaceFeatures(BETA, env)).toEqual({
       vat: true,
@@ -117,6 +155,7 @@ describe("workspaceFeatures", () => {
       documentShares: true,
       socialPublishing: true,
       emailCampaigns: true,
+      transferPayments: true,
     });
   });
 });

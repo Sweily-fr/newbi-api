@@ -86,6 +86,7 @@ import {
   recordStoredFileDeleted,
   refreshWorkspaceStorage,
   checkStorageAlerts,
+  waitForStorageRefreshes,
 } from "../../../src/services/storage/storageService.js";
 import {
   computeWorkspaceStorage,
@@ -157,6 +158,10 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // Alertes et recalculs lancés en fond par le test précédent (après un
+  // refus d'envoi) : finis avant de vider la base, sinon un recalcul parti
+  // avant le nettoyage réécrit le compteur du test suivant
+  await waitForStorageRefreshes();
   await clearMongo();
   r2Objects.clear();
   r2Calls.head = 0;
