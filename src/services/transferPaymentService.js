@@ -44,6 +44,7 @@ import {
   summarizePaypalOrder,
 } from "./paypalService.js";
 import { buildTransferPaidEmail } from "../utils/transferPaymentEmails.js";
+import { createOriginChecker } from "../utils/corsOrigins.js";
 import { sendRenderedEmail } from "../utils/trialEmails.js";
 
 export const TRANSFER_PAYMENT_METHODS = Object.freeze([
@@ -72,11 +73,28 @@ function getStripe() {
   return stripeClient;
 }
 
-const frontendUrl = () =>
-  String(process.env.FRONTEND_URL || "http://localhost:3000").replace(
-    /\/+$/,
-    "",
-  );
+const frontendUrl = (env = process.env) =>
+  String(env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
+
+/**
+ * Site où revient le payeur après Stripe ou PayPal. En production : toujours
+ * FRONTEND_URL. Hors production : le site d'où le paiement a été lancé
+ * (en-tête Origin) s'il fait partie des origines autorisées, car un
+ * FRONTEND_URL réglé sur l'adresse réseau du poste (tests sur téléphone)
+ * renverrait le payeur sur une adresse d'où le navigateur bloque les appels
+ * à l'API locale.
+ */
+export function paymentReturnBase(origin, env = process.env) {
+  if (env.NODE_ENV !== "production" && typeof origin === "string" && origin) {
+    const isAllowed = createOriginChecker({
+      nodeEnv: env.NODE_ENV,
+      frontendUrl: env.FRONTEND_URL,
+      partnerFrontendUrl: env.PARTNER_FRONTEND_URL,
+    });
+    if (isAllowed(origin)) return origin.replace(/\/+$/, "");
+  }
+  return frontendUrl(env);
+}
 
 const toCents = (amount) => Math.round(Number(amount || 0) * 100);
 
@@ -425,10 +443,15 @@ function paymentLabel(transfer) {
 
 /**
  * Lance un paiement en ligne (le transfert doit être actif, payant, non payé,
- * accès vérifié par l'appelant).
+ * accès vérifié par l'appelant). `returnOrigin` : en-tête Origin de la page
+ * du payeur (voir paymentReturnBase).
  * @returns {Promise<{success: boolean, message?: string, sessionId?: string, sessionUrl?: string}>}
  */
-export async function startOnlinePayment(transfer, provider) {
+export async function startOnlinePayment(
+  transfer,
+  provider,
+  { returnOrigin } = {},
+) {
   if (!ONLINE_PAYMENT_PROVIDERS.includes(provider)) {
     return fail("Moyen de paiement inconnu");
   }
@@ -456,7 +479,7 @@ export async function startOnlinePayment(transfer, provider) {
 
   const orgId = workspaceKey(transfer.workspaceId);
   const returnToken = crypto.randomBytes(16).toString("hex");
-  const back = `${frontendUrl()}/transfer/return?rt=${returnToken}&provider=${provider}`;
+  const back = `${paymentReturnBase(returnOrigin)}/transfer/return?rt=${returnToken}&provider=${provider}`;
   const { name, description } = paymentLabel(transfer);
   const metadata = {
     type: "file_transfer",

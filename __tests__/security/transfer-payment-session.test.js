@@ -20,6 +20,7 @@ import {
   beforeAll,
   afterAll,
   beforeEach,
+  afterEach,
   vi,
 } from "vitest";
 import mongoose from "mongoose";
@@ -60,6 +61,7 @@ import FileTransfer from "../../src/models/FileTransfer.js";
 import Notification from "../../src/models/Notification.js";
 import StripeConnectAccount from "../../src/models/StripeConnectAccount.js";
 import stripeConnectResolvers from "../../src/resolvers/stripeConnectResolvers.js";
+import { paymentReturnBase } from "../../src/services/transferPaymentService.js";
 
 const { Mutation } = stripeConnectResolvers;
 
@@ -276,6 +278,78 @@ describe("createPaymentSessionForFileTransfer : clé d'accès exigée", () => {
     expect(carte.success).toBe(false);
     expect(paypal.success).toBe(false);
     expect(stripeApi.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("Site de retour du payeur", () => {
+  const frontendInitial = process.env.FRONTEND_URL;
+  const LAN = "http://192.168.1.99:3000";
+
+  beforeEach(() => {
+    // Poste de développement : FRONTEND_URL sur l'adresse réseau (tests sur
+    // téléphone), site ouvert sur localhost
+    process.env.FRONTEND_URL = LAN;
+  });
+
+  afterEach(() => {
+    if (frontendInitial === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = frontendInitial;
+  });
+
+  const depuis = (transfer, origin) =>
+    Mutation.createPaymentSessionForFileTransfer(
+      {},
+      { transferId: transfer._id.toString(), accessKey: "c".repeat(32) },
+      {
+        req: {
+          headers: origin ? { origin } : {},
+          ip: `10.0.1.${++compteur % 250}`,
+          socket: {},
+        },
+      },
+    );
+
+  it("hors production : retour sur le site d'où le paiement est lancé", async () => {
+    const t = await transfertPayant();
+    await avecCompteStripe(t);
+
+    const res = await depuis(t, "http://localhost:3000");
+
+    expect(res.success).toBe(true);
+    const [params] = stripeApi.checkout.sessions.create.mock.calls[0];
+    expect(params.success_url).toMatch(
+      /^http:\/\/localhost:3000\/transfer\/return\?/,
+    );
+    expect(params.cancel_url).toMatch(
+      /^http:\/\/localhost:3000\/transfer\/return\?/,
+    );
+  });
+
+  it("origine non autorisée ou absente : retour sur FRONTEND_URL", async () => {
+    const t1 = await transfertPayant();
+    await avecCompteStripe(t1);
+    const t2 = await transfertPayant();
+    await avecCompteStripe(t2);
+
+    await depuis(t1, "https://pirate.example");
+    await depuis(t2, undefined);
+
+    const [[p1], [p2]] = stripeApi.checkout.sessions.create.mock.calls;
+    expect(p1.success_url.startsWith(`${LAN}/transfer/return?`)).toBe(true);
+    expect(p2.success_url.startsWith(`${LAN}/transfer/return?`)).toBe(true);
+  });
+
+  it("production : toujours FRONTEND_URL, quelle que soit l'origine", () => {
+    const prod = {
+      NODE_ENV: "production",
+      FRONTEND_URL: "https://www.newbi.fr/",
+    };
+    expect(paymentReturnBase("http://localhost:3000", prod)).toBe(
+      "https://www.newbi.fr",
+    );
+    expect(paymentReturnBase("https://newbi.fr", prod)).toBe(
+      "https://www.newbi.fr",
+    );
   });
 });
 

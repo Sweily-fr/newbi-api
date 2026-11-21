@@ -620,7 +620,9 @@ const stripeConnectResolvers = {
         // connecté par OAuth, ou son compte PayPal) : jeton de retour opaque,
         // le lien et la clé du transfert restent hors des journaux des
         // prestataires
-        return await startOnlinePayment(fileTransfer, provider || "stripe");
+        return await startOnlinePayment(fileTransfer, provider || "stripe", {
+          returnOrigin: req?.headers?.origin,
+        });
       } catch (error) {
         logger.error(
           "Erreur lors de la création de la session de paiement:",
