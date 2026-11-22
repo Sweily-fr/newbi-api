@@ -1046,14 +1046,18 @@ const editFile = (share, session, documentId, changes) =>
     },
     body: JSON.stringify({ session, ...changes }),
   });
-/** Nouvelle version d'un document (multipart, comme le navigateur). */
-const replaceFile = (share, session, documentId, file = {}) => {
+/**
+ * Nouvelle version d'un document (multipart, comme le navigateur), avec le
+ * nom choisi par le visiteur dans `fields.name`.
+ */
+const replaceFile = (share, session, documentId, file = {}, fields = {}) => {
   const {
     name = "scan-final.pdf",
     content = PDF_V2,
     type = "application/pdf",
   } = file;
   const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
   form.append("file", new Blob([content], { type }), name);
   return fetch(
     urlOf(share, `/files/${documentId}/content`, session ? q(session) : ""),
@@ -1319,6 +1323,71 @@ describe("Modification de ses documents par le client", () => {
       name: "Carte grise (ancienne version).png",
       mimeType: "image/png",
     });
+  });
+
+  it("nouvelle version sous le nom choisi par le visiteur", async () => {
+    const { share, session, document } = await depositOne();
+
+    const res = await replaceFile(
+      share,
+      session,
+      document.id,
+      { name: "Relevé mars 2026.pdf" },
+      { name: "Relevé mars 2026.pdf" },
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).document).toMatchObject({
+      id: document.id,
+      name: "Relevé mars 2026.pdf",
+    });
+    const saved = await SharedDocument.findById(document.id).lean();
+    // Le téléchargement porte aussi le nouveau nom
+    expect(saved).toMatchObject({
+      name: "Relevé mars 2026.pdf",
+      originalName: "Relevé mars 2026.pdf",
+    });
+    // L'ancienne version garde l'ancien nom
+    const [previous] = await trashedVersions();
+    expect(previous.name).toBe("releve (ancienne version).pdf");
+  });
+
+  it("nom choisi : nettoyé, toujours avec l'extension du nouveau fichier", async () => {
+    const { share, session, document } = await depositOne();
+    const cases = [
+      ["Relevé 03/2026", "Relevé 03-2026.pdf"],
+      ["  Attestation.pdf  ", "Attestation.pdf"],
+    ];
+    for (const [requested, expected] of cases) {
+      const res = await replaceFile(
+        share,
+        session,
+        document.id,
+        {},
+        { name: requested },
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).document.name).toBe(expected);
+    }
+  });
+
+  it("nom choisi vide : refusé avant tout envoi du fichier", async () => {
+    const { share, session, document } = await depositOne();
+
+    const res = await replaceFile(
+      share,
+      session,
+      document.id,
+      {},
+      { name: " . " },
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).message).toBe(
+      "Le nom du document ne peut pas être vide.",
+    );
+    expect(r2.uploads).toHaveLength(1);
+    expect(await trashedVersions()).toHaveLength(0);
+    const saved = await SharedDocument.findById(document.id).lean();
+    expect(saved).toMatchObject({ name: "releve.pdf", fileSize: PDF.length });
   });
 
   it("nouvelle version refusée (format, contenu, espace plein) : rien ne change", async () => {
