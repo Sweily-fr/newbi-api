@@ -151,6 +151,7 @@ import { startPurchaseInvoicePaymentRetryCron } from "./cron/purchaseInvoicePaym
 import { startInvoiceRecurrenceCron } from "./cron/invoiceRecurrenceCron.js";
 import { startDocumentDeliveryCheckCron } from "./cron/documentDeliveryCheckCron.js";
 import { startStorageReconcileCron } from "./cron/storageReconcileCron.js";
+import { startProspectOrdersCron } from "./cron/prospectOrdersCron.js";
 import { startCalendarWeeklyDigestCron } from "./cron/calendarWeeklyDigestCron.js";
 import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
 import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
@@ -896,6 +897,10 @@ async function startServer() {
       // Réconciliation du compteur de stockage des espaces, toutes les
       // 30 minutes
       startStorageReconcileCron();
+
+      // Commandes de crédits de prospection : activées dès que le stock
+      // Societeinfo les couvre, toutes les 10 minutes
+      startProspectOrdersCron();
 
       // Récap du calendrier le lundi à 8 h (no-op tant que
       // CALENDAR_WEEKLY_DIGEST_MODE n'est pas « simulation » ou « live »)

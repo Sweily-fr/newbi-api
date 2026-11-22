@@ -116,17 +116,23 @@ export async function getProspectBalance(workspaceId, now = new Date()) {
         },
       },
     ]),
+    // Achats disponibles (« paid ») et commandés pas encore activés
+    // (« pending » : en attente du stock du fournisseur, prospectOrders.js)
     ProspectCreditPurchase.aggregate([
-      { $match: { workspaceId: wid, status: "paid" } },
-      { $group: { _id: null, credits: { $sum: "$credits" } } },
+      { $match: { workspaceId: wid, status: { $in: ["paid", "pending"] } } },
+      { $group: { _id: "$status", credits: { $sum: "$credits" } } },
     ]),
   ]);
   const spent = Object.fromEntries(usage.map((row) => [row._id, row.credits]));
+  const bought = Object.fromEntries(
+    purchases.map((row) => [row._id, row.credits]),
+  );
 
   const monthlyCredits = plan ? PROSPECT_MONTHLY_CREDITS[plan] : 0;
   const monthlyUsed = spent.plan || 0;
   const monthlyRemaining = Math.max(0, monthlyCredits - monthlyUsed);
-  const purchasedTotal = purchases[0]?.credits || 0;
+  const purchasedTotal = bought.paid || 0;
+  const purchasedPending = bought.pending || 0;
   const purchasedUsed = spent.purchased || 0;
   const purchasedRemaining = Math.max(0, purchasedTotal - purchasedUsed);
   const available = monthlyRemaining + purchasedRemaining;
@@ -138,6 +144,7 @@ export async function getProspectBalance(workspaceId, now = new Date()) {
     monthlyUsed,
     monthlyRemaining,
     purchasedRemaining,
+    purchasedPending,
     available,
     // Par solde : deux dépenses simultanées ont pris le même dernier crédit
     overdrawn: {
