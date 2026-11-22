@@ -197,20 +197,37 @@ export function insufficientCreditsError(balance, needed, detail = "") {
   });
 }
 
-/** Crédits consommés par Newbi ce mois-ci, tous espaces confondus. */
-export async function getMonthlyCreditsUsed(now = new Date()) {
+/**
+ * Crédits offerts (crédits du mois des offres) consommés ce mois-ci, tous
+ * espaces confondus. Les crédits achetés, payés par le client, n'entrent pas
+ * dans ce budget : un client qui en a acheté peut toujours les dépenser.
+ */
+export async function getMonthlyPlanCreditsUsed(now = new Date()) {
   const { start, end } = parisMonthBounds(now);
   const [row] = await ProspectCreditUsage.aggregate([
-    { $match: { createdAt: { $gte: start, $lt: end } } },
+    {
+      $match: {
+        createdAt: { $gte: start, $lt: end },
+        source: { $ne: "purchased" },
+      },
+    },
     { $group: { _id: null, credits: { $sum: "$credits" } } },
   ]);
   return row?.credits || 0;
 }
 
-/** Refuse toute dépense qui ferait dépasser le budget mensuel de Newbi. */
-export async function assertGlobalBudget(creditsNeeded) {
-  const used = await getMonthlyCreditsUsed();
-  if (used + creditsNeeded > monthlyCreditCap()) {
+/**
+ * Refuse une dépense de crédits offerts qui ferait dépasser le budget
+ * mensuel de Newbi. Seule compte la part prise sur les crédits du mois de
+ * l'espace (dépensés avant les crédits achetés) : `balance` = son solde.
+ */
+export async function assertGlobalBudget(creditsNeeded, balance = null) {
+  const fromPlan = balance
+    ? Math.min(creditsNeeded, balance.monthlyRemaining ?? creditsNeeded)
+    : creditsNeeded;
+  if (fromPlan <= 0) return;
+  const used = await getMonthlyPlanCreditsUsed();
+  if (used + fromPlan > monthlyCreditCap()) {
     throw new AppError(
       "La génération de prospects est momentanément indisponible. Réessayez le mois prochain ou contactez le support.",
       ERROR_CODES.VALIDATION_ERROR,

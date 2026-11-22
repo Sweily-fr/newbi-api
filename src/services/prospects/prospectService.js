@@ -294,7 +294,7 @@ async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
   const source = spendSource(balance);
   if (!source) throw insufficientCreditsError(balance, 1);
   await assertSearchAllowed(workspaceId);
-  await assertGlobalBudget(1);
+  await assertGlobalBudget(1, balance);
 
   let result;
   try {
@@ -462,7 +462,7 @@ export async function unlockProspects({
     );
   }
   if (toUnlock.length) {
-    await assertGlobalBudget(toUnlock.length);
+    await assertGlobalBudget(toUnlock.length, balance);
     await assertProviderCanCover(toUnlock.length);
   }
 

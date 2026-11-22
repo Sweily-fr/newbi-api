@@ -788,6 +788,34 @@ describe("génération par nombre", () => {
       available: 8,
     });
   });
+
+  it("le budget mensuel de Newbi borne les crédits offerts, jamais les crédits achetés", async () => {
+    process.env.PROSPECT_MONTHLY_CREDIT_CAP = "100";
+    await setSubscription("entreprise");
+    // 100 crédits offerts dépensés ce mois-ci : budget de Newbi atteint
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 100,
+    });
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 10,
+      stripeCheckoutSessionId: "cs_test_budget",
+    });
+    searchCompanies.mockResolvedValue(page(["100000002"], 1));
+
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 1,
+    });
+
+    // Page et fiche payées par les crédits achetés, malgré le budget atteint
+    expect(result).toMatchObject({ unlockedCount: 1, creditsUsed: 2 });
+    expect(result.quota).toMatchObject({ purchasedRemaining: 8 });
+  });
 });
 
 describe("reprise d'une génération à l'autre", () => {
