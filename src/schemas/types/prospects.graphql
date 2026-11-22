@@ -48,19 +48,37 @@ type ProspectPlace {
   type: String
 }
 
-"Prospects offerts à l'espace"
+"""
+Crédits de prospection de l'espace : 1 crédit par page de 25 entreprises
+lues, 1 par prospect ajouté. Offerts chaque mois selon l'offre (Standard 0,
+Premium 50, Entreprise 100), puis crédits achetés (offre Entreprise seulement).
+"""
 type ProspectQuota {
   "Plan payé (freelance, pme, entreprise), null pendant l'essai"
   plan: String
-  "monthly (TPE, Entreprise) ou welcome (Freelance, une seule fois)"
-  bucket: String
-  quota: Int!
-  used: Int!
-  remaining: Int!
-  "Réellement disponible : le plus petit du quota restant, des crédits du fournisseur et du budget de Newbi"
+  "Crédits offerts chaque mois par l'offre"
+  monthlyCredits: Int!
+  monthlyUsed: Int!
+  monthlyRemaining: Int!
+  "Crédits achetés pas encore dépensés (sans expiration)"
+  purchasedRemaining: Int!
+  "Solde total : crédits du mois restants + crédits achetés restants"
   available: Int!
-  "Remise à zéro du quota mensuel"
+  "Remise à zéro des crédits du mois"
   resetsAt: String
+  "Offre au-dessus qui donne plus de crédits (pme, entreprise), null en Entreprise"
+  nextPlan: String
+  nextPlanCredits: Int
+  "Achat de crédits à l'unité ouvert (offre Entreprise)"
+  canPurchase: Boolean!
+  "Ancien quota : toujours monthly (null pendant l'essai)"
+  bucket: String
+  "Ancien quota : crédits offerts du mois"
+  quota: Int!
+  "Ancien quota : crédits du mois utilisés"
+  used: Int!
+  "Ancien quota : solde total"
+  remaining: Int!
 }
 
 type ProspectSettings {

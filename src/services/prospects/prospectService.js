@@ -33,9 +33,9 @@ import { countRegistryCompanies } from "./prospectCount.js";
 import { mapCompanyToClient } from "./prospectMapping.js";
 import { checkCommercialOpposition } from "./prospectOpposition.js";
 import {
-  getProspectQuota,
-  getMonthlyCreditsUsed,
-  monthlyCreditCap,
+  getProspectBalance,
+  spendSource,
+  insufficientCreditsError,
   assertGlobalBudget,
   assertSearchAllowed,
 } from "./prospectQuota.js";
@@ -56,6 +56,7 @@ const SIREN = /^\d{9}$/;
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 const validationError = (message, details) =>
   new AppError(message, ERROR_CODES.VALIDATION_ERROR, details);
+const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
 // PROSPECTS_WORKSPACE_IDS (facultatif, ids séparés par des virgules) limite
 // l'ouverture à ces espaces : test en prod avant l'ouverture à tous
@@ -210,25 +211,27 @@ export function resetProviderCreditsCache() {
 }
 
 /**
- * Prospects réellement disponibles pour l'espace : le plus petit de son
- * quota offert, des crédits restants chez le fournisseur et du budget
- * mensuel de Newbi (une page de recherche réservée dans les deux derniers).
+ * Refuse une dépense que le compte fournisseur de Newbi ne couvre plus. Le
+ * client ne voit jamais ce solde (seulement le sien) : c'est à Newbi de
+ * racheter des crédits, d'où l'erreur dans les journaux.
  */
-export async function getProspectAvailability(workspaceId) {
-  const quota = await getProspectQuota(workspaceId);
-  const [provider, monthUsed] = await Promise.all([
-    isProspectGenerationEnabled(workspaceId) ? getProviderCreditsLeft() : null,
-    getMonthlyCreditsUsed(),
-  ]);
-  const limits = [quota.remaining, monthlyCreditCap() - monthUsed - 1];
-  if (provider !== null) limits.push(provider - 1);
-  return { ...quota, available: Math.max(0, Math.min(...limits)) };
+async function assertProviderCanCover(creditsNeeded) {
+  const left = await getProviderCreditsLeft();
+  if (left === null || left >= creditsNeeded) return;
+  logger.error(
+    `[Prospects] Solde Societeinfo insuffisant : ${left} crédit(s) pour ${creditsNeeded} demandé(s). Racheter des crédits.`,
+  );
+  throw new AppError(
+    "La génération de prospects est momentanément indisponible. Réessayez un peu plus tard ou demandez moins de prospects.",
+    ERROR_CODES.VALIDATION_ERROR,
+    { reason: "PROVIDER_CREDITS_LOW" },
+  );
 }
 
-/** Disponibilité relue après une dépense (solde fournisseur non mis en cache). */
-async function freshAvailability(workspaceId) {
+/** Solde relu après une dépense (solde fournisseur non mis en cache). */
+async function freshBalance(workspaceId) {
   resetProviderCreditsCache();
-  return getProspectAvailability(workspaceId);
+  return getProspectBalance(workspaceId);
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -282,10 +285,16 @@ async function buildCriteria(input = {}) {
   }
 }
 
-/** Une page chez le fournisseur : limites vérifiées, crédit journalisé. */
+/**
+ * Une page chez le fournisseur : 1 crédit du solde de l'espace, limites
+ * vérifiées, crédit journalisé.
+ */
 async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
+  const balance = await getProspectBalance(workspaceId);
+  const source = spendSource(balance);
+  if (!source) throw insufficientCreditsError(balance, 1);
   await assertSearchAllowed(workspaceId);
-  await assertGlobalBudget(1);
+  await assertGlobalBudget(1, balance);
 
   let result;
   try {
@@ -298,6 +307,7 @@ async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
     workspaceId: toObjectId(workspaceId),
     kind: "search",
     credits: 1,
+    source,
     userId: userId ? toObjectId(userId) : undefined,
   });
   return result;
@@ -305,7 +315,7 @@ async function fetchSearchPage({ workspaceId, userId, criteria, page }) {
 
 /**
  * Une page de résultats (25 au plus) : aperçu sans coordonnées.
- * Coûte 1 crédit à Newbi, rien au quota de l'espace.
+ * Coûte 1 crédit à l'espace.
  */
 export async function searchProspects({ workspaceId, userId, input = {} }) {
   assertEnabled(workspaceId);
@@ -337,7 +347,7 @@ export async function searchProspects({ workspaceId, userId, input = {} }) {
       alreadyInClients: existing.has(r.siren),
       clientId: existing.get(r.siren) || null,
     })),
-    quota: await getProspectAvailability(workspaceId),
+    quota: await getProspectBalance(workspaceId),
   };
 }
 
@@ -402,8 +412,8 @@ function buildClientDoc({ mapped, workspaceId, user, fallbackName }) {
 }
 
 /**
- * Débloque les fiches choisies : 1 prospect du quota par entreprise
- * réellement débloquée. Une entreprise déjà dans les clients de l'espace ne
+ * Débloque les fiches choisies : 1 crédit par entreprise réellement
+ * débloquée. Une entreprise déjà dans les clients de l'espace ne
  * coûte rien ; une entreprise opposée à la prospection n'est jamais livrée.
  */
 export async function unlockProspects({
@@ -443,18 +453,18 @@ export async function unlockProspects({
     }
   }
 
-  const quota = await getProspectQuota(workspaceId);
-  if (toUnlock.length > quota.remaining) {
-    throw validationError(
-      quota.remaining > 0
-        ? `Il vous reste ${quota.remaining} prospect${quota.remaining > 1 ? "s" : ""} : sélectionnez-en ${quota.remaining} au maximum.`
-        : quota.plan
-          ? "Vous avez utilisé tous vos prospects offerts."
-          : "Les prospects offerts sont réservés aux abonnements payés.",
-      { reason: "QUOTA_EXCEEDED", remaining: quota.remaining },
+  let balance = await getProspectBalance(workspaceId);
+  if (toUnlock.length > balance.available) {
+    throw insufficientCreditsError(
+      balance,
+      toUnlock.length,
+      `sélectionnez ${plural(balance.available, "prospect")} au maximum`,
     );
   }
-  if (toUnlock.length) await assertGlobalBudget(toUnlock.length);
+  if (toUnlock.length) {
+    await assertGlobalBudget(toUnlock.length, balance);
+    await assertProviderCanCover(toUnlock.length);
+  }
 
   const opposition =
     oppositionStatuses || (await checkCommercialOpposition(toUnlock));
@@ -477,6 +487,12 @@ export async function unlockProspects({
       continue;
     }
 
+    const source = spendSource(balance);
+    if (!source) {
+      skipped.push({ siren, reason: "QUOTA_EXCEEDED" });
+      break;
+    }
+
     // Réservation avant l'appel payant : deux demandes simultanées pour la
     // même entreprise ne la font pas payer deux fois (index unique)
     let usage;
@@ -486,7 +502,7 @@ export async function unlockProspects({
         kind: "unlock",
         credits: 1,
         siren,
-        bucket: quota.bucket,
+        source,
         userId: user?.id ? toObjectId(user.id) : undefined,
       });
     } catch (error) {
@@ -497,9 +513,9 @@ export async function unlockProspects({
       throw error;
     }
 
-    // Deux ajouts lancés en même temps ne dépassent pas le quota
-    const fresh = await getProspectQuota(workspaceId);
-    if (fresh.used > fresh.quota) {
+    // Deux ajouts lancés en même temps ne dépassent pas le solde
+    balance = await getProspectBalance(workspaceId);
+    if (balance.overdrawn[source]) {
       await ProspectCreditUsage.deleteOne({ _id: usage._id });
       skipped.push({ siren, reason: "QUOTA_EXCEEDED" });
       break;
@@ -513,6 +529,7 @@ export async function unlockProspects({
       creditsUsed++;
     } catch (error) {
       await ProspectCreditUsage.deleteOne({ _id: usage._id });
+      balance = await getProspectBalance(workspaceId);
       if (error instanceof ProspectProviderError && error.isAccountIssue) {
         providerError = providerToAppError(error);
         break;
@@ -591,12 +608,12 @@ export async function unlockProspects({
     creditsUsed,
     skipped,
     listId: list?._id || null,
-    quota: await freshAvailability(workspaceId),
+    quota: await freshBalance(workspaceId),
     providerError: providerError?.message || null,
   };
 }
 
-export { MAX_NAF_CODES };
+export { MAX_NAF_CODES, getProspectBalance };
 
 // Pages parcourues au plus pour trouver le nombre demandé (1 crédit chacune)
 export const MAX_GENERATION_PAGES = 6;
@@ -658,17 +675,19 @@ export async function generateProspects({
   }
   await resolveTargetList(workspaceId, { listId, newListName });
 
-  const availability = await getProspectAvailability(workspaceId);
-  if (wanted > availability.available) {
-    throw validationError(
-      availability.available > 0
-        ? `Il vous reste ${availability.available} prospect${availability.available > 1 ? "s" : ""} disponible${availability.available > 1 ? "s" : ""}.`
-        : availability.plan
-          ? "Vous n'avez plus de prospects disponibles."
-          : "Les prospects offerts sont réservés aux abonnements payés.",
-      { reason: "QUOTA_EXCEEDED", remaining: availability.available },
+  // 1 crédit par prospect, plus au moins une page de résultats lue
+  const balance = await getProspectBalance(workspaceId);
+  const budget = balance.available;
+  if (wanted + 1 > budget) {
+    throw insufficientCreditsError(
+      balance,
+      wanted + 1,
+      budget > 1
+        ? `demandez ${plural(budget - 1, "prospect")} au maximum (1 crédit par prospect et 1 par page de 25 entreprises lues)`
+        : "il en faut au moins 2 (une page lue et un prospect)",
     );
   }
+  await assertProviderCanCover(wanted + 1);
 
   // Après le contrôle du quota : le rayon peut interroger la base des communes
   const criteria = await buildCriteria(input);
@@ -684,6 +703,8 @@ export async function generateProspects({
   let outOfRadiusCount = 0;
   let searchCredits = 0;
   let checks = 0;
+  // Prospects que le solde paie encore, pages déjà lues déduites
+  const affordable = () => Math.min(wanted, budget - searchCredits);
 
   /** Retient des entreprises nouvelles pour l'espace et libres de toute opposition. */
   async function consider(sirensToCheck) {
@@ -698,7 +719,7 @@ export async function generateProspects({
     let i = 0;
     for (
       ;
-      i < candidates.length && chosen.length < wanted;
+      i < candidates.length && chosen.length < affordable();
       i += OPPOSITION_CHUNK
     ) {
       // API publique limitée à 7 requêtes par seconde
@@ -708,7 +729,8 @@ export async function generateProspects({
       for (const siren of chunk) {
         const status = checked.get(siren);
         statuses.set(siren, status);
-        if (status === "ALLOWED" && chosen.length < wanted) chosen.push(siren);
+        if (status === "ALLOWED" && chosen.length < affordable())
+          chosen.push(siren);
         else if (status === "OPPOSED") opposedCount++;
         else if (status === "CLOSED") closedCount++;
         // En trop, ou registre muet : retentée la fois suivante
@@ -735,8 +757,11 @@ export async function generateProspects({
   let pagesRead = 0;
   let cycleDone = false;
 
+  // Une page de plus seulement si le solde paie encore la page et au moins
+  // un prospect de plus
   while (
     chosen.length < wanted &&
+    budget - searchCredits - 1 > chosen.length &&
     pagesRead < MAX_GENERATION_PAGES &&
     !cycleDone
   ) {
@@ -800,7 +825,7 @@ export async function generateProspects({
       creditsUsed: searchCredits,
       skipped: [],
       listId: listId || null,
-      quota: await freshAvailability(workspaceId),
+      quota: await freshBalance(workspaceId),
       providerError: null,
     };
   }

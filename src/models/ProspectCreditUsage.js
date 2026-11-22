@@ -3,12 +3,12 @@ import mongoose from "mongoose";
 /**
  * Journal des crédits consommés chez le fournisseur de prospects (Societeinfo).
  *
- * - kind « search » : une page de résultats (1 crédit pour Newbi, hors quota
- *   de l'espace).
- * - kind « unlock » : une fiche débloquée et ajoutée aux clients de l'espace.
- *   Décomptée du quota de l'espace (bucket) et gardée comme trace RGPD
- *   (qui, quand, quelle source).
+ * - kind « search » : une page de résultats (1 crédit).
+ * - kind « unlock » : une fiche débloquée et ajoutée aux clients de l'espace
+ *   (1 crédit), gardée comme trace RGPD (qui, quand, quelle source).
  *
+ * Chaque crédit est décompté du solde de l'espace : crédits offerts du mois
+ * (source « plan ») puis crédits achetés (source « purchased »).
  * Le total du mois, tous espaces confondus, sert au plafond de dépense global.
  */
 const prospectCreditUsageSchema = new mongoose.Schema(
@@ -40,7 +40,13 @@ const prospectCreditUsageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Client",
     },
-    // Quota utilisé : « monthly » (TPE, Entreprise) ou « welcome » (Freelance)
+    // Solde débité : crédits offerts du mois ou crédits achetés. Absent sur
+    // les lignes d'avant le 11/11/2026 : comptées comme crédits du mois.
+    source: {
+      type: String,
+      enum: ["plan", "purchased"],
+    },
+    // Ancien quota (avant les crédits) : « monthly » ou « welcome »
     bucket: {
       type: String,
       enum: ["monthly", "welcome"],

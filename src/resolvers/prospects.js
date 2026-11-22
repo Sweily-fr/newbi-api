@@ -13,7 +13,7 @@ import {
   searchProspects,
   unlockProspects,
   generateProspects,
-  getProspectAvailability,
+  getProspectBalance,
   MAX_UNLOCK_PER_REQUEST,
   MAX_GENERATION_PAGES,
   MAX_NAF_CODES,
@@ -40,7 +40,7 @@ const prospectsResolvers = {
       return {
         enabled: isProspectGenerationEnabled(workspaceId),
         trades: listProspectTrades(),
-        quota: await getProspectAvailability(workspaceId),
+        quota: await getProspectBalance(workspaceId),
         maxPerUnlock: MAX_UNLOCK_PER_REQUEST,
         maxSearchPages: MAX_GENERATION_PAGES,
         maxNafCodes: MAX_NAF_CODES,
