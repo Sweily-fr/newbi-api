@@ -68,14 +68,13 @@ import {
 } from "../../src/services/prospects/prospectMapping.js";
 import { resolveNafCodes } from "../../src/services/prospects/prospectTrades.js";
 import {
-  getProspectQuota,
+  getProspectBalance,
   getPaidPlan,
 } from "../../src/services/prospects/prospectQuota.js";
 import {
   searchProspects,
   unlockProspects,
   generateProspects,
-  getProspectAvailability,
   resetProviderCreditsCache,
   isProspectGenerationEnabled,
   searchCursorKey,
@@ -87,6 +86,7 @@ import Client from "../../src/models/Client.js";
 import ClientList from "../../src/models/ClientList.js";
 import ProspectCreditUsage from "../../src/models/ProspectCreditUsage.js";
 import ProspectSearchCursor from "../../src/models/ProspectSearchCursor.js";
+import ProspectCreditPurchase from "../../src/models/ProspectCreditPurchase.js";
 import clientResolvers from "../../src/resolvers/client.js";
 
 const userId = buildUserId();
@@ -251,47 +251,119 @@ describe("métiers", () => {
   });
 });
 
-describe("quota de prospects offerts", () => {
+describe("crédits de prospection par offre", () => {
+  // Crédits déjà dépensés ce mois-ci
+  const spend = (credits, source) =>
+    ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits,
+      ...(source ? { source } : {}),
+    });
+  const buy = (credits, extra = {}) =>
+    ProspectCreditPurchase.create({
+      workspaceId,
+      credits,
+      stripeCheckoutSessionId: `cs_test_${credits}_${Math.random()}`,
+      ...extra,
+    });
+
   it("rien pendant l'essai ni sans abonnement", async () => {
     await setSubscription("pme", "trialing");
     expect(await getPaidPlan(workspaceId)).toBeNull();
-    expect(await getProspectQuota(workspaceId)).toMatchObject({
-      quota: 0,
-      remaining: 0,
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      plan: null,
+      monthlyCredits: 0,
+      available: 0,
+      canPurchase: false,
     });
   });
 
-  it("TPE : 20 par mois, Entreprise : 50 par mois", async () => {
-    expect(await getProspectQuota(workspaceId)).toMatchObject({
-      plan: "pme",
-      bucket: "monthly",
-      quota: 20,
-      remaining: 20,
-    });
-    await setSubscription("entreprise");
-    expect((await getProspectQuota(workspaceId)).quota).toBe(50);
-  });
-
-  it("Freelance : 10 une seule fois, les mois passés comptent aussi", async () => {
+  it("Standard : aucun crédit, l'offre Premium est la marche suivante", async () => {
     await setSubscription("freelance");
-    const old = await ProspectCreditUsage.create({
-      workspaceId,
-      kind: "unlock",
-      credits: 1,
-      siren: "111111111",
-      bucket: "welcome",
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      plan: "freelance",
+      monthlyCredits: 0,
+      available: 0,
+      nextPlan: "pme",
+      nextPlanCredits: 50,
+      canPurchase: false,
     });
-    await ProspectCreditUsage.collection.updateOne(
-      { _id: old._id },
+  });
+
+  it("Premium : 50 crédits par mois, puis l'offre Entreprise", async () => {
+    await spend(5);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      plan: "pme",
+      monthlyCredits: 50,
+      monthlyUsed: 5,
+      monthlyRemaining: 45,
+      available: 45,
+      nextPlan: "entreprise",
+      nextPlanCredits: 100,
+      canPurchase: false,
+    });
+  });
+
+  it("Entreprise : 100 crédits par mois, puis les crédits achetés", async () => {
+    await setSubscription("entreprise");
+    await spend(100);
+    await buy(30);
+    await buy(10, { status: "refunded" });
+    await spend(4, "purchased");
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      monthlyCredits: 100,
+      monthlyRemaining: 0,
+      purchasedRemaining: 26,
+      available: 26,
+      nextPlan: null,
+      canPurchase: true,
+    });
+  });
+
+  it("les crédits du mois repartent le 1er, pas les crédits achetés", async () => {
+    await setSubscription("entreprise");
+    await buy(10);
+    const old = await spend(100);
+    const oldPurchased = await spend(3, "purchased");
+    await ProspectCreditUsage.collection.updateMany(
+      { _id: { $in: [old._id, oldPurchased._id] } },
       { $set: { createdAt: new Date("2025-01-10T10:00:00Z") } },
     );
-    expect(await getProspectQuota(workspaceId)).toMatchObject({
-      bucket: "welcome",
-      quota: 10,
-      used: 1,
-      remaining: 9,
-      resetsAt: null,
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      monthlyUsed: 0,
+      monthlyRemaining: 100,
+      purchasedRemaining: 7,
+      available: 107,
     });
+  });
+
+  it("dit quoi faire quand il n'y a plus de crédits, selon l'offre", async () => {
+    const generer = () =>
+      generateProspects({
+        workspaceId,
+        user,
+        input: { tradeIds: ["menuisier"] },
+        count: 1,
+      });
+
+    await setSubscription("freelance");
+    await expect(generer()).rejects.toThrow(
+      /à partir de l'offre Premium \(50 crédits par mois\)/,
+    );
+
+    await setSubscription("pme");
+    await spend(50);
+    await expect(generer()).rejects.toThrow(
+      /Vos 50 crédits du mois sont utilisés\. Passez à l'offre Entreprise pour en avoir 100 par mois/,
+    );
+
+    await setSubscription("entreprise");
+    await spend(50);
+    await expect(generer()).rejects.toThrow(
+      /Vos 100 crédits du mois sont utilisés\. Achetez des crédits/,
+    );
+    expect(searchCompanies).not.toHaveBeenCalled();
   });
 });
 
@@ -402,7 +474,7 @@ describe("déblocage", () => {
 
     expect(result.unlockedCount).toBe(3);
     expect(result.skipped).toEqual([]);
-    expect(result.quota).toMatchObject({ used: 3, remaining: 17 });
+    expect(result.quota).toMatchObject({ monthlyUsed: 3, available: 47 });
 
     const sansEmail = await Client.findOne({
       "prospect.siren": "111111111",
@@ -420,7 +492,7 @@ describe("déblocage", () => {
     expect(
       await ProspectCreditUsage.countDocuments({
         kind: "unlock",
-        bucket: "monthly",
+        source: "plan",
       }),
     ).toBe(3);
   });
@@ -444,7 +516,7 @@ describe("déblocage", () => {
     expect(again.skipped).toEqual([
       { siren: "111111111", reason: "ALREADY_IN_CLIENTS" },
     ]);
-    expect(again.quota.used).toBe(1);
+    expect(again.quota.monthlyUsed).toBe(1);
   });
 
   it("n'ajoute jamais une entreprise opposée à la prospection, ni une non vérifiée", async () => {
@@ -468,15 +540,22 @@ describe("déblocage", () => {
       "VERIFICATION_UNAVAILABLE",
       "COMPANY_CLOSED",
     ]);
-    expect(result.quota.used).toBe(1);
+    expect(result.quota.monthlyUsed).toBe(1);
   });
 
-  it("refuse avant toute dépense quand le quota ne suffit pas", async () => {
-    await setSubscription("freelance");
-    const sirens = Array.from({ length: 11 }, (_, i) => String(100000000 + i));
+  it("refuse avant toute dépense quand le solde ne suffit pas", async () => {
+    // 20 crédits restants sur les 50 du mois
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 30,
+    });
+    const sirens = Array.from({ length: 21 }, (_, i) => String(100000000 + i));
     await expect(
       unlockProspects({ workspaceId, user, sirens }),
-    ).rejects.toThrow(/Il vous reste 10 prospects/);
+    ).rejects.toThrow(
+      /Il vous reste 20 crédits : sélectionnez 20 prospects au maximum/,
+    );
     expect(getCompany).not.toHaveBeenCalled();
   });
 
@@ -500,8 +579,8 @@ describe("déblocage", () => {
     });
     expect(result.unlockedCount).toBe(1);
     expect(result.providerError).toMatch(/indisponible/);
-    // La fiche ratée ne coûte rien au quota
-    expect(result.quota.used).toBe(1);
+    // La fiche ratée ne coûte rien au solde
+    expect(result.quota.monthlyUsed).toBe(1);
     expect(await ProspectCreditUsage.exists({ siren: "222222222" })).toBeNull();
   });
 
@@ -531,19 +610,35 @@ const page = (sirens, totalPages = 3) => ({
   results: sirens.map((siren) => ({ siren, name: `M ${siren}` })),
 });
 
-describe("disponibilité réelle", () => {
-  it("prend le plus petit du quota et des crédits du fournisseur", async () => {
+describe("solde du fournisseur", () => {
+  it("n'entre jamais dans le solde affiché à l'espace", async () => {
     getKeyInfo.mockResolvedValue({ totalAvailableCredits: 8 });
-    expect(await getProspectAvailability(workspaceId)).toMatchObject({
-      remaining: 20,
-      // 8 crédits moins une page de recherche
-      available: 7,
-    });
+    expect((await getProspectBalance(workspaceId)).available).toBe(50);
   });
 
-  it("ignore le solde fournisseur quand il est illisible", async () => {
+  it("refuse sans rien dépenser une génération qu'il ne couvre pas", async () => {
+    getKeyInfo.mockResolvedValue({ totalAvailableCredits: 4 });
+    await expect(
+      generateProspects({
+        workspaceId,
+        user,
+        input: { tradeIds: ["menuisier"] },
+        count: 5,
+      }),
+    ).rejects.toThrow(/momentanément indisponible/);
+    expect(searchCompanies).not.toHaveBeenCalled();
+  });
+
+  it("laisse passer quand il est illisible", async () => {
     getKeyInfo.mockRejectedValue(new Error("réseau"));
-    expect((await getProspectAvailability(workspaceId)).available).toBe(20);
+    searchCompanies.mockResolvedValue(page(["100000002"], 1));
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 1,
+    });
+    expect(result.unlockedCount).toBe(1);
   });
 });
 
@@ -607,17 +702,119 @@ describe("génération par nombre", () => {
     expect(result).toMatchObject({ requested: 5, unlockedCount: 1 });
   });
 
-  it("refuse plus que la disponibilité réelle, avant toute recherche", async () => {
-    getKeyInfo.mockResolvedValue({ totalAvailableCredits: 4 });
+  it("refuse plus que le solde de l'espace, avant toute recherche", async () => {
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 47,
+    });
     await expect(
       generateProspects({
         workspaceId,
         user,
         input: { tradeIds: ["menuisier"] },
-        count: 5,
+        count: 3,
       }),
-    ).rejects.toThrow(/Il vous reste 3 prospects disponibles/);
+    ).rejects.toThrow(
+      /Il vous reste 3 crédits : demandez 2 prospects au maximum/,
+    );
     expect(searchCompanies).not.toHaveBeenCalled();
+  });
+
+  it("ne lit jamais une page que le solde ne peut plus payer", async () => {
+    // 4 crédits, et chaque page n'apporte qu'une entreprise
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 46,
+    });
+    let n = 0;
+    searchCompanies.mockImplementation(async () =>
+      page([String(100000010 + n++)], 6),
+    );
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 3,
+    });
+    // Page 1 + 1 fiche, page 2 + 1 fiche : une 3e page ne laisserait plus
+    // de quoi payer un prospect de plus
+    expect(result).toMatchObject({
+      unlockedCount: 2,
+      searchCredits: 2,
+      creditsUsed: 4,
+    });
+    expect(result.quota.available).toBe(0);
+  });
+
+  it("dépense les crédits du mois puis les crédits achetés", async () => {
+    await setSubscription("entreprise");
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 99,
+    });
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 10,
+      stripeCheckoutSessionId: "cs_test_achat",
+    });
+    searchCompanies.mockResolvedValue(page(["100000002", "100000003"], 1));
+
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 2,
+    });
+
+    expect(result).toMatchObject({ unlockedCount: 2, creditsUsed: 3 });
+    // La page prend le dernier crédit du mois, les fiches les crédits achetés
+    const sources = await ProspectCreditUsage.find(
+      { credits: 1 },
+      { kind: 1, source: 1 },
+    )
+      .sort({ createdAt: 1, _id: 1 })
+      .lean();
+    expect(sources.map((u) => `${u.kind}:${u.source}`)).toEqual([
+      "search:plan",
+      "unlock:purchased",
+      "unlock:purchased",
+    ]);
+    expect(result.quota).toMatchObject({
+      monthlyRemaining: 0,
+      purchasedRemaining: 8,
+      available: 8,
+    });
+  });
+
+  it("le budget mensuel de Newbi borne les crédits offerts, jamais les crédits achetés", async () => {
+    process.env.PROSPECT_MONTHLY_CREDIT_CAP = "100";
+    await setSubscription("entreprise");
+    // 100 crédits offerts dépensés ce mois-ci : budget de Newbi atteint
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 100,
+    });
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 10,
+      stripeCheckoutSessionId: "cs_test_budget",
+    });
+    searchCompanies.mockResolvedValue(page(["100000002"], 1));
+
+    const result = await generateProspects({
+      workspaceId,
+      user,
+      input: { tradeIds: ["menuisier"] },
+      count: 1,
+    });
+
+    // Page et fiche payées par les crédits achetés, malgré le budget atteint
+    expect(result).toMatchObject({ unlockedCount: 1, creditsUsed: 2 });
+    expect(result.quota).toMatchObject({ purchasedRemaining: 8 });
   });
 });
 
