@@ -7,12 +7,7 @@ import {
   monthlyCreditCap,
 } from "./prospectQuota.js";
 import { alertRecipients } from "../errorAlertService.js";
-import {
-  APP_URL,
-  escapeHtml,
-  renderEmail,
-  sendRenderedEmail,
-} from "../../utils/trialEmails.js";
+import { APP_URL, escapeHtml, renderEmail } from "../../utils/trialEmails.js";
 import logger from "../../utils/logger.js";
 
 /**
@@ -194,7 +189,13 @@ export async function sendCustomerActivationEmail({ order }) {
     ctaLabel: "Générer des prospects",
     ctaUrl: `${APP_URL}/dashboard/clients`,
   });
-  await sendRenderedEmail({ to, subject, html });
+  // Par Resend, depuis l'adresse Newbi (RESEND_FROM_EMAIL, no-reply@newbi.fr
+  // en prod), comme l'e-mail à l'équipe ; pas par le SMTP des relances
+  // d'essai (sendRenderedEmail), dont l'expéditeur de prod est une adresse
+  // sweily.fr (décision du 22/11/2026)
+  const { default: emailReminderService } =
+    await import("../emailReminderService.js");
+  await emailReminderService.sendEmail({ to, subject, html });
   return true;
 }
 
