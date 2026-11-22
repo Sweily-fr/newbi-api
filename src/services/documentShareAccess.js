@@ -159,7 +159,10 @@ export async function findVisitorAccess(token, session) {
   return { ...opened, email };
 }
 
-/** Document déposé par ce visiteur (seul cas où il peut le supprimer). */
+/**
+ * Document déposé par ce visiteur : seul cas où il peut le renommer, le
+ * déplacer, le remplacer ou le supprimer.
+ */
 export const isVisitorUpload = (document, email) =>
   Boolean(email) && document?.clientUpload?.email === email;
 

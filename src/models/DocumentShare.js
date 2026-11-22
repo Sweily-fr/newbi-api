@@ -68,9 +68,10 @@ const documentShareSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     expiresAt: { type: Date, default: null },
     passwordHash: { type: String, default: null },
-    // Le client peut déposer des documents dans les dossiers de l'accès et
-    // supprimer ceux qu'il a déposés. Absent sur les accès créés avant :
-    // fermé, rien n'est ouvert sans que le propriétaire le décide.
+    // Le client peut déposer des documents dans les dossiers de l'accès, et
+    // renommer, déplacer, remplacer ou supprimer ceux qu'il a déposés.
+    // Absent sur les accès créés avant : fermé, rien n'est ouvert sans que
+    // le propriétaire le décide.
     allowUploads: { type: Boolean, default: false },
     visitors: [visitorSchema],
     bannedEmails: [bannedEmailSchema],
