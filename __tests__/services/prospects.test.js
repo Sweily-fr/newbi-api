@@ -279,7 +279,7 @@ describe("crédits de prospection par offre", () => {
     });
   });
 
-  it("Freelance : aucun crédit, l'offre TPE est la marche suivante", async () => {
+  it("Standard : aucun crédit, l'offre Premium est la marche suivante", async () => {
     await setSubscription("freelance");
     expect(await getProspectBalance(workspaceId)).toMatchObject({
       plan: "freelance",
@@ -291,7 +291,7 @@ describe("crédits de prospection par offre", () => {
     });
   });
 
-  it("TPE : 50 crédits par mois, puis l'offre Entreprise", async () => {
+  it("Premium : 50 crédits par mois, puis l'offre Entreprise", async () => {
     await spend(5);
     expect(await getProspectBalance(workspaceId)).toMatchObject({
       plan: "pme",
@@ -349,7 +349,7 @@ describe("crédits de prospection par offre", () => {
 
     await setSubscription("freelance");
     await expect(generer()).rejects.toThrow(
-      /à partir de l'offre TPE \(50 crédits par mois\)/,
+      /à partir de l'offre Premium \(50 crédits par mois\)/,
     );
 
     await setSubscription("pme");

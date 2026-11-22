@@ -50,8 +50,8 @@ type ProspectPlace {
 
 """
 Crédits de prospection de l'espace : 1 crédit par page de 25 entreprises
-lues, 1 par prospect ajouté. Offerts chaque mois selon l'offre (Freelance 0,
-TPE 20, Entreprise 50), puis crédits achetés (offre Entreprise seulement).
+lues, 1 par prospect ajouté. Offerts chaque mois selon l'offre (Standard 0,
+Premium 50, Entreprise 100), puis crédits achetés (offre Entreprise seulement).
 """
 type ProspectQuota {
   "Plan payé (freelance, pme, entreprise), null pendant l'essai"

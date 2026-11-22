@@ -3,14 +3,15 @@ import ProspectCreditUsage from "../../models/ProspectCreditUsage.js";
 import ProspectCreditPurchase from "../../models/ProspectCreditPurchase.js";
 import { parisMonthBounds } from "../esignatureQuota.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
+import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
 
 /**
  * Crédits de prospection d'un espace. 1 crédit = 1 page de 25 entreprises
  * lue ou 1 prospect ajouté, le décompte même du fournisseur : le coût pour
  * Newbi ne dépasse jamais les crédits offerts plus les crédits vendus.
  *
- * - Freelance : rien, la génération commence à l'offre TPE.
- * - TPE (« pme ») : 50 crédits par mois ; pour plus, passer à Entreprise.
+ * - Standard (« freelance ») : rien, la génération commence à l'offre Premium.
+ * - Premium (« pme ») : 50 crédits par mois ; pour plus, passer à Entreprise.
  * - Entreprise : 100 crédits par mois ; pour plus, crédits achetés à l'unité.
  * Rien pendant l'essai : seul un abonnement payé ouvre des crédits, pour
  * qu'on ne puisse pas enchaîner les comptes d'essai.
@@ -23,15 +24,8 @@ export const PROSPECT_MONTHLY_CREDITS = {
   entreprise: 100,
 };
 
-const PLAN_ORDER = ["freelance", "pme", "entreprise"];
 // Seule l'offre la plus haute achète des crédits : avant, on monte d'offre
 export const PURCHASE_PLAN = "entreprise";
-
-export const PLAN_LABELS = {
-  freelance: "Freelance",
-  pme: "TPE",
-  entreprise: "Entreprise",
-};
 
 /** Offre au-dessus qui donne plus de crédits, null pour la plus haute. */
 export function nextProspectPlan(plan) {
@@ -173,8 +167,8 @@ const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 
 /**
  * Refus quand le solde ne couvre pas la dépense, avec la marche suivante :
- * offre TPE pour un Freelance, offre Entreprise pour une TPE, achat de
- * crédits pour une Entreprise.
+ * offre Premium pour un Standard, offre Entreprise pour un Premium, achat
+ * de crédits pour une Entreprise.
  */
 export function insufficientCreditsError(balance, needed, detail = "") {
   const { plan, available, monthlyCredits, nextPlan, nextPlanCredits } =
