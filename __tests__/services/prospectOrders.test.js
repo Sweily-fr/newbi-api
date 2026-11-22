@@ -20,8 +20,16 @@ vi.mock(
   }),
 );
 
+vi.mock("../../src/services/emailReminderService.js", () => ({
+  default: { sendEmail: vi.fn(async () => ({ id: "test" })) },
+}));
+
 import { getKeyInfo } from "../../src/services/prospects/societeinfoClient.js";
-import { processProspectOrders } from "../../src/services/prospects/prospectOrders.js";
+import emailReminderService from "../../src/services/emailReminderService.js";
+import {
+  processProspectOrders,
+  sendTeamOrderEmail,
+} from "../../src/services/prospects/prospectOrders.js";
 import { getProspectBalance } from "../../src/services/prospects/prospectQuota.js";
 import ProspectCreditPurchase from "../../src/models/ProspectCreditPurchase.js";
 import ProspectCreditUsage from "../../src/models/ProspectCreditUsage.js";
@@ -303,5 +311,69 @@ describe("commandes de crédits de prospection", () => {
     expect(getKeyInfo).not.toHaveBeenCalled();
     expect(notifyTeam).not.toHaveBeenCalled();
     expect(notifyCustomer).not.toHaveBeenCalled();
+  });
+});
+
+describe("e-mail à l'équipe", () => {
+  const order = { _id: "c1", workspaceId, credits: 25, amountTotal: 750 };
+
+  afterAll(() => {
+    delete process.env.ERROR_ALERT_EMAILS;
+  });
+
+  it("sans adresse : rien n'est envoyé (false, retenté plus tard)", async () => {
+    delete process.env.ERROR_ALERT_EMAILS;
+    expect(
+      await sendTeamOrderEmail({ order, activated: false, missing: 213 }),
+    ).toBe(false);
+    expect(emailReminderService.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("commande à servir : le calcul et ce qu'il faut racheter", async () => {
+    process.env.ERROR_ALERT_EMAILS = "a@test.fr, b@test.fr";
+    const sent = await sendTeamOrderEmail({
+      order,
+      activated: false,
+      stock: 12,
+      owed: 0,
+      reserve: 200,
+      missing: 213,
+    });
+    expect(sent).toBe(true);
+    expect(emailReminderService.sendEmail).toHaveBeenCalledTimes(2);
+    const { subject, html } = emailReminderService.sendEmail.mock.calls[0][0];
+    expect(subject).toBe(
+      "[Newbi] Commande de 25 crédits de prospection à servir",
+    );
+    expect(html).toContain("7,50 €");
+    expect(html).toContain("gardés pour les abonnements ce mois-ci");
+    expect(html).toContain(
+      "Rechargez le compte Societeinfo d'au moins 213 crédits",
+    );
+  });
+
+  it("commande activée : ni calcul ni rachat", async () => {
+    process.env.ERROR_ALERT_EMAILS = "a@test.fr";
+    await sendTeamOrderEmail({
+      order,
+      activated: true,
+      stock: 500,
+      owed: 0,
+      reserve: 100,
+      missing: null,
+    });
+    const { subject, html } = emailReminderService.sendEmail.mock.calls[0][0];
+    expect(subject).toBe(
+      "[Newbi] Commande de 25 crédits de prospection activée",
+    );
+    expect(html).not.toContain("Rechargez");
+  });
+
+  it("envoi refusé partout : false, pour être retenté", async () => {
+    process.env.ERROR_ALERT_EMAILS = "a@test.fr";
+    emailReminderService.sendEmail.mockRejectedValueOnce(new Error("Resend"));
+    expect(
+      await sendTeamOrderEmail({ order, activated: false, missing: null }),
+    ).toBe(false);
   });
 });

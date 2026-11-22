@@ -106,6 +106,19 @@ const euros = (cents) =>
     ? `${(cents / 100).toFixed(2).replace(".", ",")} €`
     : "inconnu";
 
+/** Commande en attente : pourquoi, et ce qu'il faut racheter pour la servir. */
+function waitingAdvice(missing) {
+  if (missing === null || missing === undefined) {
+    return `<p>Le stock Societeinfo n'a pas pu être lu : la commande s'active toute seule dès qu'il est lisible et suffisant, et le client est prévenu par e-mail.</p>`;
+  }
+  const amount =
+    missing > 0
+      ? ` d'au moins ${escapeHtml(missing)} crédit${missing > 1 ? "s" : ""}`
+      : "";
+  return `<p>Une commande s'active quand le stock Societeinfo la couvre en plus des crédits déjà dus aux clients, de ceux gardés pour les abonnements ce mois-ci et des commandes arrivées avant elle.</p>
+<p>Rechargez le compte Societeinfo${amount} : la commande s'active toute seule dans les 10 minutes qui suivent, et le client est prévenu par e-mail.</p>`;
+}
+
 /** Prévient l'équipe d'une commande (activée ou en attente du stock). */
 export async function sendTeamOrderEmail({
   order,
@@ -145,7 +158,7 @@ export async function sendTeamOrderEmail({
   const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#1a1a1a;max-width:640px;">
 <p style="font-weight:600;">Commande de ${escapeHtml(order.credits)} crédits de prospection : ${escapeHtml(state)}.</p>
 <table style="border-collapse:collapse;font-size:13px;">${rows}</table>
-${activated ? "" : `<p>Rechargez le compte Societeinfo : la commande s'active toute seule dans les 10 minutes qui suivent, et le client est prévenu par e-mail.</p>`}
+${activated ? "" : waitingAdvice(missing)}
 <p style="color:#999;font-size:12px;">Message automatique de newbi-api (commandes de crédits de prospection).</p>
 </div>`;
   const { default: emailReminderService } =
