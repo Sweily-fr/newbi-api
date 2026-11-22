@@ -226,7 +226,7 @@ describe("commandes de crédits de prospection", () => {
     });
   });
 
-  it("un e-mail en échec n'empêche pas l'activation et sera retenté", async () => {
+  it("un e-mail client en échec n'empêche pas l'activation et est retenté au passage suivant", async () => {
     stock(500);
     notifyCustomer.mockRejectedValueOnce(new Error("SMTP"));
     const order = await commande(25);
@@ -235,5 +235,73 @@ describe("commandes de crédits de prospection", () => {
     const relu = await relire(order);
     expect(relu.status).toBe("paid");
     expect(relu.customerNotifiedAt).toBeNull();
+    expect(relu.teamNotifiedAt).toBeInstanceOf(Date);
+
+    // Commande déjà activée : seul l'e-mail client repart, une fois
+    await passer();
+    expect(notifyCustomer).toHaveBeenCalledTimes(2);
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+    expect((await relire(order)).customerNotifiedAt).toBeInstanceOf(Date);
+    await passer();
+    expect(notifyCustomer).toHaveBeenCalledTimes(2);
+  });
+
+  it("e-mail équipe pas parti (aucune adresse, envoi refusé) : retenté au passage suivant", async () => {
+    stock(120);
+    notifyTeam.mockResolvedValueOnce(false);
+    const order = await commande(25);
+
+    await passer();
+    expect((await relire(order)).teamNotifiedAt).toBeNull();
+
+    await passer();
+    expect(notifyTeam).toHaveBeenCalledTimes(2);
+    expect((await relire(order)).teamNotifiedAt).toBeInstanceOf(Date);
+    await passer();
+    expect(notifyTeam).toHaveBeenCalledTimes(2);
+  });
+
+  it("e-mail équipe d'une commande activée tout de suite : retenté après l'activation", async () => {
+    stock(500);
+    notifyTeam.mockRejectedValueOnce(new Error("Resend"));
+    const order = await commande(25);
+
+    await passer();
+    expect(await relire(order)).toMatchObject({
+      status: "paid",
+      teamNotifiedAt: null,
+    });
+    await passer();
+    expect(notifyTeam).toHaveBeenCalledTimes(2);
+    expect(notifyTeam.mock.calls[1][0]).toMatchObject({
+      activated: true,
+      missing: null,
+    });
+    expect((await relire(order)).teamNotifiedAt).toBeInstanceOf(Date);
+    expect(notifyCustomer).toHaveBeenCalledTimes(1);
+  });
+
+  it("achats d'avant les commandes et e-mails de plus de trois jours : jamais renvoyés", async () => {
+    // Achat activé tout de suite, avant les commandes (pas d'activatedAt)
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 50,
+      status: "paid",
+      stripeCheckoutSessionId: "cs_test_avant_commandes",
+    });
+    // Commande activée il y a quatre jours, e-mails jamais partis
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 25,
+      status: "paid",
+      activatedAt: new Date(Date.now() - 4 * 24 * 3600 * 1000),
+      stripeCheckoutSessionId: "cs_test_vieille_commande",
+    });
+
+    const result = await passer();
+    expect(result.activated).toEqual([]);
+    expect(getKeyInfo).not.toHaveBeenCalled();
+    expect(notifyTeam).not.toHaveBeenCalled();
+    expect(notifyCustomer).not.toHaveBeenCalled();
   });
 });
