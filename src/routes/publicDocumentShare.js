@@ -640,6 +640,10 @@ const EDITS_CLOSED = {
 };
 const NOT_FOUND = { success: false, message: "Document introuvable." };
 const FOLDER_NOT_FOUND = { success: false, message: "Dossier introuvable." };
+const EMPTY_NAME = {
+  success: false,
+  message: "Le nom du document ne peut pas être vide.",
+};
 
 /** Accès qui accepte les dépôts, pour un visiteur identifié. */
 async function loadDepositor(req, res) {
@@ -908,12 +912,7 @@ router.put("/:token/files/:documentId", depositLimiter, async (req, res) => {
         typeof name === "string"
           ? clientDocumentName(name, documentExtension(document))
           : null;
-      if (!cleaned) {
-        return res.status(400).json({
-          success: false,
-          message: "Le nom du document ne peut pas être vide.",
-        });
-      }
+      if (!cleaned) return res.status(400).json(EMPTY_NAME);
       changes.name = cleaned;
       // Le téléchargement porte le nom que voit le client
       changes.originalName = cleaned;
@@ -951,11 +950,14 @@ router.put("/:token/files/:documentId", depositLimiter, async (req, res) => {
 });
 
 /**
- * PUT /:token/files/:documentId/content?session=  (multipart, champ « file »)
+ * PUT /:token/files/:documentId/content?session=  (multipart : « file », et
+ * « name » facultatif)
  * Le visiteur remplace le fichier d'un document qu'il a déposé par une
- * nouvelle version. Le document garde son nom (l'extension suit le nouveau
- * fichier), son dossier, et côté espace ses tags et commentaires ;
- * l'ancienne version part à la corbeille de l'espace.
+ * nouvelle version. Nom : celui qu'il a choisi dans « name » (le nom du
+ * nouveau fichier ou le nom actuel), sinon le nom actuel ; l'extension est
+ * toujours celle du nouveau fichier. Le document garde son dossier, et côté
+ * espace ses tags et commentaires ; l'ancienne version part à la corbeille
+ * de l'espace.
  */
 router.put(
   "/:token/files/:documentId/content",
@@ -973,13 +975,25 @@ router.put(
 
       const received = await receiveClientFile(req, res, workspaceId);
       if (!received) return;
+      // Nom contrôlé avant l'envoi vers R2 : un nom vide ne coûte rien
+      const extension = received.checked.extension;
+      const requested = req.body?.name;
+      let name;
+      if (requested !== undefined) {
+        name =
+          typeof requested === "string"
+            ? clientDocumentName(requested, extension)
+            : null;
+        if (!name) return res.status(400).json(EMPTY_NAME);
+      } else {
+        name =
+          clientDocumentName(
+            document.name,
+            extension,
+            documentExtension(document),
+          ) || received.filename;
+      }
       const file = await storeClientFile(share, received);
-      const name =
-        clientDocumentName(
-          document.name,
-          received.checked.extension,
-          documentExtension(document),
-        ) || received.filename;
 
       // Remplacé seulement s'il n'a pas changé de fichier entre-temps
       const updated = await SharedDocument.findOneAndUpdate(
