@@ -190,9 +190,7 @@ export async function sendCustomerActivationEmail({ order }) {
     ctaUrl: `${APP_URL}/dashboard/clients`,
   });
   // Par Resend, depuis l'adresse Newbi (RESEND_FROM_EMAIL, no-reply@newbi.fr
-  // en prod), comme l'e-mail à l'équipe ; pas par le SMTP des relances
-  // d'essai (sendRenderedEmail), dont l'expéditeur de prod est une adresse
-  // sweily.fr (décision du 22/11/2026)
+  // en prod), comme l'e-mail à l'équipe
   const { default: emailReminderService } =
     await import("../emailReminderService.js");
   await emailReminderService.sendEmail({ to, subject, html });

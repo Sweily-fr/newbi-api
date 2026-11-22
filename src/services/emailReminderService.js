@@ -94,13 +94,15 @@ class EmailReminderService {
   /**
    * Envoie un email via Resend ou SMTP
    */
-  async sendEmail({ to, subject, html }) {
+  async sendEmail({ to, subject, html, text }) {
     if (this.useResend && this.resend) {
       const { data, error } = await this.resend.emails.send({
         from: `Newbi <${this.resendFromEmail}>`,
         to: [to],
         subject,
         html,
+        // Version texte, quand l'e-mail en a une (gabarits renderEmail)
+        ...(text ? { text } : {}),
       });
 
       if (error) {
@@ -121,6 +123,7 @@ class EmailReminderService {
       to,
       subject,
       html,
+      ...(text ? { text } : {}),
     });
 
     logger.info(`📧 Email envoyé via SMTP à ${to}`);
