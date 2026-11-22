@@ -27,12 +27,28 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_key
           chmod 600 ~/.ssh/vps_key
-          ssh-keyscan -H 51.91.254.74 >> ~/.ssh/known_hosts
+          # Une seule connexion (clé ed25519) au lieu d'une par type de clé ;
+          # si le VPS la refuse, la clé est prise à la première connexion
+          # (StrictHostKeyChecking=no, comme avant)
+          ssh-keyscan -t ed25519 -H 51.91.254.74 >> ~/.ssh/known_hosts || true
 
       - name: Deploy to Production
         run: |
           echo "🚀 Déploiement PRODUCTION en cours..."
-          SSH="ssh -i $HOME/.ssh/vps_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30"
+          # Une seule connexion SSH, partagée par toutes les commandes
+          # (ControlMaster), ouverte en réessayant : le VPS refuse par
+          # moments les connexions du robot (« Connection refused » dès la
+          # 1re commande, 4 déploiements sur 9 le 22/11/2026, relances OK).
+          SSH="ssh -i $HOME/.ssh/vps_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-%C -o ControlPersist=20m"
+          for essai in $(seq 1 30); do
+            if $SSH -o ConnectTimeout=15 joaquim@51.91.254.74 true; then break; fi
+            if [ "$essai" -eq 30 ]; then
+              echo "❌ VPS injoignable en SSH depuis 15 minutes"
+              exit 1
+            fi
+            echo "Connexion SSH refusée, nouvel essai dans 30 s ($essai/30)"
+            sleep 30
+          done
 
           # La nouvelle version arrive dans un dossier à part : la version en
           # ligne n'est modifiée qu'après un démarrage d'essai réussi, puis ses
