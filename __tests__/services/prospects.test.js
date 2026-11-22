@@ -264,6 +264,8 @@ describe("crédits de prospection par offre", () => {
     ProspectCreditPurchase.create({
       workspaceId,
       credits,
+      // Commande déjà activée (crédits utilisables)
+      status: "paid",
       stripeCheckoutSessionId: `cs_test_${credits}_${Math.random()}`,
       ...extra,
     });
@@ -758,6 +760,7 @@ describe("génération par nombre", () => {
     await ProspectCreditPurchase.create({
       workspaceId,
       credits: 10,
+      status: "paid",
       stripeCheckoutSessionId: "cs_test_achat",
     });
     searchCompanies.mockResolvedValue(page(["100000002", "100000003"], 1));
@@ -801,6 +804,7 @@ describe("génération par nombre", () => {
     await ProspectCreditPurchase.create({
       workspaceId,
       credits: 10,
+      status: "paid",
       stripeCheckoutSessionId: "cs_test_budget",
     });
     searchCompanies.mockResolvedValue(page(["100000002"], 1));

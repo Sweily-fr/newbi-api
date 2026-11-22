@@ -1,0 +1,239 @@
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
+import mongoose from "mongoose";
+import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
+import { buildOrganizationId } from "../factories/index.js";
+
+vi.mock(
+  "../../src/services/prospects/societeinfoClient.js",
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    isSocieteinfoConfigured: vi.fn(() => true),
+    getKeyInfo: vi.fn(),
+  }),
+);
+
+import { getKeyInfo } from "../../src/services/prospects/societeinfoClient.js";
+import { processProspectOrders } from "../../src/services/prospects/prospectOrders.js";
+import { getProspectBalance } from "../../src/services/prospects/prospectQuota.js";
+import ProspectCreditPurchase from "../../src/models/ProspectCreditPurchase.js";
+import ProspectCreditUsage from "../../src/models/ProspectCreditUsage.js";
+
+/**
+ * Commandes de crédits de prospection : activées dès que le stock de Newbi
+ * chez Societeinfo les couvre, sans prendre les crédits déjà dus aux clients
+ * ni la part gardée pour les crédits offerts des abonnements ; dans l'ordre
+ * d'arrivée ; équipe prévenue de chaque commande, client de l'activation.
+ */
+
+const workspaceId = buildOrganizationId().toString();
+let numero = 0;
+
+const stock = (credits) =>
+  getKeyInfo.mockResolvedValue({ totalAvailableCredits: credits });
+
+const commande = (credits, extra = {}) => {
+  numero += 1;
+  return ProspectCreditPurchase.create({
+    workspaceId,
+    credits,
+    amountTotal: credits * 30,
+    status: "pending",
+    stripeCheckoutSessionId: `cs_test_commande_${numero}`,
+    ...extra,
+  });
+};
+
+const relire = (order) => ProspectCreditPurchase.findById(order._id).lean();
+
+let notifyTeam;
+let notifyCustomer;
+const passer = () => processProspectOrders({ notifyTeam, notifyCustomer });
+
+async function abonnementEntreprise() {
+  await mongoose.connection.db.collection("subscription").updateOne(
+    { referenceId: workspaceId },
+    {
+      $set: {
+        referenceId: workspaceId,
+        plan: "entreprise",
+        status: "active",
+        periodEnd: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+      },
+    },
+    { upsert: true },
+  );
+}
+
+beforeAll(async () => {
+  await startMongo();
+  await ProspectCreditPurchase.init();
+  await ProspectCreditUsage.init();
+});
+
+afterAll(async () => {
+  await stopMongo();
+});
+
+beforeEach(async () => {
+  await clearMongo();
+  vi.clearAllMocks();
+  // Budget mensuel des crédits offerts : la part gardée pour les abonnements
+  process.env.PROSPECT_MONTHLY_CREDIT_CAP = "100";
+  notifyTeam = vi.fn(async () => true);
+  notifyCustomer = vi.fn(async () => true);
+  await abonnementEntreprise();
+});
+
+describe("commandes de crédits de prospection", () => {
+  it("sans commande en attente : rien, pas même d'appel au fournisseur", async () => {
+    const result = await passer();
+    expect(result.activated).toEqual([]);
+    expect(getKeyInfo).not.toHaveBeenCalled();
+    expect(notifyTeam).not.toHaveBeenCalled();
+  });
+
+  it("commande en attente : affichée à part, pas utilisable", async () => {
+    await commande(25);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedPending: 25,
+      purchasedRemaining: 0,
+      available: 100,
+    });
+  });
+
+  it("stock suffisant : activée, utilisable, équipe et client prévenus une fois", async () => {
+    // 200 en stock - 100 gardés pour les abonnements = 100 libres
+    stock(200);
+    const order = await commande(25);
+
+    const result = await passer();
+    expect(result.activated.map((o) => String(o._id))).toEqual([
+      String(order._id),
+    ]);
+    expect(await relire(order)).toMatchObject({ status: "paid" });
+    expect((await relire(order)).activatedAt).toBeInstanceOf(Date);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedPending: 0,
+      purchasedRemaining: 25,
+      available: 125,
+    });
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+    expect(notifyTeam.mock.calls[0][0]).toMatchObject({
+      activated: true,
+      stock: 200,
+      owed: 0,
+      reserve: 100,
+    });
+    expect(notifyCustomer).toHaveBeenCalledTimes(1);
+
+    await passer();
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+    expect(notifyCustomer).toHaveBeenCalledTimes(1);
+  });
+
+  it("stock insuffisant : gardée en commande, équipe prévenue de ce qu'il manque, une fois", async () => {
+    // 120 - 100 gardés = 20 libres pour une commande de 25
+    stock(120);
+    const order = await commande(25);
+
+    const result = await passer();
+    expect(result.activated).toEqual([]);
+    expect(await relire(order)).toMatchObject({ status: "pending" });
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+    expect(notifyTeam.mock.calls[0][0]).toMatchObject({
+      activated: false,
+      missing: 5,
+    });
+    expect(notifyCustomer).not.toHaveBeenCalled();
+
+    await passer();
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+
+    // Stock rechargé : activée au passage suivant, client prévenu
+    stock(1100);
+    const apres = await passer();
+    expect(apres.activated).toHaveLength(1);
+    expect(await relire(order)).toMatchObject({ status: "paid" });
+    expect(notifyCustomer).toHaveBeenCalledTimes(1);
+    expect(notifyTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("respecte les crédits déjà dus aux clients et la part des abonnements", async () => {
+    // 50 crédits achetés activés, pas encore dépensés : dus au client
+    await ProspectCreditPurchase.create({
+      workspaceId,
+      credits: 50,
+      status: "paid",
+      stripeCheckoutSessionId: "cs_test_deja_active",
+    });
+    // 170 - 50 dus - 100 gardés = 20 libres : la commande de 25 attend
+    stock(170);
+    const order = await commande(25);
+    await passer();
+    expect(await relire(order)).toMatchObject({ status: "pending" });
+
+    // 10 crédits achetés dépensés (et retirés du stock) : 160 - 40 - 100 = 20
+    await ProspectCreditUsage.create({
+      workspaceId,
+      kind: "search",
+      credits: 10,
+      source: "purchased",
+    });
+    stock(160);
+    await passer();
+    expect(await relire(order)).toMatchObject({ status: "pending" });
+
+    // Rachat de 5 crédits chez le fournisseur : 165 - 40 - 100 = 25
+    stock(165);
+    await passer();
+    expect(await relire(order)).toMatchObject({ status: "paid" });
+  });
+
+  it("dans l'ordre d'arrivée : une petite commande ne passe pas devant une grosse", async () => {
+    // 130 - 100 gardés = 30 libres
+    stock(130);
+    const grosse = await commande(100);
+    const petite = await commande(10);
+
+    const result = await passer();
+    expect(result.activated).toEqual([]);
+    expect(await relire(grosse)).toMatchObject({ status: "pending" });
+    expect(await relire(petite)).toMatchObject({ status: "pending" });
+    // Pour la petite, il faut d'abord servir la grosse : 110 - 30 = 80
+    const manques = notifyTeam.mock.calls.map(([arg]) => arg.missing);
+    expect(manques).toEqual([70, 80]);
+  });
+
+  it("stock illisible : rien n'est activé, l'équipe est prévenue", async () => {
+    getKeyInfo.mockRejectedValue(new Error("Societeinfo injoignable"));
+    const order = await commande(25);
+
+    const result = await passer();
+    expect(result.stock).toBeNull();
+    expect(await relire(order)).toMatchObject({ status: "pending" });
+    expect(notifyTeam.mock.calls[0][0]).toMatchObject({
+      activated: false,
+      stock: null,
+      missing: null,
+    });
+  });
+
+  it("un e-mail en échec n'empêche pas l'activation et sera retenté", async () => {
+    stock(500);
+    notifyCustomer.mockRejectedValueOnce(new Error("SMTP"));
+    const order = await commande(25);
+
+    await passer();
+    const relu = await relire(order);
+    expect(relu.status).toBe("paid");
+    expect(relu.customerNotifiedAt).toBeNull();
+  });
+});

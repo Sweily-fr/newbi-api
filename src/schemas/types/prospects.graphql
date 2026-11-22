@@ -62,6 +62,8 @@ type ProspectQuota {
   monthlyRemaining: Int!
   "Crédits achetés pas encore dépensés (sans expiration)"
   purchasedRemaining: Int!
+  "Crédits commandés (payés) pas encore activés : en attente du stock du fournisseur"
+  purchasedPending: Int!
   "Solde total : crédits du mois restants + crédits achetés restants"
   available: Int!
   "Remise à zéro des crédits du mois"
