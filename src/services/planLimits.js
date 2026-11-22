@@ -44,9 +44,10 @@ export const PLAN_LIMITS = {
   },
 };
 
-// Offre qui lève le plafond, telle que le site la nomme (« pme » = TPE)
+// Offre qui lève le plafond, telle que le site la nomme (plans-display.js du
+// site : « freelance » = Standard, « pme » = Premium, depuis le 22/11/2026)
 const NEXT_PLAN_LABEL = {
-  freelance: "TPE",
+  freelance: "Premium",
   pme: "Entreprise",
 };
 

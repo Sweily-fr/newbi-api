@@ -121,7 +121,7 @@ describe("GET /banking-connect/bridge/connect : banques de l'offre", () => {
       expect(res.status).toBe(403);
       expect(await res.json()).toEqual({
         error:
-          "Votre offre n'autorise qu'une banque connectée. Passez à l'offre TPE pour en connecter davantage.",
+          "Votre offre n'autorise qu'une banque connectée. Passez à l'offre Premium pour en connecter davantage.",
         code: "BANK_CONNECTION_LIMIT",
       });
     }
