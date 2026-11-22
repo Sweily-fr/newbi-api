@@ -27,7 +27,9 @@ describe("assertPlanCapacity", () => {
       ),
     ).rejects.toMatchObject({
       code: "FORBIDDEN",
-      message: expect.stringMatching(/pas plus de 5 champs personnalisés.*TPE/),
+      message: expect.stringMatching(
+        /pas plus de 5 champs personnalisés.*Premium/,
+      ),
     });
   });
 

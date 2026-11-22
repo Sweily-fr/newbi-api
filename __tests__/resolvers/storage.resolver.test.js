@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership, buildContext } from "../helpers/auth.js";
@@ -48,9 +56,12 @@ beforeEach(async () => {
   invalidateOrgCache();
   await seedOrgMembership({ userId: ownerId, organizationId, role: "owner" });
   await seedOrgMembership({ userId: viewerId, organizationId, role: "viewer" });
-  await mongoose.connection.db
-    .collection("user")
-    .insertOne({ _id: ownerId, name: "Alice", lastName: "Martin", email: "alice@test.fr" });
+  await mongoose.connection.db.collection("user").insertOne({
+    _id: ownerId,
+    name: "Alice",
+    lastName: "Martin",
+    email: "alice@test.fr",
+  });
 });
 
 describe("Requête workspaceStorage", () => {
@@ -61,7 +72,7 @@ describe("Requête workspaceStorage", () => {
     expect(storage).toMatchObject({
       ready: true,
       plan: "pme",
-      planLabel: "TPE",
+      planLabel: "Premium",
       usedBytes: 440 * GB,
       quotaBytes: 450 * GB,
       baseQuotaBytes: 400 * GB,
@@ -74,7 +85,10 @@ describe("Requête workspaceStorage", () => {
       category: "sharedDocuments",
       label: "Documents partagés",
     });
-    expect(storage.byUser.map((u) => u.name)).toEqual(["Alice Martin", "Non attribué"]);
+    expect(storage.byUser.map((u) => u.name)).toEqual([
+      "Alice Martin",
+      "Non attribué",
+    ]);
     expect(storage.offer.upgrade.plan).toBe("entreprise");
   });
 
@@ -90,6 +104,8 @@ describe("Requête workspaceStorage", () => {
 
   it("refuse une personne étrangère à l'espace", async () => {
     await seedUsage(10 * GB);
-    await expect(query(buildUserId())).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(query(buildUserId())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });

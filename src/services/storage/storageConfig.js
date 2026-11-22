@@ -35,9 +35,11 @@ export const PLAN_PRICES = {
   entreprise: { month: 94.99, year: 85.49 },
 };
 
+// Noms affichés, alignés sur plans-display.js du site (22/11/2026). Les clés
+// techniques (freelance, pme, entreprise) ne changent pas.
 export const PLAN_LABELS = {
-  freelance: "Freelance",
-  pme: "TPE",
+  freelance: "Standard",
+  pme: "Premium",
   entreprise: "Entreprise",
 };
 
@@ -129,7 +131,8 @@ function round2(value) {
 
 /** Packs nécessaires pour contenir `neededBytes` avec l'offre `plan`. */
 export function packsNeededFor(plan, neededBytes) {
-  const missing = Math.max(0, Number(neededBytes || 0)) - planBaseQuotaBytes(plan);
+  const missing =
+    Math.max(0, Number(neededBytes || 0)) - planBaseQuotaBytes(plan);
   return missing > 0 ? Math.ceil(missing / STORAGE_PACK_BYTES) : 0;
 }
 
@@ -163,12 +166,15 @@ export function recommendStorageOptions({
   const normalizedPlan = normalizePlan(plan);
   const normalizedInterval = normalizeInterval(interval);
   const neededBytes =
-    Math.max(0, Number(usedBytes) || 0) + Math.max(0, Number(incomingBytes) || 0);
+    Math.max(0, Number(usedBytes) || 0) +
+    Math.max(0, Number(incomingBytes) || 0);
   const packPrice = packMonthlyPrice(normalizedInterval);
   const planPrice = (key) => PLAN_PRICES[key][normalizedInterval];
   const owned = Math.max(0, Math.floor(Number(currentPacks) || 0));
 
-  const currentMonthlyCost = round2(planPrice(normalizedPlan) + owned * packPrice);
+  const currentMonthlyCost = round2(
+    planPrice(normalizedPlan) + owned * packPrice,
+  );
 
   // Packs sur l'offre actuelle : au moins un de plus que ceux déjà actifs
   const requiredPacks = packsNeededFor(normalizedPlan, neededBytes);
@@ -222,7 +228,8 @@ export function formatBytes(bytes) {
     const rounded = n >= 100 ? Math.round(n) : Math.round(n * 10) / 10;
     return String(rounded).replace(".", ",");
   };
-  if (value >= 1000 * BYTES_PER_GB) return `${fmt(value / (1000 * BYTES_PER_GB))} To`;
+  if (value >= 1000 * BYTES_PER_GB)
+    return `${fmt(value / (1000 * BYTES_PER_GB))} To`;
   if (value >= BYTES_PER_GB) return `${fmt(value / BYTES_PER_GB)} Go`;
   if (value >= 1_000_000) return `${fmt(value / 1_000_000)} Mo`;
   if (value >= 1000) return `${fmt(value / 1000)} Ko`;
