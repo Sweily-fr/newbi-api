@@ -185,21 +185,64 @@ export async function sendCustomerActivationEmail({ order }) {
   return true;
 }
 
+// E-mails d'une commande activée pas encore partis : retentés trois jours
+const NOTIFY_RETRY_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
+ * Envoie un e-mail d'une commande et le note envoyé (`field`). Un e-mail qui
+ * n'est pas parti (aucune adresse, envoi refusé) n'est pas noté : il est
+ * retenté au passage suivant, sinon une commande pourrait attendre sans que
+ * personne ne le sache.
+ */
+async function notifyOnce(order, field, send, now) {
+  const who = field === "teamNotifiedAt" ? "à l'équipe" : "au client";
+  try {
+    if (!(await send())) {
+      logger.warn(
+        `[Prospects] E-mail ${who} de la commande ${order._id} pas parti (aucune adresse ou envoi refusé) : nouvel essai dans 10 minutes`,
+      );
+      return false;
+    }
+    await ProspectCreditPurchase.updateOne(
+      { _id: order._id, [field]: null },
+      { $set: { [field]: now } },
+    );
+    return true;
+  } catch (error) {
+    logger.error(
+      `[Prospects] E-mail ${who} de la commande ${order._id} en échec : ${error.message}`,
+    );
+    return false;
+  }
+}
+
 /**
  * Active les commandes que le stock couvre (dans l'ordre d'arrivée) et
- * prévient l'équipe et les clients. Sans commande en attente : rien, pas
- * même d'appel au fournisseur. Stock illisible : rien n'est activé.
+ * prévient l'équipe et les clients ; renvoie aussi les e-mails des commandes
+ * déjà activées qui ne sont pas partis (pendant trois jours). Sans commande
+ * en attente ni e-mail à renvoyer : rien, pas même d'appel au fournisseur.
+ * Stock illisible : rien n'est activé.
  */
 export async function processProspectOrders({
   now = new Date(),
   notifyTeam = sendTeamOrderEmail,
   notifyCustomer = sendCustomerActivationEmail,
 } = {}) {
-  const pending = await ProspectCreditPurchase.find({ status: "pending" })
-    .sort({ createdAt: 1, _id: 1 })
-    .lean();
+  const byArrival = { createdAt: 1, _id: 1 };
+  const [pending, unnotified] = await Promise.all([
+    ProspectCreditPurchase.find({ status: "pending" }).sort(byArrival).lean(),
+    // Activées par ce service (activatedAt), avec un e-mail pas encore parti.
+    // Les achats d'avant les commandes (sans activatedAt) n'en reçoivent pas.
+    ProspectCreditPurchase.find({
+      status: "paid",
+      activatedAt: { $gte: new Date(now.getTime() - NOTIFY_RETRY_MS) },
+      $or: [{ teamNotifiedAt: null }, { customerNotifiedAt: null }],
+    })
+      .sort(byArrival)
+      .lean(),
+  ]);
   const result = { activated: [], waiting: [], stock: null };
-  if (!pending.length) return result;
+  if (!pending.length && !unnotified.length) return result;
 
   const [stock, owed, reserve] = await Promise.all([
     readProviderStock(),
@@ -227,7 +270,9 @@ export async function processProspectOrders({
     if (!covered) result.waiting.push(order);
   }
 
-  // Équipe : chaque commande une fois (activée ou ce qu'il manque)
+  // Équipe : chaque commande une fois (activée, ou ce qu'il manque pour
+  // l'activer en servant d'abord les commandes arrivées avant elle)
+  const forTeam = [];
   let queued = 0;
   for (const order of pending) {
     const activated = result.activated.includes(order);
@@ -235,33 +280,34 @@ export async function processProspectOrders({
     if (order.teamNotifiedAt) continue;
     const missing =
       activated || free === null ? null : Math.max(0, queued - free);
-    try {
-      await notifyTeam({ order, activated, stock, owed, reserve, missing });
-      await ProspectCreditPurchase.updateOne(
-        { _id: order._id, teamNotifiedAt: null },
-        { $set: { teamNotifiedAt: now } },
-      );
-    } catch (error) {
-      logger.error(
-        `[Prospects] Équipe non prévenue de la commande ${order._id} : ${error.message}`,
-      );
+    forTeam.push({ order, activated, missing });
+  }
+  for (const order of unnotified) {
+    if (!order.teamNotifiedAt) {
+      forTeam.push({ order, activated: true, missing: null });
     }
+  }
+  for (const { order, activated, missing } of forTeam) {
+    await notifyOnce(
+      order,
+      "teamNotifiedAt",
+      () => notifyTeam({ order, activated, stock, owed, reserve, missing }),
+      now,
+    );
   }
 
   // Clients : prévenus de l'activation, une fois
-  for (const order of result.activated) {
-    try {
-      if (await notifyCustomer({ order })) {
-        await ProspectCreditPurchase.updateOne(
-          { _id: order._id, customerNotifiedAt: null },
-          { $set: { customerNotifiedAt: now } },
-        );
-      }
-    } catch (error) {
-      logger.error(
-        `[Prospects] Client non prévenu de l'activation ${order._id} : ${error.message}`,
-      );
-    }
+  const forCustomers = [
+    ...result.activated,
+    ...unnotified.filter((order) => !order.customerNotifiedAt),
+  ];
+  for (const order of forCustomers) {
+    await notifyOnce(
+      order,
+      "customerNotifiedAt",
+      () => notifyCustomer({ order }),
+      now,
+    );
   }
 
   if (result.activated.length || result.waiting.length) {
