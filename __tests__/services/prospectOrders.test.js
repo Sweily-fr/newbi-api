@@ -24,10 +24,18 @@ vi.mock("../../src/services/emailReminderService.js", () => ({
   default: { sendEmail: vi.fn(async () => ({ id: "test" })) },
 }));
 
+// SMTP des relances d'essai : l'e-mail client ne doit pas passer par là
+vi.mock("../../src/utils/trialEmails.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  sendRenderedEmail: vi.fn(async () => undefined),
+}));
+
 import { getKeyInfo } from "../../src/services/prospects/societeinfoClient.js";
 import emailReminderService from "../../src/services/emailReminderService.js";
+import { sendRenderedEmail } from "../../src/utils/trialEmails.js";
 import {
   processProspectOrders,
+  sendCustomerActivationEmail,
   sendTeamOrderEmail,
 } from "../../src/services/prospects/prospectOrders.js";
 import { getProspectBalance } from "../../src/services/prospects/prospectQuota.js";
@@ -375,5 +383,38 @@ describe("e-mail à l'équipe", () => {
     expect(
       await sendTeamOrderEmail({ order, activated: false, missing: null }),
     ).toBe(false);
+  });
+});
+
+describe("e-mail au client", () => {
+  it("part par Resend (adresse Newbi), pas par le SMTP des relances d'essai", async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await mongoose.connection.db
+      .collection("user")
+      .insertOne({ _id: userId, email: "client@test.fr" });
+    const sent = await sendCustomerActivationEmail({
+      order: { _id: "c2", workspaceId, credits: 25, userId },
+    });
+    expect(sent).toBe(true);
+    expect(sendRenderedEmail).not.toHaveBeenCalled();
+    expect(emailReminderService.sendEmail).toHaveBeenCalledTimes(1);
+    const { to, subject, html } =
+      emailReminderService.sendEmail.mock.calls[0][0];
+    expect(to).toBe("client@test.fr");
+    expect(subject).toBe("Vos 25 crédits de prospection sont disponibles");
+    expect(html).toContain("Générer des prospects");
+  });
+
+  it("sans adresse trouvée : rien n'est envoyé (false, retenté plus tard)", async () => {
+    const sent = await sendCustomerActivationEmail({
+      order: {
+        _id: "c3",
+        workspaceId,
+        credits: 25,
+        userId: new mongoose.Types.ObjectId(),
+      },
+    });
+    expect(sent).toBe(false);
+    expect(emailReminderService.sendEmail).not.toHaveBeenCalled();
   });
 });
