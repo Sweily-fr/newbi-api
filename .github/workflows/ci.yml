@@ -105,3 +105,36 @@ jobs:
         env:
           MONGODB_URI: mongodb://localhost:27017/newbi-test
           NODE_ENV: test
+
+  # Fusion automatique dans develop quand les contrôles sont verts, pour les
+  # PR qui portent l'étiquette « fusion-auto » (posée à l'ouverture ; demande
+  # du 22/11/2026 : ne plus faire valider chaque fusion). Pas de règle de
+  # protection sur develop : elle bloquerait les pushs directs (publication
+  # du blog, remises à niveau après une mise en prod). L'étiquette est relue
+  # au moment de fusionner : gh pr create --label la pose après l'ouverture.
+  # PR de forks exclues (jeton en lecture seule) ; --match-head-commit évite
+  # de fusionner un commit poussé après le passage de la CI.
+  fusion-auto:
+    name: Fusion automatique dans develop
+    needs: [checks, integration-tests]
+    if: >-
+      success() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fusionner la PR si elle porte l'étiquette fusion-auto
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name' | grep -qx 'fusion-auto'; then
+            echo "Pas d'étiquette fusion-auto : la PR attend une fusion manuelle."
+            exit 0
+          fi
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --merge --match-head-commit "$SHA"
