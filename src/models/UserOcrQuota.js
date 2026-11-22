@@ -18,12 +18,14 @@ export const PLAN_QUOTAS = {
   FREELANCE: {
     monthlyQuota: parseInt(process.env.OCR_QUOTA_FREELANCE) || 50,
     extraImportPrice: 0.25,
-    name: "Freelance",
+    // Nom affiché seulement : la clé FREELANCE reste en base.
+    name: "Standard",
   },
   TPE: {
     monthlyQuota: parseInt(process.env.OCR_QUOTA_TPE) || 999999,
     extraImportPrice: 0.2,
-    name: "TPE",
+    // Nom affiché seulement : la clé TPE reste en base.
+    name: "Premium",
   },
   ENTREPRISE: {
     monthlyQuota: parseInt(process.env.OCR_QUOTA_ENTREPRISE) || 999999,
