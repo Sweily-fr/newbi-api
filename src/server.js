@@ -765,15 +765,12 @@ async function startServer() {
     }
   });
 
-  // Initialiser Redis PubSub
+  // Initialiser Redis (PubSub + cache). Sans Redis, l'API démarre en mode
+  // dégradé et s'y reconnecte seule à son retour (initializeRedis l'annonce)
   try {
     await initializeRedis();
-    logger.info("✅ Redis PubSub initialisé");
   } catch (error) {
-    logger.warn(
-      "⚠️ Redis PubSub non disponible, fallback vers PubSub en mémoire:",
-      error.message,
-    );
+    logger.warn(`⚠️ [Redis] Initialisation impossible : ${error.message}`);
   }
 
   // Initialiser le système banking
