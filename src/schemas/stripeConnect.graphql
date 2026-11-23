@@ -22,6 +22,7 @@ type StripeConnectAccount {
 type PaymentConnections {
   stripe: StripePaymentConnection!
   paypal: PaypalPaymentConnection!
+  sumup: SumupPaymentConnection!
   bankTransfer: BankTransferPaymentConnection!
 }
 
@@ -46,6 +47,19 @@ type PaypalPaymentConnection {
   email: String
 }
 
+type SumupPaymentConnection {
+  # SumUp configuré côté Newbi et ouvert à l'espace
+  available: Boolean!
+  connected: Boolean!
+  # Accès retiré ou expiré côté SumUp : le compte est à reconnecter
+  needsReconnect: Boolean!
+  businessName: String
+  email: String
+  merchantCode: String
+  # Devise du compte marchand : seule devise que SumUp encaisse pour lui
+  currency: String
+}
+
 type BankTransferPaymentConnection {
   # IBAN renseigné dans les informations de l'entreprise
   available: Boolean!
@@ -68,6 +82,11 @@ type PaypalConnectionResponse {
   success: Boolean!
   message: String
   email: String
+}
+
+type SumupConnectionResponse {
+  success: Boolean!
+  message: String
 }
 
 # Retour du payeur après un paiement en ligne
@@ -141,7 +160,8 @@ extend type Mutation {
   generateStripeDashboardLink(accountId: String!): StripeOnboardingLinkResponse!
 
   # Lancer le paiement d'un transfert (destinataire du lien) : provider
-  # « stripe » (carte, défaut) ou « paypal » ; sessionUrl à ouvrir
+  # « stripe » (carte, défaut), « sumup » (carte, compte SumUp du vendeur)
+  # ou « paypal » ; sessionUrl à ouvrir
   createPaymentSessionForFileTransfer(
     transferId: ID!
     accessKey: String
@@ -172,6 +192,9 @@ extend type Mutation {
   # Compte PayPal Business de l'espace (adresse e-mail seule)
   connectPaypal(email: String!): PaypalConnectionResponse!
   disconnectPaypal: PaypalConnectionResponse!
+
+  # Compte SumUp de l'espace (connexion par OAuth : GET /sumup/authorize)
+  disconnectSumup: SumupConnectionResponse!
 }
 
 type PaymentReturnTokenResponse {

@@ -307,7 +307,7 @@ describe("createFileTransferWithIdsR2 : options validées", () => {
   it("paiement refusé sans moyen d'encaissement : aucun transfert impayable", async () => {
     const { run } = await creer({ paymentAmount: 10 });
     const error = await errorOf(run);
-    expect(error?.message).toMatch(/Connectez Stripe ou PayPal/);
+    expect(error?.message).toMatch(/Connectez Stripe, SumUp ou PayPal/);
     expect(await FileTransfer.countDocuments()).toBe(0);
   });
 

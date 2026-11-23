@@ -75,6 +75,7 @@ import {
 } from "./controllers/invoicePaymentController.js";
 import { handleStripeConnectWebhook } from "./controllers/stripeConnectWebhookController.js";
 import stripeConnectOAuthRoutes from "./routes/stripe-connect-oauth.js";
+import sumupOAuthRoutes, { handleSumupWebhook } from "./routes/sumup-oauth.js";
 import { setupScheduledJobs } from "./jobs/scheduler.js";
 import logger from "./utils/logger.js";
 import { createGracefulShutdown } from "./utils/gracefulShutdown.js";
@@ -383,6 +384,14 @@ async function startServer() {
     handleStripeConnectWebhook,
   );
 
+  // Notifications de SumUp sur les paiements des transferts (compte marchand
+  // du client). Non signées : le paiement est relu auprès de SumUp.
+  app.post(
+    "/webhook/sumup",
+    express.json({ limit: "16kb" }),
+    handleSumupWebhook,
+  );
+
   // Routes webhook (avant les middlewares JSON)
   app.use("/webhook", webhookRoutes);
 
@@ -433,6 +442,9 @@ async function startServer() {
 
   // Connexion du compte Stripe du client par OAuth
   app.use("/stripe-connect", stripeConnectOAuthRoutes);
+
+  // Connexion du compte SumUp du client par OAuth
+  app.use("/sumup", sumupOAuthRoutes);
 
   // Routes file transfer auth
   app.use("/api/transfers", fileTransferAuthRoutes);

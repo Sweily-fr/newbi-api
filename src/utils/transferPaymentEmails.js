@@ -11,6 +11,7 @@ const paragraph = (html, margin = "0 0 16px 0") =>
 
 const PROVIDER_LABELS = {
   stripe: "Carte bancaire (Stripe)",
+  sumup: "Carte bancaire (SumUp)",
   paypal: "PayPal",
   bank_transfer: "Virement bancaire",
 };

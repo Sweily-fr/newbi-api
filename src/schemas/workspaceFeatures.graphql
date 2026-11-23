@@ -14,7 +14,7 @@ type WorkspaceFeatures {
   socialPublishing: Boolean!
   "Campagnes e-mail (envoi en masse aux contacts)"
   emailCampaigns: Boolean!
-  "Transferts de fichiers payants (Stripe, PayPal ou virement du vendeur)"
+  "Transferts de fichiers payants (Stripe, SumUp, PayPal ou virement du vendeur)"
   transferPayments: Boolean!
 }
 

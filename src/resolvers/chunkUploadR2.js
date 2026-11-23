@@ -941,7 +941,7 @@ const chunkUploadR2Resolvers = {
           paymentMethods: requestedPaymentMethods,
         } = normalizeTransferCreationOptions(input);
         // Transfert payant : espace, accès anticipé, moyens d'encaissement de
-        // l'espace (Stripe, PayPal, IBAN) et incompatibilité avec le
+        // l'espace (Stripe, SumUp, PayPal, IBAN) et incompatibilité avec le
         // filigrane vérifiés avant tout
         if (
           isPaymentRequired &&
@@ -960,6 +960,7 @@ const chunkUploadR2Resolvers = {
             workspaceId: input?.workspaceId || null,
             isPaymentRequired,
             paymentMethods: requestedPaymentMethods,
+            paymentCurrency,
             hasWatermark: Boolean(input?.hasWatermark),
           });
         try {

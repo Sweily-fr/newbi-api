@@ -161,6 +161,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "disconnectPennylane",
     "disconnectPaypal",
     "disconnectQonto",
+    "disconnectSumup",
     "disconnectStripe",
     "uninstallApp",
   ],
