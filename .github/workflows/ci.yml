@@ -114,6 +114,11 @@ jobs:
   # au moment de fusionner : gh pr create --label la pose après l'ouverture.
   # PR de forks exclues (jeton en lecture seule) ; --match-head-commit évite
   # de fusionner un commit poussé après le passage de la CI.
+  # Une fusion faite avec le jeton du workflow (github.token) ne lance aucun
+  # autre workflow : deploy_staging.yml (on: push develop) ne partait plus
+  # après une fusion automatique (constaté le 23/11/2026, sept PR fusionnées
+  # sans déploiement du staging). Le déploiement est donc demandé ici, par
+  # workflow_dispatch, seul lancement permis avec ce jeton.
   fusion-auto:
     name: Fusion automatique dans develop
     needs: [checks, integration-tests]
@@ -126,8 +131,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Lancer deploy_staging.yml après la fusion
+      actions: write
     steps:
       - name: Fusionner la PR si elle porte l'étiquette fusion-auto
+        id: fusion
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -138,3 +146,12 @@ jobs:
             exit 0
           fi
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --merge --match-head-commit "$SHA"
+          echo "fusionnee=oui" >> "$GITHUB_OUTPUT"
+
+      - name: Lancer le déploiement du staging
+        if: steps.fusion.outputs.fusionnee == 'oui'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run deploy_staging.yml --repo "$GITHUB_REPOSITORY" --ref develop
+          echo "Déploiement du staging demandé sur develop."
