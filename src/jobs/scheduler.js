@@ -7,6 +7,7 @@ import { cleanupExpiredFiles } from "./cleanupExpiredFiles.js";
 import { cleanupOrphanChunks } from "./cleanupOrphanChunks.js";
 import { cleanupOrphanTransferFiles } from "./cleanupOrphanTransferFiles.js";
 import { processAccountDeletions } from "./processAccountDeletions.js";
+import { sweepOpenTransferPayments } from "../services/transferPaymentService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -69,6 +70,18 @@ function setupScheduledJobs() {
     }
   });
 
+  // Paiements en ligne des transferts restés ouverts (page du prestataire
+  // fermée avant le retour sur Newbi) : revérifiés toutes les 10 minutes
+  cron.schedule("*/10 * * * *", async () => {
+    try {
+      await sweepOpenTransferPayments();
+    } catch (error) {
+      logger.error(
+        `Erreur lors du rattrapage des paiements de transferts : ${error.message}`,
+      );
+    }
+  });
+
   logger.info("Jobs planifiés configurés avec succès");
   logger.info("  - Nettoyage fichiers expirés: tous les jours à 3h UTC");
   logger.info("  - Nettoyage chunks orphelins: toutes les 6 heures");
@@ -76,6 +89,7 @@ function setupScheduledJobs() {
     "  - Nettoyage fichiers de transfert orphelins: toutes les 6 heures (h+30)",
   );
   logger.info("  - Suppressions RGPD: tous les jours à 4h UTC");
+  logger.info("  - Rattrapage des paiements de transferts: toutes les 10 min");
 }
 
 export { setupScheduledJobs };

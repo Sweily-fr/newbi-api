@@ -770,6 +770,7 @@ const fileTransferResolvers = {
               workspaceId,
               isPaymentRequired,
               paymentMethods: requestedPaymentMethods,
+              paymentCurrency,
               hasWatermark: Boolean(input?.hasWatermark),
             });
 

@@ -11,9 +11,14 @@
  * la page du transfert) : aucun webhook PayPal n'est nécessaire pour
  * débloquer le transfert.
  *
- * PAYPAL_MODE = « live » pour la production ; toute autre valeur (ou
- * absente) utilise le bac à sable.
+ * PAYPAL_MODE = « live » pour la production, « sandbox » pour le bac à
+ * sable. Absent : l'ancien réglage PAYPAL_BASE_URL (module bancaire) décide,
+ * sinon bac à sable. Des clés réelles envoyées au bac à sable (ou
+ * l'inverse) font échouer chaque paiement.
  */
+
+const PAYPAL_LIVE_API = "https://api-m.paypal.com";
+const PAYPAL_SANDBOX_API = "https://api-m.sandbox.paypal.com";
 
 const PAYPAL_TIMEOUT_MS = 15_000;
 
@@ -35,9 +40,15 @@ export function isPaypalConfigured(env = process.env) {
 }
 
 export function paypalApiBase(env = process.env) {
-  return env.PAYPAL_MODE === "live"
-    ? "https://api-m.paypal.com"
-    : "https://api-m.sandbox.paypal.com";
+  const mode = String(env.PAYPAL_MODE || "")
+    .trim()
+    .toLowerCase();
+  if (mode === "live") return PAYPAL_LIVE_API;
+  if (mode === "sandbox") return PAYPAL_SANDBOX_API;
+  if (env.PAYPAL_BASE_URL && !/sandbox/i.test(env.PAYPAL_BASE_URL)) {
+    return PAYPAL_LIVE_API;
+  }
+  return PAYPAL_SANDBOX_API;
 }
 
 export function isPaypalId(value) {

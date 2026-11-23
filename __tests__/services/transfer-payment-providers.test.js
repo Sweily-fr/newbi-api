@@ -65,7 +65,10 @@ import {
   refreshTransferPayment,
   startOnlinePayment,
 } from "../../src/services/transferPaymentService.js";
-import { resetPaypalTokenCache } from "../../src/services/paypalService.js";
+import {
+  paypalApiBase,
+  resetPaypalTokenCache,
+} from "../../src/services/paypalService.js";
 import { saveOAuthConnection } from "../../src/services/stripeConnectService.js";
 import { dispatchConnectEvent } from "../../src/controllers/stripeConnectWebhookController.js";
 
@@ -339,6 +342,27 @@ describe("PayPal", () => {
     delete process.env.PAYPAL_CLIENT_ID;
     delete process.env.PAYPAL_CLIENT_SECRET;
     vi.unstubAllGlobals();
+  });
+
+  it("environnement : PAYPAL_MODE, sinon l'ancien PAYPAL_BASE_URL, sinon bac à sable", () => {
+    const live = "https://api-m.paypal.com";
+    const sandbox = "https://api-m.sandbox.paypal.com";
+    expect(paypalApiBase({ PAYPAL_MODE: "live" })).toBe(live);
+    expect(paypalApiBase({ PAYPAL_MODE: "LIVE " })).toBe(live);
+    expect(paypalApiBase({ PAYPAL_MODE: "sandbox" })).toBe(sandbox);
+    expect(paypalApiBase({ PAYPAL_BASE_URL: "https://api.paypal.com" })).toBe(
+      live,
+    );
+    expect(
+      paypalApiBase({ PAYPAL_BASE_URL: "https://api-m.sandbox.paypal.com" }),
+    ).toBe(sandbox);
+    expect(
+      paypalApiBase({
+        PAYPAL_MODE: "sandbox",
+        PAYPAL_BASE_URL: "https://api.paypal.com",
+      }),
+    ).toBe(sandbox);
+    expect(paypalApiBase({})).toBe(sandbox);
   });
 
   it("commande créée au bénéfice du compte PayPal du vendeur", async () => {
