@@ -4,7 +4,9 @@
  * passe le mot de passe s'il y en a un, prouve son adresse e-mail par un code
  * reçu par e-mail, puis consulte. Si l'accès le permet, il dépose aussi des
  * documents dans les dossiers, et renomme, déplace, remplace (nouvelle
- * version) ou supprime ceux qu'il a déposés, jamais les autres. Tout est relu
+ * version) ou supprime ceux qu'il a déposés, jamais les autres. Il y crée
+ * aussi des dossiers (nouveau dossier ou dossier importé de son ordinateur),
+ * qu'il peut renommer ou supprimer, ceux-là seulement. Tout est relu
  * à chaque requête : désactiver l'accès, le faire expirer, fermer un dossier
  * ou retirer l'accès d'un visiteur agit immédiatement, y compris sur une
  * page déjà ouverte (temps réel : publicDocumentShareChanged).
@@ -15,11 +17,13 @@ import rateLimit from "express-rate-limit";
 import multer from "multer";
 import DocumentShare from "../models/DocumentShare.js";
 import SharedDocument from "../models/SharedDocument.js";
+import SharedFolder from "../models/SharedFolder.js";
 import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { publishSharedDocsChanged } from "../resolvers/sharedDocument.js";
 import cloudflareService from "../services/cloudflareService.js";
 import {
   findShareDocument,
+  isVisitorFolder,
   isVisitorUpload,
   listShareDocuments,
   openShareByToken,
@@ -34,6 +38,7 @@ import {
   checkClientUpload,
   cleanUploadedName,
   clientDocumentName,
+  clientFolderName,
   CLIENT_VIDEO_MAX_BYTES,
   documentExtension,
   withoutExtension,
@@ -88,9 +93,10 @@ const limited = (max) =>
 const formLimiter = limited(60);
 // Un ZIP lit tous les fichiers des dossiers sur R2
 const zipLimiter = limited(10);
-// Dépôts, modifications et suppressions d'un client : un dossier de
-// plusieurs dizaines de pièces passe, un envoi en rafale est arrêté
-const depositLimiter = limited(200);
+// Dépôts, dossiers, modifications et suppressions d'un client : un dossier
+// importé de plusieurs centaines de pièces passe (une requête par fichier),
+// un envoi en rafale est arrêté
+const depositLimiter = limited(500);
 
 // Un fichier par envoi, gardé en mémoire le temps du contrôle puis de
 // l'envoi vers R2 (la plus grande taille acceptée est celle d'une vidéo)
@@ -259,6 +265,19 @@ const documentView = (document, email) => ({
   mine: isVisitorUpload(document, email),
 });
 
+/** Dossier tel que le voit le visiteur : rien d'interne. */
+const folderView = (folder, email) => ({
+  id: String(folder._id),
+  name: folder.name,
+  parentId: folder.parentId ? String(folder.parentId) : null,
+  order: folder.order || 0,
+  // Couleur choisie dans Newbi (page du visiteur au même visuel)
+  color: HEX_COLOR.test(folder.color || "") ? folder.color : null,
+  // Créé par ce visiteur : il peut le renommer ou le supprimer (si l'accès
+  // accepte les dépôts)
+  mine: isVisitorFolder(folder, email),
+});
+
 /**
  * GET /:token
  * État de la visite (`password`, `identify`, `banned`) ou, pour un visiteur
@@ -306,14 +325,7 @@ router.get("/:token", async (req, res) => {
       allowUploads: Boolean(share.allowUploads),
       visitor: visitorView(share, email),
       rootFolderIds: folders.roots.map((folder) => String(folder._id)),
-      folders: folders.folders.map((folder) => ({
-        id: String(folder._id),
-        name: folder.name,
-        parentId: folder.parentId ? String(folder.parentId) : null,
-        order: folder.order || 0,
-        // Couleur choisie dans Newbi (page du visiteur au même visuel)
-        color: HEX_COLOR.test(folder.color || "") ? folder.color : null,
-      })),
+      folders: folders.folders.map((folder) => folderView(folder, email)),
       documents: documents.map((document) => documentView(document, email)),
     });
   } catch (error) {
@@ -1051,6 +1063,319 @@ router.delete("/:token/files/:documentId", depositLimiter, async (req, res) => {
     return res.json({ success: true });
   } catch (error) {
     logger.error(`Accès client (suppression) : ${error.message}`);
+    return res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de la suppression" });
+  }
+});
+
+// Dossiers créés par le client. Un dossier importé de son ordinateur arrive
+// en une requête (toute son arborescence), puis ses fichiers un par un.
+const NEW_FOLDERS_MAX = 200;
+const FOLDER_DEPTH_MAX = 20;
+const INVALID_FOLDERS = {
+  success: false,
+  message: "Dossiers demandés invalides.",
+};
+const TOO_MANY_FOLDERS = {
+  success: false,
+  message: `Trop de dossiers d'un coup (${NEW_FOLDERS_MAX} au plus).`,
+};
+const TOO_DEEP_FOLDERS = {
+  success: false,
+  message: `Trop de niveaux de sous-dossiers (${FOLDER_DEPTH_MAX} au plus).`,
+};
+const EMPTY_FOLDER_NAME = {
+  success: false,
+  message: "Le nom du dossier ne peut pas être vide.",
+};
+const FOLDER_NAME_TAKEN = {
+  success: false,
+  message: "Un dossier porte déjà ce nom à cet endroit.",
+};
+const FOLDER_FORBIDDEN = {
+  success: false,
+  message: "Vous ne pouvez modifier que les dossiers que vous avez créés.",
+};
+const FOLDER_NOT_ONLY_YOURS = {
+  success: false,
+  message:
+    "Ce dossier contient des éléments que vous n'avez pas ajoutés : seul votre interlocuteur peut le supprimer.",
+};
+
+/**
+ * Dossiers demandés : chaque chemin est une liste de noms (« Factures »,
+ * « 2026 ») à partir du dossier choisi. Noms nettoyés comme un renommage ;
+ * arborescence bornée en nombre de dossiers et en profondeur.
+ * @returns {{ paths: string[][] } | { refusal: object }}
+ */
+function readFolderPaths(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    return { refusal: INVALID_FOLDERS };
+  }
+  const cleaned = [];
+  const distinct = new Set();
+  for (const path of paths) {
+    if (!Array.isArray(path) || path.length === 0) {
+      return { refusal: INVALID_FOLDERS };
+    }
+    if (path.length > FOLDER_DEPTH_MAX) return { refusal: TOO_DEEP_FOLDERS };
+    const names = path.map(clientFolderName);
+    if (names.some((name) => !name)) return { refusal: EMPTY_FOLDER_NAME };
+    names.forEach((_, depth) =>
+      distinct.add(JSON.stringify(names.slice(0, depth + 1))),
+    );
+    if (distinct.size > NEW_FOLDERS_MAX) return { refusal: TOO_MANY_FOLDERS };
+    cleaned.push(names);
+  }
+  return { paths: cleaned };
+}
+
+const childKey = (parentId, name) => `${parentId}/${name}`;
+
+/**
+ * Dossier créé par ce visiteur, dans son accès ouvert au dépôt : seul cas
+ * où il peut le renommer ou le supprimer. Un dossier choisi par le
+ * propriétaire pour l'accès (une racine) ne l'est jamais.
+ */
+async function loadOwnFolder(req, res) {
+  const loaded = await loadDepositor(req, res);
+  if (!loaded) return null;
+  const { folderId } = req.params;
+  const folder = loaded.folders.folders.find(
+    (candidate) => String(candidate._id) === String(folderId),
+  );
+  if (!folder) {
+    res.status(404).json(FOLDER_NOT_FOUND);
+    return null;
+  }
+  const isRoot = loaded.folders.roots.some(
+    (root) => String(root._id) === String(folder._id),
+  );
+  if (isRoot || !isVisitorFolder(folder, loaded.email)) {
+    res.status(403).json(FOLDER_FORBIDDEN);
+    return null;
+  }
+  return { ...loaded, folder };
+}
+
+/**
+ * Sous-dossiers d'un dossier hors corbeille, à toute profondeur, privés
+ * compris (le visiteur ne les voit pas). Un dossier déjà vu n'est jamais
+ * repris, même sur un cycle.
+ */
+async function collectSubfolders(workspaceId, rootId) {
+  const visited = new Set([String(rootId)]);
+  const found = [];
+  let frontier = [rootId];
+  while (frontier.length > 0) {
+    const children = await SharedFolder.find(
+      { workspaceId, parentId: { $in: frontier }, trashedAt: null },
+      { parentId: 1, "clientCreated.email": 1 },
+    ).lean();
+    frontier = [];
+    for (const child of children) {
+      const key = String(child._id);
+      if (visited.has(key)) continue;
+      visited.add(key);
+      found.push(child);
+      frontier.push(child._id);
+    }
+  }
+  return found;
+}
+
+/**
+ * POST /:token/folders/:folderId/folders { session, paths }
+ * Le visiteur crée des dossiers dans un dossier de son accès : un nouveau
+ * dossier (`paths: [["Factures 2026"]]`) ou l'arborescence d'un dossier de
+ * son ordinateur qu'il importe (`[["Factures"], ["Factures", "Janvier"]]`).
+ * Un dossier du même nom qu'il voit déjà au même endroit est repris, pas
+ * doublé. Comme un sous-dossier créé par un membre sans visibilité choisie,
+ * le dossier suit la visibilité de son parent. Réponse : pour chaque
+ * chemin, dans l'ordre, le dossier où il mène (`created` : créé à l'instant).
+ */
+router.post(
+  "/:token/folders/:folderId/folders",
+  depositLimiter,
+  async (req, res) => {
+    try {
+      const loaded = await loadDepositor(req, res);
+      if (!loaded) return;
+      const { share, folders, email } = loaded;
+      const { folderId } = req.params;
+      if (!folders.folderIds.has(String(folderId))) {
+        return res.status(404).json(FOLDER_NOT_FOUND);
+      }
+      const requested = readFolderPaths(req.body?.paths);
+      if (requested.refusal) return res.status(400).json(requested.refusal);
+      const workspaceId = String(share.workspaceId);
+      if (!(await hasActiveSubscription(workspaceId))) {
+        return res.status(403).json(DEPOSITS_CLOSED);
+      }
+
+      // Dossiers que le visiteur voit déjà, par dossier parent et par nom
+      const existing = new Map();
+      for (const folder of folders.folders) {
+        const key = childKey(folder.parentId, folder.name);
+        if (folder.parentId && !existing.has(key)) existing.set(key, folder);
+      }
+      const last = await SharedFolder.findOne({ workspaceId })
+        .sort({ order: -1 })
+        .select("order")
+        .lean();
+      let order = last?.order || 0;
+
+      let createdCount = 0;
+      const results = [];
+      for (const path of requested.paths) {
+        let parentId = String(folderId);
+        let folder = null;
+        let created = false;
+        for (const name of path) {
+          const key = childKey(parentId, name);
+          folder = existing.get(key);
+          created = !folder;
+          if (created) {
+            order += 1;
+            folder = (
+              await SharedFolder.create({
+                name,
+                workspaceId: share.workspaceId,
+                parentId,
+                // Membre qui a ouvert l'accès ; le client est noté à côté
+                createdBy: share.createdBy,
+                isSharedWithAccountant: true,
+                order,
+                visibility: null,
+                allowedUserIds: [],
+                clientCreated: { shareId: share._id, email },
+              })
+            ).toObject();
+            existing.set(key, folder);
+            createdCount += 1;
+          }
+          parentId = String(folder._id);
+        }
+        results.push({ ...folderView(folder, email), created });
+      }
+
+      if (createdCount > 0) {
+        publishSharedDocsChanged(workspaceId, "createSharedFolder");
+      }
+      return res
+        .status(createdCount > 0 ? 201 : 200)
+        .json({ success: true, folders: results });
+    } catch (error) {
+      logger.error(`Accès client (dossiers) : ${error.message}`);
+      return res.status(500).json({
+        success: false,
+        message: "Erreur lors de la création du dossier",
+      });
+    }
+  },
+);
+
+/**
+ * PUT /:token/folders/:folderId { session, name }
+ * Le visiteur renomme un dossier qu'il a créé.
+ */
+router.put("/:token/folders/:folderId", depositLimiter, async (req, res) => {
+  try {
+    const loaded = await loadOwnFolder(req, res);
+    if (!loaded) return;
+    const { share, folders, email, folder } = loaded;
+    const name = clientFolderName(req.body?.name);
+    if (!name) return res.status(400).json(EMPTY_FOLDER_NAME);
+    const taken = folders.folders.some(
+      (other) =>
+        String(other._id) !== String(folder._id) &&
+        String(other.parentId) === String(folder.parentId) &&
+        other.name === name,
+    );
+    if (taken) return res.status(409).json(FOLDER_NAME_TAKEN);
+    if (!(await hasActiveSubscription(share.workspaceId))) {
+      return res.status(403).json(EDITS_CLOSED);
+    }
+
+    const updated = await SharedFolder.findOneAndUpdate(
+      {
+        _id: folder._id,
+        workspaceId: share.workspaceId,
+        trashedAt: null,
+        "clientCreated.email": email,
+      },
+      { $set: { name } },
+      { new: true },
+    ).lean();
+    if (!updated) return res.status(404).json(FOLDER_NOT_FOUND);
+    publishSharedDocsChanged(share.workspaceId, "updateSharedFolder");
+    return res.json({ success: true, folder: folderView(updated, email) });
+  } catch (error) {
+    logger.error(`Accès client (renommage d'un dossier) : ${error.message}`);
+    return res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de la modification" });
+  }
+});
+
+/**
+ * DELETE /:token/folders/:folderId?session=
+ * Le visiteur retire un dossier qu'il a créé, avec son contenu, si tout est
+ * à lui (sous-dossiers qu'il a créés, documents qu'il a déposés) : un
+ * dossier où un membre a rangé quelque chose reste. Tout part à la corbeille
+ * de l'espace comme pour un membre (un membre peut le restaurer).
+ */
+router.delete("/:token/folders/:folderId", depositLimiter, async (req, res) => {
+  try {
+    const loaded = await loadOwnFolder(req, res);
+    if (!loaded) return;
+    const { share, email, folder } = loaded;
+    const { workspaceId } = share;
+
+    const subfolders = await collectSubfolders(workspaceId, folder._id);
+    const documents = await SharedDocument.find(
+      {
+        workspaceId,
+        folderId: { $in: [folder._id, ...subfolders.map((f) => f._id)] },
+        trashedAt: null,
+      },
+      { folderId: 1, "clientUpload.email": 1 },
+    ).lean();
+    const onlyTheirs =
+      subfolders.every((subfolder) => isVisitorFolder(subfolder, email)) &&
+      documents.every((document) => isVisitorUpload(document, email));
+    if (!onlyTheirs) return res.status(409).json(FOLDER_NOT_ONLY_YOURS);
+
+    // Mêmes marques qu'une mise en corbeille par un membre
+    // (deleteSharedFolder) : la restauration les relit
+    const now = new Date();
+    if (documents.length > 0) {
+      await SharedDocument.bulkWrite(
+        documents.map((document) => ({
+          updateOne: {
+            filter: { _id: document._id, trashedAt: null },
+            update: {
+              $set: { trashedAt: now, originalFolderId: document.folderId },
+            },
+          },
+        })),
+      );
+    }
+    await SharedFolder.bulkWrite(
+      [folder, ...subfolders].map((trashed) => ({
+        updateOne: {
+          filter: { _id: trashed._id, trashedAt: null },
+          update: {
+            $set: { trashedAt: now, originalParentId: trashed.parentId },
+          },
+        },
+      })),
+    );
+    publishSharedDocsChanged(workspaceId, "deleteSharedFolder");
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error(`Accès client (suppression d'un dossier) : ${error.message}`);
     return res
       .status(500)
       .json({ success: false, message: "Erreur lors de la suppression" });

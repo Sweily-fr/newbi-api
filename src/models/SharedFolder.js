@@ -71,9 +71,11 @@ const SharedFolderSchema = new mongoose.Schema(
       enum: ["public", "private"],
       default: "public",
     },
-    allowedUserIds: [{
-      type: mongoose.Schema.Types.ObjectId,
-    }],
+    allowedUserIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+      },
+    ],
 
     // Corbeille - soft delete
     trashedAt: {
@@ -86,10 +88,25 @@ const SharedFolderSchema = new mongoose.Schema(
       ref: "SharedFolder",
       default: null,
     },
+
+    // Créé par un client depuis un accès (lien client des documents
+    // partagés), comme SharedDocument.clientUpload : seul ce visiteur, une
+    // fois son adresse prouvée, peut le renommer ou le supprimer. createdBy
+    // est alors le membre qui a créé l'accès.
+    clientCreated: {
+      type: new mongoose.Schema(
+        {
+          shareId: { type: mongoose.Schema.Types.ObjectId, required: true },
+          email: { type: String, required: true, lowercase: true, trim: true },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
   },
   {
     timestamps: true,
-  }
+  },
 );
 
 // Index pour la corbeille

@@ -1431,6 +1431,347 @@ describe("Modification de ses documents par le client", () => {
   });
 });
 
+const jsonRequest = (method, url, body) =>
+  fetch(url, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": clientIp,
+    },
+    body: JSON.stringify(body),
+  });
+/** Dossiers créés par le visiteur (nouveau dossier ou dossier importé). */
+const createFolders = (share, session, folderId, paths) =>
+  jsonRequest("POST", urlOf(share, `/folders/${folderId}/folders`), {
+    session,
+    paths,
+  });
+const renameFolder = (share, session, folderId, name) =>
+  jsonRequest("PUT", urlOf(share, `/folders/${folderId}`), { session, name });
+const removeFolder = (share, session, folderId) =>
+  fetch(urlOf(share, `/folders/${folderId}`, q(session)), {
+    method: "DELETE",
+    headers: { "x-forwarded-for": clientIp },
+  });
+/** Accès ouvert au dépôt, visiteur identifié et dossiers créés. */
+async function withClientFolders(paths, folderId = ids.shared) {
+  const share = await createShare({ allowUploads: true });
+  const session = await identify(share);
+  const res = await createFolders(share, session, folderId, paths);
+  expect(res.status).toBe(201);
+  const { folders } = await res.json();
+  return { share, session, folders };
+}
+const clientFolders = () =>
+  SharedFolder.find({ "clientCreated.email": CLIENT }).lean();
+
+describe("Dossiers du client", () => {
+  it("dépôt fermé : aucun dossier créé", async () => {
+    const share = await createShare();
+    const session = await identify(share);
+    const res = await createFolders(share, session, ids.shared, [["Neuf"]]);
+    expect(res.status).toBe(403);
+    expect(await clientFolders()).toHaveLength(0);
+  });
+
+  it("crée un dossier dans un dossier de l'accès, visible et marqué comme le sien", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    const other = await identify(share, "associe@dupont.fr");
+
+    const res = await createFolders(share, session, ids.child, [
+      ["  Factures   2025/2026. "],
+    ]);
+    expect(res.status).toBe(201);
+    const [created] = (await res.json()).folders;
+    expect(created).toMatchObject({
+      name: "Factures 2025-2026",
+      parentId: String(ids.child),
+      mine: true,
+      created: true,
+    });
+
+    const saved = await SharedFolder.findById(created.id).lean();
+    expect(saved).toMatchObject({
+      workspaceId,
+      parentId: ids.child,
+      // Membre qui a ouvert l'accès, comme pour un dépôt
+      createdBy: owner,
+      isSharedWithAccountant: true,
+      clientCreated: { shareId: share._id, email: CLIENT },
+    });
+    // Suit la visibilité de son parent, comme un sous-dossier d'un membre
+    expect(saved.visibility).toBeNull();
+
+    // Le visiteur le voit, marqué comme le sien ; un autre visiteur aussi,
+    // sans la marque ; rien d'interne ne sort
+    const content = await getJson(share, session);
+    expect(content.folders.find((f) => f.id === created.id)).toMatchObject({
+      name: "Factures 2025-2026",
+      parentId: String(ids.child),
+      mine: true,
+    });
+    expect(content.folders.filter((f) => f.mine)).toHaveLength(1);
+    const seen = await getJson(share, other);
+    expect(seen.folders.find((f) => f.id === created.id).mine).toBe(false);
+    expect(JSON.stringify(seen)).not.toContain("clientCreated");
+    expect(JSON.stringify(seen)).not.toContain(CLIENT);
+
+    // On y dépose aussitôt
+    expect((await upload(share, session, created.id)).status).toBe(201);
+  });
+
+  it("importe une arborescence : un dossier déjà là est repris, jamais doublé", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+
+    const res = await createFolders(share, session, ids.shared, [
+      ["Contrats"],
+      ["Contrats", "2026"],
+      ["Relevés"],
+      ["Relevés", "Janvier"],
+      ["Relevés", "Janvier"],
+      // Même nom qu'un dossier privé ou à la corbeille : ni repris ni dévoilé
+      ["RH confidentiel"],
+      ["À la corbeille"],
+    ]);
+    expect(res.status).toBe(201);
+    const { folders } = await res.json();
+    expect(folders.map((f) => [f.name, f.created])).toEqual([
+      ["Contrats", false],
+      ["2026", true],
+      ["Relevés", true],
+      ["Janvier", true],
+      ["Janvier", false],
+      ["RH confidentiel", true],
+      ["À la corbeille", true],
+    ]);
+    expect(folders[0].id).toBe(String(ids.child));
+    expect(folders[1].parentId).toBe(String(ids.child));
+    expect(folders[3].parentId).toBe(folders[2].id);
+    expect(folders[4].id).toBe(folders[3].id);
+    expect(folders[5].id).not.toBe(String(ids.privateChild));
+    expect(folders[6].id).not.toBe(String(ids.trashedChild));
+    expect(await clientFolders()).toHaveLength(5);
+
+    // Rien de nouveau à créer : réponse 200, rien n'est doublé
+    const again = await createFolders(share, session, ids.shared, [
+      ["Relevés", "Janvier"],
+    ]);
+    expect(again.status).toBe(200);
+    expect((await again.json()).folders[0]).toMatchObject({
+      id: folders[3].id,
+      created: false,
+    });
+    expect(await clientFolders()).toHaveLength(5);
+  });
+
+  it("refuse un dossier hors de l'accès et une demande invalide", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    for (const folderId of [
+      ids.privateChild,
+      ids.underPrivate,
+      ids.trashedChild,
+      ids.sibling,
+      ids.otherWorkspace,
+      new ObjectId(),
+    ]) {
+      const res = await createFolders(share, session, folderId, [["Neuf"]]);
+      expect(res.status).toBe(404);
+    }
+
+    const tooDeep = Array.from({ length: 21 }, (_, i) => `Niveau ${i}`);
+    const tooMany = Array.from({ length: 201 }, (_, i) => [`Dossier ${i}`]);
+    for (const [paths, message] of [
+      [undefined, "invalides"],
+      [[], "invalides"],
+      ["Factures", "invalides"],
+      [[[]], "invalides"],
+      [["Factures"], "invalides"],
+      [[["  "]], "vide"],
+      [[["..."]], "vide"],
+      [[[42]], "vide"],
+      [[tooDeep], "niveaux"],
+      [tooMany, "200 au plus"],
+    ]) {
+      const res = await createFolders(share, session, ids.shared, paths);
+      expect(res.status).toBe(400);
+      expect((await res.json()).message).toContain(message);
+    }
+    expect(await clientFolders()).toHaveLength(0);
+  });
+
+  it("sans session, accès retiré ou abonnement échu : refusé", async () => {
+    const share = await createShare({ allowUploads: true });
+    const session = await identify(share);
+    expect(
+      (await createFolders(share, null, ids.shared, [["Neuf"]])).status,
+    ).toBe(401);
+
+    await mongoose.connection.db.collection("subscription").deleteMany({});
+    invalidateSubCache(ws);
+    expect(
+      (await createFolders(share, session, ids.shared, [["Neuf"]])).status,
+    ).toBe(403);
+
+    await DocumentShare.updateOne(
+      { _id: share._id },
+      { $push: { bannedEmails: { email: CLIENT } } },
+    );
+    expect(
+      (await createFolders(share, session, ids.shared, [["Neuf"]])).status,
+    ).toBe(403);
+    expect(await clientFolders()).toHaveLength(0);
+  });
+
+  it("renomme ses dossiers, jamais ceux de l'espace ni d'un autre visiteur", async () => {
+    const { share, session, folders } = await withClientFolders([["Factures"]]);
+    const [mine] = folders;
+
+    const res = await renameFolder(
+      share,
+      session,
+      mine.id,
+      " Factures / 2026 ",
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).folder).toMatchObject({
+      id: mine.id,
+      name: "Factures - 2026",
+      mine: true,
+    });
+    expect((await SharedFolder.findById(mine.id).lean()).name).toBe(
+      "Factures - 2026",
+    );
+
+    // Nom déjà pris par un dossier visible au même endroit ; celui d'un
+    // dossier privé ne se devine pas
+    const taken = await renameFolder(share, session, mine.id, "Contrats");
+    expect(taken.status).toBe(409);
+    expect(
+      (await renameFolder(share, session, mine.id, "RH confidentiel")).status,
+    ).toBe(200);
+    for (const name of ["  ", "...", 42, null]) {
+      expect((await renameFolder(share, session, mine.id, name)).status).toBe(
+        400,
+      );
+    }
+
+    const other = await identify(share, "associe@dupont.fr");
+    for (const [who, folderId, status] of [
+      [other, mine.id, 403],
+      // Dossier choisi pour l'accès, dossier de l'espace
+      [session, ids.shared, 403],
+      [session, ids.child, 403],
+      // Hors de l'accès
+      [session, ids.privateChild, 404],
+      [session, ids.sibling, 404],
+      [session, "pas-un-id", 404],
+    ]) {
+      expect((await renameFolder(share, who, folderId, "Pris")).status).toBe(
+        status,
+      );
+      expect((await removeFolder(share, who, folderId)).status).toBe(status);
+    }
+    expect((await SharedFolder.findById(ids.child).lean()).name).toBe(
+      "Contrats",
+    );
+    expect((await SharedFolder.findById(mine.id).lean()).name).toBe(
+      "RH confidentiel",
+    );
+
+    // Dépôt refermé par le propriétaire : plus rien n'est permis
+    await DocumentShare.updateOne(
+      { _id: share._id },
+      { $set: { allowUploads: false } },
+    );
+    expect((await renameFolder(share, session, mine.id, "Autre")).status).toBe(
+      403,
+    );
+    expect((await removeFolder(share, session, mine.id)).status).toBe(403);
+  });
+
+  it("supprime son dossier et ce qu'il contient, vers la corbeille, restaurable", async () => {
+    const { share, session, folders } = await withClientFolders([
+      ["Factures"],
+      ["Factures", "2026"],
+    ]);
+    const [top, sub] = folders;
+    const { document } = await (await upload(share, session, sub.id)).json();
+
+    const res = await removeFolder(share, session, top.id);
+    expect(res.status).toBe(200);
+    const trashedTop = await SharedFolder.findById(top.id).lean();
+    const trashedSub = await SharedFolder.findById(sub.id).lean();
+    const trashedDoc = await SharedDocument.findById(document.id).lean();
+    expect(trashedTop.trashedAt).toBeTruthy();
+    expect(String(trashedTop.originalParentId)).toBe(String(ids.shared));
+    expect(trashedSub.trashedAt).toBeTruthy();
+    expect(String(trashedSub.originalParentId)).toBe(top.id);
+    expect(trashedDoc.trashedAt).toBeTruthy();
+    expect(String(trashedDoc.originalFolderId)).toBe(sub.id);
+    // Rien d'autre n'est touché
+    expect(
+      await SharedDocument.countDocuments({
+        trashedAt: { $ne: null },
+        _id: { $ne: document.id },
+      }),
+    ).toBe(1);
+
+    const content = await getJson(share, session);
+    expect(content.folders.map((f) => f.id)).not.toContain(top.id);
+    expect(content.documents.map((d) => d.id)).not.toContain(document.id);
+
+    // Un membre le restaure depuis la corbeille, avec son contenu
+    await sharedDocumentResolvers.Mutation.restoreFromTrash(
+      null,
+      { workspaceId: ws, folderIds: [top.id] },
+      asOwner(),
+    );
+    const restored = await getJson(share, session);
+    expect(restored.folders.map((f) => f.id)).toEqual(
+      expect.arrayContaining([top.id, sub.id]),
+    );
+  });
+
+  it("garde un dossier où un membre ou un autre visiteur a rangé quelque chose", async () => {
+    const { share, session, folders } = await withClientFolders([
+      ["Factures"],
+      ["Partagé"],
+      ["Privé"],
+    ]);
+    const [withMemberDocument, withOtherUpload, withPrivateFolder] = folders;
+    await SharedDocument.collection.insertOne(
+      doc(
+        new ObjectId(),
+        "note-interne.pdf",
+        new ObjectId(withMemberDocument.id),
+      ),
+    );
+    const other = await identify(share, "associe@dupont.fr");
+    expect((await upload(share, other, withOtherUpload.id)).status).toBe(201);
+    // Sous-dossier privé d'un membre : le visiteur ne le voit pas
+    await SharedFolder.collection.insertOne(
+      folder(new ObjectId(), "Notes", new ObjectId(withPrivateFolder.id), {
+        visibility: "private",
+      }),
+    );
+
+    for (const kept of folders) {
+      const res = await removeFolder(share, session, kept.id);
+      expect(res.status).toBe(409);
+      expect((await res.json()).message).toContain("pas ajoutés");
+    }
+    expect(
+      await SharedFolder.countDocuments({
+        _id: { $in: folders.map((f) => f.id) },
+        trashedAt: null,
+      }),
+    ).toBe(3);
+  });
+});
+
 describe("Gestion des accès", () => {
   const {
     createDocumentShare,

@@ -154,6 +154,30 @@ export function clientDocumentName(
   return ext ? `${stem}.${ext}` : stem;
 }
 
+export const FOLDER_NAME_MAX_LENGTH = 120;
+
+/**
+ * Nom qu'un client donne à un dossier (nouveau dossier, dossier de son
+ * ordinateur qu'il importe, renommage) : ni caractère de contrôle, ni
+ * séparateur de chemin (« 2025/2026 » devient « 2025-2026 »), espaces
+ * resserrés, ni point ni espace final, longueur bornée.
+ *
+ * @param {unknown} rawName
+ * @returns {string|null} null si ce n'est pas un texte ou si rien n'en reste
+ */
+export function clientFolderName(rawName) {
+  if (typeof rawName !== "string") return null;
+  const name = rawName
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[/\\]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, FOLDER_NAME_MAX_LENGTH)
+    .replace(/[.\s]+$/, "");
+  return name || null;
+}
+
 /**
  * @param {{ filename: string, buffer: Buffer }} file
  * @returns {{ ok: true, mime: string, extension: string }
