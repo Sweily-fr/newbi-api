@@ -3,9 +3,11 @@ import {
   checkClientUpload,
   cleanUploadedName,
   clientDocumentName,
+  clientFolderName,
   CLIENT_UPLOAD_MAX_BYTES,
   CLIENT_VIDEO_MAX_BYTES,
   documentExtension,
+  FOLDER_NAME_MAX_LENGTH,
   withoutExtension,
 } from "../../src/utils/clientUploadType.js";
 
@@ -162,5 +164,29 @@ describe("documentExtension et withoutExtension", () => {
     expect(withoutExtension("Relevé.PDF", "pdf")).toBe("Relevé");
     expect(withoutExtension("Relevé.png", "pdf")).toBe("Relevé.png");
     expect(withoutExtension("Relevé", "")).toBe("Relevé");
+  });
+});
+
+describe("clientFolderName", () => {
+  it("nettoie le nom d'un dossier : espaces, séparateurs, fin", () => {
+    expect(clientFolderName("  Factures   2026  ")).toBe("Factures 2026");
+    expect(clientFolderName("2025/2026")).toBe("2025-2026");
+    expect(clientFolderName("..\\secret")).toBe("..-secret");
+    expect(clientFolderName("fac\u0000tures\n")).toBe("factures");
+    expect(clientFolderName("Archives... ")).toBe("Archives");
+    // Point au début gardé, comme chez un membre
+    expect(clientFolderName(".photos")).toBe(".photos");
+  });
+
+  it("borne la longueur", () => {
+    expect(clientFolderName("a".repeat(300))).toHaveLength(
+      FOLDER_NAME_MAX_LENGTH,
+    );
+  });
+
+  it("rien d'utilisable : null", () => {
+    for (const name of ["", "   ", "...", ". . .", 42, null, undefined, {}]) {
+      expect(clientFolderName(name)).toBeNull();
+    }
   });
 });
