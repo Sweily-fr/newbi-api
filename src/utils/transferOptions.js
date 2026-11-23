@@ -19,6 +19,7 @@ export const TRANSFER_PAYMENT_CURRENCIES = ["EUR", "USD", "GBP", "CHF"];
 export const TRANSFER_PAYMENT_METHOD_KEYS = [
   "stripe",
   "paypal",
+  "sumup",
   "bank_transfer",
 ];
 

@@ -6,6 +6,7 @@ import stripeConnectService, {
 } from "../services/stripeConnectService.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import PaypalMerchantAccount from "../models/PaypalMerchantAccount.js";
+import SumupMerchantAccount from "../models/SumupMerchantAccount.js";
 import FileTransfer from "../models/FileTransfer.js";
 import logger from "../utils/logger.js";
 import {
@@ -46,6 +47,15 @@ const NO_PAYMENT_CONNECTIONS = {
     accountEmail: null,
   },
   paypal: { available: false, connected: false, email: null },
+  sumup: {
+    available: false,
+    connected: false,
+    needsReconnect: false,
+    businessName: null,
+    email: null,
+    merchantCode: null,
+    currency: null,
+  },
   bankTransfer: { available: false, ibanLast4: null },
 };
 
@@ -219,7 +229,8 @@ const stripeConnectResolvers = {
 
     /**
      * Moyens d'encaissement de l'espace actif : compte Stripe, compte
-     * PayPal, IBAN (réglages des applications, transferts payants).
+     * PayPal, compte SumUp, IBAN (réglages des applications, transferts
+     * payants).
      */
     paymentConnections: async (
       _,
@@ -628,10 +639,10 @@ const stripeConnectResolvers = {
           };
         }
 
-        // Paiement créé sur le compte du vendeur (compte Stripe de l'espace
-        // connecté par OAuth, ou son compte PayPal) : jeton de retour opaque,
-        // le lien et la clé du transfert restent hors des journaux des
-        // prestataires
+        // Paiement créé sur le compte du vendeur (compte Stripe ou SumUp de
+        // l'espace connecté par OAuth, ou son compte PayPal) : jeton de
+        // retour opaque, le lien et la clé du transfert restent hors des
+        // journaux des prestataires
         return await startOnlinePayment(fileTransfer, provider || "stripe", {
           returnOrigin: req?.headers?.origin,
         });
@@ -708,7 +719,7 @@ const stripeConnectResolvers = {
     },
 
     /**
-     * Retour du payeur (Stripe ou PayPal) : paiement vérifié auprès du
+     * Retour du payeur (Stripe, SumUp ou PayPal) : paiement vérifié auprès du
      * prestataire, transfert débloqué s'il est payé, lien et clé du
      * transfert renvoyés pour y revenir. Le jeton reste valable jusqu'à son
      * expiration (rechargement de la page de retour).
@@ -741,7 +752,7 @@ const stripeConnectResolvers = {
 
         const result = await refreshTransferPayment(fileTransfer, {
           force: true,
-          provider: ["stripe", "paypal"].includes(provider)
+          provider: ["stripe", "sumup", "paypal"].includes(provider)
             ? provider
             : undefined,
           sessionId: typeof sessionId === "string" ? sessionId : undefined,
@@ -857,6 +868,36 @@ const stripeConnectResolvers = {
     },
 
     /**
+     * Compte SumUp de l'espace : la connexion est retirée et ses jetons
+     * effacés. Le client peut aussi retirer l'accès de Newbi depuis SumUp.
+     */
+    disconnectSumup: async (
+      _,
+      args,
+      { user, organizationId, permissionLevels },
+    ) => {
+      if (!user) {
+        throw new AppError(
+          "Vous devez être connecté",
+          ERROR_CODES.UNAUTHENTICATED,
+        );
+      }
+      if (!organizationId) {
+        return { success: false, message: "Aucune organisation active" };
+      }
+      if (!canManageIntegrations(permissionLevels)) {
+        return {
+          success: false,
+          message: "Votre rôle ne permet pas de déconnecter SumUp",
+        };
+      }
+      await SumupMerchantAccount.deleteOne({
+        organizationId: String(organizationId),
+      });
+      return { success: true, message: "Compte SumUp déconnecté" };
+    },
+
+    /**
      * Consume a single-use payment return token and return transfer info
      */
     consumePaymentReturnToken: async (_, { token }) => {
@@ -939,6 +980,7 @@ const STRIPE_CONNECT_ORG_SCOPED_MUTATIONS = [
   "disconnectStripe",
   "connectPaypal",
   "disconnectPaypal",
+  "disconnectSumup",
 ];
 STRIPE_CONNECT_ORG_SCOPED_QUERIES.forEach((name) => {
   const original = stripeConnectResolvers.Query[name];

@@ -4,6 +4,8 @@
  * L'argent va directement au vendeur, jamais par le compte de Newbi :
  * - carte : session Stripe Checkout créée sur le compte Stripe du vendeur,
  *   rattaché par OAuth (frais Stripe à sa charge) ;
+ * - carte avec SumUp : paiement (checkout) créé sur le compte marchand SumUp
+ *   du vendeur, rattaché par OAuth (frais SumUp à sa charge) ;
  * - PayPal : commande dont le vendeur est le bénéficiaire (frais PayPal à sa
  *   charge) ;
  * - virement : IBAN de l'entreprise et référence affichés au destinataire,
@@ -12,8 +14,9 @@
  *
  * Le transfert est débloqué (`isPaid`) dès que le paiement est vérifié
  * auprès du prestataire : au retour du payeur, par le webhook Stripe des
- * comptes connectés, ou à la visite suivante de la page du transfert. Le
- * webhook accélère, il n'est pas indispensable.
+ * comptes connectés ou la notification de SumUp, ou à la visite suivante de
+ * la page du transfert. Webhook et notification accélèrent, ils ne sont pas
+ * indispensables.
  */
 import crypto from "crypto";
 import mongoose from "mongoose";
@@ -22,6 +25,7 @@ import { UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import PaypalMerchantAccount from "../models/PaypalMerchantAccount.js";
+import SumupMerchantAccount from "../models/SumupMerchantAccount.js";
 import AccountBanking from "../models/AccountBanking.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
@@ -45,6 +49,16 @@ import {
   summarizePaypalOrder,
 } from "./paypalService.js";
 import {
+  SumupApiError,
+  createSumupCheckout,
+  deactivateSumupCheckout,
+  getSumupCheckout,
+  isSumupCheckoutId,
+  isSumupConfigured,
+  refundSumupTransaction,
+  summarizeSumupCheckout,
+} from "./sumupService.js";
+import {
   buildTransferBankDeclaredEmail,
   buildTransferFilesAvailableEmail,
   buildTransferPaidEmail,
@@ -54,10 +68,15 @@ import { sendRenderedEmail } from "../utils/trialEmails.js";
 
 export const TRANSFER_PAYMENT_METHODS = Object.freeze([
   "stripe",
+  "sumup",
   "paypal",
   "bank_transfer",
 ]);
-export const ONLINE_PAYMENT_PROVIDERS = Object.freeze(["stripe", "paypal"]);
+export const ONLINE_PAYMENT_PROVIDERS = Object.freeze([
+  "stripe",
+  "sumup",
+  "paypal",
+]);
 
 // Lien de retour du payeur (jeton opaque) : valable une heure
 export const PAYMENT_RETURN_TTL_MS = 60 * 60 * 1000;
@@ -65,7 +84,7 @@ export const PAYMENT_RETURN_TTL_MS = 60 * 60 * 1000;
 // le jeton de retour
 const STRIPE_SESSION_TTL_S = 60 * 60;
 // Vérification auprès du prestataire à la visite de la page : au plus une
-// fois par intervalle, pour ne pas solliciter Stripe ou PayPal à chaque
+// fois par intervalle, pour ne pas solliciter le prestataire à chaque
 // rafraîchissement
 const RECHECK_INTERVAL_MS = 15 * 1000;
 // Même forcée (retour du payeur), une vérification par transfert au plus
@@ -82,7 +101,7 @@ const frontendUrl = (env = process.env) =>
   String(env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 /**
- * Site où revient le payeur après Stripe ou PayPal. En production : toujours
+ * Site où revient le payeur après le prestataire. En production : toujours
  * FRONTEND_URL. Hors production : le site d'où le paiement a été lancé
  * (en-tête Origin) s'il fait partie des origines autorisées, car un
  * FRONTEND_URL réglé sur l'adresse réseau du poste (tests sur téléphone)
@@ -170,22 +189,42 @@ export async function hasConnectedBank(workspaceId) {
   return Boolean(account);
 }
 
+/** Compte SumUp de l'espace (jetons compris, jamais renvoyé au site). */
+function findSumupAccount(workspaceId) {
+  const orgId = workspaceKey(workspaceId);
+  return orgId ? SumupMerchantAccount.findOne({ organizationId: orgId }) : null;
+}
+
+/** Compte SumUp utilisable pour encaisser (connexion valide). */
+const isSumupAccountReady = (account) =>
+  Boolean(account?.merchantCode && account.status !== "reconnect");
+
 /**
  * Moyens d'encaissement de l'espace (réglages, formulaire de création).
  */
 export async function getPaymentConnections(workspaceId) {
   const orgId = workspaceKey(workspaceId);
-  const [stripeAccount, paypalAccount, organization, bankConnected] =
-    await Promise.all([
-      orgId
-        ? StripeConnectAccount.findOne({ organizationId: orgId }).lean()
-        : null,
-      orgId
-        ? PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
-        : null,
-      loadOrganization(orgId),
-      hasConnectedBank(orgId),
-    ]);
+  const [
+    stripeAccount,
+    paypalAccount,
+    sumupAccount,
+    organization,
+    bankConnected,
+  ] = await Promise.all([
+    orgId
+      ? StripeConnectAccount.findOne({ organizationId: orgId }).lean()
+      : null,
+    orgId
+      ? PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
+      : null,
+    orgId
+      ? SumupMerchantAccount.findOne({ organizationId: orgId })
+          .select("merchantCode businessName email currency status")
+          .lean()
+      : null,
+    loadOrganization(orgId),
+    hasConnectedBank(orgId),
+  ]);
   const featureOpen = orgId
     ? isFeatureEnabled("transferPayments", orgId)
     : false;
@@ -206,6 +245,17 @@ export async function getPaymentConnections(workspaceId) {
       connected: Boolean(paypalAccount),
       email: paypalAccount?.email || null,
     },
+    sumup: {
+      available: isSumupConfigured() && featureOpen,
+      connected: Boolean(sumupAccount),
+      needsReconnect: Boolean(
+        sumupAccount && !isSumupAccountReady(sumupAccount),
+      ),
+      businessName: sumupAccount?.businessName || null,
+      email: sumupAccount?.email || null,
+      merchantCode: sumupAccount?.merchantCode || null,
+      currency: sumupAccount?.currency || null,
+    },
     bankTransfer: {
       available: Boolean(iban),
       ibanLast4: iban ? iban.slice(-4) : null,
@@ -217,6 +267,8 @@ export async function getPaymentConnections(workspaceId) {
 const UNAVAILABLE_MESSAGES = {
   stripe:
     "Connectez votre compte Stripe (Paramètres > Applications) pour accepter les paiements par carte.",
+  sumup:
+    "Connectez votre compte SumUp (Paramètres > Applications) pour accepter les paiements par carte avec SumUp.",
   paypal:
     "Connectez votre compte PayPal (Paramètres > Applications) pour accepter PayPal.",
   bank_transfer:
@@ -225,12 +277,25 @@ const UNAVAILABLE_MESSAGES = {
 
 /**
  * Moyens d'un nouveau transfert payant, vérifiés : sans précision, tous ceux
- * que l'espace peut proposer.
+ * que l'espace peut proposer. `currency` : devise du transfert (SumUp
+ * n'encaisse que la devise du compte marchand).
  */
-export async function resolveTransferPaymentMethods(workspaceId, requested) {
+export async function resolveTransferPaymentMethods(
+  workspaceId,
+  requested,
+  currency,
+) {
   const connections = await getPaymentConnections(workspaceId);
+  const sumup = connections.sumup;
+  const sumupReady =
+    sumup.available && sumup.connected && !sumup.needsReconnect;
+  const sumupCurrencyOk =
+    !currency ||
+    !sumup.currency ||
+    sumup.currency === String(currency).toUpperCase();
   const available = {
     stripe: connections.stripe.ready,
+    sumup: sumupReady && sumupCurrencyOk,
     paypal: connections.paypal.available && connections.paypal.connected,
     bank_transfer: connections.bankTransfer.available,
   };
@@ -239,10 +304,15 @@ export async function resolveTransferPaymentMethods(workspaceId, requested) {
     : TRANSFER_PAYMENT_METHODS.filter((method) => available[method]);
   if (!wanted.length) {
     throw new UserInputError(
-      "Connectez Stripe ou PayPal, ou renseignez l'IBAN de votre entreprise, pour demander un paiement.",
+      "Connectez Stripe, SumUp ou PayPal, ou renseignez l'IBAN de votre entreprise, pour demander un paiement.",
     );
   }
   const unavailable = wanted.find((method) => !available[method]);
+  if (unavailable === "sumup" && sumupReady && !sumupCurrencyOk) {
+    throw new UserInputError(
+      `Votre compte SumUp encaisse uniquement en ${sumup.currency} : choisissez cette devise ou un autre moyen de paiement.`,
+    );
+  }
   if (unavailable) throw new UserInputError(UNAVAILABLE_MESSAGES[unavailable]);
   return wanted;
 }
@@ -266,6 +336,7 @@ export async function prepareTransferPayment({
   workspaceId,
   isPaymentRequired,
   paymentMethods,
+  paymentCurrency,
   hasWatermark,
 }) {
   if (!isPaymentRequired) return {};
@@ -283,7 +354,11 @@ export async function prepareTransferPayment({
       "Le paiement n'est pas compatible avec le filigrane : le destinataire ne pourrait pas télécharger les fichiers après avoir payé.",
     );
   }
-  const methods = await resolveTransferPaymentMethods(orgId, paymentMethods);
+  const methods = await resolveTransferPaymentMethods(
+    orgId,
+    paymentMethods,
+    paymentCurrency,
+  );
   return {
     paymentMethods: methods,
     paymentReference: methods.includes("bank_transfer")
@@ -331,7 +406,18 @@ function definedOnly(values) {
  */
 export async function markTransferPaid(
   transfer,
-  { provider, paymentId, amount, currency, payerEmail, accountId, markedBy },
+  {
+    provider,
+    paymentId,
+    amount,
+    currency,
+    payerEmail,
+    accountId,
+    markedBy,
+    // Transaction à rembourser si ce paiement fait doublon (SumUp : le
+    // paiement est identifié par son checkout, remboursé par sa transaction)
+    refundReference,
+  },
 ) {
   const updated = await FileTransfer.findOneAndUpdate(
     { _id: transfer._id, isPaid: { $ne: true } },
@@ -387,6 +473,7 @@ export async function markTransferPaid(
       provider,
       paymentId,
       accountId,
+      refundReference,
     });
   }
   return { status: "paid", transfer: current, newlyPaid: false, duplicate };
@@ -397,7 +484,25 @@ async function refundDuplicatePayment({
   provider,
   paymentId,
   accountId,
+  refundReference,
 }) {
+  if (provider === "sumup" && refundReference) {
+    try {
+      const account = await findSumupAccount(transfer.workspaceId);
+      if (account) {
+        await refundSumupTransaction(account, refundReference);
+        logger.warn(
+          `[transfer-payment] Second paiement SumUp ${paymentId} du transfert ${transfer._id} remboursé`,
+        );
+        return;
+      }
+    } catch (error) {
+      logger.error(
+        `[transfer-payment] ANOMALIE : second paiement SumUp ${paymentId} du transfert ${transfer._id} non remboursé (${error.message}) : à rembourser depuis le compte SumUp ${accountId || ""}`,
+      );
+      return;
+    }
+  }
   if (provider === "stripe" && accountId && paymentId?.startsWith("pi_")) {
     try {
       await getStripe().refunds.create(
@@ -621,8 +726,33 @@ export async function detectTransferBankPayments(workspaceId, transactions) {
 
 const fail = (message) => ({ success: false, message });
 
+const NOT_OFFERED_MESSAGES = {
+  stripe: "Le paiement par carte n'est pas proposé pour ce transfert.",
+  sumup:
+    "Le paiement par carte avec SumUp n'est pas proposé pour ce transfert.",
+  paypal: "Le paiement par PayPal n'est pas proposé pour ce transfert.",
+};
+
+const SUMUP_UNAVAILABLE =
+  "Le paiement par carte avec SumUp n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.";
+
+/** Référence SumUp d'une tentative : rattache le paiement au transfert. */
+export const sumupCheckoutReference = (transferId, returnToken) =>
+  `newbi-${transferId}-${String(returnToken).slice(0, 12)}`;
+
 async function closeOpenAttempt(transfer) {
   const attempt = transfer?.paymentAttempt;
+  if (attempt?.provider === "sumup" && attempt.reference) {
+    try {
+      const account = await findSumupAccount(transfer.workspaceId);
+      if (account) await deactivateSumupCheckout(account, attempt.reference);
+    } catch (error) {
+      logger.warn(
+        `[transfer-payment] Paiement SumUp ${attempt.reference} non fermé : ${error.message}`,
+      );
+    }
+    return;
+  }
   if (attempt?.provider !== "stripe" || !attempt.reference) return;
   if (!attempt.accountId) return;
   try {
@@ -667,11 +797,7 @@ export async function startOnlinePayment(
     return fail("Moyen de paiement inconnu");
   }
   if (!transferPaymentMethods(transfer).includes(provider)) {
-    return fail(
-      provider === "paypal"
-        ? "Le paiement par PayPal n'est pas proposé pour ce transfert."
-        : "Le paiement par carte n'est pas proposé pour ce transfert.",
-    );
+    return fail(NOT_OFFERED_MESSAGES[provider]);
   }
   // Virement annoncé : pas de second paiement en ligne
   if (transfer.bankTransferDeclaration?.declaredAt) {
@@ -755,6 +881,29 @@ export async function startOnlinePayment(
         createdAt: new Date(),
       };
       url = session.url;
+    } else if (provider === "sumup") {
+      const account = await findSumupAccount(orgId);
+      if (!isSumupConfigured() || !isSumupAccountReady(account)) {
+        return fail(SUMUP_UNAVAILABLE);
+      }
+      const checkout = await createSumupCheckout(account, {
+        reference: sumupCheckoutReference(transfer._id, returnToken),
+        amount: transfer.paymentAmount,
+        currency: transfer.paymentCurrency || "EUR",
+        description: `${name} (${description})`,
+        redirectUrl: back,
+      });
+      if (!checkout?.id || !checkout.url) {
+        throw new SumupApiError("Paiement SumUp sans page de paiement");
+      }
+      attempt = {
+        provider: "sumup",
+        reference: checkout.id,
+        accountId: account.merchantCode,
+        status: "open",
+        createdAt: new Date(),
+      };
+      url = checkout.url;
     } else {
       const merchant = orgId
         ? await PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
@@ -790,6 +939,9 @@ export async function startOnlinePayment(
     logger.error(
       `[transfer-payment] Paiement ${provider} du transfert ${transfer._id} non lancé : ${error.message}`,
     );
+    if (error instanceof SumupApiError && error.code === "RECONNECT") {
+      return fail(SUMUP_UNAVAILABLE);
+    }
     return fail(
       error instanceof PaypalApiError &&
         String(error.issue || "").startsWith("PAYEE_")
@@ -1021,12 +1173,103 @@ async function applyPaypalCapture(transfer, summary) {
 }
 
 /**
+ * Applique un paiement SumUp relu auprès de SumUp (retour, notification ou
+ * visite) : il doit porter la référence du transfert, venir du compte
+ * marchand du vendeur et correspondre au montant et à la devise.
+ */
+export async function applySumupCheckout(transfer, summary, account) {
+  const expectedPrefix = `newbi-${transfer._id}-`;
+  const expectedMerchant =
+    transfer.paymentAttempt?.accountId || account?.merchantCode || null;
+  if (
+    !summary?.reference ||
+    !summary.reference.startsWith(expectedPrefix) ||
+    (summary.merchantCode &&
+      expectedMerchant &&
+      summary.merchantCode !== expectedMerchant)
+  ) {
+    logger.warn(
+      `[transfer-payment] Paiement SumUp ${summary?.id} étranger au transfert ${transfer._id}`,
+    );
+    return { status: "unpaid" };
+  }
+
+  if (summary.status === "PAID") {
+    const currency = String(summary.currency || "").toUpperCase();
+    if (
+      !sameAmount(summary.amount, transfer.paymentAmount) ||
+      currency !== String(transfer.paymentCurrency || "EUR").toUpperCase()
+    ) {
+      logger.error(
+        `[transfer-payment] ANOMALIE : paiement SumUp ${summary.id} de ${summary.amount} ${currency} pour le transfert ${transfer._id} (${transfer.paymentAmount} ${transfer.paymentCurrency}) : non appliqué`,
+      );
+      return { status: "unpaid" };
+    }
+    return markTransferPaid(transfer, {
+      provider: "sumup",
+      paymentId: summary.id,
+      amount: summary.amount,
+      currency,
+      accountId: expectedMerchant || undefined,
+      refundReference: summary.transactionId || undefined,
+    });
+  }
+  if (summary.status === "FAILED" || summary.status === "EXPIRED") {
+    await setAttemptStatus(transfer, "failed", summary.id);
+  }
+  return { status: "unpaid" };
+}
+
+async function verifySumupAttempt(transfer) {
+  if (!isSumupConfigured()) return { status: "unpaid" };
+  const attempt = transfer.paymentAttempt || {};
+  if (attempt.provider !== "sumup" || !isSumupCheckoutId(attempt.reference)) {
+    return { status: "unpaid" };
+  }
+  const account = await findSumupAccount(transfer.workspaceId);
+  if (!account) return { status: "unpaid" };
+  try {
+    const checkout = await getSumupCheckout(account, attempt.reference);
+    return applySumupCheckout(
+      transfer,
+      summarizeSumupCheckout(checkout),
+      account,
+    );
+  } catch (error) {
+    logger.warn(
+      `[transfer-payment] Vérification SumUp du transfert ${transfer._id} : ${error.message}`,
+    );
+    return { status: "unpaid" };
+  }
+}
+
+/**
+ * Notification de SumUp (changement d'état d'un paiement). Non signée : elle
+ * ne fait que déclencher la relecture du paiement auprès de SumUp.
+ * @returns {Promise<{status: string}>}
+ */
+export async function handleSumupNotification(payload) {
+  const checkoutId = payload?.id || payload?.checkout_id;
+  if (!isSumupCheckoutId(checkoutId)) return { status: "ignored" };
+  const transfer = await FileTransfer.findOne({
+    "paymentAttempt.provider": "sumup",
+    "paymentAttempt.reference": checkoutId,
+  });
+  if (!transfer) return { status: "ignored" };
+  const result = await refreshTransferPayment(transfer, {
+    force: true,
+    provider: "sumup",
+  });
+  return { status: result.status };
+}
+
+/**
  * Vérifie le dernier paiement en ligne du transfert auprès du prestataire et
  * débloque le transfert s'il est payé.
  * @param {object} transfer - document FileTransfer
  * @param {object} [options]
  * @param {boolean} [options.force] - ignorer l'intervalle entre deux vérifications
- * @param {string} [options.provider] - prestataire du retour (stripe | paypal)
+ * @param {string} [options.provider] - prestataire du retour (stripe | sumup | paypal)
  * @param {string} [options.sessionId] - session Checkout du retour Stripe
  * @param {string} [options.orderId] - commande du retour PayPal
  * @returns {Promise<{status: "paid"|"pending"|"unpaid"|"free", message?: string}>}
@@ -1060,7 +1303,9 @@ export async function refreshTransferPayment(
     const result =
       attemptProvider === "stripe"
         ? await verifyStripeAttempt(transfer, sessionId)
-        : await verifyPaypalAttempt(transfer, orderId);
+        : attemptProvider === "sumup"
+          ? await verifySumupAttempt(transfer)
+          : await verifyPaypalAttempt(transfer, orderId);
     return { status: result.status, message: result.message };
   } catch (error) {
     logger.error(
@@ -1068,6 +1313,72 @@ export async function refreshTransferPayment(
     );
     return { status: "unpaid" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rattrapage des paiements en ligne restés ouverts
+// ---------------------------------------------------------------------------
+
+// Paiement ouvert depuis moins longtemps : le payeur est peut-être encore
+// sur la page du prestataire
+const SWEEP_MIN_AGE_MS = 2 * 60 * 1000;
+// Paiement ouvert : revérifié pendant 3 heures (page de paiement fermée
+// après coup, commande PayPal approuvée mais jamais revenue chez Newbi)
+const SWEEP_OPEN_WINDOW_MS = 3 * 60 * 60 * 1000;
+// Paiement en confirmation chez le prestataire : revérifié 7 jours
+const SWEEP_PENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const SWEEP_BATCH = 100;
+
+/**
+ * Revérifie les paiements en ligne récents restés ouverts ou en
+ * confirmation : un payeur qui ferme la page avant d'être revenu sur Newbi
+ * (PayPal approuvé mais pas encore encaissé, notification perdue) est
+ * débloqué sans attendre sa prochaine visite. Lancé toutes les 10 minutes
+ * (jobs/scheduler.js).
+ * @returns {Promise<{checked: number, unlocked: number}>}
+ */
+export async function sweepOpenTransferPayments({ now = Date.now() } = {}) {
+  const transfers = await FileTransfer.find({
+    isPaymentRequired: true,
+    isPaid: { $ne: true },
+    status: "active",
+    "paymentAttempt.provider": { $in: ONLINE_PAYMENT_PROVIDERS },
+    $or: [
+      {
+        "paymentAttempt.status": "open",
+        "paymentAttempt.createdAt": {
+          $gte: new Date(now - SWEEP_OPEN_WINDOW_MS),
+          $lte: new Date(now - SWEEP_MIN_AGE_MS),
+        },
+      },
+      {
+        "paymentAttempt.status": "pending",
+        "paymentAttempt.createdAt": {
+          $gte: new Date(now - SWEEP_PENDING_WINDOW_MS),
+        },
+      },
+    ],
+  })
+    .sort({ "paymentAttempt.createdAt": -1 })
+    .limit(SWEEP_BATCH);
+
+  let unlocked = 0;
+  for (const transfer of transfers) {
+    try {
+      const result = await refreshTransferPayment(transfer);
+      if (result.status === "paid") unlocked += 1;
+    } catch (error) {
+      logger.warn(
+        `[transfer-payment] Rattrapage du transfert ${transfer._id} : ${error.message}`,
+      );
+    }
+  }
+  if (unlocked) {
+    logger.info(
+      `[transfer-payment] Rattrapage : ${unlocked} transfert(s) débloqué(s) sur ${transfers.length} vérifié(s)`,
+    );
+  }
+  return { checked: transfers.length, unlocked };
 }
 
 // ---------------------------------------------------------------------------

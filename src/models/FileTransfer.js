@@ -129,7 +129,7 @@ const FileTransferSchema = new Schema(
       type: [
         {
           type: String,
-          enum: ["stripe", "paypal", "bank_transfer"],
+          enum: ["stripe", "paypal", "sumup", "bank_transfer"],
         },
       ],
       default: undefined,
@@ -139,7 +139,7 @@ const FileTransferSchema = new Schema(
     // connecté du vendeur)
     paymentProvider: {
       type: String,
-      enum: ["stripe", "paypal", "manual", "bank_transfer"],
+      enum: ["stripe", "paypal", "sumup", "manual", "bank_transfer"],
     },
     paidAmount: {
       type: Number,
@@ -171,12 +171,13 @@ const FileTransferSchema = new Schema(
       type: Date,
     },
     // Dernier paiement en ligne lancé par le destinataire : session Stripe
-    // Checkout (sur le compte du vendeur) ou commande PayPal. Sert à
-    // vérifier le paiement au retour, au webhook, ou à la visite suivante.
+    // Checkout (sur le compte du vendeur), commande PayPal ou paiement SumUp
+    // (checkout du compte marchand du vendeur). Sert à vérifier le paiement
+    // au retour, au webhook, ou à la visite suivante.
     paymentAttempt: {
       provider: {
         type: String,
-        enum: ["stripe", "paypal"],
+        enum: ["stripe", "paypal", "sumup"],
       },
       reference: { type: String },
       accountId: { type: String },
