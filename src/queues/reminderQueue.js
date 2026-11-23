@@ -10,6 +10,7 @@ import InvoiceReminderLog from "../models/InvoiceReminderLog.js";
 import EmailSettings from "../models/EmailSettings.js";
 import emailReminderService from "../services/emailReminderService.js";
 import { generateReminderEmailHtml } from "../services/documentEmailService.js";
+import { createRedisErrorReporter } from "../utils/redisConnectionLog.js";
 import axios from "axios";
 
 // Configuration Redis
@@ -38,6 +39,13 @@ const reminderQueue = new Queue("invoice-reminders", {
     },
   },
 });
+
+// Erreurs de connexion journalisées avec parcimonie : sans cela, une coupure
+// de Redis écrit une erreur à chaque tentative de reconnexion
+reminderQueue.on(
+  "error",
+  createRedisErrorReporter("File des relances").onError,
+);
 
 // Worker qui traite les jobs de relance
 let reminderWorker = null;
@@ -140,9 +148,9 @@ function startReminderWorker() {
     );
   });
 
-  reminderWorker.on("error", (error) => {
-    console.error("❌ [Queue] Erreur worker:", error);
-  });
+  const workerErrors = createRedisErrorReporter("Worker des relances");
+  reminderWorker.on("error", workerErrors.onError);
+  reminderWorker.on("ready", workerErrors.onReady);
 
   logger.debug(
     "🚀 [Queue] Worker de relances démarré (concurrency: 5, rate: 10/s)",
