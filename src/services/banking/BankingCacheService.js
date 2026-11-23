@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import logger from "../../utils/logger.js";
+import { createRedisErrorReporter } from "../../utils/redisConnectionLog.js";
 
 /**
  * Service de cache spécifique pour les données bancaires Bridge
@@ -47,26 +48,20 @@ class BankingCacheService {
           // Ne JAMAIS abandonner : un restart Redis (ex: auto-refresh snap)
           // peut durer plus longtemps que quelques tentatives, et un cache
           // mort jusqu'au prochain reload PM2 coûte plus cher qu'un retry.
-          reconnectStrategy: (retries) => {
-            if (retries % 10 === 0) {
-              logger.warn(
-                `⚠️ [BankingCache] Redis injoignable, nouvelle tentative (essai ${retries})`,
-              );
-            }
-            return Math.min(retries * 100, 3000);
-          },
+          reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
         },
       });
 
+      // Une ligne par coupure, un rappel toutes les 5 min, une au retour
+      const connectionLog = createRedisErrorReporter("Cache bancaire");
       this.client.on("error", (err) => {
-        if (this.isConnected) {
-          logger.error("❌ [BankingCache] Redis Error:", err.message);
-        }
         this.isConnected = false;
+        connectionLog.onError(err);
       });
 
       this.client.on("ready", () => {
         this.isConnected = true;
+        connectionLog.onReady();
         logger.info("✅ [BankingCache] Redis connecté");
       });
 

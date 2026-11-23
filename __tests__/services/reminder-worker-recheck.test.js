@@ -20,6 +20,7 @@ vi.mock("bullmq", () => {
   class Queue {
     add = vi.fn();
     close = vi.fn();
+    on = vi.fn();
   }
   class Worker {
     on = vi.fn();

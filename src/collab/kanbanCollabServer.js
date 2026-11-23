@@ -20,7 +20,6 @@
 //   il l'écraserait au prochain enregistrement.
 import crypto from "node:crypto";
 import mongoose from "mongoose";
-import IORedis from "ioredis";
 import * as Y from "yjs";
 import { Hocuspocus } from "@hocuspocus/server";
 import { Redis as HocuspocusRedis } from "@hocuspocus/extension-redis";
@@ -39,7 +38,11 @@ import { checkSubscriptionActive } from "../middlewares/rbac.js";
 import { getEffectiveLevelsFor } from "../services/organizationRoleService.js";
 import { levelsAllowLevel } from "../config/rolePermissions.js";
 import { publishTaskUpdated } from "../resolvers/kanban.js";
-import { getCacheClient, getPubSub, redisConfig } from "../config/redis.js";
+import {
+  createRedisClient,
+  getCacheClient,
+  getPubSub,
+} from "../config/redis.js";
 import logger from "../utils/logger.js";
 
 export const COLLAB_PATH = "/collab";
@@ -673,18 +676,15 @@ export const createKanbanCollabServer = ({ authenticate: authFn } = {}) => {
 
   // Même connexion Redis que le reste de l'API (REDIS_URL en prod/staging,
   // hôte/port en local). Deux clients (pub/sub) créés par l'extension.
+  // Leurs commandes attendent le retour de Redis au lieu d'échouer pour de
+  // bon : l'extension prend son abonnement de réponse une seule fois, à sa
+  // création, et un démarrage pendant une coupure le laissait en échec, donc
+  // tous les chargements de documents aussi, jusqu'au redémarrage suivant
+  // (incident du 27/10/2026).
   const extensions = [];
   try {
-    const redisUrl = process.env.REDIS_URL;
     const createClient = () =>
-      redisUrl
-        ? new IORedis(redisUrl)
-        : new IORedis({
-            host: redisConfig.host,
-            port: redisConfig.port,
-            db: redisConfig.db,
-            password: redisConfig.password,
-          });
+      createRedisClient("Kanban collaboratif", { maxRetriesPerRequest: null });
     extensions.push(
       new HocuspocusRedis({ createClient, prefix: "kanban-collab" }),
     );
