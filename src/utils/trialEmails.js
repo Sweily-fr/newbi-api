@@ -6,37 +6,28 @@
  *   - J0 ended    (sendTrialEndedEmail)   — incitatif et rassurant
  *                                          (décision #7)
  *
- * Reuses the existing nodemailer transporter from emailService.js (SMTP).
+ * Envoi par Resend (emailReminderService), depuis RESEND_FROM_EMAIL
+ * (no-reply@newbi.fr en prod), comme les autres e-mails Newbi.
  * Templates follow the shared Newbi email design (cf. NewbiV2
  * src/lib/email-templates) : logo header, notification badge, white card,
  * black CTA, legal footer — built here via `renderEmail` so the look stays
  * consistent with the rest of the product emails.
  */
-import nodemailer from "nodemailer";
 import logger from "./logger.js";
 
-let _transporter = null;
-function transporter() {
-  if (_transporter) return _transporter;
-  _transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: parseInt(process.env.SMTP_PORT || "587", 10),
-    secure: process.env.SMTP_SECURE === "true",
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    tls: { rejectUnauthorized: false },
-  });
-  return _transporter;
-}
-
-const FROM =
-  process.env.SMTP_FROM || process.env.SMTP_USER || "noreply@newbi.fr";
-
-/** Envoie un e-mail déjà mis en page par renderEmail (même expéditeur). */
+/**
+ * Envoie un e-mail déjà mis en page par renderEmail : fin d'essai, documents
+ * partagés, transferts payants. Par Resend (emailReminderService), depuis
+ * l'adresse Newbi (RESEND_FROM_EMAIL, no-reply@newbi.fr en prod), et non
+ * plus par le SMTP dont l'expéditeur de prod était une adresse sweily.fr
+ * (décision du 18/11/2026 : plus d'adresse sweily). Import dynamique : ce
+ * module sert aussi de boîte à outils (renderEmail, escapeHtml, typo) à des
+ * modules qui n'envoient rien.
+ */
 export async function sendRenderedEmail({ to, subject, html, text }) {
-  await transporter().sendMail({ from: FROM, to, subject, html, text });
+  const { default: emailReminderService } =
+    await import("../services/emailReminderService.js");
+  await emailReminderService.sendEmail({ to, subject, html, text });
 }
 export const APP_URL = process.env.FRONTEND_URL || "https://www.newbi.fr";
 // L'abonnement (choix des plans) s'ouvre via la modale de paramètres du
@@ -316,7 +307,7 @@ export async function sendTrialEndingEmail({ to, orgName, daysRemaining }) {
   }
   const { subject, html } = buildTrialEndingEmail({ orgName, daysRemaining });
   try {
-    await transporter().sendMail({ from: FROM, to, subject, html });
+    await sendRenderedEmail({ to, subject, html });
     logger.info(`[TrialEmails] J-3 reminder sent to ${to} (org=${orgName})`);
   } catch (error) {
     logger.error(
@@ -368,7 +359,7 @@ export async function sendTrialEndedEmail({ to, orgName }) {
   }
   const { subject, html } = buildTrialEndedEmail({ orgName });
   try {
-    await transporter().sendMail({ from: FROM, to, subject, html });
+    await sendRenderedEmail({ to, subject, html });
     logger.info(`[TrialEmails] J0 ended email sent to ${to} (org=${orgName})`);
   } catch (error) {
     logger.error(
