@@ -45,7 +45,17 @@ function isUnderOneOf(folder, ids, folderMap) {
 async function loadFolderMap(workspaceId) {
   const folders = await SharedFolder.find(
     { workspaceId },
-    { name: 1, parentId: 1, visibility: 1, trashedAt: 1, order: 1, color: 1 },
+    {
+      name: 1,
+      parentId: 1,
+      visibility: 1,
+      trashedAt: 1,
+      order: 1,
+      color: 1,
+      // Dossier créé par un visiteur : jamais renvoyé, sert à lui dire si
+      // c'est le sien (isVisitorFolder)
+      "clientCreated.email": 1,
+    },
   ).lean();
   return new Map(folders.map((folder) => [String(folder._id), folder]));
 }
@@ -165,6 +175,13 @@ export async function findVisitorAccess(token, session) {
  */
 export const isVisitorUpload = (document, email) =>
   Boolean(email) && document?.clientUpload?.email === email;
+
+/**
+ * Dossier créé par ce visiteur : seul cas où il peut le renommer ou le
+ * supprimer (si tout ce qu'il contient est aussi à lui).
+ */
+export const isVisitorFolder = (folder, email) =>
+  Boolean(email) && folder?.clientCreated?.email === email;
 
 /** Document de la portée de l'accès, hors corbeille ; sinon null. */
 export async function findShareDocument(share, shareFolders, documentId) {
