@@ -5,6 +5,8 @@
 # Appelé par .github/workflows/deploy_*.yml une fois la nouvelle version
 # copiée dans <dossier de l'app>/.deploy/next. La version en ligne n'est
 # touchée qu'après un démarrage d'essai réussi de la nouvelle :
+#   0. un seul déploiement à la fois sur le serveur (prod et staging compris) :
+#      le second attend la fin du premier ;
 #   1. dépendances réutilisées si package-lock.json n'a pas changé, sinon
 #      installées à part (la version en ligne garde les siennes jusque-là) ;
 #   2. démarrage d'essai sur un port de test, sans crons (canary.cjs). En cas
@@ -45,6 +47,33 @@ case "$TARGET" in
     ;;
 esac
 
+# 0. Un seul déploiement à la fois sur le serveur. La prod et le staging
+# partagent le même PM2, qui refuse un rechargement pendant un autre
+# (« Reload already in progress ») : le 23/11/2026, le report main → develop
+# poussé juste après une release a lancé le staging pendant la prod, et il a
+# échoué. Le second déploiement attend donc la fin du premier (15 min au plus).
+# Le script se relance sous `flock -o` : le verrou reste tenu par flock et
+# aucun processus lancé ici n'en hérite (un démon PM2 démarré pendant le
+# déploiement le garderait sinon jusqu'à son arrêt).
+DEPLOY_LOCK="$HOME/.deploy-vps.lock"
+LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-900}"
+if [ -z "${DEPLOY_VPS_LOCKED:-}" ]; then
+  export DEPLOY_VPS_LOCKED=1
+  if ! flock -n "$DEPLOY_LOCK" true; then
+    export DEPLOY_VPS_WAITED=1
+    echo "⏳ Un autre déploiement est en cours sur le serveur, attente de sa fin..."
+  fi
+  status=0
+  flock -o -w "$LOCK_WAIT_SECONDS" -E 75 "$DEPLOY_LOCK" bash "$0" "$@" || status=$?
+  if [ "$status" = 75 ]; then
+    echo "❌ Serveur occupé par un autre déploiement depuis $((LOCK_WAIT_SECONDS / 60)) min : abandon, la version en ligne n'a pas changé" >&2
+  fi
+  exit "$status"
+fi
+if [ -n "${DEPLOY_VPS_WAITED:-}" ]; then
+  echo "   Le déploiement précédent est terminé, celui-ci démarre"
+fi
+
 NEXT="$APP_DIR/.deploy/next"
 # Production : la config PM2 arrive avec la nouvelle version ; staging : celle du VPS
 if [ "$TARGET" = production ]; then
@@ -64,10 +93,13 @@ if [ ! -f "$NEXT/package.json" ]; then
   exit 1
 fi
 
-if /snap/bin/redis.cli ping > /dev/null 2>&1; then
+# PING direct sur le port : /snap/bin/redis.cli peut échouer alors que Redis
+# tourne (dossier /tmp/snap-private-tmp effacé, incidents du 27/10 et du 23/11)
+if (exec 3<> /dev/tcp/127.0.0.1/6379 && printf 'PING\r\n' >&3 &&
+  timeout 2 head -c 5 <&3) 2> /dev/null | grep -q PONG; then
   echo "✅ Redis opérationnel"
 else
-  echo "⚠️ Redis ne répond pas : l'API passera sur son repli en mémoire"
+  echo "⚠️ Redis ne répond pas : l'API démarrera sans lui et s'y reconnectera seule"
 fi
 
 # 1. Dépendances
