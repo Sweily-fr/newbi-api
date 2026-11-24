@@ -66,16 +66,16 @@ beforeEach(async () => {
 
 describe("Requête workspaceStorage", () => {
   it("donne au propriétaire l'état, le détail et la proposition", async () => {
-    await seedUsage(440 * GB);
+    await seedUsage(540 * GB);
     const storage = await query(ownerId);
     // Offre TPE (pme) des données de test + 1 pack
     expect(storage).toMatchObject({
       ready: true,
       plan: "pme",
       planLabel: "Premium",
-      usedBytes: 440 * GB,
-      quotaBytes: 450 * GB,
-      baseQuotaBytes: 400 * GB,
+      usedBytes: 540 * GB,
+      quotaBytes: 550 * GB,
+      baseQuotaBytes: 500 * GB,
       remainingBytes: 10 * GB,
       packs: 1,
       level: "warning",
