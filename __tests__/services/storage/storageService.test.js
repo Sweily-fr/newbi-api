@@ -383,7 +383,7 @@ describe("Stockage : état et quota", () => {
   it("reconnaît les offres « pro » et « enterprise » de la base", async () => {
     await setPlan("enterprise");
     await seedUsage(GB);
-    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(2000 * GB);
+    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(5000 * GB);
     await setPlan("pro");
     expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(500 * GB);
   });

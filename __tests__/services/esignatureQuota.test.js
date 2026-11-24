@@ -148,14 +148,14 @@ describe("getEsignatureQuota", () => {
     expect(quota.remaining).toBe(100);
   });
 
-  it("Entreprise : illimité", async () => {
+  it("Entreprise : 200 par mois", async () => {
     await setPlan("entreprise");
     await seedSignatures(250);
     const quota = await getEsignatureQuota(organizationId.toString());
     expect(quota).toMatchObject({
-      unlimited: true,
-      monthlyQuota: null,
-      remaining: null,
+      unlimited: false,
+      monthlyQuota: 200,
+      remaining: 0,
       used: 250,
     });
   });
@@ -274,7 +274,9 @@ describe("requestDocumentSignature : envois simultanés", () => {
     esignatureService.createSESSignature.mockImplementation(async () => {
       await new Promise((r) => setTimeout(r, 50));
       n += 1;
-      return { data: { id: `ext-concurrent-${n}`, state: "WAIT_SIGN", signers: [] } };
+      return {
+        data: { id: `ext-concurrent-${n}`, state: "WAIT_SIGN", signers: [] },
+      };
     });
 
     const send = (quoteId) =>
@@ -284,7 +286,9 @@ describe("requestDocumentSignature : envois simultanés", () => {
           input: {
             documentType: "quote",
             documentId: quoteId.toString(),
-            signers: [{ name: "Jean", surname: "Client", email: "jean@client.fr" }],
+            signers: [
+              { name: "Jean", surname: "Client", email: "jean@client.fr" },
+            ],
             documentBase64: "JVBERi0=",
           },
         },
