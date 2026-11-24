@@ -17,7 +17,7 @@ export const BYTES_PER_GB = 1_000_000_000;
 export const PLAN_STORAGE_GB = {
   freelance: 100,
   pme: 500,
-  entreprise: 2000,
+  entreprise: 5000,
 };
 
 // Pack de stockage supplémentaire, en vente sur l'offre Entreprise seulement
@@ -35,8 +35,8 @@ export const STORAGE_PACK_PRICES = {
 // de l'abonnement annuel.
 export const PLAN_PRICES = {
   freelance: { month: 17.99, year: 16.19 },
-  pme: { month: 48.99, year: 44.09 },
-  entreprise: { month: 94.99, year: 85.49 },
+  pme: { month: 50, year: 45 },
+  entreprise: { month: 200, year: 180 },
 };
 
 // Noms affichés, alignés sur plans-display.js du site (22/11/2026). Les clés
