@@ -1,3 +1,5 @@
+import { startOfTodayInParis } from "./parisDay.js";
+
 /**
  * Recale les dates d'un brouillon repris ultérieurement, au moment de sa
  * finalisation (facture DRAFT → PENDING, devis DRAFT → PENDING, bon de
@@ -12,14 +14,20 @@
  * (30 jours par défaut). Les dates au présent ou au futur sont laissées
  * telles quelles, et une seconde date absente n'est jamais inventée.
  *
+ * « Aujourd'hui » est le jour de Paris, à minuit UTC comme les dates saisies
+ * sur le site. Le serveur tourne en UTC : avec `setHours(0, 0, 0, 0)`, un
+ * brouillon finalisé entre minuit et 1 h à Paris (2 h l'été) était daté de la
+ * veille, alors que le site affichait le jour même, et la validation d'une
+ * facture était refusée si une autre était déjà datée du jour.
+ *
  * @param {Date|string|number} issueDate - Date d'émission du brouillon
  * @param {Date|string|number} [secondDate] - dueDate / validUntil
+ * @param {Date} [now] - instant de référence (tests)
  * @returns {{ issueDate: Date|null, secondDate: Date|null, changed: boolean }}
  */
-export function refreshDraftDates(issueDate, secondDate) {
+export function refreshDraftDates(issueDate, secondDate, now = new Date()) {
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = startOfTodayInParis(now);
 
   const toDate = (v) => {
     if (v === null || v === undefined || v === "") return null;
