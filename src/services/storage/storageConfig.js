@@ -15,12 +15,16 @@ export const BYTES_PER_GB = 1_000_000_000;
 // Quota de chaque offre, en Go, pour tout l'espace (aucun lien avec le
 // nombre d'utilisateurs)
 export const PLAN_STORAGE_GB = {
-  freelance: 75,
-  pme: 400,
-  entreprise: 1000,
+  freelance: 100,
+  pme: 500,
+  entreprise: 2000,
 };
 
-// Pack de stockage supplémentaire
+// Pack de stockage supplémentaire, en vente sur l'offre Entreprise seulement
+// (décision du 24/11/2026) : Standard et Premium passent à l'offre
+// supérieure pour avoir plus d'espace. Les packs déjà achetés sur une autre
+// offre restent comptés dans le quota et peuvent être retirés.
+export const PACK_PLANS = ["entreprise"];
 export const STORAGE_PACK_GB = 50;
 export const STORAGE_PACK_PRICES = {
   month: 2.99, // TTC par mois
@@ -111,6 +115,30 @@ export function nextPlan(plan) {
     : null;
 }
 
+/** L'offre permet-elle d'acheter des packs de stockage ? */
+export function canBuyPacks(plan) {
+  return PACK_PLANS.includes(normalizePlan(plan));
+}
+
+/**
+ * Offre supérieure à proposer quand `neededBytes` ne tient plus : la
+ * première au-dessus de `plan` dont le quota suffit, ou qui peut ajouter des
+ * packs. Null sur l'offre la plus haute.
+ */
+export function upgradeTargetFor(plan, neededBytes) {
+  const index = PLAN_ORDER.indexOf(normalizePlan(plan));
+  const higher = PLAN_ORDER.slice(index + 1);
+  return (
+    higher.find(
+      (key) =>
+        canBuyPacks(key) ||
+        planBaseQuotaBytes(key) >= Math.max(0, Number(neededBytes) || 0),
+    ) ||
+    higher[higher.length - 1] ||
+    null
+  );
+}
+
 /** Prix mensuel TTC équivalent d'un pack selon l'intervalle. */
 export function packMonthlyPrice(interval) {
   return normalizeInterval(interval) === "year"
@@ -137,8 +165,9 @@ export function packsNeededFor(plan, neededBytes) {
 }
 
 /**
- * Propositions quand l'espace manque de place : acheter des packs, ou passer
- * à l'offre supérieure (avec ses propres packs s'il en faut).
+ * Propositions quand l'espace manque de place : acheter des packs (offre
+ * Entreprise seulement), ou passer à l'offre supérieure qui contient
+ * l'espace nécessaire (avec ses propres packs s'il en faut).
  *
  * @param {object} p
  * @param {string} p.plan offre actuelle
@@ -176,24 +205,30 @@ export function recommendStorageOptions({
     planPrice(normalizedPlan) + owned * packPrice,
   );
 
-  // Packs sur l'offre actuelle : au moins un de plus que ceux déjà actifs
-  const requiredPacks = packsNeededFor(normalizedPlan, neededBytes);
-  const totalPacks = Math.max(requiredPacks, owned + 1);
-  const additionalPacks = totalPacks - owned;
-  const packsOption = {
-    additionalPacks,
-    totalPacks,
-    monthlyCost: round2(planPrice(normalizedPlan) + totalPacks * packPrice),
-    extraMonthlyCost: round2(additionalPacks * packPrice),
-    billedPrice: packBilledPrice(normalizedInterval),
-    interval: normalizedInterval,
-    addedBytes: additionalPacks * STORAGE_PACK_BYTES,
-  };
+  // Packs sur l'offre actuelle, si elle en vend : au moins un de plus que
+  // ceux déjà actifs
+  let packsOption = null;
+  if (canBuyPacks(normalizedPlan)) {
+    const requiredPacks = packsNeededFor(normalizedPlan, neededBytes);
+    const totalPacks = Math.max(requiredPacks, owned + 1);
+    const additionalPacks = totalPacks - owned;
+    packsOption = {
+      additionalPacks,
+      totalPacks,
+      monthlyCost: round2(planPrice(normalizedPlan) + totalPacks * packPrice),
+      extraMonthlyCost: round2(additionalPacks * packPrice),
+      billedPrice: packBilledPrice(normalizedInterval),
+      interval: normalizedInterval,
+      addedBytes: additionalPacks * STORAGE_PACK_BYTES,
+    };
+  }
 
-  const upper = nextPlan(normalizedPlan);
+  const upper = upgradeTargetFor(normalizedPlan, neededBytes);
   let upgrade = null;
   if (upper) {
-    const upperPacks = packsNeededFor(upper, neededBytes);
+    const upperPacks = canBuyPacks(upper)
+      ? packsNeededFor(upper, neededBytes)
+      : 0;
     upgrade = {
       plan: upper,
       label: PLAN_LABELS[upper],
@@ -204,8 +239,9 @@ export function recommendStorageOptions({
     };
   }
 
-  let recommended = "packs";
+  let recommended = packsOption ? "packs" : upgrade ? "upgrade" : null;
   if (
+    packsOption &&
     upgrade &&
     upgrade.monthlyCost <= packsOption.monthlyCost * (1 + UPGRADE_TOLERANCE)
   ) {
