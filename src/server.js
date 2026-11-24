@@ -832,7 +832,12 @@ async function startServer() {
       process.env.NODE_APP_INSTANCE || process.env.pm_id || "0",
       10,
     );
-    if (instanceId === 0) {
+    // Changement de serveur : CRONS_DISABLED=true coupe les crons de toutes
+    // les instances de ce serveur, pour qu'ils ne tournent jamais sur deux
+    // serveurs à la fois pendant une bascule. Pour les rallumer, écrire
+    // CRONS_DISABLED=false (plutôt que de retirer la ligne) puis pm2 reload.
+    const cronsDisabled = process.env.CRONS_DISABLED === "true";
+    if (instanceId === 0 && !cronsDisabled) {
       setupScheduledJobs();
 
       // Démarrer le scheduler de rappels email
@@ -930,6 +935,10 @@ async function startServer() {
       // Campagnes e-mail : programmées arrivées à échéance et lots en cours,
       // chaque minute (EMAIL_CAMPAIGN_SEND_MODE, EMAIL_CAMPAIGN_MAX_PER_MINUTE)
       startEmailCampaignCron();
+    } else if (cronsDisabled) {
+      logger.warn(
+        `⏸️ Instance PM2 #${instanceId} : crons/schedulers coupés sur ce serveur (CRONS_DISABLED=true)`,
+      );
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,
