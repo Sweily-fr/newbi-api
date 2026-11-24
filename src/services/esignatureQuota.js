@@ -11,7 +11,7 @@ import { AppError, ERROR_CODES } from "../utils/errors.js";
 export const ESIGNATURE_MONTHLY_QUOTAS = {
   freelance: 10,
   pme: 100,
-  entreprise: -1,
+  entreprise: 200,
 };
 
 // Sans abonnement (essai géré par l'app), on applique le plan d'entrée,

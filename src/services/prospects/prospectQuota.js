@@ -11,7 +11,7 @@ import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
  * Newbi ne dépasse jamais les crédits offerts plus les crédits vendus.
  *
  * - Standard (« freelance ») : rien, la génération commence à l'offre Premium.
- * - Premium (« pme ») : 50 crédits par mois ; pour plus, passer à Entreprise.
+ * - Premium (« pme ») : 30 crédits par mois ; pour plus, passer à Entreprise.
  * - Entreprise : 100 crédits par mois ; pour plus, crédits achetés à l'unité.
  * Rien pendant l'essai : seul un abonnement payé ouvre des crédits, pour
  * qu'on ne puisse pas enchaîner les comptes d'essai.
@@ -20,7 +20,7 @@ import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
  */
 export const PROSPECT_MONTHLY_CREDITS = {
   freelance: 0,
-  pme: 50,
+  pme: 30,
   entreprise: 100,
 };
 

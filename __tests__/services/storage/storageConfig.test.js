@@ -16,13 +16,13 @@ import {
 const GB = BYTES_PER_GB;
 
 describe("Stockage : quota par offre", () => {
-  it("donne 100 Go à Freelance, 500 Go à TPE, 2 To à Entreprise", () => {
+  it("donne 100 Go à Freelance, 500 Go à TPE, 5 To à Entreprise", () => {
     expect(computeStorageQuota({ plan: "freelance" }).quotaBytes).toBe(
       100 * GB,
     );
     expect(computeStorageQuota({ plan: "pme" }).quotaBytes).toBe(500 * GB);
     expect(computeStorageQuota({ plan: "entreprise" }).quotaBytes).toBe(
-      2000 * GB,
+      5000 * GB,
     );
   });
 
@@ -102,7 +102,7 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
       plan: "pme",
       label: "Premium",
       packs: 0,
-      monthlyCost: 48.99,
+      monthlyCost: 50,
       quotaBytes: 500 * GB,
     });
     expect(offer.recommended).toBe("upgrade");
@@ -117,7 +117,7 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
     expect(offer.upgrade).toMatchObject({
       plan: "entreprise",
       packs: 0,
-      monthlyCost: 94.99,
+      monthlyCost: 200,
     });
     expect(offer.recommended).toBe("upgrade");
   });
@@ -133,30 +133,30 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
       plan: "entreprise",
       label: "Entreprise",
       packs: 0,
-      monthlyCost: 94.99,
-      quotaBytes: 2000 * GB,
+      monthlyCost: 200,
+      quotaBytes: 5000 * GB,
     });
     expect(offer.recommended).toBe("upgrade");
   });
 
-  it("au-delà de 2 To : Entreprise avec les packs nécessaires", () => {
-    // 2 100 Go : Entreprise + 2 packs = 94,99 + 5,98 = 100,97
+  it("au-delà de 5 To : Entreprise avec les packs nécessaires", () => {
+    // 5 100 Go : Entreprise + 2 packs = 200 + 5,98 = 205,98
     const offer = recommendStorageOptions({
       plan: "freelance",
-      usedBytes: 2100 * GB,
+      usedBytes: 5100 * GB,
     });
     expect(offer.upgrade).toMatchObject({
       plan: "entreprise",
       packs: 2,
-      monthlyCost: 100.97,
-      quotaBytes: 2100 * GB,
+      monthlyCost: 205.98,
+      quotaBytes: 5100 * GB,
     });
   });
 
   it("Entreprise pleine : propose des packs, pas d'offre supérieure", () => {
     const offer = recommendStorageOptions({
       plan: "entreprise",
-      usedBytes: 2000 * GB,
+      usedBytes: 5000 * GB,
       incomingBytes: GB,
     });
     expect(offer.upgrade).toBeNull();
@@ -164,7 +164,7 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
     expect(offer.packs).toMatchObject({
       additionalPacks: 1,
       totalPacks: 1,
-      monthlyCost: 97.98,
+      monthlyCost: 202.99,
       extraMonthlyCost: 2.99,
     });
   });
@@ -172,13 +172,13 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
   it("compte les packs déjà actifs", () => {
     const offer = recommendStorageOptions({
       plan: "entreprise",
-      usedBytes: 2050 * GB,
+      usedBytes: 5050 * GB,
       currentPacks: 1,
       incomingBytes: GB,
     });
     expect(offer.packs.totalPacks).toBe(2);
     expect(offer.packs.additionalPacks).toBe(1);
-    expect(offer.currentMonthlyCost).toBe(97.98);
+    expect(offer.currentMonthlyCost).toBe(202.99);
   });
 
   it("garde les packs déjà achetés sur Premium sans en proposer d'autres", () => {
@@ -189,7 +189,7 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
       incomingBytes: GB,
     });
     expect(offer.packs).toBeNull();
-    expect(offer.currentMonthlyCost).toBe(54.97);
+    expect(offer.currentMonthlyCost).toBe(55.98);
     expect(offer.upgrade.plan).toBe("entreprise");
   });
 
@@ -197,13 +197,13 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
     const offer = recommendStorageOptions({
       plan: "entreprise",
       interval: "year",
-      usedBytes: 2000 * GB,
+      usedBytes: 5000 * GB,
       incomingBytes: 1,
     });
     expect(offer.packs.billedPrice).toBe(29.9);
     expect(offer.packs.interval).toBe("year");
     expect(offer.packs.monthlyCost).toBe(
-      Math.round((85.49 + 29.9 / 12) * 100) / 100,
+      Math.round((180 + 29.9 / 12) * 100) / 100,
     );
     const standard = recommendStorageOptions({
       plan: "freelance",
@@ -211,7 +211,7 @@ describe("Stockage : proposition pack ou offre supérieure", () => {
       usedBytes: 100 * GB,
       incomingBytes: 1,
     });
-    expect(standard.upgrade.planMonthlyPrice).toBe(44.09);
+    expect(standard.upgrade.planMonthlyPrice).toBe(45);
   });
 });
 
