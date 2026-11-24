@@ -357,7 +357,7 @@ describe("Stockage : état et quota", () => {
     const state = await getWorkspaceStorageState(ws);
     expect(state.ready).toBe(true);
     expect(state.plan).toBe("pme");
-    expect(state.quotaBytes).toBe(400 * GB);
+    expect(state.quotaBytes).toBe(500 * GB);
     expect(state.usedBytes).toBe(10 * MB);
     expect(state.level).toBe("ok");
   });
@@ -366,7 +366,7 @@ describe("Stockage : état et quota", () => {
     await setPlan("freelance");
     await seedUsage(GB, { packs: { quantity: 2, interval: "month" } });
     const state = await getWorkspaceStorageState(ws);
-    expect(state.quotaBytes).toBe(175 * GB);
+    expect(state.quotaBytes).toBe(200 * GB);
     expect(state.packs).toBe(2);
   });
 
@@ -377,22 +377,22 @@ describe("Stockage : état et quota", () => {
     });
     await seedUsage(GB, { packs: { quantity: 2, interval: "month" } });
     const state = await getWorkspaceStorageState(ws);
-    expect(state.quotaBytes).toBe(75 * GB);
+    expect(state.quotaBytes).toBe(100 * GB);
   });
 
   it("reconnaît les offres « pro » et « enterprise » de la base", async () => {
     await setPlan("enterprise");
     await seedUsage(GB);
-    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(1000 * GB);
+    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(2000 * GB);
     await setPlan("pro");
-    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(400 * GB);
+    expect((await getWorkspaceStorageState(ws)).quotaBytes).toBe(500 * GB);
   });
 
   it("passe au niveau d'alerte à 80 % puis à 100 %", async () => {
     await setPlan("freelance");
-    await seedUsage(61 * GB);
+    await seedUsage(81 * GB);
     expect((await getWorkspaceStorageState(ws)).level).toBe("warning");
-    await seedUsage(75 * GB);
+    await seedUsage(100 * GB);
     expect((await getWorkspaceStorageState(ws)).level).toBe("full");
   });
 });
@@ -400,29 +400,30 @@ describe("Stockage : état et quota", () => {
 describe("Stockage : refus des nouveaux envois", () => {
   it("laisse passer un envoi qui tient dans le quota", async () => {
     await setPlan("freelance");
-    await seedUsage(70 * GB);
+    await seedUsage(95 * GB);
     await expect(assertStorageAvailable(ws, 4 * GB)).resolves.toBeTruthy();
   });
 
   it("refuse un envoi qui dépasse, avec un code dédié et les propositions", async () => {
     await setPlan("freelance");
-    await seedUsage(74 * GB);
+    await seedUsage(99 * GB);
     const error = await assertStorageAvailable(ws, 2 * GB).catch((e) => e);
     expect(error.code).toBe("STORAGE_QUOTA_EXCEEDED");
     expect(error.message).toMatch(
-      /Espace de stockage plein : 74 Go utilisés sur 75 Go/,
+      /Espace de stockage plein : 99 Go utilisés sur 100 Go/,
     );
     expect(error.message).toMatch(/Vos fichiers existants restent disponibles/);
     // Ni lien ni prix dans le message (affiché tel quel par l'app mobile)
     expect(error.message).not.toMatch(/newbi\.fr|€|http/);
-    expect(error.details.offer.packs.additionalPacks).toBe(1);
+    // Standard : pas de pack, seulement l'offre supérieure
+    expect(error.details.offer.packs).toBeNull();
     expect(error.details.offer.upgrade.plan).toBe("pme");
     expect(error.details.incomingBytes).toBe(2 * GB);
   });
 
   it("refuse un envoi de taille inconnue quand l'espace est déjà plein", async () => {
     await setPlan("freelance");
-    await seedUsage(75 * GB);
+    await seedUsage(100 * GB);
     await expect(assertStorageAvailable(ws, 0)).rejects.toMatchObject({
       code: "STORAGE_QUOTA_EXCEEDED",
     });
@@ -431,7 +432,7 @@ describe("Stockage : refus des nouveaux envois", () => {
 
   it("ne refuse jamais un PDF légal généré automatiquement", async () => {
     await setPlan("freelance");
-    await seedUsage(80 * GB);
+    await seedUsage(105 * GB);
     await expect(
       assertStorageAvailable(ws, 5 * MB, { legal: true }),
     ).resolves.toBeNull();
@@ -442,19 +443,19 @@ describe("Stockage : refus des nouveaux envois", () => {
       workspaceId: ws,
       computingUntil: new Date(Date.now() + 60_000),
     });
-    const state = await assertStorageAvailable(ws, 500 * GB, { waitMs: 50 });
+    const state = await assertStorageAvailable(ws, 600 * GB, { waitMs: 50 });
     expect(state.ready).toBe(false);
   });
 
   it("ne supprime rien quand l'espace est déjà au-dessus", async () => {
-    await sharedDoc({ fileSize: 80 * GB });
+    await sharedDoc({ fileSize: 105 * GB });
     await setPlan("freelance");
     await refreshWorkspaceStorage(ws);
     await expect(assertStorageAvailable(ws, MB)).rejects.toMatchObject({
       code: "STORAGE_QUOTA_EXCEEDED",
     });
     expect(await SharedDocument.countDocuments({})).toBe(1);
-    expect((await getWorkspaceStorageState(ws)).usedBytes).toBe(80 * GB);
+    expect((await getWorkspaceStorageState(ws)).usedBytes).toBe(105 * GB);
   });
 });
 
@@ -576,12 +577,12 @@ describe("Stockage : réconciliation", () => {
 describe("Stockage : alertes", () => {
   it("notifie une fois les rôles qui voient l'abonnement à 80 % puis à 100 %", async () => {
     await setPlan("freelance");
-    await seedUsage(61 * GB);
+    await seedUsage(81 * GB);
     const first = await checkStorageAlerts(ws);
     expect(first).toMatchObject({ level: 80, notified: 1 });
     expect(await checkStorageAlerts(ws)).toBeNull();
 
-    await seedUsage(76 * GB);
+    await seedUsage(101 * GB);
     expect(await checkStorageAlerts(ws)).toMatchObject({ level: 100 });
 
     const notifications = await Notification.find({}).lean();
@@ -598,7 +599,7 @@ describe("Stockage : alertes", () => {
 
   it("réarme l'alerte quand l'espace redescend", async () => {
     await setPlan("freelance");
-    await seedUsage(61 * GB);
+    await seedUsage(81 * GB);
     await checkStorageAlerts(ws);
     await seedUsage(10 * GB);
     await checkStorageAlerts(ws);

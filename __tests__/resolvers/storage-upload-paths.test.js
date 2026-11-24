@@ -138,8 +138,8 @@ beforeEach(async () => {
   await clearMongo();
   invalidateOrgCache();
   await seedOrgMembership({ userId, organizationId, role: "owner" });
-  // Offre TPE (données de test) : 400 Go, espace plein
-  await usage(400 * GB);
+  // Offre TPE (données de test) : 500 Go, espace plein
+  await usage(500 * GB);
 });
 
 describe("Stockage plein : refus sur chaque chemin d'envoi", () => {
@@ -286,7 +286,7 @@ describe("Stockage plein : les PDF légaux passent et sont comptés", () => {
     const counter = await db()
       .collection("workspace_storage_usage")
       .findOne({ workspaceId: ws });
-    expect(counter.totalBytes).toBe(400 * GB + PDF.length);
+    expect(counter.totalBytes).toBe(500 * GB + PDF.length);
   });
 
   it("avoir archivé (document comptable légal)", async () => {
