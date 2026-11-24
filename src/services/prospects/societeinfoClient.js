@@ -1,5 +1,9 @@
 import axios from "axios";
 import logger from "../../utils/logger.js";
+import {
+  acquireSocieteinfoSlot,
+  SlotTimeoutError,
+} from "./societeinfoSlots.js";
 
 /**
  * Client de l'API Societeinfo (https://societeinfo.com/api).
@@ -22,6 +26,8 @@ const PROVIDER_MESSAGES = {
   API_COMPANY_ANONYMIZED:
     "Cette entreprise a demandé à ne plus apparaître dans les fichiers de prospection.",
   API_COMPANY_QUERY_MIN_LENGTH: "Saisissez au moins deux caractères.",
+  PROVIDER_BUSY:
+    "Beaucoup de recherches de prospects sont en cours. Réessayez dans quelques instants.",
 };
 
 export class ProspectProviderError extends Error {
@@ -55,36 +61,51 @@ async function call(path, params = new URLSearchParams()) {
     );
   }
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const { data } = await http.get(path, {
-        params,
-        headers: { "X-API-KEY": key, Accept: "application/json" },
-      });
-      if (data?.success === false) {
-        throw new ProspectProviderError(data.errorCode, data.errorMessage);
-      }
-      return data;
-    } catch (error) {
-      if (error instanceof ProspectProviderError) throw error;
-      const status = error.response?.status;
-      const body = error.response?.data;
-      // « Vous requêtez trop vite » : une seconde tentative après une pause
-      if (status === 429 && attempt === 1) {
-        await sleep(1000);
-        continue;
-      }
-      if (body?.errorCode) {
-        throw new ProspectProviderError(body.errorCode, body.errorMessage);
-      }
-      logger.error(`[Societeinfo] ${path} : ${error.message}`);
-      throw new ProspectProviderError(
-        "PROVIDER_UNAVAILABLE",
-        "Le service de prospects ne répond pas. Réessayez dans quelques instants.",
-      );
+  // Societeinfo refuse plus de 3 appels simultanés : chacun attend son tour
+  let release;
+  try {
+    release = await acquireSocieteinfoSlot();
+  } catch (error) {
+    if (error instanceof SlotTimeoutError) {
+      throw new ProspectProviderError("PROVIDER_BUSY");
     }
+    throw error;
   }
-  throw new ProspectProviderError("PROVIDER_UNAVAILABLE");
+
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const { data } = await http.get(path, {
+          params,
+          headers: { "X-API-KEY": key, Accept: "application/json" },
+        });
+        if (data?.success === false) {
+          throw new ProspectProviderError(data.errorCode, data.errorMessage);
+        }
+        return data;
+      } catch (error) {
+        if (error instanceof ProspectProviderError) throw error;
+        const status = error.response?.status;
+        const body = error.response?.data;
+        // « Vous requêtez trop vite » : une seconde tentative après une pause
+        if (status === 429 && attempt === 1) {
+          await sleep(1000);
+          continue;
+        }
+        if (body?.errorCode) {
+          throw new ProspectProviderError(body.errorCode, body.errorMessage);
+        }
+        logger.error(`[Societeinfo] ${path} : ${error.message}`);
+        throw new ProspectProviderError(
+          "PROVIDER_UNAVAILABLE",
+          "Le service de prospects ne répond pas. Réessayez dans quelques instants.",
+        );
+      }
+    }
+    throw new ProspectProviderError("PROVIDER_UNAVAILABLE");
+  } finally {
+    await release();
+  }
 }
 
 /** « 28000 CHARTRES » → { postalCode: "28000", city: "CHARTRES" } */
