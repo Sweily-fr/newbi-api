@@ -11,6 +11,7 @@ import {
   featureWorkspaceIdsVariable,
   gateFeatureResolvers,
   isFeatureEnabled,
+  isFeatureSwitchedOff,
   restrictedFeatures,
   workspaceFeatures,
 } from "../../src/utils/featureAccess.js";
@@ -136,9 +137,75 @@ describe("isFeatureEnabled", () => {
   });
 });
 
+describe("isFeatureSwitchedOff (interrupteur général)", () => {
+  it("prospection fermée à tous en production sans PROSPECTING_ENABLED, même absente de BETA_FEATURES", () => {
+    // Liste explicite de la prod d'avant la Prospection : sans
+    // l'interrupteur, une release l'ouvrirait à tous les espaces
+    const env = prodEnv({
+      BETA_FEATURES: "vat,urssaf,appointments,documentShares,emailCampaigns",
+    });
+    expect(isFeatureSwitchedOff("prospecting", env)).toBe(true);
+    expect(isFeatureEnabled("prospecting", OTHER, env)).toBe(false);
+    expect(isFeatureEnabled("prospecting", BETA, env)).toBe(false);
+    expect(workspaceFeatures(OTHER, env).prospecting).toBe(false);
+    for (const value of ["", "false", "1", "oui"]) {
+      expect(
+        isFeatureSwitchedOff(
+          "prospecting",
+          prodEnv({ PROSPECTING_ENABLED: value }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("PROSPECTING_ENABLED=true rend la main à BETA_FEATURES", () => {
+    const reserved = prodEnv({
+      PROSPECTING_ENABLED: " TRUE ",
+      BETA_FEATURES: "prospecting",
+      BETA_WORKSPACE_IDS_PROSPECTING: BETA,
+    });
+    expect(isFeatureSwitchedOff("prospecting", reserved)).toBe(false);
+    expect(isFeatureEnabled("prospecting", BETA, reserved)).toBe(true);
+    expect(isFeatureEnabled("prospecting", OTHER, reserved)).toBe(false);
+  });
+
+  it("sans effet hors production et pour les fonctionnalités sans interrupteur", () => {
+    expect(isFeatureSwitchedOff("prospecting", { NODE_ENV: "staging" })).toBe(
+      false,
+    );
+    expect(isFeatureEnabled("prospecting", OTHER, { NODE_ENV: "test" })).toBe(
+      true,
+    );
+    expect(isFeatureSwitchedOff("vat", prodEnv())).toBe(false);
+  });
+
+  it("assertFeatureForRequest refuse la prospection en production sans interrupteur", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("BETA_FEATURES", "vat");
+    vi.stubEnv("BETA_WORKSPACE_IDS", BETA);
+    vi.stubEnv("PROSPECTING_ENABLED", "");
+    expect(() =>
+      assertFeatureForRequest(
+        "prospecting",
+        ...requestFor({ args: { workspaceId: BETA } }),
+      ),
+    ).toThrow();
+    vi.stubEnv("PROSPECTING_ENABLED", "true");
+    expect(() =>
+      assertFeatureForRequest(
+        "prospecting",
+        ...requestFor({ args: { workspaceId: OTHER } }),
+      ),
+    ).not.toThrow();
+  });
+});
+
 describe("workspaceFeatures", () => {
   it("donne l'accès de l'espace à chaque fonctionnalité", () => {
-    const env = prodEnv({ BETA_FEATURES: "vat,urssaf,socialPublishing" });
+    const env = prodEnv({
+      BETA_FEATURES: "vat,urssaf,socialPublishing",
+      PROSPECTING_ENABLED: "true",
+    });
     expect(workspaceFeatures(OTHER, env)).toEqual({
       vat: false,
       urssaf: false,
