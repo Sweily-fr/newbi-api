@@ -147,6 +147,7 @@ describe("workspaceFeatures", () => {
       socialPublishing: false,
       emailCampaigns: true,
       transferPayments: true,
+      prospecting: true,
     });
     expect(workspaceFeatures(BETA, env)).toEqual({
       vat: true,
@@ -156,6 +157,7 @@ describe("workspaceFeatures", () => {
       socialPublishing: true,
       emailCampaigns: true,
       transferPayments: true,
+      prospecting: true,
     });
   });
 });

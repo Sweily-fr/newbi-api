@@ -204,6 +204,9 @@ const clientSchema = new mongoose.Schema(
       activityLabel: { type: String },
       companyCreatedAt: { type: Date },
       website: { type: String },
+      // Dernier contact venu de la personne (« A répondu » d'une
+      // prospection) : départ de la durée de conservation de 3 ans
+      lastContactAt: { type: Date },
     },
     // Blocage du client
     isBlocked: {

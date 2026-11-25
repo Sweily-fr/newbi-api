@@ -12,6 +12,10 @@ import mongoose from "mongoose";
  * Une adresse n'y figure qu'une fois : un motif plus fort remplace le
  * précédent (une adresse ajoutée à la main puis désinscrite ne peut plus
  * être retirée par l'espace).
+ *
+ * La liste est commune aux campagnes et à la prospection : une adresse
+ * désinscrite d'une prospection ne reçoit plus de campagne, et
+ * inversement (`sequenceId` : prospection d'origine).
  */
 
 export const SUPPRESSION_REASONS = [
@@ -35,7 +39,14 @@ const emailSuppressionSchema = new mongoose.Schema(
       ref: "EmailCampaign",
       default: null,
     },
-    // Origine : « one-click », « link », « webhook », « manual »
+    sequenceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ProspectingSequence",
+      default: null,
+    },
+    // Origine : « one-click », « link », « webhook », « manual »,
+    // « prospecting-link », « prospecting-one-click », « prospecting-reply »
+    // (« Ne plus contacter » après une réponse)
     source: { type: String, default: null },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
