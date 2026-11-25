@@ -77,12 +77,16 @@ export async function upsertSuppression({
   return existing;
 }
 
+// Suivi effacé (durée de conservation dépassée, voir retention.js) : plus
+// rien n'est enregistré pour ce destinataire
+const STILL_TRACKED = { trackingExpired: { $ne: true } };
+
 /** Ouverture (pixel) : première ouverture et ouvertures totales. */
 export async function recordOpen(recipientId, now = new Date()) {
   const id = toObjectIdOrNull(recipientId);
   if (!id) return false;
   const first = await EmailCampaignRecipient.findOneAndUpdate(
-    { _id: id, openedAt: null },
+    { _id: id, openedAt: null, ...STILL_TRACKED },
     { $set: { openedAt: now }, $inc: { openCount: 1 } },
     { projection: { campaignId: 1 } },
   ).lean();
@@ -94,7 +98,7 @@ export async function recordOpen(recipientId, now = new Date()) {
     return true;
   }
   const again = await EmailCampaignRecipient.findOneAndUpdate(
-    { _id: id },
+    { _id: id, ...STILL_TRACKED },
     { $inc: { openCount: 1 } },
     { projection: { campaignId: 1 } },
   ).lean();
@@ -103,8 +107,13 @@ export async function recordOpen(recipientId, now = new Date()) {
   return true;
 }
 
-/** Clic sur le lien n° `linkIndex` (vaut aussi ouverture si aucune). */
+/**
+ * Clic sur le lien n° `linkIndex` (vaut aussi ouverture si aucune). Rien
+ * n'est enregistré si le suivi du destinataire est effacé
+ * (`recipient.trackingExpired`, à lire avec lui).
+ */
 export async function recordClick(recipient, linkIndex, now = new Date()) {
+  if (recipient.trackingExpired) return;
   await EmailCampaignClick.create({
     workspaceId: recipient.workspaceId,
     campaignId: recipient.campaignId,
@@ -114,19 +123,19 @@ export async function recordClick(recipient, linkIndex, now = new Date()) {
   });
   const inc = { "stats.clicks": 1 };
   const first = await EmailCampaignRecipient.updateOne(
-    { _id: recipient._id, clickedAt: null },
+    { _id: recipient._id, clickedAt: null, ...STILL_TRACKED },
     { $set: { clickedAt: now }, $inc: { clickCount: 1 } },
   );
   if (first.modifiedCount) {
     inc["stats.clicked"] = 1;
   } else {
     await EmailCampaignRecipient.updateOne(
-      { _id: recipient._id },
+      { _id: recipient._id, ...STILL_TRACKED },
       { $inc: { clickCount: 1 } },
     );
   }
   const opened = await EmailCampaignRecipient.updateOne(
-    { _id: recipient._id, openedAt: null },
+    { _id: recipient._id, openedAt: null, ...STILL_TRACKED },
     { $set: { openedAt: now }, $inc: { openCount: 1 } },
   );
   if (opened.modifiedCount) {

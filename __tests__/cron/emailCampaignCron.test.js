@@ -18,6 +18,7 @@ vi.mock("node-cron", () => ({
 const services = vi.hoisted(() => ({
   runEmailCampaignTick: vi.fn(async () => ({})),
   refreshSendingDomains: vi.fn(async () => ({})),
+  purgeExpiredCampaignTracking: vi.fn(async () => 0),
 }));
 vi.mock("../../src/services/emailCampaigns/campaignService.js", () => ({
   runEmailCampaignTick: services.runEmailCampaignTick,
@@ -25,10 +26,14 @@ vi.mock("../../src/services/emailCampaigns/campaignService.js", () => ({
 vi.mock("../../src/services/emailCampaigns/sendingDomains.js", () => ({
   refreshSendingDomains: services.refreshSendingDomains,
 }));
+vi.mock("../../src/services/emailCampaigns/retention.js", () => ({
+  purgeExpiredCampaignTracking: services.purgeExpiredCampaignTracking,
+}));
 
 import {
   EMAIL_CAMPAIGN_CRON,
   EMAIL_SENDING_DOMAIN_CRON,
+  EMAIL_TRACKING_RETENTION_CRON,
   startEmailCampaignCron,
 } from "../../src/cron/emailCampaignCron.js";
 
@@ -36,19 +41,25 @@ beforeEach(() => {
   cronMock.tasks = [];
   services.runEmailCampaignTick.mockClear();
   services.refreshSendingDomains.mockClear();
+  services.purgeExpiredCampaignTracking.mockClear();
 });
 
 describe("cron des campagnes e-mail", () => {
-  it("envoi chaque minute, domaines toutes les 10 minutes, heure de Paris", () => {
-    const { task, domainsTask } = startEmailCampaignCron();
+  it("envoi chaque minute, domaines toutes les 10 minutes, effacement du suivi chaque nuit, heure de Paris", async () => {
+    const { task, domainsTask, retentionTask } = startEmailCampaignCron();
     expect(cronMock.tasks.map((t) => t.expression)).toEqual([
       "* * * * *",
       "*/10 * * * *",
+      "30 3 * * *",
     ]);
     expect(EMAIL_CAMPAIGN_CRON).toBe("* * * * *");
     expect(EMAIL_SENDING_DOMAIN_CRON).toBe("*/10 * * * *");
+    expect(EMAIL_TRACKING_RETENTION_CRON).toBe("30 3 * * *");
     expect(task.options.timezone).toBe("Europe/Paris");
     expect(domainsTask.options.timezone).toBe("Europe/Paris");
+    expect(retentionTask.options.timezone).toBe("Europe/Paris");
+    await retentionTask.run();
+    expect(services.purgeExpiredCampaignTracking).toHaveBeenCalledTimes(1);
   });
 
   it("pas de chevauchement ; une erreur n'arrête pas la tâche", async () => {
