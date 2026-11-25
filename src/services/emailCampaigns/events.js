@@ -39,13 +39,15 @@ const incrementStats = (campaignId, inc) =>
 /**
  * Ajoute une adresse à la liste d'exclusion de l'espace (idempotent). Un
  * motif plus fort remplace le précédent (MANUAL < UNSUBSCRIBED < BOUNCED <
- * COMPLAINED).
+ * COMPLAINED). Liste commune aux campagnes (`campaignId`) et à la
+ * prospection (`sequenceId`).
  */
 export async function upsertSuppression({
   workspaceId,
   email,
   reason,
   campaignId = null,
+  sequenceId = null,
   source = null,
   createdBy = null,
 }) {
@@ -59,6 +61,7 @@ export async function upsertSuppression({
         ...filter,
         reason,
         campaignId,
+        sequenceId,
         source,
         createdBy,
       });
@@ -72,6 +75,7 @@ export async function upsertSuppression({
     existing.reason = reason;
     existing.source = source;
     if (campaignId) existing.campaignId = campaignId;
+    if (sequenceId) existing.sequenceId = sequenceId;
     await existing.save();
   }
   return existing;

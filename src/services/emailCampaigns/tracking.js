@@ -1,11 +1,18 @@
 /**
- * Jetons signés des campagnes e-mail (HMAC-SHA256, sans expiration : un lien
- * de désinscription doit marcher pour toujours) et adresses publiques :
+ * Jetons signés des campagnes e-mail et de la prospection (HMAC-SHA256,
+ * sans expiration : un lien de désinscription doit marcher pour toujours)
+ * et adresses publiques :
  *
- *   u  désinscription d'un destinataire   /api/email-campaigns/unsubscribe?t=
- *   o  ouverture (pixel)                  /api/email-campaigns/o/<jeton>.gif
- *   c  clic sur un lien                   /api/email-campaigns/c/<jeton>/<n>
- *   t  désinscription d'un e-mail de test (aucun effet, page d'explication)
+ *   u   désinscription d'un destinataire   /api/email-campaigns/unsubscribe?t=
+ *   o   ouverture (pixel)                  /api/email-campaigns/o/<jeton>.gif
+ *   c   clic sur un lien                   /api/email-campaigns/c/<jeton>/<n>
+ *   t   désinscription d'un e-mail de test (aucun effet, page d'explication)
+ *   pu  désinscription d'un destinataire   /api/prospection/desinscription?t=
+ *       de prospection (ProspectingRecipient)
+ *   pt  désinscription d'un e-mail de test de prospection (aucun effet ;
+ *       identifiant = la prospection)
+ *   pd  page « Vos données » d'un espace   /api/prospection/donnees/<jeton>
+ *       (identifiant = l'espace)
  *
  * Jeton = `<identifiant>.<signature>` ; la signature couvre le type et
  * l'identifiant (un jeton d'ouverture ne désinscrit pas). Comparaison en
@@ -18,6 +25,9 @@ export const TOKEN_KINDS = Object.freeze({
   open: "o",
   click: "c",
   testUnsubscribe: "t",
+  prospectingUnsubscribe: "pu",
+  prospectingTestUnsubscribe: "pt",
+  prospectingData: "pd",
 });
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -92,3 +102,17 @@ export function clickUrlBuilder(recipientId) {
   const token = createCampaignToken(TOKEN_KINDS.click, recipientId);
   return (index) => `${routesBase()}/c/${token}/${index}`;
 }
+
+// ─── Prospection (aucun lien suivi : seuls ces deux liens sont propres au
+// destinataire) ────────────────────────────────────────────────────────────
+
+const prospectingBase = () => `${apiBaseUrl()}/api/prospection`;
+
+export const prospectingUnsubscribeUrlFor = (recipientId) =>
+  `${prospectingBase()}/desinscription?t=${createCampaignToken(TOKEN_KINDS.prospectingUnsubscribe, recipientId)}`;
+
+export const prospectingTestUnsubscribeUrlFor = (sequenceId) =>
+  `${prospectingBase()}/desinscription?t=${createCampaignToken(TOKEN_KINDS.prospectingTestUnsubscribe, sequenceId)}`;
+
+export const prospectingDataUrlFor = (workspaceId) =>
+  `${prospectingBase()}/donnees/${createCampaignToken(TOKEN_KINDS.prospectingData, workspaceId)}`;
