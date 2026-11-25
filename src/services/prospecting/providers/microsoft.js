@@ -15,7 +15,7 @@
  */
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { apiPublicUrl, microsoftCredentials } from "../config.js";
-import { MailProviderError, readJson, request } from "./errors.js";
+import { MailProviderError, readJson, request, withTimeout } from "./errors.js";
 
 export const MICROSOFT_SEND_SCOPE = "https://graph.microsoft.com/Mail.Send";
 export const MICROSOFT_SCOPES = Object.freeze([
@@ -59,13 +59,18 @@ function refreshTokenFromCache(cca) {
   }
 }
 
-/** Erreur de MSAL : autorisation retirée ou erreur passagère. */
-function msalError(error) {
+/**
+ * Erreur de MSAL : autorisation retirée ou refusée (jeton révoqué ou
+ * expiré, appli inconnue ou secret refusé : invalid_client,
+ * unauthorized_client), sinon erreur passagère.
+ */
+export function msalError(error) {
+  if (error?.name === "MailProviderError") return error;
   const code = String(error?.errorCode || error?.code || "");
   const message = error?.errorMessage || error?.message || "erreur inconnue";
   const auth =
     error?.name === "InteractionRequiredAuthError" ||
-    /invalid_grant|interaction_required|consent_required|login_required|AADSTS(50173|70000|70008|700082|65001|50076|50079)\b/i.test(
+    /invalid_grant|invalid_client|unauthorized_client|interaction_required|consent_required|login_required|AADSTS(50173|70000|70008|700082|700016|7000215|7000222|65001|50076|50079)\b/i.test(
       `${code} ${message}`,
     );
   if (auth) {
@@ -80,12 +85,15 @@ const scopesOf = (result) =>
 
 /** Adresse d'autorisation (consentement redemandé). */
 export async function getAuthUrl(state) {
-  return client().getAuthCodeUrl({
-    scopes: [...MICROSOFT_SCOPES],
-    redirectUri: microsoftRedirectUri(),
-    state,
-    prompt: "consent",
-  });
+  return withTimeout(
+    client().getAuthCodeUrl({
+      scopes: [...MICROSOFT_SCOPES],
+      redirectUri: microsoftRedirectUri(),
+      state,
+      prompt: "consent",
+    }),
+    "Microsoft",
+  );
 }
 
 /** Code d'autorisation → jetons et droits accordés. */
@@ -93,11 +101,14 @@ export async function exchangeCode(code) {
   const cca = client();
   let result;
   try {
-    result = await cca.acquireTokenByCode({
-      code,
-      scopes: [...MICROSOFT_SCOPES],
-      redirectUri: microsoftRedirectUri(),
-    });
+    result = await withTimeout(
+      cca.acquireTokenByCode({
+        code,
+        scopes: [...MICROSOFT_SCOPES],
+        redirectUri: microsoftRedirectUri(),
+      }),
+      "Microsoft",
+    );
   } catch (error) {
     throw msalError(error);
   }
@@ -143,10 +154,13 @@ export async function refreshAccessToken(refreshToken) {
   const cca = client();
   let result;
   try {
-    result = await cca.acquireTokenByRefreshToken({
-      refreshToken,
-      scopes: REFRESH_SCOPES,
-    });
+    result = await withTimeout(
+      cca.acquireTokenByRefreshToken({
+        refreshToken,
+        scopes: REFRESH_SCOPES,
+      }),
+      "Microsoft",
+    );
   } catch (error) {
     throw msalError(error);
   }
@@ -176,6 +190,17 @@ const QUOTA_CODES = new Set([
   "MailboxConcurrency",
   "TooManyRequests",
 ]);
+// Refus propres au compte : la boîte ne peut rien envoyer (pas de boîte
+// Exchange, compte désactivé, droit d'envoi refusé, MIME refusé)
+const ACCOUNT_CODES = new Set([
+  "MailboxNotEnabledForRESTAPI",
+  "MailboxNotHostedInExchangeOnline",
+  "ErrorAccountDisabled",
+  "ErrorSendAsDenied",
+  "ErrorMimeContentInvalid",
+  "ErrorMimeContentConversionFailed",
+  "ErrorInvalidMimeContent",
+]);
 const RECIPIENT_CODES = new Set([
   "ErrorInvalidRecipients",
   "ErrorRecipientNotFound",
@@ -198,6 +223,9 @@ export function classifyGraphError(status, body) {
   ) {
     return new MailProviderError("QUOTA", `Outlook : ${message}`, details);
   }
+  if (ACCOUNT_CODES.has(code) || (status === 400 && /mime/i.test(message))) {
+    return new MailProviderError("ACCOUNT", `Outlook : ${message}`, details);
+  }
   if (status === 403) {
     return new MailProviderError("AUTH", `Outlook : ${message}`, details);
   }
@@ -209,6 +237,10 @@ export function classifyGraphError(status, body) {
       `Outlook : ${message}`,
       details,
     );
+  }
+  // Passerelle sans réponse : Graph a pu traiter l'envoi
+  if (status === 502 || status === 504) {
+    return new MailProviderError("UNCERTAIN", `Outlook : ${message}`, details);
   }
   if (status >= 500 || status === 408) {
     return new MailProviderError("TEMPORARY", `Outlook : ${message}`, details);
@@ -232,6 +264,7 @@ export async function sendMessage({ accessToken, mime }) {
       body: Buffer.from(mime, "utf8").toString("base64"),
     },
     "Outlook",
+    { sending: true },
   );
   if (!response.ok) {
     throw classifyGraphError(response.status, await readJson(response));

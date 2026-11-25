@@ -13,7 +13,9 @@
  *   suppressed         adresse de la liste d'exclusion (commune avec les
  *                      campagnes : désinscription, rejet, plainte, à la main)
  *   recentlyContacted  déjà prospecté par l'espace depuis moins de 30 jours
- *                      (vrais envois, toutes prospections confondues)
+ *                      (vrais envois, toutes prospections confondues), ou
+ *                      en attente dans une autre prospection en cours ou en
+ *                      pause de l'espace
  *   duplicates         adresse déjà retenue pour un autre contact
  *   sendable           destinataire
  * `missingFirstName` : destinataires sans prénom ({{prenom}} vide).
@@ -21,7 +23,9 @@
 import Client from "../../models/Client.js";
 import ClientList from "../../models/ClientList.js";
 import EmailSuppression from "../../models/EmailSuppression.js";
+import ProspectingContact from "../../models/ProspectingContact.js";
 import ProspectingRecipient from "../../models/ProspectingRecipient.js";
+import ProspectingSequence from "../../models/ProspectingSequence.js";
 import { isObjectIdRef, toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { isValidEmail } from "../../utils/validators.js";
 import { normalizeEmail } from "../emailCampaigns/audience.js";
@@ -60,16 +64,36 @@ export const recentContactSince = (now = new Date()) =>
   new Date(now.getTime() - RECENT_CONTACT_DAYS * DAY_MS);
 
 /**
- * Adresses prospectées par l'espace depuis moins de 30 jours (vrais
- * envois seulement : un envoi simulé n'a rien envoyé).
+ * Adresses à ne pas prospecter de nouveau : prospectées par l'espace depuis
+ * moins de 30 jours (adresses réservées, vrais envois ou envois peut-être
+ * partis ; un envoi simulé n'a rien envoyé), ou encore en attente dans une
+ * autre prospection en cours ou en pause de l'espace.
  */
 export async function recentlyContactedEmails(workspaceId, now = new Date()) {
-  const emails = await ProspectingRecipient.distinct("email", {
+  const since = recentContactSince(now);
+  const running = await ProspectingSequence.distinct("_id", {
     workspaceId,
-    sentAt: { $gte: recentContactSince(now) },
-    simulated: { $ne: true },
+    status: { $in: ["ACTIVE", "PAUSED"] },
+    deletedAt: null,
   });
-  return new Set(emails);
+  const [reserved, sent, pending] = await Promise.all([
+    ProspectingContact.distinct("email", {
+      workspaceId,
+      lastSentAt: { $gte: since },
+    }),
+    ProspectingRecipient.distinct("email", {
+      workspaceId,
+      sentAt: { $gte: since },
+      simulated: { $ne: true },
+    }),
+    running.length
+      ? ProspectingRecipient.distinct("email", {
+          sequenceId: { $in: running },
+          status: "PENDING",
+        })
+      : [],
+  ]);
+  return new Set([...reserved, ...sent, ...pending]);
 }
 
 /**

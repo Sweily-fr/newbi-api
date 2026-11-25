@@ -12,8 +12,10 @@ import mongoose from "mongoose";
  *   EXPIRED       jeton refusé par le fournisseur : à reconnecter, les
  *                 prospections attendent (un e-mail prévient le membre une
  *                 fois, `expiredNotifiedAt`) ;
- *   PAUSED        coupe-circuit de réputation (`pauseKind` REPUTATION) :
- *                 reprise à la main en relançant une prospection ;
+ *   PAUSED        coupe-circuit de réputation (`pauseKind` REPUTATION), ou
+ *                 envois refusés par la messagerie du compte (ACCOUNT) :
+ *                 reprise à la main en reprenant ou en lançant une
+ *                 prospection ;
  *   DISCONNECTED  déconnectée par le membre, jetons effacés.
  *
  * Jetons chiffrés comme ceux de GmailConnection (AES-256-CBC, clé dérivée
@@ -27,7 +29,9 @@ import mongoose from "mongoose";
 
 export const MAILBOX_PROVIDERS = ["GOOGLE", "MICROSOFT"];
 export const MAILBOX_STATUSES = ["ACTIVE", "EXPIRED", "PAUSED", "DISCONNECTED"];
-export const MAILBOX_PAUSE_KINDS = ["MANUAL", "REPUTATION"];
+// REPUTATION : coupe-circuit des désinscriptions ; ACCOUNT : la messagerie
+// refuse les envois de ce compte, ou trois envois de suite ont échoué
+export const MAILBOX_PAUSE_KINDS = ["MANUAL", "REPUTATION", "ACCOUNT"];
 
 export const DEFAULT_DAILY_LIMIT = 30;
 export const MIN_DAILY_LIMIT = 5;
@@ -121,6 +125,9 @@ const mailboxConnectionSchema = new mongoose.Schema(
     lockedUntil: { type: Date, default: null },
     expiredNotifiedAt: { type: Date, default: null },
     lastError: { type: String, default: null },
+    // Envois en échec de suite (remis à zéro au premier envoi réussi) : à 3,
+    // la boîte est mise en pause
+    consecutiveFailures: { type: Number, default: 0 },
   },
   { timestamps: true, collection: "mailbox_connections" },
 );
@@ -148,6 +155,9 @@ mailboxConnectionSchema.methods.getRefreshToken = function getRefreshToken() {
 mailboxConnectionSchema.index({ workspaceId: 1, userId: 1 }, { unique: true });
 // Cron : boîtes actives dont le prochain envoi est dû
 mailboxConnectionSchema.index({ status: 1, nextSendAfter: 1 });
+// Même adresse connectée plusieurs fois : limite du jour et espacement
+// comptés par adresse
+mailboxConnectionSchema.index({ accountEmail: 1 });
 
 export default mongoose.models.MailboxConnection ||
   mongoose.model("MailboxConnection", mailboxConnectionSchema);

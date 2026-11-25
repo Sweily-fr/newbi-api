@@ -214,13 +214,97 @@ describe("Google", () => {
     expect(
       await kindOf(json(503, { error: { message: "Backend Error" } })),
     ).toBe("TEMPORARY");
+    // Serveur jamais joint : rien n'est parti, nouvel essai possible
     responder = () => {
-      throw new Error("ECONNRESET");
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ENOTFOUND" },
+      });
     };
-    const network = await google
+    const unreachable = await google
       .sendMessage({ accessToken: "a", mime: MIME })
       .catch((error) => error);
-    expect(network.kind).toBe("TEMPORARY");
+    expect(unreachable.kind).toBe("TEMPORARY");
+  });
+
+  it("envoi peut-être parti (coupure en plein échange, délai dépassé, 502/504) : UNCERTAIN", async () => {
+    const send = () =>
+      google
+        .sendMessage({ accessToken: "a", mime: MIME })
+        .catch((error) => error);
+    responder = () => {
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNRESET" },
+      });
+    };
+    expect((await send()).kind).toBe("UNCERTAIN");
+    responder = () => {
+      throw Object.assign(
+        new Error("The operation was aborted due to timeout"),
+        {
+          name: "TimeoutError",
+        },
+      );
+    };
+    expect((await send()).kind).toBe("UNCERTAIN");
+    responder = () => json(502, { error: { message: "Bad Gateway" } });
+    expect((await send()).kind).toBe("UNCERTAIN");
+    responder = () => json(504, { error: { message: "Gateway Timeout" } });
+    expect((await send()).kind).toBe("UNCERTAIN");
+    // Même coupure sur le point de jeton : rien n'est envoyé, TEMPORARY
+    responder = () => {
+      throw Object.assign(new TypeError("fetch failed"), {
+        cause: { code: "ECONNRESET" },
+      });
+    };
+    await expect(google.refreshAccessToken("r")).rejects.toMatchObject({
+      kind: "TEMPORARY",
+    });
+  });
+
+  it("chaque appel est borné à 30 secondes (AbortSignal.timeout)", async () => {
+    responder = () => json(200, { id: "m", threadId: "t" });
+    await google.sendMessage({ accessToken: "a", mime: MIME });
+    responder = () => json(200, { access_token: "x", expires_in: 3600 });
+    await google.refreshAccessToken("r");
+    expect(
+      calls.every((call) => call.options.signal instanceof AbortSignal),
+    ).toBe(true);
+  });
+
+  it("refus propre au compte (Gmail désactivé, règle du domaine) : ACCOUNT", async () => {
+    const kindOf = async (response) => {
+      responder = () => response;
+      return google
+        .sendMessage({ accessToken: "a", mime: MIME })
+        .catch((error) => error.kind);
+    };
+    expect(
+      await kindOf(
+        json(400, {
+          error: {
+            code: 400,
+            message: "Precondition check failed.",
+            errors: [{ reason: "failedPrecondition" }],
+            status: "FAILED_PRECONDITION",
+          },
+        }),
+      ),
+    ).toBe("ACCOUNT");
+    expect(
+      await kindOf(
+        json(400, { error: { message: "Mail service not enabled" } }),
+      ),
+    ).toBe("ACCOUNT");
+    expect(
+      await kindOf(
+        json(403, {
+          error: {
+            message: "Domain policy",
+            errors: [{ reason: "domainPolicy" }],
+          },
+        }),
+      ),
+    ).toBe("ACCOUNT");
   });
 
   it("révocation au mieux (sans erreur si Google ne répond pas)", async () => {
@@ -292,6 +376,17 @@ describe("Microsoft", () => {
     await expect(microsoft.refreshAccessToken("ancien")).rejects.toMatchObject({
       kind: "TEMPORARY",
     });
+    // Appli refusée (secret expiré, appli supprimée) : AUTH, plus jamais
+    // de nouvel essai sans fin
+    for (const [errorCode, message] of [
+      ["invalid_client", "AADSTS7000215: Invalid client secret provided."],
+      ["unauthorized_client", "AADSTS700016: Application not found."],
+    ]) {
+      msal.error = Object.assign(new Error(message), { errorCode });
+      await expect(
+        microsoft.refreshAccessToken("ancien"),
+      ).rejects.toMatchObject({ kind: "AUTH" });
+    }
   });
 
   it("envoi Graph : MIME en base64, texte brut, 202 sans identifiant", async () => {
@@ -306,6 +401,37 @@ describe("Microsoft", () => {
     });
     expect(Buffer.from(calls[0].options.body, "base64").toString("utf8")).toBe(
       MIME,
+    );
+  });
+
+  it("Graph : refus propre au compte (pas de boîte Exchange, MIME refusé) : ACCOUNT ; 502 : UNCERTAIN", async () => {
+    const kindOf = async (response) => {
+      responder = () => response;
+      return microsoft
+        .sendMessage({ accessToken: "a", mime: MIME })
+        .catch((error) => error.kind);
+    };
+    expect(
+      await kindOf(
+        json(404, { error: { code: "MailboxNotEnabledForRESTAPI" } }),
+      ),
+    ).toBe("ACCOUNT");
+    expect(
+      await kindOf(
+        json(400, {
+          error: { code: "ErrorMimeContentInvalid", message: "Invalid MIME" },
+        }),
+      ),
+    ).toBe("ACCOUNT");
+    expect(
+      await kindOf(
+        json(400, {
+          error: { code: "BadRequest", message: "MIME content is invalid" },
+        }),
+      ),
+    ).toBe("ACCOUNT");
+    expect(await kindOf(json(502, { error: { code: "BadGateway" } }))).toBe(
+      "UNCERTAIN",
     );
   });
 

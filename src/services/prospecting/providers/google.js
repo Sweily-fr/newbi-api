@@ -7,7 +7,12 @@
  * lue), openid, email, profile (adresse et nom de la boîte).
  */
 import { apiPublicUrl, googleCredentials } from "../config.js";
-import { MailProviderError, readJson, request } from "./errors.js";
+import {
+  MailProviderError,
+  PROVIDER_TIMEOUT_MS,
+  readJson,
+  request,
+} from "./errors.js";
 
 export const GOOGLE_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 export const GOOGLE_SCOPES = Object.freeze([
@@ -22,6 +27,8 @@ const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+
+const ACCOUNT_REASONS = new Set(["failedPrecondition", "domainPolicy"]);
 
 const QUOTA_REASONS = new Set([
   "dailyLimitExceeded",
@@ -177,6 +184,7 @@ export async function revokeToken(token) {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ token }).toString(),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
     return response.ok;
   } catch {
@@ -200,6 +208,16 @@ export function classifyGmailError(status, body) {
   ) {
     return new MailProviderError("QUOTA", `Gmail : ${message}`, details);
   }
+  // Refus propre au compte (Gmail désactivé, règle du domaine) : la boîte
+  // ne peut rien envoyer, aucun destinataire n'est en cause
+  if (
+    ACCOUNT_REASONS.has(reason) ||
+    /precondition check failed|mail service not enabled|gmail.*(disabled|not enabled)/i.test(
+      message,
+    )
+  ) {
+    return new MailProviderError("ACCOUNT", `Gmail : ${message}`, details);
+  }
   if (status === 403) {
     return new MailProviderError("AUTH", `Gmail : ${message}`, details);
   }
@@ -211,6 +229,10 @@ export function classifyGmailError(status, body) {
       `Gmail : ${message}`,
       details,
     );
+  }
+  // Passerelle sans réponse : Gmail a pu traiter l'envoi
+  if (status === 502 || status === 504) {
+    return new MailProviderError("UNCERTAIN", `Gmail : ${message}`, details);
   }
   if (status >= 500 || status === 408) {
     return new MailProviderError("TEMPORARY", `Gmail : ${message}`, details);
@@ -235,6 +257,7 @@ export async function sendMessage({ accessToken, mime }) {
       }),
     },
     "Gmail",
+    { sending: true },
   );
   const body = await readJson(response);
   if (!response.ok) throw classifyGmailError(response.status, body);

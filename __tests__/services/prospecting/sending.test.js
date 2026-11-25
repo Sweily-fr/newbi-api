@@ -689,14 +689,22 @@ describe("garde-fous", () => {
   });
 
   it("passage du cron : seules les boîtes actives dont l'envoi est dû", async () => {
+    const [paul, luc] = [buildUserId(), buildUserId()];
+    for (const userId of [paul, luc]) {
+      await seedOrgMembership({
+        userId,
+        organizationId: workspaceId,
+        role: "admin",
+      });
+    }
     const due = await seedMailbox();
     const later = await seedMailbox({
-      userId: buildUserId(),
+      userId: paul,
       accountEmail: "paul@atelier-durand.fr",
       nextSendAfter: new Date(WEDNESDAY_10H.getTime() + 5 * MINUTE),
     });
     const expired = await seedMailbox({
-      userId: buildUserId(),
+      userId: luc,
       accountEmail: "luc@atelier-durand.fr",
       status: "EXPIRED",
     });

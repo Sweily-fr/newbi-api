@@ -32,18 +32,102 @@ export const MAILBOX_PAUSE_REASONS = {
     "Boîte d'envoi suspendue pour protéger votre réputation : relisez votre message et votre liste, puis reprenez la prospection.",
   rights:
     "Le propriétaire de la boîte d'envoi n'a plus le droit d'envoyer de prospection dans cet espace.",
+  ownerLeft:
+    "Le propriétaire de la boîte d'envoi ne fait plus partie de l'espace : sa boîte a été déconnectée.",
+  account:
+    "Votre messagerie refuse les envois depuis cette boîte : vérifiez que l'envoi d'e-mails est activé pour ce compte, puis reprenez la prospection.",
+  failures:
+    "Trois envois de suite ont échoué : vérifiez votre boîte d'envoi et vos destinataires, puis reprenez la prospection.",
 };
 
 /** Adresse de messagerie gratuite (gmail.com, outlook.*, hotmail.*…). */
 export const isPersonalAddress = (email) =>
   isFreeEmailDomain(String(email || "").split("@")[1] || "");
 
-/** E-mails partis de la boîte aujourd'hui (jour de Paris, réels + simulés). */
-export function countSentToday(mailboxId, now = new Date()) {
+/**
+ * Connexions de la même adresse (tous membres, tous espaces) : la limite du
+ * jour et l'espacement valent pour l'adresse, pas pour la connexion.
+ */
+export async function sameAddressMailboxIds(mailbox) {
+  if (!mailbox?.accountEmail) return [mailbox._id];
+  const ids = await MailboxConnection.distinct("_id", {
+    accountEmail: mailbox.accountEmail,
+  });
+  return ids.length ? ids : [mailbox._id];
+}
+
+/**
+ * E-mails partis de l'adresse de la boîte aujourd'hui (jour de Paris),
+ * toutes connexions confondues : réels, simulés, et envois peut-être
+ * partis (incertains ou interrompus, `sentAt` posé).
+ */
+export async function countSentToday(mailbox, now = new Date()) {
   return ProspectingRecipient.countDocuments({
-    mailboxId,
+    mailboxId: { $in: await sameAddressMailboxIds(mailbox) },
     sentAt: { $gte: startOfParisDay(now) },
   });
+}
+
+/** Prochain envoi de l'adresse (toutes ses connexions) au plus tôt à `until`. */
+export async function delayAddress(mailbox, until) {
+  await MailboxConnection.updateMany(
+    mailbox.accountEmail
+      ? { accountEmail: mailbox.accountEmail }
+      : { _id: mailbox._id },
+    { $max: { nextSendAfter: until } },
+  );
+}
+
+/**
+ * Boîte mise en pause (coupe-circuit, refus de la messagerie, échecs de
+ * suite) et ses prospections en cours aussi (MAILBOX) : reprendre ou lancer
+ * une prospection la réactive.
+ */
+export async function pauseMailbox(
+  mailbox,
+  { kind, reason, sequenceReason = reason, lastError = null },
+) {
+  const result = await MailboxConnection.updateOne(
+    { _id: mailbox._id, status: "ACTIVE" },
+    {
+      $set: {
+        status: "PAUSED",
+        pauseKind: kind,
+        pausedReason: reason,
+        lockedUntil: null,
+        consecutiveFailures: 0,
+        ...(lastError ? { lastError: String(lastError).slice(0, 500) } : {}),
+      },
+    },
+  );
+  if (!result.modifiedCount) return false;
+  await pauseMailboxSequences(mailbox._id, sequenceReason);
+  logger.warn(`[prospection] boîte ${mailbox._id} en pause (${kind})`);
+  return true;
+}
+
+/**
+ * Accès révoqué chez le fournisseur, sauf si une autre connexion active
+ * partage la même adresse (révoquer couperait aussi celle-là : Google
+ * retire l'autorisation de l'appli pour tout le compte).
+ */
+export async function revokeMailboxAccess(mailbox, token) {
+  if (!token) return false;
+  const shared = await MailboxConnection.exists({
+    _id: { $ne: mailbox._id },
+    provider: mailbox.provider,
+    accountEmail: mailbox.accountEmail,
+    status: { $ne: "DISCONNECTED" },
+  });
+  if (shared) return false;
+  try {
+    return await mailProvider(mailbox.provider).revokeToken(token);
+  } catch (error) {
+    logger.warn(
+      `[prospection] révocation impossible (${mailbox._id}) : ${error.message}`,
+    );
+    return false;
+  }
 }
 
 const safeDecrypt = (value) => {
@@ -160,6 +244,7 @@ export async function connectMailbox({
     lastError: null,
     expiredNotifiedAt: null,
     lockedUntil: null,
+    consecutiveFailures: 0,
   };
   // Sans nouveau jeton de rafraîchissement, l'ancien sert encore (même compte)
   if (tokens.refreshToken) {
@@ -190,13 +275,12 @@ export async function connectMailbox({
   );
   if (existing && !sameAccount) {
     await pauseMailboxSequences(existing._id, MAILBOX_PAUSE_REASONS.changed);
-    // Ancien compte Google : accès révoqué au mieux
+    // Ancien compte Google : accès révoqué au mieux (sauf s'il sert encore
+    // à une autre connexion)
     if (existing.provider === "GOOGLE") {
       const oldToken = safeDecrypt(existing.refreshToken);
       if (oldToken && oldToken !== tokens.refreshToken) {
-        mailProvider("GOOGLE")
-          .revokeToken(oldToken)
-          .catch(() => false);
+        revokeMailboxAccess(existing, oldToken).catch(() => false);
       }
     }
   }
@@ -204,21 +288,19 @@ export async function connectMailbox({
 }
 
 /**
- * Déconnexion par le membre : accès révoqué chez le fournisseur si possible
- * (Google), jetons effacés, prospections en cours mises en pause (MAILBOX).
+ * Déconnexion (par le membre, ou parce qu'il a quitté l'espace) : accès
+ * révoqué chez le fournisseur si possible (Google, et seulement si aucune
+ * autre connexion active ne partage l'adresse), jetons effacés,
+ * prospections en cours mises en pause (MAILBOX).
  */
-export async function disconnectMailbox(mailbox) {
-  const token =
-    safeDecrypt(mailbox.refreshToken) || safeDecrypt(mailbox.accessToken);
-  if (token) {
-    try {
-      await mailProvider(mailbox.provider).revokeToken(token);
-    } catch (error) {
-      logger.warn(
-        `[prospection] révocation impossible (${mailbox._id}) : ${error.message}`,
-      );
-    }
-  }
+export async function disconnectMailbox(
+  mailbox,
+  { reason = MAILBOX_PAUSE_REASONS.disconnected } = {},
+) {
+  await revokeMailboxAccess(
+    mailbox,
+    safeDecrypt(mailbox.refreshToken) || safeDecrypt(mailbox.accessToken),
+  );
   await MailboxConnection.updateOne(
     { _id: mailbox._id },
     {
@@ -235,6 +317,6 @@ export async function disconnectMailbox(mailbox) {
       },
     },
   );
-  await pauseMailboxSequences(mailbox._id, MAILBOX_PAUSE_REASONS.disconnected);
+  await pauseMailboxSequences(mailbox._id, reason);
   return true;
 }

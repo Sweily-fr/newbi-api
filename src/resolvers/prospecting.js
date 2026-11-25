@@ -153,7 +153,7 @@ function viewsFor(ctx) {
   async function mailboxView(mailbox) {
     const [sentToday, ownerName] = await Promise.all([
       cached(caches.sent, String(mailbox._id), () =>
-        countSentToday(mailbox._id, now),
+        countSentToday(mailbox, now),
       ),
       cached(caches.owner, String(mailbox.userId), () =>
         userDisplayName(mailbox.userId),
