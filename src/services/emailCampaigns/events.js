@@ -19,6 +19,7 @@ import EmailSuppression from "../../models/EmailSuppression.js";
 import logger from "../../utils/logger.js";
 import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { normalizeEmail } from "./audience.js";
+import { recipientTracked } from "./tracking.js";
 
 // Seuils sous ceux que Resend impose au compte entier (rejets sous 4 %,
 // plaintes sous 0,08 %, sous peine de pause des envois, voire de fermeture
@@ -77,9 +78,12 @@ export async function upsertSuppression({
   return existing;
 }
 
-// Suivi effacé (durée de conservation dépassée, voir retention.js) : plus
-// rien n'est enregistré pour ce destinataire
-const STILL_TRACKED = { trackingExpired: { $ne: true } };
+// Destinataire sans accord de suivi, ou suivi effacé (durée de conservation
+// dépassée, refus de l'adresse) : rien n'est enregistré pour lui
+const STILL_TRACKED = {
+  trackingAllowed: { $ne: false },
+  trackingExpired: { $ne: true },
+};
 
 /** Ouverture (pixel) : première ouverture et ouvertures totales. */
 export async function recordOpen(recipientId, now = new Date()) {
@@ -109,11 +113,11 @@ export async function recordOpen(recipientId, now = new Date()) {
 
 /**
  * Clic sur le lien n° `linkIndex` (vaut aussi ouverture si aucune). Rien
- * n'est enregistré si le suivi du destinataire est effacé
- * (`recipient.trackingExpired`, à lire avec lui).
+ * n'est enregistré pour un destinataire non suivi (`trackingAllowed`,
+ * `trackingExpired`, à lire avec lui).
  */
 export async function recordClick(recipient, linkIndex, now = new Date()) {
-  if (recipient.trackingExpired) return;
+  if (!recipientTracked(recipient)) return;
   await EmailCampaignClick.create({
     workspaceId: recipient.workspaceId,
     campaignId: recipient.campaignId,
