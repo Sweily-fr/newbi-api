@@ -19,8 +19,10 @@ import mongoose from "mongoose";
  *                 prospecté, prospection arrêtée…).
  *
  * `lockedAt` : réservé par un envoi en cours (levé au bout de 10 minutes si
- * le processus s'est arrêté). `simulated` : l'envoi n'est pas parti pour de
- * vrai (coupe-circuit et règle des 30 jours ne comptent que les vrais).
+ * le processus s'est arrêté avant l'appel au fournisseur ; après, FAILED :
+ * jamais deux fois le même message). `simulated` : l'envoi n'est pas parti
+ * pour de vrai (coupe-circuit et règle des 30 jours ne comptent que les
+ * vrais).
  */
 
 export const PROSPECTING_RECIPIENT_STATUSES = [
@@ -84,6 +86,9 @@ const prospectingRecipientSchema = new mongoose.Schema(
     },
     attempts: { type: Number, default: 0 },
     lockedAt: { type: Date, default: null },
+    // Appel au fournisseur commencé : un arrêt brutal à ce moment ne relance
+    // jamais l'envoi (le message est peut-être parti), il le passe en FAILED
+    sendStartedAt: { type: Date, default: null },
     sentAt: { type: Date, default: null },
     simulated: { type: Boolean, default: false },
     providerMessageId: { type: String, default: null },

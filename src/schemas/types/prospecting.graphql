@@ -1,0 +1,263 @@
+# Prospection (Communication > Prospection) : un message envoyé une fois à
+# chaque prospect, depuis la boîte Gmail ou Outlook du membre (jamais par
+# Resend), au rythme de cette boîte. Aucun suivi d'ouverture ni de clic.
+# Droits : module « prospecting » (view, create, edit, delete, send) ; seul
+# le propriétaire de la boîte lance, met en pause, reprend ou arrête.
+# Accès anticipé : clé « prospecting » (BETA_FEATURES).
+# Dates : chaînes ISO 8601 (estimatedEndDate : AAAA-MM-JJ).
+# Voir src/services/prospecting/ et le contrat technique V1.
+
+enum MailboxProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+enum MailboxStatus {
+  ACTIVE
+  EXPIRED
+  PAUSED
+  DISCONNECTED
+}
+
+enum ProspectingSequenceStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELED
+}
+
+enum ProspectingRecipientStatus {
+  PENDING
+  SENT
+  SIMULATED
+  REPLIED
+  BOUNCED
+  UNSUBSCRIBED
+  FAILED
+  SKIPPED
+}
+
+enum ProspectingRecipientAction {
+  REPLIED
+  DO_NOT_CONTACT
+}
+
+type ProspectingSendWindow {
+  days: [Int!]!
+  startHour: Int!
+  endHour: Int!
+}
+
+type ProspectingMailbox {
+  id: ID!
+  provider: MailboxProvider!
+  accountEmail: String!
+  accountName: String
+  "Adresse gratuite (gmail.com, outlook.*, hotmail.*, live.*) : conseil d'utiliser une adresse pro"
+  isPersonalAddress: Boolean!
+  status: MailboxStatus!
+  pausedReason: String
+  dailyLimit: Int!
+  "Limite du jour après la montée progressive"
+  effectiveDailyLimit: Int!
+  sentToday: Int!
+  sendWindow: ProspectingSendWindow!
+  signatureId: ID
+  connectedAt: String!
+  "Boîte du membre connecté"
+  isMine: Boolean!
+  ownerName: String
+}
+
+type ProspectingProviders {
+  google: Boolean!
+  microsoft: Boolean!
+}
+
+type ProspectingSettings {
+  providers: ProspectingProviders!
+  myMailbox: ProspectingMailbox
+  mailboxes: [ProspectingMailbox!]!
+  variables: [EmailCampaignVariable!]!
+  defaultDailyLimit: Int!
+  maxDailyLimit: Int!
+  dataPageUrl: String!
+}
+
+type ProspectingStats {
+  recipients: Int!
+  pending: Int!
+  sent: Int!
+  simulated: Int!
+  replied: Int!
+  bounced: Int!
+  unsubscribed: Int!
+  failed: Int!
+  skipped: Int!
+}
+
+type ProspectingSequence {
+  id: ID!
+  name: String!
+  status: ProspectingSequenceStatus!
+  pauseKind: String
+  pausedReason: String
+  mailbox: ProspectingMailbox
+  audience: EmailCampaignAudience!
+  subject: String!
+  body: String!
+  signatureId: ID
+  stats: ProspectingStats!
+  "AAAA-MM-JJ, fin prévue au rythme de la boîte (null sans boîte ni destinataire)"
+  estimatedEndDate: String
+  consentAt: String
+  startedAt: String
+  completedAt: String
+  createdAt: String!
+  updatedAt: String!
+  createdByName: String
+  "Le membre connecté peut lancer, mettre en pause, reprendre ou arrêter (sa boîte + droit send)"
+  canSend: Boolean!
+}
+
+type ProspectingAudienceCount {
+  total: Int!
+  sendable: Int!
+  noEmail: Int!
+  invalidEmail: Int!
+  "Fiches de particuliers : jamais prospectées par e-mail sans consentement"
+  individuals: Int!
+  blocked: Int!
+  suppressed: Int!
+  "Déjà prospectés par l'espace depuis moins de 30 jours"
+  recentlyContacted: Int!
+  duplicates: Int!
+  excludedByList: Int!
+  missingFirstName: Int!
+}
+
+type ProspectingVerification {
+  canSend: Boolean!
+  checks: [EmailCampaignCheck!]!
+  audience: ProspectingAudienceCount!
+  "Jours ouvrés d'envoi prévus au rythme actuel de la boîte"
+  estimatedDays: Int
+  estimatedEndDate: String
+}
+
+type ProspectingPreview {
+  subject: String!
+  html: String!
+  text: String!
+}
+
+type ProspectingRecipient {
+  id: ID!
+  clientId: ID
+  email: String!
+  name: String!
+  company: String
+  status: ProspectingRecipientStatus!
+  sentAt: String
+  repliedAt: String
+  bouncedAt: String
+  unsubscribedAt: String
+  error: String
+}
+
+type ProspectingRecipientPage {
+  items: [ProspectingRecipient!]!
+  total: Int!
+}
+
+input ProspectingSendWindowInput {
+  days: [Int!]!
+  startHour: Int!
+  endHour: Int!
+}
+
+input ProspectingMailboxInput {
+  dailyLimit: Int
+  sendWindow: ProspectingSendWindowInput
+  signatureId: ID
+}
+
+input ProspectingSequenceInput {
+  name: String
+  audience: EmailCampaignAudienceInput
+  subject: String
+  body: String
+  signatureId: ID
+}
+
+extend type Query {
+  prospectingSettings(workspaceId: ID!): ProspectingSettings!
+  prospectingSequences(
+    workspaceId: ID!
+    status: ProspectingSequenceStatus
+  ): [ProspectingSequence!]!
+  prospectingSequence(workspaceId: ID!, id: ID!): ProspectingSequence
+  prospectingAudienceCount(
+    workspaceId: ID!
+    audience: EmailCampaignAudienceInput!
+  ): ProspectingAudienceCount!
+  prospectingVerification(workspaceId: ID!, id: ID!): ProspectingVerification!
+  "subject/body facultatifs : aperçu du brouillon en cours d'édition sans l'enregistrer ; clientId : un vrai prospect, sinon valeurs d'exemple"
+  prospectingPreview(
+    workspaceId: ID!
+    id: ID!
+    subject: String
+    body: String
+    clientId: ID
+  ): ProspectingPreview!
+  prospectingRecipients(
+    workspaceId: ID!
+    id: ID!
+    status: ProspectingRecipientStatus
+    search: String
+    offset: Int
+    limit: Int
+  ): ProspectingRecipientPage!
+  "Envois de prospection reçus par un contact (fiche contact)"
+  clientProspectingHistory(
+    workspaceId: ID!
+    clientId: ID!
+  ): [ProspectingRecipient!]!
+}
+
+extend type Mutation {
+  updateProspectingMailbox(
+    workspaceId: ID!
+    id: ID!
+    input: ProspectingMailboxInput!
+  ): ProspectingMailbox!
+  "Révoque le jeton chez le fournisseur si possible, efface les jetons, met les prospections ACTIVE de la boîte en PAUSED (MAILBOX)"
+  disconnectProspectingMailbox(workspaceId: ID!, id: ID!): Boolean!
+  "La boîte est celle du membre connecté (refus s'il n'en a pas)"
+  createProspectingSequence(
+    workspaceId: ID!
+    input: ProspectingSequenceInput!
+  ): ProspectingSequence!
+  updateProspectingSequence(
+    workspaceId: ID!
+    id: ID!
+    input: ProspectingSequenceInput!
+  ): ProspectingSequence!
+  deleteProspectingSequence(workspaceId: ID!, id: ID!): Boolean!
+  "Envoie le brouillon depuis la boîte à 1 à 5 adresses (défaut : l'adresse de la boîte), objet préfixé « [Test] », variables d'exemple ou du premier destinataire ; renvoie les adresses servies"
+  sendProspectingTest(workspaceId: ID!, id: ID!, emails: [String!]): [String!]!
+  launchProspectingSequence(
+    workspaceId: ID!
+    id: ID!
+    consent: Boolean!
+  ): ProspectingSequence!
+  pauseProspectingSequence(workspaceId: ID!, id: ID!): ProspectingSequence!
+  resumeProspectingSequence(workspaceId: ID!, id: ID!): ProspectingSequence!
+  cancelProspectingSequence(workspaceId: ID!, id: ID!): ProspectingSequence!
+  markProspectingRecipient(
+    workspaceId: ID!
+    id: ID!
+    action: ProspectingRecipientAction!
+  ): ProspectingRecipient!
+}
