@@ -4,8 +4,8 @@
  *
  * Toutes les 10 minutes, tous les jours :
  *   - bienvenue des essais sans carte (sous ENABLE_APP_TRIAL) ;
- *   - inscriptions à finaliser (entreprise, offre ou carte) ;
- *   - relance J+2 des essais avec carte (entre 9 h et 20 h, Paris).
+ *   - inscriptions à finaliser (entreprise, offre ou carte).
+ * Aucune relance pour les essais avec carte (décision du 25/11/2026).
  * Du lundi au vendredi à 10:00 Europe/Paris (sous ENABLE_APP_TRIAL) : J+7
  * inactif et J+14 suggestions des essais sans carte.
  * La relance de fin d'essai sans carte part avec l'expiration
@@ -19,7 +19,6 @@ import cron from "node-cron";
 import logger from "../utils/logger.js";
 import { isAppTrialEnabled } from "../utils/featureFlags.js";
 import {
-  CARD_STEP,
   DAILY_RUN_HOUR,
   SIGNUP_STEP,
   runTrialNudges,
@@ -44,19 +43,12 @@ export function startTrialNudgeCron() {
           `[trialNudgeCron] inscriptions à finaliser, erreur : ${error.message}`,
         );
       }
-      try {
-        await runTrialNudges({ steps: [CARD_STEP] });
-      } catch (error) {
-        logger.error(
-          `[trialNudgeCron] essais avec carte, erreur : ${error.message}`,
-        );
-      }
     },
     { scheduled: true, timezone: "Europe/Paris" },
   );
   if (!appTrial) {
     logger.info(
-      "[trialNudgeCron] ENABLE_APP_TRIAL est OFF : relances des essais sans carte non planifiées (inscriptions à finaliser et essais avec carte toutes les 10 min)",
+      "[trialNudgeCron] ENABLE_APP_TRIAL est OFF : relances des essais sans carte non planifiées (inscriptions à finaliser toutes les 10 min)",
     );
     return null;
   }
@@ -72,7 +64,7 @@ export function startTrialNudgeCron() {
     { scheduled: true, timezone: "Europe/Paris" },
   );
   logger.info(
-    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue, inscriptions à finaliser et essais avec carte toutes les 10 min)`,
+    `[trialNudgeCron] planifié du lundi au vendredi à ${DAILY_RUN_HOUR}:00 Europe/Paris (bienvenue et inscriptions à finaliser toutes les 10 min)`,
   );
   return task;
 }
