@@ -22,14 +22,10 @@
  *   dernier de ces essais se termine.
  *
  * Essais AVEC CARTE (Stripe, 7 jours, inscriptions depuis le 18/11/2026) :
- * la bienvenue et le rappel 3 jours avant le prélèvement sont envoyés par le
- * site sur les webhooks Stripe (invoice.paid, trial_will_end). Ici :
- *   - card_inactive_d2 : J+2, si l'inscrit n'est pas revenu depuis 24 h,
- *                    vérifiée toutes les 10 minutes entre 9 h et 20 h (Paris)
- *                    pour partir à J+2 et non au passage de 10 h suivant
- *                    (le rappel de Stripe tombe à J+4) ;
- *   - signup_incomplete couvre aussi les inscrits arrêtés au choix de l'offre
- *     ou à la carte.
+ * AUCUNE relance (décision du 25/11/2026). Seuls partent la confirmation et
+ * le rappel 3 jours avant le prélèvement, envoyés par le site sur les
+ * webhooks Stripe (invoice.paid, trial_will_end). signup_incomplete couvre
+ * en revanche les inscrits arrêtés au choix de l'offre ou avant la carte.
  *
  * Réglages (collection trial_nudge_settings, document « global ») :
  *   - mode « off » (défaut) : rien ne part ;
@@ -89,20 +85,6 @@ export const SCHEDULED_STEPS = {
 };
 // Relance de fin d'essai, déclenchée par l'expiration (trialCleanupCron)
 export const END_STEP = "inactive_d30";
-
-// Relances des essais avec carte (abonnement Stripe en essai), comptées
-// depuis le début de l'essai. « Inactif » = pas revenu depuis
-// `inactivityDays` jours (fixe : le réglage de l'admin, 2 jours au minimum,
-// ne laisserait jamais partir une relance à J+2).
-export const CARD_TRIAL_STEPS = {
-  card_inactive_d2: { dayOffset: 2, inactivityDays: 1 },
-};
-export const CARD_STEP = "card_inactive_d2";
-// Plage d'envoi des relances d'essai avec carte (heure de Paris)
-export const CARD_SEND_HOURS = { from: 9, to: 20 };
-// Pas de relance quand le rappel de Stripe (3 jours avant la fin de l'essai)
-// tombe dans moins d'un jour : jamais deux e-mails le même jour
-export const CARD_MIN_DAYS_BEFORE_END = 4;
 
 // Inscription pas terminée (entreprise, choix de l'offre ou carte), comptée
 // depuis la création du compte : le temps de revenir de soi-même avant
@@ -355,11 +337,6 @@ function trialOrgsQuery() {
   return { isTrialActive: true, stripeTrialActive: { $ne: true } };
 }
 
-// Essais avec carte : abonnement Stripe en essai (org-creation.js du site)
-function cardTrialOrgsQuery() {
-  return { isTrialActive: true, stripeTrialActive: true };
-}
-
 /**
  * Espaces provisoires des inscriptions pas terminées (entreprise, offre ou
  * carte), pour les comptes créés entre `from` (inclus) et `to` (exclu).
@@ -542,12 +519,6 @@ async function loadContexts(db, orgs, { simulated }) {
       )
       .map((s) => String(s.referenceId)),
   );
-  // Essai avec carte en cours, non résilié
-  const trialingOrgs = new Set(
-    subs
-      .filter((s) => s.status === "trialing" && s.cancelAtPeriodEnd !== true)
-      .map((s) => String(s.referenceId)),
-  );
   const managedOrgs = new Set(managed.map((m) => String(m.organizationId)));
   const optedOut = new Set(optouts.map((o) => String(o.userId)));
   const sentSteps = new Set(logs.map((l) => `${l.orgId}:${l.step}`));
@@ -584,7 +555,6 @@ async function loadContexts(db, orgs, { simulated }) {
         : null,
       lastActivityAt,
       subscribed: paidOrgs.has(orgId),
-      trialing: trialingOrgs.has(orgId),
       managed: managedOrgs.has(orgId),
       optedOut: owner ? optedOut.has(String(owner._id)) : false,
       sentSteps,
@@ -604,14 +574,8 @@ export function exclusionReason(ctx, step, { now, inactivityDays }) {
   if (!ctx.owner.emailVerified && step !== SIGNUP_STEP) return "unverified";
   if (isInternalEmail(ctx.owner.email)) return "internal";
   if (ctx.optedOut) return "optout";
-  const cardStep = CARD_TRIAL_STEPS[step];
-  if (cardStep) {
-    // L'abonnement en essai est la condition même de ces relances : seuls
-    // sont écartés un abonnement déjà payé ou résilié
-    if (!ctx.trialing) return "not_trialing";
-  } else if (ctx.subscribed) {
-    return "subscribed";
-  }
+  // Un essai avec carte compte comme abonné : aucune relance
+  if (ctx.subscribed) return "subscribed";
   if (ctx.managed) return "managed";
   if (
     step === SIGNUP_STEP &&
@@ -621,24 +585,9 @@ export function exclusionReason(ctx, step, { now, inactivityDays }) {
     return "signup_completed";
   }
   if (ctx.sentSteps.has(`${ctx.orgId}:${step}`)) return "already_sent";
-  if (
-    cardStep &&
-    ctx.trialEnd &&
-    ctx.trialEnd.getTime() - now.getTime() < CARD_MIN_DAYS_BEFORE_END * DAY_MS
-  ) {
-    return "reminder_close";
-  }
   const requiresInactivity =
-    step === END_STEP ||
-    Boolean(cardStep) ||
-    SCHEDULED_STEPS[step]?.requiresInactivity;
-  if (
-    requiresInactivity &&
-    isActive(ctx, {
-      now,
-      inactivityDays: cardStep ? cardStep.inactivityDays : inactivityDays,
-    })
-  ) {
+    step === END_STEP || SCHEDULED_STEPS[step]?.requiresInactivity;
+  if (requiresInactivity && isActive(ctx, { now, inactivityDays })) {
     return "active";
   }
   return null;
@@ -658,7 +607,7 @@ function dueDateOf(ctx, step) {
       : null;
   }
   if (!ctx.trialStart) return null;
-  const { dayOffset } = SCHEDULED_STEPS[step] || CARD_TRIAL_STEPS[step];
+  const { dayOffset } = SCHEDULED_STEPS[step];
   return new Date(ctx.trialStart.getTime() + dayOffset * DAY_MS);
 }
 
@@ -754,22 +703,7 @@ function sendWindowEnd(step, due) {
  */
 function isSendable(step, due, now) {
   if (!due || due > now || now >= sendWindowEnd(step, due)) return false;
-  if (CARD_TRIAL_STEPS[step] && !isCardSendHour(now)) return false;
   return !(isWeekdaysOnly(step) && isWeekendInParis(now));
-}
-
-const isCardSendHour = (date) => {
-  const { hour } = parisParts(date);
-  return hour >= CARD_SEND_HOURS.from && hour < CARD_SEND_HOURS.to;
-};
-
-/** Premier instant d'envoi d'une relance d'essai avec carte due à `due`. */
-function cardSendAt(due) {
-  if (isCardSendHour(due)) return due;
-  const morning = parisAt(due, CARD_SEND_HOURS.from);
-  return morning > due
-    ? morning
-    : parisAt(new Date(morning.getTime() + DAY_MS), CARD_SEND_HOURS.from);
 }
 
 // ─── Envoi ─────────────────────────────────────────────────────────────────
@@ -956,24 +890,6 @@ export async function runTrialNudges({
       }
     }
   }
-  const cardSteps = steps.filter((step) => CARD_TRIAL_STEPS[step]);
-  if (cardSteps.length > 0) {
-    const orgs = await database
-      .collection("organization")
-      .find(cardTrialOrgsQuery(), { projection: ORG_PROJECTION })
-      .toArray();
-    for (const org of orgs) {
-      const start = toDate(org.trialStartDate);
-      if (!start) continue;
-      for (const step of cardSteps) {
-        const { dayOffset } = CARD_TRIAL_STEPS[step];
-        const dueAt = new Date(start.getTime() + dayOffset * DAY_MS);
-        if (isSendable(step, dueAt, now)) {
-          due.push({ org, step });
-        }
-      }
-    }
-  }
   if (steps.includes(SIGNUP_STEP)) {
     // La date dépend de la création du compte : la requête ne retient que
     // les comptes dont la relance est due et encore dans le rattrapage
@@ -1075,14 +991,10 @@ export async function listTrialNudgeSchedule({
   const database = getDb(db);
   const settings = await getTrialNudgeSettings(database);
   const to = now.getTime() + horizonDays * DAY_MS;
-  const [orgs, cardOrgs, signupOrgs] = await Promise.all([
+  const [orgs, signupOrgs] = await Promise.all([
     database
       .collection("organization")
       .find(trialOrgsQuery(), { projection: ORG_PROJECTION })
-      .toArray(),
-    database
-      .collection("organization")
-      .find(cardTrialOrgsQuery(), { projection: ORG_PROJECTION })
       .toArray(),
     // Comptes dont la relance n'a pas dépassé son rattrapage et tombe avant
     // la fin de l'horizon
@@ -1095,9 +1007,8 @@ export async function listTrialNudgeSchedule({
   ]);
 
   const simulated = settings.mode === "simulation";
-  const [contexts, cardContexts, signupContexts] = await Promise.all([
+  const [contexts, signupContexts] = await Promise.all([
     loadContexts(database, orgs, { simulated }),
-    loadContexts(database, cardOrgs, { simulated }),
     loadContexts(database, signupOrgs, { simulated }),
   ]);
   const candidates = [
@@ -1107,9 +1018,6 @@ export async function listTrialNudgeSchedule({
         step,
       })),
     ),
-    ...cardContexts.flatMap((ctx) =>
-      Object.keys(CARD_TRIAL_STEPS).map((step) => ({ ctx, step })),
-    ),
     ...signupContexts.map((ctx) => ({ ctx, step: SIGNUP_STEP })),
   ];
 
@@ -1118,13 +1026,8 @@ export async function listTrialNudgeSchedule({
     const due = dueDateOf(ctx, step);
     // Rattrapage dépassé : la relance ne partira plus
     if (!due || now >= sendWindowEnd(step, due)) continue;
-    // Jours ouvrés : date d'envoi réelle (un samedi → le lundi à 10 h) ;
-    // essai avec carte : entre 9 h et 20 h
-    const sendAt = isWeekdaysOnly(step)
-      ? nextWeekdaySlot(due)
-      : CARD_TRIAL_STEPS[step]
-        ? cardSendAt(due)
-        : due;
+    // Jours ouvrés : date d'envoi réelle (un samedi → le lundi à 10 h)
+    const sendAt = isWeekdaysOnly(step) ? nextWeekdaySlot(due) : due;
     if (sendAt.getTime() > to) continue;
     // Fin d'essai déjà traitée par le cron (e-mail standard parti)
     if (step === END_STEP && ctx.org.trialEndedEmailSentAt) continue;
@@ -1158,15 +1061,10 @@ const SAMPLE = {
   orgName: "Atelier Martin",
   daysRemaining: 23,
 };
-// Essai avec carte : 7 jours, relance à J+2 (5 jours restants)
-const sampleData = (step) =>
-  CARD_TRIAL_STEPS[step]
-    ? {
-        ...SAMPLE,
-        daysRemaining: 5,
-        trialEndDate: new Date(Date.now() + 5 * DAY_MS),
-      }
-    : { ...SAMPLE, trialEndDate: new Date(Date.now() + 30 * DAY_MS) };
+const sampleData = () => ({
+  ...SAMPLE,
+  trialEndDate: new Date(Date.now() + 30 * DAY_MS),
+});
 
 function assertStep(step) {
   if (!NUDGE_STEPS.includes(step)) {
@@ -1177,7 +1075,7 @@ function assertStep(step) {
 export function renderTrialNudgePreview(step) {
   assertStep(step);
   return buildTrialNudgeEmail(step, {
-    ...sampleData(step),
+    ...sampleData(),
     unsubscribeUrl: "#",
   });
 }
@@ -1189,7 +1087,7 @@ export async function sendTrialNudgeTest({ step, to }) {
   // Lien de désinscription factice : la page répond « lien invalide »
   const unsubscribeUrl = `${apiBaseUrl()}/api/trial-nudges/unsubscribe?t=apercu`;
   const { subject, html } = buildTrialNudgeEmail(step, {
-    ...sampleData(step),
+    ...sampleData(),
     unsubscribeUrl,
   });
   try {
