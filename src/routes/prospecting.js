@@ -254,11 +254,25 @@ async function loadDataController(workspaceId) {
   const siren = String(organization.siren || organization.siret || "")
     .replace(/\D/g, "")
     .slice(0, 9);
+  // Sans e-mail de l'entreprise : l'adresse de la boîte qui a envoyé la
+  // prospection la plus récente de l'espace (figée à son lancement)
+  let email = clean(organization.companyEmail).toLowerCase();
+  if (!email) {
+    const latest = await ProspectingSequence.findOne({
+      workspaceId: id,
+      startedAt: { $ne: null },
+      "snapshot.senderEmail": { $nin: [null, ""] },
+    })
+      .sort({ startedAt: -1, _id: -1 })
+      .select("snapshot.senderEmail")
+      .lean();
+    email = clean(latest?.snapshot?.senderEmail).toLowerCase();
+  }
   return {
     name: clean(organization.companyName) || clean(organization.name),
     address: formatCompanyAddress(organization),
     siren: siren.length === 9 ? siren : "",
-    email: clean(organization.companyEmail).toLowerCase(),
+    email,
   };
 }
 

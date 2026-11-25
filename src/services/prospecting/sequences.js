@@ -29,7 +29,10 @@ import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import logger from "../../utils/logger.js";
 import { isValidEmail } from "../../utils/validators.js";
 import { normalizeEmail } from "../emailCampaigns/audience.js";
-import { loadWorkspaceIdentity } from "../emailCampaigns/identity.js";
+import {
+  loadOrganization,
+  loadWorkspaceIdentity,
+} from "../emailCampaigns/identity.js";
 import {
   campaignSendMode,
   isRealSendAllowed,
@@ -164,7 +167,7 @@ export async function estimateForMailbox(
   if (!mailbox || mailbox.status !== "ACTIVE" || !(count > 0)) return null;
   const [total, sentToday] = await Promise.all([
     sharedSendCount(mailbox._id, count, excludeSequenceId),
-    countSentToday(mailbox._id, now),
+    countSentToday(mailbox, now),
   ]);
   return estimateSchedule({ mailbox, count: total, sentToday, now });
 }
@@ -177,11 +180,12 @@ export async function evaluateSequence(
   sequence,
   { now = new Date(), mailbox: knownMailbox, identity: knownIdentity } = {},
 ) {
-  const [mailbox, identity, audience] = await Promise.all([
+  const [mailbox, identity, organization, audience] = await Promise.all([
     knownMailbox !== undefined
       ? knownMailbox
       : MailboxConnection.findById(sequence.mailboxId).lean(),
     knownIdentity || loadWorkspaceIdentity(sequence.workspaceId),
+    loadOrganization(sequence.workspaceId),
     resolveProspectingAudience(sequence.workspaceId, sequence.audience, {
       now,
     }),
@@ -198,6 +202,11 @@ export async function evaluateSequence(
     audienceCount: audience.counts,
     estimate,
     effectiveLimit: mailbox ? effectiveDailyLimit(mailbox, now) : 0,
+    // Raison sociale légale, jamais le nom de l'espace (repli de l'identité)
+    legalCompanyName:
+      typeof organization?.companyName === "string"
+        ? organization.companyName.trim()
+        : "",
   });
   return {
     canSend,
@@ -249,19 +258,9 @@ export async function launchSequence(
   if (sequence.status !== "DRAFT") {
     throw validation("Seul un brouillon peut être lancé.");
   }
-  const mailbox = await ownedMailbox(sequence, userId);
-  const identity = await loadWorkspaceIdentity(sequence.workspaceId);
-  const report = await evaluateSequence(sequence, {
-    now,
-    mailbox: mailbox.toObject(),
-    identity,
-  });
-  if (!report.canSend) {
-    throw validation(
-      firstErrorTitle(report.checks) || "La prospection ne peut pas partir.",
-      { checks: report.checks.filter((c) => c.level === "ERROR") },
-    );
-  }
+  await ownedMailbox(sequence, userId);
+  // Verrou d'abord : la vérification porte sur le document relu sous
+  // verrou (une modification juste avant ne passe pas sans être vérifiée)
   const locked = await ProspectingSequence.findOneAndUpdate(
     {
       _id: sequence._id,
@@ -274,6 +273,22 @@ export async function launchSequence(
   );
   if (!locked) throw conflict();
   try {
+    const mailbox = await MailboxConnection.findById(locked.mailboxId).lean();
+    if (!isMailboxOwner(mailbox, userId)) throw forbidden(OWNER_ONLY_MESSAGE);
+    const identity = await loadWorkspaceIdentity(locked.workspaceId);
+    const report = await evaluateSequence(locked.toObject(), {
+      now,
+      mailbox,
+      identity,
+    });
+    if (!report.canSend) {
+      throw validation(
+        firstErrorTitle(report.checks) || "La prospection ne peut pas partir.",
+        { checks: report.checks.filter((c) => c.level === "ERROR") },
+      );
+    }
+    // Lancement interrompu avant : ses destinataires sont recréés
+    await ProspectingRecipient.deleteMany({ sequenceId: locked._id });
     const [signature, ownerName, audience] = await Promise.all([
       renderSequenceSignature(locked, mailbox.userId, { ensure: true }),
       userDisplayName(mailbox.userId),
@@ -318,6 +333,24 @@ export async function launchSequence(
       { new: true },
     );
     if (!launched) throw conflict();
+    // Boîte suspendue (coupe-circuit, refus de la messagerie) : lancer une
+    // prospection la réactive (le membre a été prévenu par la vérification)
+    if (mailbox.status === "PAUSED") {
+      await MailboxConnection.updateOne(
+        { _id: mailbox._id, status: "PAUSED" },
+        {
+          $set: {
+            status: "ACTIVE",
+            pauseKind: null,
+            pausedReason: null,
+            consecutiveFailures: 0,
+          },
+        },
+      );
+      logger.info(
+        `[prospection] boîte ${mailbox._id} réactivée par le lancement de ${locked._id}`,
+      );
+    }
     logger.info(
       `[prospection] prospection ${locked._id} lancée par ${userId} : ${stats.recipients} destinataire(s), mode ${campaignSendMode()}`,
     );
@@ -375,7 +408,14 @@ export async function resumeSequence(
   if (mailbox.status === "PAUSED") {
     await MailboxConnection.updateOne(
       { _id: mailbox._id, status: "PAUSED" },
-      { $set: { status: "ACTIVE", pauseKind: null, pausedReason: null } },
+      {
+        $set: {
+          status: "ACTIVE",
+          pauseKind: null,
+          pausedReason: null,
+          consecutiveFailures: 0,
+        },
+      },
     );
     logger.info(
       `[prospection] boîte ${mailbox._id} réactivée par ${userId} (reprise de ${sequence._id})`,
@@ -589,16 +629,16 @@ export async function sendTestMessage(
   }
   const invalid = addresses.find((email) => !isValidEmail(email));
   if (invalid) throw validation(`Adresse e-mail invalide : ${invalid}`);
-  const rejected = await EmailSuppression.findOne({
+  // Toute adresse de la liste d'exclusion : même un test ne lui écrit plus
+  const excluded = await EmailSuppression.findOne({
     workspaceId: sequence.workspaceId,
     email: { $in: addresses },
-    reason: { $in: ["BOUNCED", "COMPLAINED"] },
   })
     .select("email")
     .lean();
-  if (rejected) {
+  if (excluded) {
     throw validation(
-      `Envoi impossible à ${rejected.email} : cette adresse a été rejetée ou a signalé vos e-mails comme indésirables.`,
+      `Envoi impossible à ${excluded.email} : cette adresse est dans la liste d'exclusion de l'espace (désinscription, rejet, plainte ou ajout à la main).`,
     );
   }
   const { recipients } = await resolveProspectingAudience(

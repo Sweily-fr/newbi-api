@@ -35,6 +35,7 @@ vi.mock("../../src/config/redis.js", () => ({
 }));
 
 import express from "express";
+import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
 import { seedOrgMembership } from "../helpers/auth.js";
 import { buildOrganizationId, buildUserId } from "../factories/index.js";
@@ -339,6 +340,28 @@ describe("page « Vos données »", () => {
     expect(html).toContain('href="mailto:contact@test.fr"');
     expect(html).toContain('href="https://www.cnil.fr"');
     expect(html).not.toContain("—");
+  });
+
+  it("sans e-mail de l'entreprise : l'adresse de la boîte d'envoi de la dernière prospection sert de contact", async () => {
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne({ _id: workspaceId }, { $set: { companyEmail: "" } });
+    await ProspectingSequence.updateOne(
+      { _id: sequence._id },
+      {
+        $set: {
+          startedAt: new Date("2026-11-20T09:00:00Z"),
+          "snapshot.senderEmail": "jean@atelier-durand.fr",
+        },
+      },
+    );
+    const html = await (
+      await api(`/donnees/${token(TOKEN_KINDS.prospectingData, workspaceId)}`)
+    ).text();
+    expect(html).toContain('href="mailto:jean@atelier-durand.fr"');
+    expect(visibleText(html)).toContain(
+      "ou par e-mail à jean@atelier-durand.fr",
+    );
   });
 
   it("jeton invalide (ou d'un autre type) : 404", async () => {

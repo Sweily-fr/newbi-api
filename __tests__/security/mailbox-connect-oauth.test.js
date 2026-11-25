@@ -380,6 +380,28 @@ describe("retour", () => {
     );
   });
 
+  it("adresse déjà connectée par un autre membre de l'espace : refusée", async () => {
+    await MailboxConnection.create({
+      workspaceId,
+      userId: viewer,
+      provider: "GOOGLE",
+      accountEmail: "jean@atelier-durand.fr",
+      status: "ACTIVE",
+    });
+    const state = await stateFrom(await authorize("google"));
+    expect(errorOf(await callback("google", state))).toBe(
+      "Cette adresse est déjà connectée par un autre membre de l'espace",
+    );
+    expect(await MailboxConnection.countDocuments({ userId: owner })).toBe(0);
+    // Déconnectée chez l'autre membre : l'adresse est libre
+    await MailboxConnection.updateOne(
+      { userId: viewer },
+      { $set: { status: "DISCONNECTED" } },
+    );
+    const again = await stateFrom(await authorize("google"));
+    expect(await callback("google", again)).toBe(`${PAGE}?boite=connectee`);
+  });
+
   it("Outlook : boîte MICROSOFT créée", async () => {
     const state = await stateFrom(await authorize("microsoft"));
     expect(await callback("microsoft", state)).toBe(`${PAGE}?boite=connectee`);

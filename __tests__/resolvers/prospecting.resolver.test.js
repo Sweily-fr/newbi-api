@@ -61,7 +61,10 @@ import {
   TOKEN_KINDS,
   verifyCampaignToken,
 } from "../../src/services/emailCampaigns/tracking.js";
-import { OWNER_ONLY_MESSAGE } from "../../src/services/prospecting/sequences.js";
+import {
+  OWNER_ONLY_MESSAGE,
+  launchSequence,
+} from "../../src/services/prospecting/sequences.js";
 
 const { Query, Mutation } = prospectingResolvers;
 
@@ -1136,7 +1139,159 @@ describe("prospection d'origine des destinataires", () => {
   });
 });
 
+describe("lancement et vérification : constats de la relecture", () => {
+  it("boîte suspendue par le coupe-circuit, plus rien à reprendre : lancer reste possible et la réactive", async () => {
+    await connectMailbox(owner, {
+      status: "PAUSED",
+      pauseKind: "REPUTATION",
+      pausedReason:
+        "Envois suspendus pour protéger votre réputation : 13 % de désinscrits.",
+    });
+    const sequence = await draft();
+    const report = await call(Query.prospectingVerification, owner, {
+      id: sequence.id,
+    });
+    expect(report.canSend).toBe(true);
+    expect(report.checks.find((c) => c.id === "mailbox_paused")).toMatchObject({
+      level: "WARNING",
+      title: "Boîte d'envoi suspendue",
+      detail:
+        "Votre boîte a été suspendue après trop de désinscriptions. Lancer cette prospection la réactive : ciblez mieux vos destinataires.",
+    });
+    const launched = await call(Mutation.launchProspectingSequence, owner, {
+      id: sequence.id,
+      consent: true,
+    });
+    expect(launched.status).toBe("ACTIVE");
+    expect(launched.mailbox).toMatchObject({
+      status: "ACTIVE",
+      pausedReason: null,
+    });
+  });
+
+  it("vérifié sous verrou sur le brouillon relu : une modification juste avant le lancement n'y échappe pas", async () => {
+    await connectMailbox();
+    const sequence = await draft();
+    // Brouillon lu avant la modification (comme par le resolver)
+    const stale = await ProspectingSequence.findById(sequence.id).lean();
+    await ProspectingSequence.updateOne(
+      { _id: sequence.id },
+      { $set: { subject: "" } },
+    );
+    expect(
+      await failure(launchSequence(stale, { userId: owner })),
+    ).toMatchObject({ code: "VALIDATION_ERROR", message: "Ajoutez un objet" });
+    const after = await ProspectingSequence.findById(sequence.id).lean();
+    expect(after).toMatchObject({ status: "DRAFT", launchLockedUntil: null });
+    expect(await ProspectingRecipient.countDocuments()).toBe(0);
+  });
+
+  it("lancement interrompu puis repris : les destinataires laissés sont effacés puis recréés", async () => {
+    const mailbox = await connectMailbox();
+    const sequence = await draft();
+    const leftover = await ProspectingRecipient.create({
+      workspaceId,
+      sequenceId: sequence.id,
+      mailboxId: mailbox._id,
+      email: "ancien@disparu.fr",
+      status: "PENDING",
+    });
+    // Verrou du premier lancement expiré (arrêt du serveur)
+    await ProspectingSequence.updateOne(
+      { _id: sequence.id },
+      { $set: { launchLockedUntil: new Date(Date.now() - 1000) } },
+    );
+    const launched = await call(Mutation.launchProspectingSequence, owner, {
+      id: sequence.id,
+      consent: true,
+    });
+    expect(launched).toMatchObject({
+      status: "ACTIVE",
+      stats: { recipients: 5, pending: 5 },
+    });
+    expect(await ProspectingRecipient.exists({ _id: leftover._id })).toBeNull();
+  });
+
+  it("lancement en cours (verrou posé) : second lancement refusé", async () => {
+    await connectMailbox();
+    const sequence = await draft();
+    await ProspectingSequence.updateOne(
+      { _id: sequence.id },
+      { $set: { launchLockedUntil: new Date(Date.now() + 60 * 1000) } },
+    );
+    expect(
+      (
+        await failure(
+          call(Mutation.launchProspectingSequence, owner, {
+            id: sequence.id,
+            consent: true,
+          }),
+        )
+      ).message,
+    ).toBe(
+      "La prospection a changé entre-temps : rechargez la page puis réessayez.",
+    );
+  });
+
+  it("raison sociale légale manquante : erreur, même si l'espace porte un nom", async () => {
+    await connectMailbox();
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne({ _id: workspaceId }, { $set: { companyName: "" } });
+    const sequence = await draft();
+    const report = await call(Query.prospectingVerification, owner, {
+      id: sequence.id,
+    });
+    expect(report.canSend).toBe(false);
+    expect(report.checks.find((c) => c.id === "legal_company")).toMatchObject({
+      level: "ERROR",
+      title: "Raison sociale manquante",
+    });
+  });
+
+  it("e-mail de l'entreprise manquant : avertissement, la page « Vos données » donnera l'adresse de la boîte", async () => {
+    await connectMailbox();
+    await mongoose.connection.db
+      .collection("organization")
+      .updateOne({ _id: workspaceId }, { $set: { companyEmail: "" } });
+    const sequence = await draft();
+    const report = await call(Query.prospectingVerification, owner, {
+      id: sequence.id,
+    });
+    expect(report.canSend).toBe(true);
+    expect(
+      report.checks.find((c) => c.id === "legal_contact_email"),
+    ).toMatchObject({
+      level: "WARNING",
+      title: "Adresse e-mail de l'entreprise manquante",
+    });
+  });
+});
+
 describe("aperçu et e-mail de test", () => {
+  it("test vers une adresse de la liste d'exclusion (désinscrite) : refusé", async () => {
+    await connectMailbox();
+    const sequence = await draft();
+    await EmailSuppression.create({
+      workspaceId,
+      email: "desinscrit@ailleurs.fr",
+      reason: "UNSUBSCRIBED",
+    });
+    expect(
+      (
+        await failure(
+          call(Mutation.sendProspectingTest, owner, {
+            id: sequence.id,
+            emails: ["Desinscrit@Ailleurs.fr"],
+          }),
+        )
+      ).message,
+    ).toBe(
+      "Envoi impossible à desinscrit@ailleurs.fr : cette adresse est dans la liste d'exclusion de l'espace (désinscription, rejet, plainte ou ajout à la main).",
+    );
+    expect(gmail.sends).toHaveLength(0);
+  });
+
   it("aperçu avec un vrai prospect, objet et message non enregistrés", async () => {
     await connectMailbox();
     const sequence = await draft();

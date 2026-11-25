@@ -1,6 +1,7 @@
 import express from "express";
 import { betterAuthJWTMiddleware } from "../middlewares/better-auth-jwt.js";
 import { requireWorkspaceActionPermission } from "../middlewares/require-workspace-membership.js";
+import MailboxConnection from "../models/MailboxConnection.js";
 import {
   isProviderConfigured,
   prospectingPageUrl,
@@ -64,6 +65,8 @@ export const CALLBACK_ERRORS = {
   feature: "Prospection non disponible pour cet espace",
   scope: "Autorisez l'envoi d'e-mails pour connecter votre boîte",
   noEmail: "Adresse de la boîte introuvable",
+  addressTaken:
+    "Cette adresse est déjà connectée par un autre membre de l'espace",
   failed: "La connexion a échoué, réessayez",
 };
 
@@ -226,6 +229,15 @@ router.get("/:provider/callback", async (req, res) => {
     if (!userInfo.email || !isValidEmail(userInfo.email)) {
       return fail(CALLBACK_ERRORS.noEmail);
     }
+    // Une adresse, une boîte par espace : la limite du jour et l'espacement
+    // sont comptés par adresse
+    const taken = await MailboxConnection.exists({
+      workspaceId: stateData.workspaceId,
+      accountEmail: userInfo.email.trim().toLowerCase(),
+      userId: { $ne: stateData.userId },
+      status: { $ne: "DISCONNECTED" },
+    });
+    if (taken) return fail(CALLBACK_ERRORS.addressTaken);
     await connectMailbox({
       workspaceId: stateData.workspaceId,
       userId: stateData.userId,

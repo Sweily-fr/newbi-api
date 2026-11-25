@@ -4,15 +4,18 @@
  * level OK | INFO | WARNING | ERROR, title, detail). Lancement possible
  * seulement sans ERROR.
  *
- *   boîte        connectée, active, plage d'envoi valide (ERROR sinon) ;
+ *   boîte        connectée, non expirée, plage d'envoi valide (ERROR
+ *                sinon) ; suspendue (WARNING : le lancement la réactive) ;
  *                adresse gratuite (INFO : conseil d'adresse pro) ;
  *   objet        non vide (ERROR) ;
  *   message      non vide (ERROR) ;
  *   variables    inconnues ou accolades orphelines (ERROR) ; {{prenom}}
  *                sans repli alors que des destinataires n'ont pas de prénom
  *                (WARNING) ;
- *   mentions     raison sociale ou adresse de l'entreprise manquante
- *                (ERROR : obligatoires dans chaque message) ;
+ *   mentions     raison sociale légale ou adresse de l'entreprise
+ *                manquante (ERROR : obligatoires dans chaque message) ;
+ *                e-mail de l'entreprise manquant (WARNING : la page « Vos
+ *                données » donne alors l'adresse de la boîte) ;
  *   audience     vide (ERROR) ; contacts écartés (INFO) ;
  *   rythme       durée prévue (INFO).
  */
@@ -32,6 +35,9 @@ export const CHECK_CATEGORIES = {
   schedule: "Rythme d'envoi",
 };
 const C = CHECK_CATEGORIES;
+
+export const REPUTATION_PAUSE_WARNING =
+  "Votre boîte a été suspendue après trop de désinscriptions. Lancer cette prospection la réactive : ciblez mieux vos destinataires.";
 
 const check = (id, category, level, title, detail = null) => ({
   id,
@@ -85,13 +91,16 @@ function mailboxChecks(mailbox, { isPersonal }) {
       ),
     );
   } else if (mailbox.status === "PAUSED") {
+    // Pas bloquant : lancer (ou reprendre) une prospection réactive la boîte
     checks.push(
       check(
         "mailbox_paused",
         C.mailbox,
-        "ERROR",
+        "WARNING",
         "Boîte d'envoi suspendue",
-        `${mailbox.pausedReason || "Les envois de cette boîte sont suspendus."} Une prospection en pause peut être reprise pour réactiver la boîte.`,
+        mailbox.pauseKind === "REPUTATION"
+          ? REPUTATION_PAUSE_WARNING
+          : `Votre boîte a été suspendue : ${mailbox.pausedReason || "envois refusés par votre messagerie."} Lancer cette prospection la réactive.`,
       ),
     );
   }
@@ -202,9 +211,10 @@ function variableChecks(sequence, missingFirstName) {
   return checks;
 }
 
-function legalChecks(identity) {
+function legalChecks(identity, legalCompanyName) {
   const checks = [];
-  if (!singleLine(identity?.companyName)) {
+  // Raison sociale légale de l'entreprise, jamais le nom de l'espace
+  if (!singleLine(legalCompanyName)) {
     checks.push(
       check(
         "legal_company",
@@ -226,7 +236,19 @@ function legalChecks(identity) {
       ),
     );
   }
-  if (!checks.length) {
+  const blocking = checks.length > 0;
+  if (!singleLine(identity?.companyEmail)) {
+    checks.push(
+      check(
+        "legal_contact_email",
+        C.legal,
+        "WARNING",
+        "Adresse e-mail de l'entreprise manquante",
+        "La page « Vos données » indiquera l'adresse de votre boîte d'envoi comme contact. Renseignez l'e-mail de l'entreprise dans Paramètres > Informations légales.",
+      ),
+    );
+  }
+  if (!blocking) {
     checks.push(
       check(
         "legal",
@@ -321,7 +343,9 @@ function scheduleChecks(estimate, effectiveLimit) {
  * @param {object} input.sequence subject, body
  * @param {object|null} input.mailbox boîte de la prospection
  * @param {boolean} input.isPersonal adresse de messagerie gratuite
- * @param {object} input.identity companyName, companyAddress
+ * @param {object} input.identity companyName, companyAddress, companyEmail
+ * @param {string} [input.legalCompanyName] raison sociale légale (sans le
+ *   repli sur le nom de l'espace)
  * @param {object} input.audienceCount voir audience.js
  * @param {{ days: number, endDate: string }|null} input.estimate
  * @param {number} input.effectiveLimit limite du jour de la boîte
@@ -334,12 +358,13 @@ export function buildVerificationChecks({
   audienceCount,
   estimate = null,
   effectiveLimit = 0,
+  legalCompanyName = identity?.companyName,
 }) {
   const checks = [
     ...mailboxChecks(mailbox, { isPersonal }),
     ...contentChecks(sequence),
     ...variableChecks(sequence, audienceCount?.missingFirstName || 0),
-    ...legalChecks(identity),
+    ...legalChecks(identity, legalCompanyName),
     ...audienceChecks(audienceCount),
     ...scheduleChecks(estimate, effectiveLimit),
   ];
