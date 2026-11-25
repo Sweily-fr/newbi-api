@@ -29,6 +29,7 @@ import ProspectingSequence, {
 } from "../models/ProspectingSequence.js";
 import { workspaceListIds } from "../services/emailCampaigns/audience.js";
 import { singleLine } from "../services/emailCampaigns/design.js";
+import { campaignSendMode } from "../services/emailCampaigns/sender.js";
 import { prospectingDataUrlFor } from "../services/emailCampaigns/tracking.js";
 import { resolveProspectingAudience } from "../services/prospecting/audience.js";
 import {
@@ -230,10 +231,18 @@ function viewsFor(ctx) {
   return { mailboxView, sequenceView };
 }
 
-/** Destinataire (forme GraphQL). Écarté : son motif tient lieu d'erreur. */
-export function recipientView(recipient) {
+// Prospection introuvable (cas limite) : le nom reste lisible
+export const DELETED_SEQUENCE_NAME = "Prospection supprimée";
+
+/**
+ * Destinataire (forme GraphQL), avec le nom de sa prospection. Écarté : son
+ * motif tient lieu d'erreur.
+ */
+export function recipientView(recipient, sequenceName = "") {
   return {
     id: String(recipient._id),
+    sequenceId: String(recipient.sequenceId),
+    sequenceName: sequenceName || DELETED_SEQUENCE_NAME,
     clientId: recipient.clientId ? String(recipient.clientId) : null,
     email: recipient.email,
     name: recipient.name || recipient.company || recipient.email,
@@ -247,6 +256,35 @@ export function recipientView(recipient) {
       recipient.error ||
       (recipient.status === "SKIPPED" ? recipient.skippedReason || null : null),
   };
+}
+
+/**
+ * Destinataires avec le nom de leur prospection : une seule lecture groupée
+ * des prospections de l'espace (jamais une par destinataire). `known` :
+ * prospections déjà lues par l'appelant (aucune relecture). Une prospection
+ * masquée (supprimée après son lancement) garde son nom.
+ */
+async function recipientViews(ctx, recipients, known = []) {
+  const names = new Map(
+    known.map((sequence) => [String(sequence._id), sequence.name]),
+  );
+  const missing = [
+    ...new Set(recipients.map((recipient) => String(recipient.sequenceId))),
+  ].filter((id) => !names.has(id) && isObjectIdString(id));
+  if (missing.length) {
+    const sequences = await ProspectingSequence.find({
+      _id: { $in: missing.map(toObjectId) },
+      ...scope(ctx),
+    })
+      .select("name")
+      .lean();
+    for (const sequence of sequences) {
+      names.set(String(sequence._id), sequence.name);
+    }
+  }
+  return recipients.map((recipient) =>
+    recipientView(recipient, names.get(String(recipient.sequenceId))),
+  );
 }
 
 // ─── Saisies ───────────────────────────────────────────────────────────────
@@ -390,6 +428,9 @@ const prospectingResolvers = {
         defaultDailyLimit: defaultDailyLimit(),
         maxDailyLimit: maxDailyLimit(),
         dataPageUrl: prospectingDataUrlFor(ctx.workspaceId),
+        // Même mode que les campagnes : hors production, seules les adresses
+        // autorisées reçoivent vraiment (le site prévient des simulations)
+        sendMode: campaignSendMode(),
       };
     }),
 
@@ -481,7 +522,10 @@ const prospectingResolvers = {
             .lean(),
           ProspectingRecipient.countDocuments(query),
         ]);
-        return { items: items.map(recipientView), total };
+        return {
+          items: await recipientViews(ctx, items, [sequence]),
+          total,
+        };
       },
     ),
 
@@ -496,7 +540,7 @@ const prospectingResolvers = {
         .sort({ sentAt: -1, _id: -1 })
         .limit(HISTORY_LIMIT)
         .lean();
-      return recipients.map(recipientView);
+      return recipientViews(ctx, recipients);
     }),
   },
 
@@ -720,7 +764,8 @@ const prospectingResolvers = {
         const updated = await markRecipient(recipient, action, {
           userId: ctx.user._id,
         });
-        return recipientView(updated);
+        const [view] = await recipientViews(ctx, [updated]);
+        return view;
       },
     ),
   },

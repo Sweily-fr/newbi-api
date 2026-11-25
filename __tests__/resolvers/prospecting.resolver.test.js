@@ -377,6 +377,17 @@ describe("réglages et boîte d'envoi", () => {
     expect(settings.dataPageUrl).toMatch(
       /^https:\/\/api\.exemple\.test\/api\/prospection\/donnees\//,
     );
+    // Mode d'envoi des campagnes : hors production, envois simulés sauf
+    // adresses autorisées
+    expect(settings.sendMode).toBe("RESTRICTED");
+    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "simulation");
+    expect((await call(Query.prospectingSettings, owner)).sendMode).toBe(
+      "SIMULATION",
+    );
+    vi.stubEnv("EMAIL_CAMPAIGN_SEND_MODE", "live");
+    expect((await call(Query.prospectingSettings, owner)).sendMode).toBe(
+      "LIVE",
+    );
   });
 
   it("boîte connectée : vue du propriétaire et des autres membres", async () => {
@@ -961,6 +972,8 @@ describe("marquages, rapport et historique", () => {
     expect(marked).toMatchObject({
       status: "REPLIED",
       email: "contact@lemoine.fr",
+      sequenceId: String(sequenceId),
+      sequenceName: "Menuisiers de Lyon",
     });
     expect(marked.repliedAt).toMatch(/^\d{4}-/);
     const client = await Client.findById(clients.lemoine._id).lean();
@@ -1025,6 +1038,8 @@ describe("marquages, rapport et historique", () => {
     });
     expect(sent.items.map((r) => r.email)).toEqual(["contact@lemoine.fr"]);
     expect(sent.items[0]).toMatchObject({
+      sequenceId: String(sequenceId),
+      sequenceName: "Menuisiers de Lyon",
       name: "Menuiserie Lemoine",
       company: "Menuiserie Lemoine",
       clientId: String(clients.lemoine._id),
@@ -1052,6 +1067,8 @@ describe("marquages, rapport et historique", () => {
     expect(history[0]).toMatchObject({
       status: "SENT",
       email: "contact@lemoine.fr",
+      sequenceId: String(sequenceId),
+      sequenceName: "Menuisiers de Lyon",
     });
     expect(history[0].sentAt).toMatch(/^\d{4}-/);
     expect(
@@ -1059,6 +1076,63 @@ describe("marquages, rapport et historique", () => {
         clientId: String(clients.bois._id),
       }),
     ).toEqual([]);
+  });
+});
+
+describe("prospection d'origine des destinataires", () => {
+  it("historique d'un contact : nom de chaque prospection, une seule lecture groupée", async () => {
+    const mailboxId = new mongoose.Types.ObjectId();
+    const make = (name, extra = {}) =>
+      ProspectingSequence.create({
+        workspaceId,
+        mailboxId,
+        name,
+        status: "COMPLETED",
+        ...extra,
+      });
+    const spring = await make("Printemps");
+    const autumn = await make("Automne");
+    // Supprimée après son lancement : masquée, son nom reste
+    const hidden = await make("Ancienne", { deletedAt: new Date() });
+    const missing = new mongoose.Types.ObjectId();
+    const sentAt = (days) => new Date(Date.now() - days * 24 * 3600 * 1000);
+    await ProspectingRecipient.create(
+      [spring, autumn, hidden, { _id: missing }].map((sequence, index) => ({
+        workspaceId,
+        sequenceId: sequence._id,
+        mailboxId,
+        clientId: clients.lemoine._id,
+        email: "contact@lemoine.fr",
+        status: "SENT",
+        sentAt: sentAt(index + 1),
+      })),
+    );
+    const find = vi.spyOn(ProspectingSequence, "find");
+    const history = await call(Query.clientProspectingHistory, viewer, {
+      clientId: String(clients.lemoine._id),
+    });
+    expect(history.map((r) => [r.sequenceId, r.sequenceName])).toEqual([
+      [String(spring._id), "Printemps"],
+      [String(autumn._id), "Automne"],
+      [String(hidden._id), "Ancienne"],
+      [String(missing), "Prospection supprimée"],
+    ]);
+    expect(find).toHaveBeenCalledTimes(1);
+    find.mockRestore();
+  });
+
+  it("rapport : le nom vient de la prospection déjà lue (aucune lecture en plus)", async () => {
+    const { id } = await launched();
+    const find = vi.spyOn(ProspectingSequence, "find");
+    const page = await call(Query.prospectingRecipients, viewer, { id });
+    expect(page.items.length).toBeGreaterThan(0);
+    expect(
+      page.items.every(
+        (r) => r.sequenceId === id && r.sequenceName === "Menuisiers de Lyon",
+      ),
+    ).toBe(true);
+    expect(find).not.toHaveBeenCalled();
+    find.mockRestore();
   });
 });
 

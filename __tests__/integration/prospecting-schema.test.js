@@ -1,10 +1,10 @@
 /**
  * Prospection : le schéma GraphQL complet se construit (typeDefs et
  * resolvers fusionnés, comme server.js) et respecte à la lettre le contrat
- * technique V1 partagé avec le site : chaque type, champ, argument et
- * valeur d'énumération du contrat existe avec exactement la même
- * signature, chaque requête et mutation a son resolver, toutes sont
- * fermées par l'accès anticipé (clé « prospecting »).
+ * technique V1 partagé avec le site, plus ses ajouts voulus (ADDITIONS) :
+ * chaque type, champ, argument et valeur d'énumération existe avec
+ * exactement la même signature, chaque requête et mutation a son resolver,
+ * toutes sont fermées par l'accès anticipé (clé « prospecting »).
  */
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 
@@ -213,6 +213,13 @@ extend type Mutation {
 }
 `;
 
+// Ajouts voulus après le contrat V1 (demandés par le site le 25/11/2026) :
+// prospection d'origine de chaque destinataire, mode d'envoi des réglages
+const ADDITIONS = `
+extend type ProspectingRecipient { sequenceId: ID! sequenceName: String! }
+extend type ProspectingSettings { sendMode: String! }
+`;
+
 let schema;
 let contract;
 let resolvers;
@@ -241,7 +248,7 @@ beforeAll(async () => {
   resolvers = (await import("../../src/resolvers/index.js")).default;
   schema = makeExecutableSchema({ typeDefs, resolvers });
   contract = buildSchema(
-    `type Query { _: Boolean } type Mutation { _: Boolean } ${CAMPAIGN_TYPES} ${CONTRACT}`,
+    `type Query { _: Boolean } type Mutation { _: Boolean } ${CAMPAIGN_TYPES} ${CONTRACT} ${ADDITIONS}`,
   );
 }, 120000);
 

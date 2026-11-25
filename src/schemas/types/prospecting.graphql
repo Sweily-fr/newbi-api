@@ -83,6 +83,8 @@ type ProspectingSettings {
   defaultDailyLimit: Int!
   maxDailyLimit: Int!
   dataPageUrl: String!
+  "Mode d'envoi des campagnes, repris tel quel : LIVE, SIMULATION ou RESTRICTED (hors production, seules les adresses autorisées reçoivent vraiment, les autres envois sont simulés)"
+  sendMode: String!
 }
 
 type ProspectingStats {
@@ -154,6 +156,10 @@ type ProspectingPreview {
 
 type ProspectingRecipient {
   id: ID!
+  "Prospection d'origine"
+  sequenceId: ID!
+  "Nom de la prospection (« Prospection supprimée » si elle n'existe plus)"
+  sequenceName: String!
   clientId: ID
   email: String!
   name: String!
