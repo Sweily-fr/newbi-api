@@ -188,7 +188,7 @@ describe("resolveAudience", () => {
     expect(counts.sendable).toBe(0);
   });
 
-  it("compte à part les prospects générés parmi les destinataires", async () => {
+  it("écarte les prospects générés : jamais destinataires d'une campagne", async () => {
     await Client.create([
       individual("client@exemple.fr"),
       {
@@ -196,11 +196,44 @@ describe("resolveAudience", () => {
         prospect: { provider: "societeinfo", siren: "123456789" },
       },
     ]);
+    const { counts, recipients } = await resolveAudience(
+      String(workspaceId),
+      { mode: "ALL" },
+      { withRecipients: true },
+    );
+    expect(counts).toMatchObject({ total: 2, sendable: 1, prospects: 1 });
+    expect(recipients.map((r) => r.email)).toEqual(["client@exemple.fr"]);
+  });
+
+  it("un prospect sans adresse ou dans une liste exclue reste dans sa case", async () => {
+    const [listed] = await Client.create([
+      {
+        ...individual("liste@exemple.fr"),
+        prospect: { provider: "societeinfo" },
+      },
+    ]);
+    // Prospect sans e-mail (un téléphone seulement) : hors validation
+    await Client.collection.insertOne({
+      ...individual(null),
+      email: null,
+      prospect: { provider: "societeinfo" },
+    });
+    const excluded = await ClientList.create({
+      name: "Exclus",
+      workspaceId,
+      createdBy: userId,
+      clients: [listed._id],
+    });
     const { counts } = await resolveAudience(String(workspaceId), {
       mode: "ALL",
+      excludeListIds: [String(excluded._id)],
     });
-    expect(counts.sendable).toBe(2);
-    expect(counts.prospects).toBe(1);
+    expect(counts).toMatchObject({
+      noEmail: 1,
+      excludedByList: 1,
+      prospects: 0,
+      sendable: 0,
+    });
   });
 
   it("exclut aussi par adresse un contact présent dans une liste exclue", async () => {
