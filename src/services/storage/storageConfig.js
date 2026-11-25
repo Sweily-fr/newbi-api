@@ -34,7 +34,7 @@ export const STORAGE_PACK_PRICES = {
 // Prix TTC des offres (miroir de plans-display.js). `year` = prix mensuel
 // de l'abonnement annuel.
 export const PLAN_PRICES = {
-  freelance: { month: 18, year: 16.2 },
+  freelance: { month: 18, year: 194 / 12 }, // 194 € TTC par an
   pme: { month: 50, year: 45 },
   entreprise: { month: 200, year: 180 },
 };
