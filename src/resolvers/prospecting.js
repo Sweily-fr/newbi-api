@@ -502,6 +502,7 @@ const prospectingResolvers = {
   Mutation: {
     updateProspectingMailbox: can(["create", "edit"])(
       async (_, { id, input }, ctx) => {
+        await checkSubscriptionActive(ctx);
         const mailbox = await findMailbox(ctx, id);
         if (!isMailboxOwner(mailbox, ctx.user._id)) {
           throw forbidden(
@@ -537,7 +538,7 @@ const prospectingResolvers = {
     ),
 
     // Retirer l'accès à sa propre boîte : toujours possible pour son
-    // propriétaire, même sans droit d'écriture
+    // propriétaire, même sans droit d'écriture ni abonnement actif
     disconnectProspectingMailbox: can("view")(async (_, { id }, ctx) => {
       const mailbox = await findMailbox(ctx, id);
       if (!isMailboxOwner(mailbox, ctx.user._id)) {

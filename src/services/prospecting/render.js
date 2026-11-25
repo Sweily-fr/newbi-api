@@ -217,6 +217,16 @@ export function renderBodyText(cleanHtml, vars) {
 // ─── Pied ──────────────────────────────────────────────────────────────────
 
 /**
+ * « de » élidé devant une voyelle : « aux services d'Atelier Durand », mais
+ * « de Boulangerie Martin » (le h reste « de », muet ou aspiré, impossible à
+ * deviner sur un nom propre ; même règle que les modèles des campagnes).
+ */
+export const deCompany = (name) =>
+  /^[aeiouyàâäéèêëîïôöùûüœæ]/i.test(String(name).trim())
+    ? `d'${name}`
+    : `de ${name}`;
+
+/**
  * Lignes du pied (texte brut, sans les liens) :
  *   1. « Raison sociale, adresse » ;
  *   2. motif de l'envoi (avec l'activité du destinataire si elle est connue) ;
@@ -229,8 +239,8 @@ export function footerLines({ identity = {}, vars = {}, isGeneratedProspect }) {
   return [
     address ? `${company}, ${address}` : company,
     activity
-      ? `Vous recevez ce message car l'activité de votre entreprise (${activity}) correspond aux services de ${company}.`
-      : `Vous recevez ce message car votre activité professionnelle correspond aux services de ${company}.`,
+      ? `Vous recevez ce message car l'activité de votre entreprise (${activity}) correspond aux services ${deCompany(company)}.`
+      : `Vous recevez ce message car votre activité professionnelle correspond aux services ${deCompany(company)}.`,
     isGeneratedProspect
       ? "Vos coordonnées professionnelles proviennent de Societeinfo (données publiques des entreprises)."
       : null,
@@ -249,7 +259,7 @@ function footerHtml(lines, { unsubscribeUrl, dataPageUrl }) {
         (line) => `<p style="${p("0 0 6px 0")}">${typo(escapeHtml(line))}</p>`,
       )
       .join("") +
-    `<p style="${p("0")}">${link(unsubscribeUrl, "Se désinscrire")} &middot; ${link(dataPageUrl, "Vos données")}</p>` +
+    `<p style="${p("0")}">${link(unsubscribeUrl, "Se désinscrire")} · ${link(dataPageUrl, "Vos données")}</p>` +
     `</div>`
   );
 }

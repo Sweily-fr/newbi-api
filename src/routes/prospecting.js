@@ -8,6 +8,7 @@ import {
   TOKEN_KINDS,
   verifyCampaignToken,
 } from "../services/emailCampaigns/tracking.js";
+import { deCompany } from "../services/prospecting/render.js";
 import { unsubscribeProspectingRecipient } from "../services/prospecting/unsubscribe.js";
 import { recordAttempt } from "../utils/attemptLimiter.js";
 import logger from "../utils/logger.js";
@@ -270,7 +271,7 @@ export function dataPageBody(controller) {
     : "";
   return [
     paragraph(
-      `Vous avez reçu un message de prospection de ${company}, envoyé depuis la boîte mail d'un de ses membres avec Newbi. Voici comment vos données sont utilisées.`,
+      `Vous avez reçu un message de prospection ${deCompany(company)}, envoyé depuis la boîte mail d'un de ses membres avec Newbi. Voici comment vos données sont utilisées.`,
     ),
     section(
       "Responsable du traitement",
@@ -282,11 +283,11 @@ export function dataPageBody(controller) {
     ),
     section(
       "Finalité",
-      `Prospection commerciale auprès des professionnels : vous présenter les services de ${company}.`,
+      `Prospection commerciale auprès des professionnels : vous présenter les services ${deCompany(company)}.`,
     ),
     section(
       "Base légale",
-      `L'intérêt légitime de ${company} à faire connaître ses services aux entreprises dont l'activité y correspond (article 6, paragraphe 1, f du RGPD).`,
+      `L'intérêt légitime ${deCompany(company)} à faire connaître ses services aux entreprises dont l'activité y correspond (article 6, paragraphe 1, f du RGPD).`,
     ),
     section(
       "Données utilisées",
