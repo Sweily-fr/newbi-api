@@ -9,6 +9,11 @@
  * seules les parties texte sont remplacées (jamais les attributs) et les
  * valeurs sont échappées. Une variable inconnue est laissée telle quelle :
  * la vérification avant envoi la signale et bloque l'envoi.
+ *
+ * Les fonctions de remplacement et de recherche prennent en dernier
+ * argument la liste des clés connues (défaut : celles des campagnes) : la
+ * prospection y ajoute les siennes ({{activite}}, {{site}}) sans les ouvrir
+ * aux campagnes.
  */
 import { escapeHtml } from "./html.js";
 
@@ -100,12 +105,12 @@ function valueOf(vars, key) {
  * Remplace les variables d'un texte simple (objet, texte d'aperçu, libellé
  * de bouton, version texte). Valeur brute, repli tel que saisi.
  */
-export function substituteText(text, vars) {
+export function substituteText(text, vars, keys = VARIABLE_KEYS) {
   return String(text ?? "").replace(
     VARIABLE_PATTERN,
     (match, rawKey, fallback) => {
       const key = keyOf(rawKey);
-      if (!VARIABLE_KEYS.has(key)) return match;
+      if (!keys.has(key)) return match;
       return valueOf(vars, key) || clean(fallback ?? "");
     },
   );
@@ -115,7 +120,7 @@ export function substituteText(text, vars) {
  * Remplace les variables dans les parties texte d'un HTML déjà nettoyé :
  * valeur échappée ; repli inséré tel quel (c'est déjà du texte HTML).
  */
-export function substituteHtml(html, vars) {
+export function substituteHtml(html, vars, keys = VARIABLE_KEYS) {
   return String(html ?? "")
     .split(/(<[^>]*>)/)
     .map((part, index) =>
@@ -123,7 +128,7 @@ export function substituteHtml(html, vars) {
         ? part
         : part.replace(VARIABLE_PATTERN, (match, rawKey, fallback) => {
             const key = keyOf(rawKey);
-            if (!VARIABLE_KEYS.has(key)) return match;
+            if (!keys.has(key)) return match;
             const value = valueOf(vars, key);
             return value ? escapeHtml(value) : (fallback ?? "").trim();
           }),
@@ -135,7 +140,7 @@ export function substituteHtml(html, vars) {
  * Variables employées dans des textes : [{ key, raw, hasFallback, known }].
  * `raw` = la variable telle qu'écrite (pour la citer dans un message).
  */
-export function findVariables(texts) {
+export function findVariables(texts, keys = VARIABLE_KEYS) {
   const found = [];
   for (const text of texts) {
     if (typeof text !== "string" || !text.includes("{{")) continue;
@@ -145,7 +150,7 @@ export function findVariables(texts) {
         key,
         raw: match[0],
         hasFallback: match[2] !== undefined && clean(match[2]) !== "",
-        known: VARIABLE_KEYS.has(key),
+        known: keys.has(key),
       });
     }
   }

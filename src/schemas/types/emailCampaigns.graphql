@@ -126,6 +126,8 @@ type EmailCampaignAudienceCount {
   duplicates: Int!
   excludedByList: Int!
   missingFirstName: Int!
+  "Prospects générés, jamais destinataires d'une campagne"
+  prospects: Int!
   "Destinataires envoyables qui ont accepté le suivi"
   trackingGranted: Int!
 }

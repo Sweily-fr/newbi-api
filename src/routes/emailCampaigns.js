@@ -77,7 +77,8 @@ async function overLimit(kind, req) {
   }
 }
 
-function pageHeaders(res) {
+/** En-têtes des pages publiques (jamais en cache, jamais indexées). */
+export function pageHeaders(res) {
   res.set({
     "Cache-Control": "no-store, max-age=0",
     "X-Robots-Tag": "noindex, nofollow",
@@ -87,8 +88,11 @@ function pageHeaders(res) {
 
 const P = `style="font-size: 15px; color: #4b5563; line-height: 1.6; margin: 0 0 16px 0;"`;
 
-/** Page au visuel des pages de désinscription de Newbi (textes typographiés). */
-function page(title, bodyHtml, { companyName } = {}) {
+/**
+ * Page au visuel des pages de désinscription de Newbi (textes typographiés).
+ * Partagée avec les pages publiques de la prospection (routes/prospecting.js).
+ */
+export function page(title, bodyHtml, { companyName } = {}) {
   const signature = companyName
     ? `E-mails envoyés par ${escapeHtml(companyName)} avec Newbi.`
     : "Service d'envoi fourni par Newbi.";
@@ -112,7 +116,7 @@ function page(title, bodyHtml, { companyName } = {}) {
 </html>`;
 }
 
-const paragraph = (html) => `<p ${P}>${typo(html)}</p>`;
+export const paragraph = (html) => `<p ${P}>${typo(html)}</p>`;
 
 /** Adresse masquée : « ma***@exemple.fr ». */
 export function maskEmail(email) {

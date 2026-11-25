@@ -154,6 +154,11 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "addEmailSuppression",
     "refuseEmailTracking",
     "removeEmailTrackingConsent",
+    // Prospection : arrêter les envois, noter une réponse ou une opposition
+    // (« Ne plus contacter »), sans rien envoyer
+    "pauseProspectingSequence",
+    "cancelProspectingSequence",
+    "markProspectingRecipient",
   ],
   // Déconnecter une intégration ou une application
   disconnect: [
@@ -162,6 +167,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "disconnectEmailSendingDomain",
     "disconnectGmail",
     "disconnectPennylane",
+    "disconnectProspectingMailbox",
     "disconnectPaypal",
     "disconnectQonto",
     "disconnectSumup",
@@ -181,6 +187,7 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "deleteSignatureImage",
     "abortMultipartUpload",
     "deleteEmailCampaign",
+    "deleteProspectingSequence",
   ],
   // Gestion de l'espace : rôles, propriété, coordonnées bancaires
   workspaceAdmin: [

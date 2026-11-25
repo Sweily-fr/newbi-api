@@ -67,7 +67,8 @@ const statsSchema = new mongoose.Schema(
   { _id: false },
 );
 
-const audienceSchema = new mongoose.Schema(
+// Partagé avec les prospections (ProspectingSequence.audience)
+export const audienceSchema = new mongoose.Schema(
   {
     mode: { type: String, enum: AUDIENCE_MODES, default: "ALL" },
     listIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "ClientList" }],

@@ -23,6 +23,10 @@ import FileTransfer from "../models/FileTransfer.js";
 import { deleteTransferStorage } from "../utils/transferStorage.js";
 import CalendarConnection from "../models/CalendarConnection.js";
 import GmailConnection from "../models/GmailConnection.js";
+import MailboxConnection, {
+  decryptToken,
+} from "../models/MailboxConnection.js";
+import ProspectingSequence from "../models/ProspectingSequence.js";
 import Notification from "../models/Notification.js";
 import DocumentSettings from "../models/DocumentSettings.js";
 import { Board, Column, Task } from "../models/kanban.js";
@@ -316,6 +320,8 @@ export async function deleteUserAccount(userId, organizationId) {
   let transfersToPurge = [];
   // Cartes kanban supprimées : leurs pièces jointes aussi
   let deletedKanbanTasks = [];
+  // Boîtes d'envoi de la prospection supprimées : accès révoqué ensuite
+  let mailboxesToRevoke = [];
 
   try {
     const userObjectId = new mongoose.Types.ObjectId(userId);
@@ -574,6 +580,33 @@ export async function deleteUserAccount(userId, organizationId) {
       userId: userObjectId,
     }).session(session);
 
+    // --- Boîtes d'envoi de la prospection ---
+    // Personnelles : elles partent avec le compte, dans tous les espaces ;
+    // les prospections en cours qui en partaient passent en pause. Accès
+    // révoqué chez Google après validation (au mieux)
+    mailboxesToRevoke = await MailboxConnection.find({ userId: userObjectId })
+      .session(session)
+      .lean();
+    if (mailboxesToRevoke.length) {
+      await ProspectingSequence.updateMany(
+        {
+          mailboxId: { $in: mailboxesToRevoke.map((m) => m._id) },
+          status: "ACTIVE",
+        },
+        {
+          $set: {
+            status: "PAUSED",
+            pauseKind: "MAILBOX",
+            pausedReason:
+              "Boîte d'envoi supprimée avec le compte de son propriétaire.",
+          },
+        },
+      ).session(session);
+      await MailboxConnection.deleteMany({ userId: userObjectId }).session(
+        session,
+      );
+    }
+
     // --- Liens d'abonnement au calendrier et journal du récap du lundi ---
     await db
       .collection("calendar_feed_tokens")
@@ -733,6 +766,12 @@ export async function deleteUserAccount(userId, organizationId) {
         filter: { organizationId: String(orgObjectId) },
       },
       { name: "installedapps", filter: { workspaceId: orgObjectId } },
+      // Prospection de l'espace : boîtes des autres membres partis avant,
+      // prospections, destinataires et adresses prospectées
+      { name: "mailbox_connections", filter: { workspaceId: orgObjectId } },
+      { name: "prospecting_sequences", filter: { workspaceId: orgObjectId } },
+      { name: "prospecting_recipients", filter: { workspaceId: orgObjectId } },
+      { name: "prospecting_contacts", filter: { workspaceId: orgObjectId } },
     ];
 
     for (const col of collectionsToClean) {
@@ -783,6 +822,30 @@ export async function deleteUserAccount(userId, organizationId) {
     // comme à la suppression d'un tableau : sans attendre, sans jamais lever
     if (deletedKanbanTasks.length > 0) {
       cleanupDeletedTasksFilesLater(deletedKanbanTasks);
+    }
+
+    // Boîtes d'envoi de la prospection : accès révoqué chez Google (sauf
+    // adresse encore connectée ailleurs), au mieux, sans jamais lever
+    if (mailboxesToRevoke.length) {
+      try {
+        const { revokeMailboxAccess } =
+          await import("./prospecting/mailboxes.js");
+        for (const mailbox of mailboxesToRevoke) {
+          let token = null;
+          try {
+            token =
+              decryptToken(mailbox.refreshToken) ||
+              decryptToken(mailbox.accessToken);
+          } catch {
+            token = null;
+          }
+          await revokeMailboxAccess(mailbox, token);
+        }
+      } catch (error) {
+        logger.warn(
+          `[RGPD] Boîtes d'envoi de ${userId} non révoquées : ${error.message}`,
+        );
+      }
     }
 
     // Réseaux sociaux de l'espace supprimé : comptes déconnectés (accès

@@ -16,6 +16,8 @@ type WorkspaceFeatures {
   emailCampaigns: Boolean!
   "Transferts de fichiers payants (Stripe, SumUp, PayPal ou virement du vendeur)"
   transferPayments: Boolean!
+  "Prospection depuis la boîte mail du membre (Gmail, Outlook)"
+  prospecting: Boolean!
 }
 
 extend type Query {
