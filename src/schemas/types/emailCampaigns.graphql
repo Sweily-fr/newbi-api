@@ -119,6 +119,8 @@ type EmailCampaignAudienceCount {
   duplicates: Int!
   excludedByList: Int!
   missingFirstName: Int!
+  "Prospects générés, jamais destinataires d'une campagne"
+  prospects: Int!
 }
 
 type EmailCampaignQuota {

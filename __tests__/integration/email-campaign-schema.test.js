@@ -86,6 +86,7 @@ type EmailCampaignAudienceCount {
   total: Int!  sendable: Int!  noEmail: Int!  invalidEmail: Int!  blocked: Int!
   suppressed: Int!
   duplicates: Int!  excludedByList: Int!  missingFirstName: Int!
+  prospects: Int!
 }
 type EmailCampaignQuota { plan: String!  monthlyLimit: Int!  usedThisMonth: Int!  remaining: Int! }
 type EmailCampaignVariable { key: String!  label: String!  example: String! }

@@ -668,7 +668,29 @@ describe("aperçu, vérification, audience", () => {
       sendable: 2,
       suppressed: 1,
       missingFirstName: 1,
+      prospects: 0,
     });
+  });
+
+  it("comptage de l'audience : les prospects générés sont comptés à part, jamais destinataires", async () => {
+    await Client.create(
+      buildClientDoc({
+        workspaceId,
+        createdBy: owner,
+        type: "COMPANY",
+        name: "Menuiserie Lemoine",
+        email: "contact@menuiserie-lemoine.fr",
+        prospect: {
+          provider: "societeinfo",
+          siren: "123456789",
+          unlockedAt: new Date(),
+        },
+      }),
+    );
+    const count = await call(Query.emailCampaignAudienceCount, owner, {
+      audience: { mode: "ALL" },
+    });
+    expect(count).toMatchObject({ total: 4, sendable: 3, prospects: 1 });
   });
 
   it("réglages et modèles", async () => {
