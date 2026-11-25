@@ -2,6 +2,7 @@ import express from "express";
 import EmailCampaign from "../models/EmailCampaign.js";
 import EmailCampaignRecipient from "../models/EmailCampaignRecipient.js";
 import EmailSuppression from "../models/EmailSuppression.js";
+import EmailTrackingConsent from "../models/EmailTrackingConsent.js";
 import {
   recordClick,
   recordOpen,
@@ -9,10 +10,13 @@ import {
 } from "../services/emailCampaigns/events.js";
 import { parseHttpUrl } from "../services/emailCampaigns/html.js";
 import { loadWorkspaceIdentity } from "../services/emailCampaigns/identity.js";
+import { trackingRetentionMonths } from "../services/emailCampaigns/retention.js";
 import {
   TOKEN_KINDS,
+  createCampaignToken,
   verifyCampaignToken,
 } from "../services/emailCampaigns/tracking.js";
+import { recordContactChoice } from "../services/emailCampaigns/trackingConsent.js";
 import { recordAttempt } from "../utils/attemptLimiter.js";
 import logger from "../utils/logger.js";
 import { escapeHtml, typo } from "../utils/trialEmails.js";
@@ -26,6 +30,10 @@ import { escapeHtml, typo } from "../utils/trialEmails.js";
  *   POST /unsubscribe?t=   désinscription ; sert aussi au désabonnement en
  *                          un clic des messageries (List-Unsubscribe-Post,
  *                          RFC 8058, corps « List-Unsubscribe=One-Click »)
+ *   GET  /preferences?t=   préférences du destinataire, sans effet : choix
+ *                          actuel sur le suivi, boutons, désinscription
+ *   POST /preferences?t=   accepte ou refuse le suivi (action=accept|refuse,
+ *                          voir services/emailCampaigns/trackingConsent.js)
  *   GET  /o/<jeton>.gif    pixel d'ouverture (jamais mis en cache)
  *   GET  /c/<jeton>/<n>    clic : redirection vers le lien n° n figé au
  *                          lancement de la campagne ; jeton ou numéro
@@ -41,6 +49,7 @@ const router = express.Router();
 
 export const RATE_LIMITS = {
   unsubscribe: { window: 60, max: 30 },
+  preferences: { window: 60, max: 30 },
   open: { window: 60, max: 300 },
   click: { window: 60, max: 120 },
 };
@@ -274,6 +283,204 @@ router.post(
   },
 );
 
+// ─── Préférences du destinataire (accord ou refus du suivi) ───────────────
+
+const testPreferencesPage = () =>
+  page(
+    "E-mail de test",
+    paragraph(
+      "Ce lien vient d'un e-mail de test : rien n'a été enregistré. Dans les vrais envois, il ouvre la page où le destinataire accepte ou refuse le suivi des ouvertures et des clics, et peut se désinscrire.",
+    ),
+  );
+
+// « que » élidé devant une voyelle : « qu'Atelier Courcier », mais « que
+// Boulangerie Martin » (comme deCompany de templates.js)
+const queCompany = (name) =>
+  /^[aeiouyàâäéèêëîïôöùûüœæ]/i.test(String(name).trim())
+    ? `qu'${name}`
+    : `que ${name}`;
+
+const formatDayFr = (date) =>
+  new Intl.DateTimeFormat("fr-FR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Europe/Paris",
+  }).format(date);
+
+function submitButton(label, { action, primary = true } = {}) {
+  const colors = primary
+    ? "background-color: #1a1a1a; color: #ffffff; border: 1px solid #1a1a1a;"
+    : "background-color: #ffffff; color: #1a1a1a; border: 1px solid #d1d5db;";
+  return `<button type="submit"${action ? ` name="action" value="${action}"` : ""} style="width: 100%; ${colors} padding: 12px 24px; border-radius: 6px; font-size: 15px; cursor: pointer; margin: 0 0 8px 0;">${label}</button>`;
+}
+
+/** Destinataire, entreprise, désinscription, lien de confidentialité, choix actuel. */
+async function preferencesContext(recipientId) {
+  const context = await recipientContext(recipientId);
+  if (!context) return null;
+  const [campaign, consent] = await Promise.all([
+    EmailCampaign.findById(context.recipient.campaignId)
+      .select("privacyPolicyUrl")
+      .lean(),
+    EmailTrackingConsent.findOne({
+      workspaceId: context.recipient.workspaceId,
+      email: context.recipient.email,
+    })
+      .select("status decidedAt")
+      .lean(),
+  ]);
+  return {
+    ...context,
+    privacyUrl: parseHttpUrl(campaign?.privacyPolicyUrl)?.href || null,
+    consent,
+  };
+}
+
+function preferencesPage(context, recipientId, { notice = null } = {}) {
+  const company = escapeHtml(context.companyName);
+  const address = escapeHtml(maskEmail(context.recipient.email));
+  const token = encodeURIComponent(
+    createCampaignToken(TOKEN_KINDS.preferences, recipientId),
+  );
+  const unsubscribeToken = encodeURIComponent(
+    createCampaignToken(TOKEN_KINDS.unsubscribe, recipientId),
+  );
+  const status = context.consent?.status || null;
+  const since = context.consent?.decidedAt
+    ? ` le ${formatDayFr(context.consent.decidedAt)}`
+    : "";
+  const current =
+    status === "GRANTED"
+      ? `Vous avez accepté${since} ${queCompany(company)} mesure l'ouverture de ses e-mails et les clics sur leurs liens.`
+      : status === "REFUSED"
+        ? `Vous avez refusé ce suivi${since} : ${company} ne mesure ni vos ouvertures ni vos clics.`
+        : `Aucun choix enregistré : ${company} ne mesure ni vos ouvertures ni vos clics.`;
+  const buttons =
+    status === "GRANTED"
+      ? submitButton("Refuser le suivi", { action: "refuse" })
+      : status === "REFUSED"
+        ? submitButton("Accepter le suivi", { action: "accept" })
+        : submitButton("Accepter le suivi", { action: "accept" }) +
+          submitButton("Refuser le suivi", {
+            action: "refuse",
+            primary: false,
+          });
+  const privacy = context.privacyUrl
+    ? ` <a href="${escapeHtml(context.privacyUrl)}" target="_blank" rel="noopener noreferrer" style="color: #4b5563;">Politique de confidentialité</a>`
+    : "";
+  const unsubscribe = context.alreadyUnsubscribed
+    ? paragraph("Désinscription déjà enregistrée.")
+    : `<form method="POST" action="unsubscribe?t=${unsubscribeToken}">${submitButton(
+        "Me désinscrire",
+        { primary: false },
+      )}</form>`;
+  const heading = (text) =>
+    `<p style="font-size: 15px; font-weight: 600; color: #1a1a1a; margin: 24px 0 8px 0;">${typo(text)}</p>`;
+  return page(
+    "Vos préférences",
+    (notice ? paragraph(`<strong>${notice}</strong>`) : "") +
+      paragraph(`E-mails envoyés par ${company} à l'adresse ${address}.`) +
+      heading("Mesure des ouvertures et des clics") +
+      paragraph(current) +
+      `<p style="font-size: 13px; color: #6b7280; line-height: 1.6; margin: 0 0 16px 0;">${typo(
+        `Si vous acceptez, une image invisible indique à ${company} quand vous ouvrez ses e-mails, et leurs liens passent par Newbi pour compter les clics. Ce détail est effacé au bout de ${trackingRetentionMonths()} mois ; vous pouvez changer d'avis à tout moment sur cette page.`,
+      )}${privacy}</p>` +
+      `<form method="POST" action="preferences?t=${token}">${buttons}</form>` +
+      heading("Ne plus recevoir ces e-mails") +
+      unsubscribe,
+    context,
+  );
+}
+
+router.get("/preferences", async (req, res) => {
+  pageHeaders(res);
+  if (await overLimit("preferences", req)) {
+    res.set("Retry-After", String(RATE_LIMITS.preferences.window));
+    return res.status(429).send(tooManyPage());
+  }
+  const token = String(req.query.t || "");
+  const recipientId = verifyCampaignToken(TOKEN_KINDS.preferences, token);
+  if (!recipientId) {
+    if (verifyCampaignToken(TOKEN_KINDS.testUnsubscribe, token)) {
+      return res.send(testPreferencesPage());
+    }
+    return res.status(400).send(invalidUnsubscribePage());
+  }
+  try {
+    const context = await preferencesContext(recipientId);
+    if (!context) return res.status(400).send(invalidUnsubscribePage());
+    return res.send(preferencesPage(context, recipientId));
+  } catch (error) {
+    logger.error(`[campagnes] page de préférences : ${error.message}`);
+    return res
+      .status(500)
+      .send(
+        page(
+          "Un problème est survenu",
+          paragraph(
+            "La page n'a pas pu s'afficher. Réessayez dans un instant.",
+          ),
+        ),
+      );
+  }
+});
+
+router.post(
+  "/preferences",
+  express.urlencoded({ extended: false, limit: "4kb" }),
+  async (req, res) => {
+    pageHeaders(res);
+    if (await overLimit("preferences", req)) {
+      res.set("Retry-After", String(RATE_LIMITS.preferences.window));
+      return res.status(429).send(tooManyPage());
+    }
+    const token = String(req.query.t || "");
+    const recipientId = verifyCampaignToken(TOKEN_KINDS.preferences, token);
+    if (!recipientId) {
+      if (verifyCampaignToken(TOKEN_KINDS.testUnsubscribe, token)) {
+        return res.send(testPreferencesPage());
+      }
+      return res.status(400).send(invalidUnsubscribePage());
+    }
+    const action = req.body?.action;
+    if (!["accept", "refuse"].includes(action)) {
+      return res.status(400).send(invalidUnsubscribePage());
+    }
+    try {
+      const context = await preferencesContext(recipientId);
+      if (!context) return res.status(400).send(invalidUnsubscribePage());
+      await recordContactChoice(
+        context.recipient,
+        action === "accept" ? "GRANTED" : "REFUSED",
+      );
+      const updated = await preferencesContext(recipientId);
+      return res.send(
+        preferencesPage(updated, recipientId, {
+          notice:
+            action === "accept"
+              ? "C'est noté : vous acceptez le suivi des ouvertures et des clics."
+              : "C'est noté : vous refusez le suivi, ce qui avait été enregistré est effacé.",
+        }),
+      );
+    } catch (error) {
+      logger.error(
+        `[campagnes] préférences non enregistrées : ${error.message}`,
+      );
+      return res
+        .status(500)
+        .send(
+          page(
+            "Un problème est survenu",
+            paragraph(
+              "Votre choix n'a pas pu être enregistré. Réessayez dans un instant.",
+            ),
+          ),
+        );
+    }
+  },
+);
+
 router.get("/o/:token.gif", async (req, res) => {
   try {
     const recipientId = verifyCampaignToken(TOKEN_KINDS.open, req.params.token);
@@ -304,7 +511,7 @@ router.get("/c/:token/:index", async (req, res) => {
   if (recipientId && index >= 0) {
     try {
       recipient = await EmailCampaignRecipient.findById(recipientId)
-        .select("workspaceId campaignId trackingExpired")
+        .select("workspaceId campaignId trackingAllowed trackingExpired")
         .lean();
       const campaign = recipient
         ? await EmailCampaign.findById(recipient.campaignId)

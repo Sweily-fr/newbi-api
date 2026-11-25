@@ -4,9 +4,12 @@
  * et adresses publiques :
  *
  *   u   désinscription d'un destinataire   /api/email-campaigns/unsubscribe?t=
+ *   p   préférences d'un destinataire      /api/email-campaigns/preferences?t=
+ *       (accord ou refus du suivi, désinscription)
  *   o   ouverture (pixel)                  /api/email-campaigns/o/<jeton>.gif
  *   c   clic sur un lien                   /api/email-campaigns/c/<jeton>/<n>
- *   t   désinscription d'un e-mail de test (aucun effet, page d'explication)
+ *   t   désinscription ou préférences d'un e-mail de test (aucun effet,
+ *       page d'explication)
  *   pu  désinscription d'un destinataire   /api/prospection/desinscription?t=
  *       de prospection (ProspectingRecipient)
  *   pt  désinscription d'un e-mail de test de prospection (aucun effet ;
@@ -22,6 +25,7 @@ import crypto from "crypto";
 
 export const TOKEN_KINDS = Object.freeze({
   unsubscribe: "u",
+  preferences: "p",
   open: "o",
   click: "c",
   testUnsubscribe: "t",
@@ -94,6 +98,12 @@ export const unsubscribeUrlFor = (recipientId) =>
 export const testUnsubscribeUrlFor = (campaignId) =>
   `${routesBase()}/unsubscribe?t=${createCampaignToken(TOKEN_KINDS.testUnsubscribe, campaignId)}`;
 
+export const preferencesUrlFor = (recipientId) =>
+  `${routesBase()}/preferences?t=${createCampaignToken(TOKEN_KINDS.preferences, recipientId)}`;
+
+export const testPreferencesUrlFor = (campaignId) =>
+  `${routesBase()}/preferences?t=${createCampaignToken(TOKEN_KINDS.testUnsubscribe, campaignId)}`;
+
 export const openPixelUrlFor = (recipientId) =>
   `${routesBase()}/o/${createCampaignToken(TOKEN_KINDS.open, recipientId)}.gif`;
 
@@ -110,11 +120,27 @@ export const tracksClicks = (campaign) => campaign?.trackClicks === true;
 export const isTracked = (campaign) =>
   tracksOpens(campaign) || tracksClicks(campaign);
 
-/** Suivi à annoncer dans le pied des e-mails de la campagne (render.js). */
+/**
+ * Destinataire suivi : accord donné au lancement (absent = campagne lancée
+ * avant le suivi par contact, où tous l'étaient) et suivi pas effacé.
+ */
+export const recipientTracked = (recipient) =>
+  Boolean(recipient) &&
+  recipient.trackingAllowed !== false &&
+  recipient.trackingExpired !== true;
+
+/**
+ * Pied d'un e-mail de test ou d'un aperçu : celui d'un destinataire suivi
+ * (render.js), lien de préférences sans effet.
+ */
 export const campaignTrackingNotice = (campaign) => ({
   opens: tracksOpens(campaign),
   clicks: tracksClicks(campaign),
   privacyPolicyUrl: campaign?.privacyPolicyUrl || "",
+  preferencesUrl:
+    isTracked(campaign) && campaign?._id
+      ? testPreferencesUrlFor(campaign._id)
+      : null,
 });
 
 // ─── Prospection (aucun lien suivi : seuls ces deux liens sont propres au

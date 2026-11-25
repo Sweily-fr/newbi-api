@@ -59,6 +59,8 @@ enum EmailCampaignAudienceMode { ALL LISTS }
 enum EmailCampaignRecipientStatus { PENDING SENT DELIVERED BOUNCED COMPLAINED FAILED SIMULATED SKIPPED }
 enum EmailCampaignRecipientFilter { ALL OPENED CLICKED NOT_OPENED BOUNCED UNSUBSCRIBED FAILED }
 enum EmailCampaignCheckLevel { OK INFO WARNING ERROR }
+enum EmailTrackingConsentStatus { GRANTED REFUSED }
+enum EmailTrackingConsentSource { CONTACT SENDER }
 
 type EmailCampaignAudience { mode: EmailCampaignAudienceMode! listIds: [ID!]! excludeListIds: [ID!]! }
 input EmailCampaignAudienceInput { mode: EmailCampaignAudienceMode! listIds: [ID!] excludeListIds: [ID!] }
@@ -76,7 +78,7 @@ type EmailCampaign {
   senderEmail: String!
   design: JSON!  audience: EmailCampaignAudience!
   trackOpens: Boolean!  trackClicks: Boolean!
-  privacyPolicyUrl: String!  trackingPurgedAt: DateTime
+  privacyPolicyUrl: String!  trackingPurgedAt: DateTime  trackedRecipients: Int
   scheduledAt: DateTime  startedAt: DateTime  completedAt: DateTime  pausedReason: String
   stats: EmailCampaignStats!
   createdByName: String  createdAt: DateTime!  updatedAt: DateTime!
@@ -88,6 +90,7 @@ type EmailCampaignAudienceCount {
   suppressed: Int!
   duplicates: Int!  excludedByList: Int!  missingFirstName: Int!
   prospects: Int!
+  trackingGranted: Int!
 }
 type EmailCampaignQuota { plan: String!  monthlyLimit: Int!  usedThisMonth: Int!  remaining: Int! }
 type EmailCampaignVariable { key: String!  label: String!  example: String! }
@@ -138,13 +141,20 @@ type EmailCampaignRecipient {
   id: ID!  email: String!  name: String  clientId: ID  status: EmailCampaignRecipientStatus!
   sentAt: DateTime  deliveredAt: DateTime  openedAt: DateTime  clickedAt: DateTime
   bouncedAt: DateTime  complainedAt: DateTime  unsubscribedAt: DateTime
-  openCount: Int!  clickCount: Int!  error: String
+  openCount: Int!  clickCount: Int!  tracked: Boolean!  error: String
 }
 type EmailCampaignRecipientPage { items: [EmailCampaignRecipient!]!  total: Int!  page: Int!  limit: Int! }
 type EmailCampaignLinkStat { url: String!  clicks: Int!  uniqueClicks: Int! }
 type EmailCampaignTestResult { success: Boolean!  sentTo: [String!]!  simulated: Boolean! }
 type EmailSuppression { id: ID!  email: String!  reason: String!  createdAt: DateTime!  campaignId: ID }
 type EmailSuppressionPage { items: [EmailSuppression!]!  total: Int!  page: Int!  limit: Int! }
+type EmailTrackingConsent {
+  id: ID!  email: String!  status: EmailTrackingConsentStatus!  source: EmailTrackingConsentSource!
+  note: String  decidedAt: DateTime!  decidedByName: String
+}
+type EmailTrackingConsentPage { items: [EmailTrackingConsent!]!  total: Int!  page: Int!  limit: Int! }
+type EmailTrackingGrantSkip { email: String!  reason: String! }
+type EmailTrackingGrantResult { granted: Int!  skipped: [EmailTrackingGrantSkip!]! }
 type EmailCampaignImage { url: String!  key: String! }
 
 input CreateEmailCampaignInput { name: String!  templateKey: String }
@@ -165,6 +175,7 @@ extend type Query {
   emailCampaignRecipients(workspaceId: ID!, campaignId: ID!, filter: EmailCampaignRecipientFilter = ALL, search: String, page: Int = 1, limit: Int = 50): EmailCampaignRecipientPage!
   emailCampaignLinkStats(workspaceId: ID!, campaignId: ID!): [EmailCampaignLinkStat!]!
   emailSuppressions(workspaceId: ID!, search: String, page: Int = 1, limit: Int = 50): EmailSuppressionPage!
+  emailTrackingConsents(workspaceId: ID!, status: EmailTrackingConsentStatus, search: String, page: Int = 1, limit: Int = 50): EmailTrackingConsentPage!
   emailSendingDomain(workspaceId: ID!): EmailSendingDomain
 }
 
@@ -182,6 +193,9 @@ extend type Mutation {
   uploadEmailCampaignImage(workspaceId: ID!, file: Upload!): EmailCampaignImage!
   addEmailSuppression(workspaceId: ID!, email: String!): EmailSuppression!
   removeEmailSuppression(workspaceId: ID!, id: ID!): Boolean!
+  grantEmailTracking(workspaceId: ID!, emails: [String!]!, note: String, attestation: Boolean!): EmailTrackingGrantResult!
+  refuseEmailTracking(workspaceId: ID!, email: String!): EmailTrackingConsent!
+  removeEmailTrackingConsent(workspaceId: ID!, id: ID!): Boolean!
   connectEmailSendingDomain(workspaceId: ID!, fromEmail: String!): EmailSendingDomain!
   verifyEmailSendingDomain(workspaceId: ID!): EmailSendingDomain!
   updateEmailSendingDomainSender(workspaceId: ID!, fromEmail: String!): EmailSendingDomain!

@@ -88,13 +88,15 @@ type EmailCampaign {
   senderEmail: String!
   design: JSON!
   audience: EmailCampaignAudience!
-  "Suivi coupé par défaut (recommandation CNIL sur les pixels de suivi)"
+  "Suivi coupé par défaut (recommandation CNIL sur les pixels de suivi) ; activé, il ne concerne que les adresses qui l'ont accepté"
   trackOpens: Boolean!
   trackClicks: Boolean!
   "Politique de confidentialité de l'expéditeur, en lien dans le pied quand le suivi est actif (vide sinon)"
   privacyPolicyUrl: String!
   "Détail du suivi par destinataire effacé (plus de 13 mois), seuls les totaux restent"
   trackingPurgedAt: DateTime
+  "Destinataires suivis au lancement (accord donné) ; null : campagne lancée avant le suivi par contact, où tous l'étaient"
+  trackedRecipients: Int
   scheduledAt: DateTime
   startedAt: DateTime
   completedAt: DateTime
@@ -126,6 +128,8 @@ type EmailCampaignAudienceCount {
   missingFirstName: Int!
   "Prospects générés, jamais destinataires d'une campagne"
   prospects: Int!
+  "Destinataires envoyables qui ont accepté le suivi"
+  trackingGranted: Int!
 }
 
 type EmailCampaignQuota {
@@ -203,6 +207,8 @@ type EmailCampaignRecipient {
   unsubscribedAt: DateTime
   openCount: Int!
   clickCount: Int!
+  "Ouvertures et clics suivis pour ce destinataire (accord donné, pas effacé)"
+  tracked: Boolean!
   error: String
 }
 
@@ -238,6 +244,47 @@ type EmailSuppressionPage {
   total: Int!
   page: Int!
   limit: Int!
+}
+
+"Accord de suivi d'une adresse (recommandation CNIL sur les pixels de suivi)"
+enum EmailTrackingConsentStatus {
+  GRANTED
+  REFUSED
+}
+
+"CONTACT : choix du destinataire sur la page de préférences (l'espace ne peut ni le changer ni le retirer) ; SENDER : saisi par l'espace"
+enum EmailTrackingConsentSource {
+  CONTACT
+  SENDER
+}
+
+type EmailTrackingConsent {
+  id: ID!
+  email: String!
+  status: EmailTrackingConsentStatus!
+  source: EmailTrackingConsentSource!
+  "Comment l'accord a été recueilli (saisie de l'espace)"
+  note: String
+  decidedAt: DateTime!
+  decidedByName: String
+}
+
+type EmailTrackingConsentPage {
+  items: [EmailTrackingConsent!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+}
+
+type EmailTrackingGrantSkip {
+  email: String!
+  "INVALID (adresse invalide) | CONTACT_REFUSED (refus du contact lui-même)"
+  reason: String!
+}
+
+type EmailTrackingGrantResult {
+  granted: Int!
+  skipped: [EmailTrackingGrantSkip!]!
 }
 
 type EmailCampaignImage {
@@ -364,6 +411,14 @@ extend type Query {
     page: Int = 1
     limit: Int = 50
   ): EmailSuppressionPage!
+  "Accords et refus de suivi de l'espace, les plus récents d'abord"
+  emailTrackingConsents(
+    workspaceId: ID!
+    status: EmailTrackingConsentStatus
+    search: String
+    page: Int = 1
+    limit: Int = 50
+  ): EmailTrackingConsentPage!
   "Domaine d'envoi connecté (null si aucun)"
   emailSendingDomain(workspaceId: ID!): EmailSendingDomain
 }
@@ -390,7 +445,7 @@ extend type Mutation {
     emails: [String!]!
     clientId: ID
   ): EmailCampaignTestResult!
-  "Sans date = maintenant ; consent doit valoir true, trackingConsent aussi si la campagne suit les ouvertures ou les clics"
+  "Sans date = maintenant ; consent doit valoir true ; trackingConsent est ignoré (le suivi ne concerne que les adresses qui l'ont accepté)"
   sendEmailCampaign(
     workspaceId: ID!
     id: ID!
@@ -410,6 +465,17 @@ extend type Mutation {
   addEmailSuppression(workspaceId: ID!, email: String!): EmailSuppression!
   "Seulement les ajouts manuels"
   removeEmailSuppression(workspaceId: ID!, id: ID!): Boolean!
+  "Accords recueillis par l'espace (attestation doit valoir true) ; 500 adresses au plus"
+  grantEmailTracking(
+    workspaceId: ID!
+    emails: [String!]!
+    note: String
+    attestation: Boolean!
+  ): EmailTrackingGrantResult!
+  "Refus noté par l'espace : suivi arrêté, ouvertures et clics déjà enregistrés effacés"
+  refuseEmailTracking(workspaceId: ID!, email: String!): EmailTrackingConsent!
+  "Retire une saisie de l'espace (retour à « aucun choix ») ; un accord retiré efface le suivi déjà enregistré"
+  removeEmailTrackingConsent(workspaceId: ID!, id: ID!): Boolean!
   "Déclare le domaine de l'adresse chez le service d'envoi"
   connectEmailSendingDomain(
     workspaceId: ID!

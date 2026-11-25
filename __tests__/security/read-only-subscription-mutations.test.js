@@ -144,13 +144,16 @@ const ALLOWED_WITHOUT_SUBSCRIPTION = {
     "unbanInvitedUserFromBoard",
     "unbanVisitor",
   ],
-  // Arrêter les envois d'une campagne e-mail ou exclure une adresse (jamais
-  // en lancer un) : un espace sans abonnement doit pouvoir tout stopper
+  // Arrêter les envois d'une campagne e-mail, exclure une adresse ou arrêter
+  // le suivi d'une adresse (jamais en lancer) : un espace sans abonnement
+  // doit pouvoir tout stopper
   stopSending: [
     "pauseEmailCampaign",
     "cancelEmailCampaign",
     "unscheduleEmailCampaign",
     "addEmailSuppression",
+    "refuseEmailTracking",
+    "removeEmailTrackingConsent",
     // Prospection : arrêter les envois, noter une réponse ou une opposition
     // (« Ne plus contacter »), sans rien envoyer
     "pauseProspectingSequence",

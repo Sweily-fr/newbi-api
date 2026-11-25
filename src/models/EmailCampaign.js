@@ -18,10 +18,12 @@ import mongoose from "mongoose";
  *
  * Suivi des ouvertures et des clics : coupé par défaut (recommandation CNIL
  * sur les pixels de suivi, délibération 2026-042 : consentement préalable
- * de chaque destinataire). Activé, il exige à l'envoi une attestation de
- * l'expéditeur (`trackingConsentAt`), une mention dans le pied de l'e-mail
- * (`privacyPolicyUrl` en lien), et le détail par destinataire est effacé
- * au bout de 13 mois (`trackingPurgedAt`, totaux par lien gardés dans
+ * de chaque destinataire). Activé, il ne s'applique qu'aux destinataires
+ * dont l'adresse a accepté (EmailTrackingConsent, figé au lancement dans
+ * `EmailCampaignRecipient.trackingAllowed`, nombre dans `trackedCount`) ;
+ * le pied de l'e-mail l'annonce (`privacyPolicyUrl` en lien) avec le lien
+ * « Gérer mes préférences », et le détail par destinataire est effacé au
+ * bout de 13 mois (`trackingPurgedAt`, totaux par lien gardés dans
  * `linkStats`, voir services/emailCampaigns/retention.js).
  */
 
@@ -132,13 +134,9 @@ const emailCampaignSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
-    // Attestation « mes destinataires ont accepté le suivi » (suivi actif)
-    trackingConsentAt: { type: Date, default: null },
-    trackingConsentBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
+    // Destinataires suivis (accord donné) au lancement ; null : campagne
+    // lancée avant le suivi par contact, où tous l'étaient
+    trackedCount: { type: Number, default: null },
 
     stats: { type: statsSchema, default: () => ({}) },
 

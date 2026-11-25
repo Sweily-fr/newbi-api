@@ -7,8 +7,10 @@
  * 100 %, colonnes image + texte empilées). Le pied de page (identité de
  * l'expéditeur, raison de l'envoi, lien de désinscription) est toujours
  * ajouté ; quand la campagne suit les ouvertures ou les clics
- * (`trackingNotice`), il l'annonce aussi, avec le lien vers la politique
- * de confidentialité de l'expéditeur (recommandation CNIL sur les pixels).
+ * (`trackingNotice`), il porte le lien « Gérer mes préférences » et, pour
+ * un destinataire suivi (accord donné), la phrase qui l'annonce avec le
+ * lien vers la politique de confidentialité de l'expéditeur
+ * (recommandation CNIL sur les pixels).
  *
  * Liens : chaque adresse web distincte reçoit un numéro dans l'ordre du
  * rendu (`links`). Avec `trackClick`, le lien de l'e-mail passe par l'API
@@ -497,19 +499,26 @@ const RENDERERS = {
 // ─── Pied et document ──────────────────────────────────────────────────────
 
 /**
- * Mention du suivi pour le pied : phrase et lien vers la politique de
- * confidentialité, ou null sans suivi. Les clics ne sont annoncés que si
- * l'e-mail a des liens web.
+ * Suivi dans le pied : phrase (seulement si cet e-mail suit quelque chose ;
+ * les clics seulement s'il a des liens web) avec le lien vers la politique
+ * de confidentialité, et lien « Gérer mes préférences » (campagne suivie,
+ * même pour un destinataire sans accord, qui peut l'y donner). Null : rien
+ * à ajouter.
  *
  * @param {string} companyName nom de l'expéditeur (non échappé)
- * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string }|null} notice
+ * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string, preferencesUrl?: string|null }|null} notice
  * @param {boolean} hasLinks
- * @returns {{ sentence: string, privacyUrl: string|null }|null}
+ * @returns {{ sentence: string|null, privacyUrl: string|null, preferencesUrl: string|null }|null}
  */
 export function trackingNoticeOf(companyName, notice, hasLinks) {
   const opens = Boolean(notice?.opens);
   const clicks = Boolean(notice?.clicks) && hasLinks;
-  if (!opens && !clicks) return null;
+  const preferencesUrl = parseHttpUrl(notice?.preferencesUrl)?.href || null;
+  if (!opens && !clicks) {
+    return preferencesUrl
+      ? { sentence: null, privacyUrl: null, preferencesUrl }
+      : null;
+  }
   const measured =
     opens && clicks
       ? "l'ouverture de cet e-mail et les clics sur ses liens"
@@ -517,8 +526,9 @@ export function trackingNoticeOf(companyName, notice, hasLinks) {
         ? "l'ouverture de cet e-mail"
         : "les clics sur les liens de cet e-mail";
   return {
-    sentence: `${companyName} mesure ${measured}. Pour refuser ce suivi, répondez à cet e-mail.`,
+    sentence: `${companyName} mesure ${measured}, avec votre accord.`,
     privacyUrl: parseHttpUrl(notice?.privacyPolicyUrl)?.href || null,
+    preferencesUrl,
   };
 }
 
@@ -539,14 +549,18 @@ function footerHtml(ctx, identity, unsubscribeUrl, notice) {
     `<p style="${p("0 0 12px 0")}">${typo(
       `Vous recevez cet e-mail car vous êtes en relation avec ${name}.`,
     )}</p>` +
-    (notice
+    (notice?.sentence
       ? `<p style="${p("0 0 12px 0")}">${typo(escapeHtml(notice.sentence))}${
           notice.privacyUrl
             ? ` ${footerLink(notice.privacyUrl, "Politique de confidentialité")}`
             : ""
         }</p>`
       : "") +
-    `<p style="${p("0")}">${footerLink(unsubscribeUrl || "#", "Se désinscrire")}</p>` +
+    `<p style="${p("0")}">${
+      notice?.preferencesUrl
+        ? `${footerLink(notice.preferencesUrl, "Gérer mes préférences")} &middot; `
+        : ""
+    }${footerLink(unsubscribeUrl || "#", "Se désinscrire")}</p>` +
     `</td></tr></table>`
   );
 }
@@ -561,6 +575,9 @@ function footerText(identity, unsubscribeUrl, notice) {
     notice?.sentence,
     notice?.privacyUrl
       ? `Politique de confidentialité : ${notice.privacyUrl}`
+      : null,
+    notice?.preferencesUrl
+      ? `Gérer mes préférences : ${notice.preferencesUrl}`
       : null,
     unsubscribeUrl ? `Se désinscrire : ${unsubscribeUrl}` : "Se désinscrire",
   ]
@@ -592,9 +609,10 @@ const MEDIA_QUERY = `@media only screen and (max-width: 620px) {
  * @param {string} [options.unsubscribeUrl] lien de désinscription (« # » sinon)
  * @param {(index: number) => string} [options.trackClick] lien suivi d'une adresse
  * @param {string} [options.openPixelUrl] pixel d'ouverture
- * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string }} [options.trackingNotice]
- *   suivi à annoncer dans le pied (celui de la campagne, même pour un e-mail
- *   de test ou un aperçu qui ne suivent rien)
+ * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string, preferencesUrl?: string|null }} [options.trackingNotice]
+ *   suivi à annoncer dans le pied : celui fait dans cet e-mail (e-mail de
+ *   test, aperçu : celui de la campagne, même s'ils ne suivent rien) et le
+ *   lien de préférences
  * @returns {{ html: string, text: string, subject: string, preheader: string, links: string[] }}
  */
 export function renderCampaignEmail({
