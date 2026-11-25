@@ -300,7 +300,7 @@ router.get("/c/:token/:index", async (req, res) => {
   if (recipientId && index >= 0) {
     try {
       recipient = await EmailCampaignRecipient.findById(recipientId)
-        .select("workspaceId campaignId")
+        .select("workspaceId campaignId trackingExpired")
         .lean();
       const campaign = recipient
         ? await EmailCampaign.findById(recipient.campaignId)

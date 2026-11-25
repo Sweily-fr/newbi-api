@@ -60,11 +60,18 @@ import {
   resolveCampaignSender,
 } from "./sendingDomains.js";
 import {
+  campaignTrackingNotice,
   clickUrlBuilder,
+  isTracked,
   openPixelUrlFor,
   testUnsubscribeUrlFor,
+  tracksClicks,
+  tracksOpens,
   unsubscribeUrlFor,
 } from "./tracking.js";
+
+export const TRACKING_CONSENT_MESSAGE =
+  "Le suivi des ouvertures ou des clics est activé : confirmez que vos destinataires l'ont accepté, ou désactivez le suivi.";
 
 export const MAX_ATTEMPTS = 3;
 const STALE_RECIPIENT_LOCK_MS = 10 * 60 * 1000;
@@ -179,14 +186,13 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
     vars: EXAMPLE_VARIABLES,
     identity: resolvedIdentity,
     unsubscribeUrl: unsubscribeUrlFor(SAMPLE_RECIPIENT_ID),
-    trackClick:
-      campaign.trackClicks !== false
-        ? clickUrlBuilder(SAMPLE_RECIPIENT_ID)
-        : null,
-    openPixelUrl:
-      campaign.trackOpens !== false
-        ? openPixelUrlFor(SAMPLE_RECIPIENT_ID)
-        : null,
+    trackClick: tracksClicks(campaign)
+      ? clickUrlBuilder(SAMPLE_RECIPIENT_ID)
+      : null,
+    openPixelUrl: tracksOpens(campaign)
+      ? openPixelUrlFor(SAMPLE_RECIPIENT_ID)
+      : null,
+    trackingNotice: campaignTrackingNotice(campaign),
   });
   const replyTo = singleLine(campaign.replyTo);
   return buildDeliverability({
@@ -351,10 +357,17 @@ export async function startSending(campaign, { from, now = new Date() }) {
 /**
  * Lancement demandé par l'utilisateur : maintenant, ou programmé à
  * `scheduledAt`. La vérification avant envoi doit être sans erreur.
+ * Campagne qui suit les ouvertures ou les clics : l'expéditeur atteste que
+ * ses destinataires l'ont accepté (`trackingConsent`), attestation tracée.
  */
 export async function requestSend(
   campaign,
-  { scheduledAt = null, userId = null, now = new Date() } = {},
+  {
+    scheduledAt = null,
+    userId = null,
+    trackingConsent = false,
+    now = new Date(),
+  } = {},
 ) {
   if (campaign.status !== "DRAFT") {
     throw new AppError(
@@ -362,6 +375,16 @@ export async function requestSend(
       ERROR_CODES.VALIDATION_ERROR,
     );
   }
+  const tracked = isTracked(campaign);
+  if (tracked && trackingConsent !== true) {
+    throw new AppError(TRACKING_CONSENT_MESSAGE, ERROR_CODES.VALIDATION_ERROR);
+  }
+  const consents = {
+    consentAt: now,
+    consentBy: userId,
+    trackingConsentAt: tracked ? now : null,
+    trackingConsentBy: tracked ? userId : null,
+  };
   const report = await evaluateDeliverability(campaign);
   if (!report.canSend) {
     throw new AppError(
@@ -377,8 +400,7 @@ export async function requestSend(
         $set: {
           status: "SCHEDULED",
           scheduledAt,
-          consentAt: now,
-          consentBy: userId,
+          ...consents,
           pausedReason: null,
         },
       },
@@ -389,7 +411,7 @@ export async function requestSend(
   }
   await EmailCampaign.updateOne(
     { _id: campaign._id, status: "DRAFT" },
-    { $set: { consentAt: now, consentBy: userId, scheduledAt: null } },
+    { $set: { ...consents, scheduledAt: null } },
   );
   return startSending(campaign, { from: "DRAFT", now });
 }
@@ -598,8 +620,13 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
     },
     unsubscribeUrl,
     trackClick: trackLinks ? clickUrlBuilder(recipient._id) : null,
-    openPixelUrl:
-      campaign.trackOpens !== false ? openPixelUrlFor(recipient._id) : null,
+    openPixelUrl: tracksOpens(campaign) ? openPixelUrlFor(recipient._id) : null,
+    // Annonce le suivi réellement fait dans cet e-mail
+    trackingNotice: {
+      opens: tracksOpens(campaign),
+      clicks: trackLinks,
+      privacyPolicyUrl: campaign.privacyPolicyUrl,
+    },
   });
   return buildEmailPayload({
     fromName: snapshot.fromName,
@@ -620,7 +647,7 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
  * lancement (sinon un clic mènerait ailleurs : on garde les adresses).
  */
 function canTrackLinks(campaign) {
-  if (campaign.trackClicks === false) return false;
+  if (!tracksClicks(campaign)) return false;
   const { links } = renderCampaignEmail({ design: campaign.design });
   const frozen = campaign.links || [];
   const same =
@@ -970,6 +997,8 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
     vars: vars || EXAMPLE_VARIABLES,
     identity: resolvedIdentity,
     unsubscribeUrl,
+    // Rien n'est suivi dans un test, mais le pied est celui des destinataires
+    trackingNotice: campaignTrackingNotice(campaign),
   });
   const subject = `[Test] ${rendered.subject || "(sans objet)"}`;
   const real = emails.filter((email) => isRealSendAllowed(email, mode));

@@ -92,3 +92,17 @@ export function clickUrlBuilder(recipientId) {
   const token = createCampaignToken(TOKEN_KINDS.click, recipientId);
   return (index) => `${routesBase()}/c/${token}/${index}`;
 }
+
+// Suivi coupé tant qu'il n'est pas activé explicitement (recommandation CNIL
+// sur les pixels de suivi : consentement préalable des destinataires)
+export const tracksOpens = (campaign) => campaign?.trackOpens === true;
+export const tracksClicks = (campaign) => campaign?.trackClicks === true;
+export const isTracked = (campaign) =>
+  tracksOpens(campaign) || tracksClicks(campaign);
+
+/** Suivi à annoncer dans le pied des e-mails de la campagne (render.js). */
+export const campaignTrackingNotice = (campaign) => ({
+  opens: tracksOpens(campaign),
+  clicks: tracksClicks(campaign),
+  privacyPolicyUrl: campaign?.privacyPolicyUrl || "",
+});

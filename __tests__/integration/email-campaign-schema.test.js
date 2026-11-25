@@ -76,6 +76,7 @@ type EmailCampaign {
   senderEmail: String!
   design: JSON!  audience: EmailCampaignAudience!
   trackOpens: Boolean!  trackClicks: Boolean!
+  privacyPolicyUrl: String!  trackingPurgedAt: DateTime
   scheduledAt: DateTime  startedAt: DateTime  completedAt: DateTime  pausedReason: String
   stats: EmailCampaignStats!
   createdByName: String  createdAt: DateTime!  updatedAt: DateTime!
@@ -149,6 +150,7 @@ input CreateEmailCampaignInput { name: String!  templateKey: String }
 input UpdateEmailCampaignInput {
   name: String  subject: String  preheader: String  fromName: String  replyTo: String
   design: JSON  audience: EmailCampaignAudienceInput  trackOpens: Boolean  trackClicks: Boolean
+  privacyPolicyUrl: String
 }
 
 extend type Query {
@@ -171,7 +173,7 @@ extend type Mutation {
   duplicateEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
   deleteEmailCampaign(workspaceId: ID!, id: ID!): Boolean!
   sendEmailCampaignTest(workspaceId: ID!, id: ID!, emails: [String!]!, clientId: ID): EmailCampaignTestResult!
-  sendEmailCampaign(workspaceId: ID!, id: ID!, scheduledAt: DateTime, consent: Boolean!): EmailCampaign!
+  sendEmailCampaign(workspaceId: ID!, id: ID!, scheduledAt: DateTime, consent: Boolean!, trackingConsent: Boolean): EmailCampaign!
   unscheduleEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
   pauseEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!
   resumeEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!

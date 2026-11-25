@@ -12,6 +12,10 @@ import mongoose from "mongoose";
  * `lockedAt` / `batchKey` : destinataire réservé par un lot en cours
  * d'envoi ; un verrou de plus de 10 minutes (processus arrêté en plein
  * envoi) est levé par le cron et le destinataire repart avec le lot suivant.
+ *
+ * `trackingExpired` : durée de conservation du suivi dépassée, ouvertures
+ * et clics effacés (voir services/emailCampaigns/retention.js) ; le pixel
+ * et les liens suivis n'enregistrent plus rien pour ce destinataire.
  */
 
 export const RECIPIENT_STATUSES = [
@@ -69,6 +73,7 @@ const emailCampaignRecipientSchema = new mongoose.Schema(
     openCount: { type: Number, default: 0 },
     clickedAt: { type: Date, default: null },
     clickCount: { type: Number, default: 0 },
+    trackingExpired: { type: Boolean, default: false },
     bouncedAt: { type: Date, default: null },
     bounceType: { type: String, default: null },
     complainedAt: { type: Date, default: null },

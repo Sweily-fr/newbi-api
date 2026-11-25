@@ -13,7 +13,6 @@
 import mongoose from "mongoose";
 import Client from "../models/Client.js";
 import EmailCampaign, { EMPTY_STATS } from "../models/EmailCampaign.js";
-import EmailCampaignClick from "../models/EmailCampaignClick.js";
 import EmailCampaignRecipient from "../models/EmailCampaignRecipient.js";
 import EmailSuppression from "../models/EmailSuppression.js";
 import {
@@ -57,8 +56,15 @@ import {
   EXAMPLE_VARIABLES,
   contactVariables,
 } from "../services/emailCampaigns/personalize.js";
+import { parseHttpUrl } from "../services/emailCampaigns/html.js";
 import { renderCampaignEmail } from "../services/emailCampaigns/render.js";
+import { aggregateLinkStats } from "../services/emailCampaigns/retention.js";
 import { resolveCampaignSender } from "../services/emailCampaigns/sendingDomains.js";
+import {
+  campaignTrackingNotice,
+  tracksClicks,
+  tracksOpens,
+} from "../services/emailCampaigns/tracking.js";
 import {
   DEFAULT_TEMPLATE_KEY,
   isTemplateKey,
@@ -78,6 +84,7 @@ const NAME_MAX = 120;
 const SUBJECT_MAX = 200;
 const PREHEADER_MAX = 250;
 const FROM_NAME_MAX = 60;
+const URL_MAX = 500;
 const MAX_TEST_ADDRESSES = 5;
 // E-mails de test : envois hors quota, limités par espace
 const TEST_SENDS_PER_HOUR = 20;
@@ -243,7 +250,23 @@ async function campaignChanges(input, ctx) {
   if (has(input, "trackClicks")) {
     changes.trackClicks = Boolean(input.trackClicks);
   }
+  if (input.privacyPolicyUrl !== undefined) {
+    changes.privacyPolicyUrl = privacyPolicyUrlInput(input.privacyPolicyUrl);
+  }
   return changes;
+}
+
+/** Lien vers la politique de confidentialité de l'expéditeur (vide permis). */
+function privacyPolicyUrlInput(value) {
+  const raw = singleLine(value ?? "");
+  if (!raw) return "";
+  const url = raw.length <= URL_MAX ? parseHttpUrl(raw) : null;
+  if (!url) {
+    throw validation(
+      "Le lien vers la politique de confidentialité doit être une adresse web (https://…).",
+    );
+  }
+  return url.href;
 }
 
 /** Image envoyée par l'éditeur, lue avec une limite de taille. */
@@ -345,8 +368,10 @@ const emailCampaignsResolvers = {
       listIds: (campaign.audience?.listIds || []).map(String),
       excludeListIds: (campaign.audience?.excludeListIds || []).map(String),
     }),
-    trackOpens: (campaign) => campaign.trackOpens !== false,
-    trackClicks: (campaign) => campaign.trackClicks !== false,
+    trackOpens: (campaign) => tracksOpens(campaign),
+    trackClicks: (campaign) => tracksClicks(campaign),
+    privacyPolicyUrl: (campaign) => campaign.privacyPolicyUrl || "",
+    trackingPurgedAt: (campaign) => campaign.trackingPurgedAt || null,
     pausedReason: (campaign) => campaign.pausedReason || null,
     stats: (campaign) => ({ ...EMPTY_STATS, ...asObject(campaign.stats) }),
     createdByName: (campaign) => campaign.createdByName || null,
@@ -434,6 +459,7 @@ const emailCampaignsResolvers = {
           preheader: preheader ?? campaign.preheader,
           vars,
           identity,
+          trackingNotice: campaignTrackingNotice(campaign),
         });
         return {
           subject: rendered.subject,
@@ -481,29 +507,16 @@ const emailCampaignsResolvers = {
       const campaign = await findCampaign(ctx, campaignId, { lean: true });
       const links = campaign.links || [];
       if (!links.length) return [];
-      const rows = await EmailCampaignClick.aggregate([
-        { $match: { campaignId: campaign._id } },
-        {
-          $group: {
-            _id: { link: "$linkIndex", recipient: "$recipientId" },
-            clicks: { $sum: 1 },
-          },
-        },
-        {
-          $group: {
-            _id: "$_id.link",
-            clicks: { $sum: "$clicks" },
-            uniqueClicks: { $sum: 1 },
-          },
-        },
-      ]);
-      const byIndex = new Map(rows.map((row) => [row._id, row]));
+      // Suivi effacé (plus de 13 mois) : totaux gardés au moment de l'effacement
+      const totals = Array.isArray(campaign.linkStats)
+        ? campaign.linkStats
+        : await aggregateLinkStats(campaign._id, links.length);
       return links
         .map((url, index) => ({
           url,
           index,
-          clicks: byIndex.get(index)?.clicks || 0,
-          uniqueClicks: byIndex.get(index)?.uniqueClicks || 0,
+          clicks: totals[index]?.clicks || 0,
+          uniqueClicks: totals[index]?.uniqueClicks || 0,
         }))
         .sort((a, b) => b.clicks - a.clicks || a.index - b.index)
         .map(({ url, clicks, uniqueClicks }) => ({
@@ -592,8 +605,10 @@ const emailCampaignsResolvers = {
         replyTo: source.replyTo,
         design: normalizeDesign(source.design),
         audience: source.audience,
-        trackOpens: source.trackOpens !== false,
-        trackClicks: source.trackClicks !== false,
+        // Suivi coupé dans la copie : à réactiver, attestation comprise
+        trackOpens: false,
+        trackClicks: false,
+        privacyPolicyUrl: source.privacyPolicyUrl || "",
         createdBy: ctx.user._id,
         createdByName: await userDisplayName(ctx.user),
       });
@@ -674,7 +689,7 @@ const emailCampaignsResolvers = {
     ),
 
     sendEmailCampaign: can("send")(
-      async (_, { id, scheduledAt, consent }, ctx) => {
+      async (_, { id, scheduledAt, consent, trackingConsent }, ctx) => {
         await checkSubscriptionActive(ctx);
         if (consent !== true) {
           throw validation(
@@ -686,6 +701,7 @@ const emailCampaignsResolvers = {
         const result = await requestSend(campaign, {
           scheduledAt: when,
           userId: ctx.user._id,
+          trackingConsent: trackingConsent === true,
         });
         logger.info(
           `[campagnes] campagne ${campaign._id} ${when ? `programmée au ${when.toISOString()}` : "lancée"} par ${ctx.user._id}`,
