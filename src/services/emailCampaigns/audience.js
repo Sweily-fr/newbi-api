@@ -8,14 +8,16 @@
  *   excludedByList dans une liste exclue (ou même adresse qu'un contact
  *                  d'une liste exclue)
  *   blocked        contact bloqué dans le CRM (toujours exclu)
+ *   prospects      prospect issu de « Générer des prospects » : il ne
+ *                  connaît pas l'expéditeur, une campagne ne lui est jamais
+ *                  envoyée (le service d'envoi interdit les contacts achetés
+ *                  ou collectés) ; non exposé en GraphQL, expliqué par la
+ *                  vérification avant envoi
  *   suppressed     adresse de la liste d'exclusion (désinscription, rejet,
  *                  plainte, ajout à la main)
  *   duplicates     adresse déjà retenue pour un autre contact
  *   sendable       destinataire
  * `missingFirstName` : destinataires sans prénom ({{prenom}} vide).
- * `prospects` : destinataires issus de la génération de prospects (ils ne
- * connaissent pas encore l'expéditeur : avertissement avant envoi). Compté
- * à part, non exposé en GraphQL.
  */
 import Client from "../../models/Client.js";
 import ClientList from "../../models/ClientList.js";
@@ -131,6 +133,8 @@ export async function resolveAudience(
       counts.excludedByList += 1;
     } else if (client.isBlocked) {
       counts.blocked += 1;
+    } else if (client.prospect?.provider) {
+      counts.prospects += 1;
     } else if (suppressed.has(email)) {
       counts.suppressed += 1;
     } else if (seen.has(email)) {
@@ -140,7 +144,6 @@ export async function resolveAudience(
       counts.sendable += 1;
       const vars = contactVariables({ ...client, email });
       if (!vars.prenom) counts.missingFirstName += 1;
-      if (client.prospect?.provider) counts.prospects += 1;
       if (withRecipients) {
         recipients.push({
           clientId: client._id,
