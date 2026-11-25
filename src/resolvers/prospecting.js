@@ -139,8 +139,9 @@ function viewsFor(ctx) {
     ctx.permissions?.hasPermission?.(MODULE, "send"),
   );
   const caches = { mailbox: new Map(), sent: new Map(), owner: new Map() };
+  // Promesse gardée (une requête Mongoose ne s'exécute qu'une fois)
   const cached = (map, key, load) => {
-    if (!map.has(key)) map.set(key, load());
+    if (!map.has(key)) map.set(key, Promise.resolve(load()));
     return map.get(key);
   };
   const mailboxById = (id) =>
