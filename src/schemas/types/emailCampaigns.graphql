@@ -88,8 +88,13 @@ type EmailCampaign {
   senderEmail: String!
   design: JSON!
   audience: EmailCampaignAudience!
+  "Suivi coupé par défaut (recommandation CNIL sur les pixels de suivi)"
   trackOpens: Boolean!
   trackClicks: Boolean!
+  "Politique de confidentialité de l'expéditeur, en lien dans le pied quand le suivi est actif (vide sinon)"
+  privacyPolicyUrl: String!
+  "Détail du suivi par destinataire effacé (plus de 13 mois), seuls les totaux restent"
+  trackingPurgedAt: DateTime
   scheduledAt: DateTime
   startedAt: DateTime
   completedAt: DateTime
@@ -310,6 +315,7 @@ input UpdateEmailCampaignInput {
   audience: EmailCampaignAudienceInput
   trackOpens: Boolean
   trackClicks: Boolean
+  privacyPolicyUrl: String
 }
 
 extend type Query {
@@ -384,12 +390,13 @@ extend type Mutation {
     emails: [String!]!
     clientId: ID
   ): EmailCampaignTestResult!
-  "Sans date = maintenant ; consent doit valoir true"
+  "Sans date = maintenant ; consent doit valoir true, trackingConsent aussi si la campagne suit les ouvertures ou les clics"
   sendEmailCampaign(
     workspaceId: ID!
     id: ID!
     scheduledAt: DateTime
     consent: Boolean!
+    trackingConsent: Boolean
   ): EmailCampaign!
   "SCHEDULED → DRAFT"
   unscheduleEmailCampaign(workspaceId: ID!, id: ID!): EmailCampaign!

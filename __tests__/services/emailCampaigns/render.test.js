@@ -18,7 +18,10 @@ import {
   substituteHtml,
   substituteText,
 } from "../../../src/services/emailCampaigns/personalize.js";
-import { renderCampaignEmail } from "../../../src/services/emailCampaigns/render.js";
+import {
+  renderCampaignEmail,
+  trackingNoticeOf,
+} from "../../../src/services/emailCampaigns/render.js";
 import {
   TOKEN_KINDS,
   clickUrlBuilder,
@@ -337,6 +340,76 @@ describe("renderCampaignEmail", () => {
     expect(html).not.toContain("/o/");
     expect(html).toContain('href="#"');
     expect(links).toHaveLength(3);
+    expect(html).not.toContain("refuser ce suivi");
+  });
+
+  it("suivi annoncé dans le pied : ouvertures et clics, lien de confidentialité", () => {
+    const { html, text } = renderCampaignEmail({
+      design: fullDesign(),
+      identity,
+      unsubscribeUrl: "https://api.exemple.test/desinscription",
+      trackingNotice: {
+        opens: true,
+        clicks: true,
+        privacyPolicyUrl: "https://atelier.fr/confidentialite",
+      },
+    });
+    expect(html).toContain("Atelier Durand mesure l&#39;ouverture de cet");
+    expect(html).toContain(
+      'href="https://atelier.fr/confidentialite" target="_blank"',
+    );
+    expect(html).toContain(">Politique de confidentialité</a>");
+    // Annonce avant la désinscription
+    expect(html.indexOf("refuser ce suivi")).toBeLessThan(
+      html.indexOf("Se désinscrire"),
+    );
+    expect(text).toContain(
+      "Vous recevez cet e-mail car vous êtes en relation avec Atelier Durand.\nAtelier Durand mesure l'ouverture de cet e-mail et les clics sur ses liens. Pour refuser ce suivi, répondez à cet e-mail.\nPolitique de confidentialité : https://atelier.fr/confidentialite\nSe désinscrire : https://api.exemple.test/desinscription",
+    );
+  });
+
+  it("phrase du suivi : ouvertures, clics (seulement avec des liens), rien sinon", () => {
+    const name = "Atelier";
+    expect(trackingNoticeOf(name, { opens: true }, false).sentence).toBe(
+      "Atelier mesure l'ouverture de cet e-mail. Pour refuser ce suivi, répondez à cet e-mail.",
+    );
+    expect(trackingNoticeOf(name, { clicks: true }, true).sentence).toBe(
+      "Atelier mesure les clics sur les liens de cet e-mail. Pour refuser ce suivi, répondez à cet e-mail.",
+    );
+    // Aucun lien web : rien à suivre côté clics
+    expect(trackingNoticeOf(name, { clicks: true }, false)).toBeNull();
+    expect(
+      trackingNoticeOf(name, { opens: true, clicks: true }, false).sentence,
+    ).toBe(
+      "Atelier mesure l'ouverture de cet e-mail. Pour refuser ce suivi, répondez à cet e-mail.",
+    );
+    expect(trackingNoticeOf(name, null, true)).toBeNull();
+    expect(trackingNoticeOf(name, {}, true)).toBeNull();
+    // Lien de confidentialité : adresse web seulement
+    expect(
+      trackingNoticeOf(
+        name,
+        { opens: true, privacyPolicyUrl: "javascript:alert(1)" },
+        true,
+      ).privacyUrl,
+    ).toBeNull();
+    expect(
+      trackingNoticeOf(
+        name,
+        { opens: true, privacyPolicyUrl: " https://a.fr/rgpd " },
+        true,
+      ).privacyUrl,
+    ).toBe("https://a.fr/rgpd");
+  });
+
+  it("échappe le nom de l'entreprise dans la phrase du suivi", () => {
+    const { html } = renderCampaignEmail({
+      design: fullDesign(),
+      identity: { companyName: "<b>Durand & fils</b>" },
+      trackingNotice: { opens: true },
+    });
+    expect(html).toContain("&lt;b&gt;Durand &amp; fils&lt;/b&gt; mesure");
+    expect(html).not.toContain("<b>Durand");
   });
 
   it("génère une version texte lisible", () => {

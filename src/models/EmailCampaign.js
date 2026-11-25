@@ -15,6 +15,14 @@ import mongoose from "mongoose";
  * ses destinataires comptent toujours dans le quota du mois, et les
  * événements du service d'envoi (rejets, plaintes) alimentent toujours la
  * liste d'exclusion de l'espace.
+ *
+ * Suivi des ouvertures et des clics : coupé par défaut (recommandation CNIL
+ * sur les pixels de suivi, délibération 2026-042 : consentement préalable
+ * de chaque destinataire). Activé, il exige à l'envoi une attestation de
+ * l'expéditeur (`trackingConsentAt`), une mention dans le pied de l'e-mail
+ * (`privacyPolicyUrl` en lien), et le détail par destinataire est effacé
+ * au bout de 13 mois (`trackingPurgedAt`, totaux par lien gardés dans
+ * `linkStats`, voir services/emailCampaigns/retention.js).
  */
 
 export const CAMPAIGN_STATUSES = [
@@ -80,6 +88,14 @@ const snapshotSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const linkStatSchema = new mongoose.Schema(
+  {
+    clicks: { type: Number, default: 0 },
+    uniqueClicks: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
 const emailCampaignSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -96,8 +112,9 @@ const emailCampaignSchema = new mongoose.Schema(
     replyTo: { type: String, default: "", trim: true, lowercase: true },
     design: { type: mongoose.Schema.Types.Mixed, default: null },
     audience: { type: audienceSchema, default: () => ({}) },
-    trackOpens: { type: Boolean, default: true },
-    trackClicks: { type: Boolean, default: true },
+    trackOpens: { type: Boolean, default: false },
+    trackClicks: { type: Boolean, default: false },
+    privacyPolicyUrl: { type: String, default: "", trim: true },
 
     scheduledAt: { type: Date, default: null },
     startedAt: { type: Date, default: null },
@@ -115,8 +132,21 @@ const emailCampaignSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    // Attestation « mes destinataires ont accepté le suivi » (suivi actif)
+    trackingConsentAt: { type: Date, default: null },
+    trackingConsentBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
 
     stats: { type: statsSchema, default: () => ({}) },
+
+    // Détail du suivi par destinataire effacé (durée de conservation
+    // dépassée) ; `linkStats` garde les totaux par lien, dans l'ordre de
+    // `links` (absent tant que rien n'est effacé)
+    trackingPurgedAt: { type: Date, default: null },
+    linkStats: { type: [linkStatSchema], default: undefined },
 
     // Envoi par le cron : verrou de la campagne (une seule instance la
     // traite), attente imposée par le service d'envoi, tour de rôle
@@ -141,6 +171,8 @@ emailCampaignSchema.index({ workspaceId: 1, status: 1, updatedAt: -1 });
 // Cron : programmées arrivées à échéance, campagnes en cours d'envoi
 emailCampaignSchema.index({ status: 1, scheduledAt: 1 });
 emailCampaignSchema.index({ status: 1, lastBatchAt: 1 });
+// Purge du détail du suivi : campagnes lancées, pas encore effacées
+emailCampaignSchema.index({ trackingPurgedAt: 1, startedAt: 1 });
 
 export default mongoose.models.EmailCampaign ||
   mongoose.model("EmailCampaign", emailCampaignSchema);

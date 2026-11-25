@@ -5,7 +5,9 @@
  *     effet ; jeton invalide refusé ;
  *   - pixel d'ouverture jamais mis en cache ;
  *   - clic : redirection vers le lien figé au lancement seulement, jamais
- *     de redirection ouverte (jeton, numéro ou lien invalides = page).
+ *     de redirection ouverte (jeton, numéro ou lien invalides = page) ;
+ *   - suivi effacé (durée de conservation dépassée) : image et redirection
+ *     servies, plus rien d'enregistré.
  */
 import {
   describe,
@@ -226,6 +228,19 @@ describe("pixel d'ouverture", () => {
     expect(res.headers.get("content-type")).toBe("image/gif");
     expect((await statsOf()).opens).toBe(0);
   });
+
+  it("suivi effacé (conservation dépassée) : l'image, rien d'enregistré", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { trackingExpired: true } },
+    );
+    const res = await api(`/o/${token(TOKEN_KINDS.open)}.gif`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+    const saved = await EmailCampaignRecipient.findById(recipient._id).lean();
+    expect(saved).toMatchObject({ openedAt: null, openCount: 0 });
+    expect(await statsOf()).toMatchObject({ opened: 0, opens: 0 });
+  });
 });
 
 describe("clic suivi", () => {
@@ -247,6 +262,20 @@ describe("clic suivi", () => {
     });
     const clicks = await EmailCampaignClick.find().lean();
     expect(clicks.map((c) => c.linkIndex)).toEqual([1, 1]);
+  });
+
+  it("suivi effacé (conservation dépassée) : redirection, rien d'enregistré", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { trackingExpired: true } },
+    );
+    const res = await api(`/c/${token(TOKEN_KINDS.click)}/0`);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://atelier.fr/nouveautes");
+    const saved = await EmailCampaignRecipient.findById(recipient._id).lean();
+    expect(saved).toMatchObject({ clickCount: 0, openCount: 0 });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
+    expect(await statsOf()).toMatchObject({ clicks: 0, opens: 0 });
   });
 
   it("jamais de redirection ouverte", async () => {

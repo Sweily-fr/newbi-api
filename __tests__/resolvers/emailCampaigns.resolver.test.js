@@ -4,7 +4,9 @@
  * espace, création depuis un modèle, brouillon seul modifiable et saisies
  * contrôlées, duplication, suppression, envoi (consentement, vérification),
  * programmation, pause, reprise, annulation, aperçu, envoi de test, rapport,
- * liste d'exclusion, image. Aucun envoi réel (Resend simulé).
+ * liste d'exclusion, image, suivi (coupé par défaut et dans une copie,
+ * attestation à l'envoi, lien de confidentialité, totaux gardés après
+ * effacement). Aucun envoi réel (Resend simulé).
  */
 import {
   describe,
@@ -105,6 +107,8 @@ import { resetDnsCache } from "../../src/services/emailCampaigns/deliverability.
 import { resetResendClient } from "../../src/services/emailCampaigns/sender.js";
 import { resetNewbiDomainCache } from "../../src/services/emailCampaigns/sendingDomains.js";
 import { getCampaignQuota } from "../../src/services/emailCampaigns/quota.js";
+import { TRACKING_CONSENT_MESSAGE } from "../../src/services/emailCampaigns/campaignService.js";
+import { purgeExpiredCampaignTracking } from "../../src/services/emailCampaigns/retention.js";
 
 const { Query, Mutation } = emailCampaignsResolvers;
 const Types = emailCampaignsResolvers;
@@ -460,6 +464,51 @@ describe("brouillon", () => {
     expect(Types.EmailCampaign.stats(copy).recipients).toBe(0);
   });
 
+  it("suivi coupé à la création et dans une copie, lien de confidentialité contrôlé", async () => {
+    const campaign = await draft();
+    expect(Types.EmailCampaign.trackOpens(campaign)).toBe(false);
+    expect(Types.EmailCampaign.trackClicks(campaign)).toBe(false);
+    expect(Types.EmailCampaign.privacyPolicyUrl(campaign)).toBe("");
+    expect(Types.EmailCampaign.trackingPurgedAt(campaign)).toBeNull();
+
+    const id = String(campaign._id);
+    const tracked = await call(Mutation.updateEmailCampaign, owner, {
+      id,
+      input: {
+        trackOpens: true,
+        trackClicks: true,
+        privacyPolicyUrl: "  https://atelier.fr/rgpd  ",
+      },
+    });
+    expect(Types.EmailCampaign.trackOpens(tracked)).toBe(true);
+    expect(Types.EmailCampaign.trackClicks(tracked)).toBe(true);
+    expect(tracked.privacyPolicyUrl).toBe("https://atelier.fr/rgpd");
+    for (const invalid of ["atelier.fr/rgpd", "javascript:alert(1)"]) {
+      expect(
+        await messageOf(
+          call(Mutation.updateEmailCampaign, owner, {
+            id,
+            input: { privacyPolicyUrl: invalid },
+          }),
+        ),
+        invalid,
+      ).toMatch(
+        /^Le lien vers la politique de confidentialité doit être une adresse web/,
+      );
+    }
+
+    const copy = await call(Mutation.duplicateEmailCampaign, owner, { id });
+    expect(copy.trackOpens).toBe(false);
+    expect(copy.trackClicks).toBe(false);
+    expect(copy.privacyPolicyUrl).toBe("https://atelier.fr/rgpd");
+
+    const cleared = await call(Mutation.updateEmailCampaign, owner, {
+      id,
+      input: { privacyPolicyUrl: "" },
+    });
+    expect(cleared.privacyPolicyUrl).toBe("");
+  });
+
   it("liste : filtre, recherche sans accents, pages, contenu chargé à la demande", async () => {
     await draft();
     const other = await call(Mutation.createEmailCampaign, owner, {
@@ -535,6 +584,34 @@ describe("envoi", () => {
     ).toBe(
       "Confirmez que ces contacts sont vos clients ou ont accepté de recevoir vos e-mails.",
     );
+  });
+
+  it("suivi actif : attestation du suivi exigée, puis tracée", async () => {
+    const campaign = await draft(owner, { trackOpens: true });
+    const id = String(campaign._id);
+    for (const trackingConsent of [undefined, false, null]) {
+      expect(
+        await messageOf(
+          call(Mutation.sendEmailCampaign, owner, {
+            id,
+            consent: true,
+            trackingConsent,
+          }),
+        ),
+      ).toBe(TRACKING_CONSENT_MESSAGE);
+    }
+    expect(
+      await EmailCampaignRecipient.countDocuments({ campaignId: campaign._id }),
+    ).toBe(0);
+    const sent = await call(Mutation.sendEmailCampaign, owner, {
+      id,
+      consent: true,
+      trackingConsent: true,
+    });
+    expect(sent.status).toBe("SENDING");
+    const saved = await EmailCampaign.findById(campaign._id).lean();
+    expect(saved.trackingConsentAt).toBeInstanceOf(Date);
+    expect(String(saved.trackingConsentBy)).toBe(String(owner));
   });
 
   it("refus expliqué par la première erreur de la vérification", async () => {
@@ -799,6 +876,24 @@ describe("rapport", () => {
     expect(searched.items.map((r) => r.email)).toEqual(["ines@exemple.fr"]);
     expect(Types.EmailCampaignRecipient.openCount(searched.items[0])).toBe(0);
 
+    expect(
+      await call(Query.emailCampaignLinkStats, viewer, {
+        campaignId: String(campaign._id),
+      }),
+    ).toEqual([
+      { url: "https://b.fr/", clicks: 3, uniqueClicks: 2 },
+      { url: "https://a.fr/", clicks: 1, uniqueClicks: 1 },
+    ]);
+
+    // Suivi effacé après 13 mois : totaux par lien gardés, clics effacés
+    await purgeExpiredCampaignTracking({
+      now: new Date(Date.now() + 14 * 31 * 24 * 60 * 60 * 1000),
+    });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
+    const purged = await call(Query.emailCampaign, viewer, {
+      id: String(campaign._id),
+    });
+    expect(Types.EmailCampaign.trackingPurgedAt(purged)).toBeInstanceOf(Date);
     expect(
       await call(Query.emailCampaignLinkStats, viewer, {
         campaignId: String(campaign._id),
