@@ -916,14 +916,16 @@ function audienceChecks(count, quota) {
       ),
     );
   }
+  // Prospects générés : écartés par resolveAudience, jamais destinataires
+  // d'une campagne ; on explique pourquoi le compte baisse
   if (count.prospects > 0) {
     checks.push(
       check(
         "audience_prospects",
         CATEGORY.audience,
-        "WARNING",
-        `${plural(count.prospects, "prospect généré", "prospects générés")} parmi les destinataires`,
-        "Ces contacts ne vous connaissent pas encore : un e-mail commercial non sollicité est la première cause de signalement en spam, et leurs adresses sont parfois incertaines. Écrivez-leur plutôt un premier message personnel, ou retirez la liste « Prospects » des destinataires.",
+        "INFO",
+        `${plural(count.prospects, "prospect généré retiré", "prospects générés retirés")} de l'envoi`,
+        "Une campagne ne part qu'aux contacts qui vous connaissent déjà. Écrivez à vos prospects un premier message personnel depuis votre boîte mail.",
       ),
     );
   }
