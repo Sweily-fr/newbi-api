@@ -20,7 +20,6 @@
  */
 import crypto from "crypto";
 import mongoose from "mongoose";
-import Stripe from "stripe";
 import { UserInputError } from "apollo-server-express";
 import FileTransfer from "../models/FileTransfer.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
@@ -41,7 +40,6 @@ import {
 import {
   PaypalApiError,
   capturePaypalOrder,
-  createPaypalOrder,
   getPaypalCapture,
   getPaypalOrder,
   isPaypalConfigured,
@@ -50,12 +48,9 @@ import {
 } from "./paypalService.js";
 import {
   SumupApiError,
-  createSumupCheckout,
-  deactivateSumupCheckout,
   getSumupCheckout,
   isSumupCheckoutId,
   isSumupConfigured,
-  refundSumupTransaction,
   summarizeSumupCheckout,
 } from "./sumupService.js";
 import {
@@ -65,6 +60,19 @@ import {
 } from "../utils/transferPaymentEmails.js";
 import { createOriginChecker } from "../utils/corsOrigins.js";
 import { sendRenderedEmail } from "../utils/trialEmails.js";
+import {
+  DirectPaymentUnavailableError,
+  ONLINE_PAYMENT_PROVIDERS,
+  closeDirectCheckout,
+  createDirectCheckout,
+  findSumupAccount,
+  isSumupAccountReady,
+  refundDirectPayment,
+  retrieveStripeSession,
+  sameAmount,
+  toCents,
+  workspaceKey,
+} from "./payments/directPayments.js";
 
 export const TRANSFER_PAYMENT_METHODS = Object.freeze([
   "stripe",
@@ -72,11 +80,7 @@ export const TRANSFER_PAYMENT_METHODS = Object.freeze([
   "paypal",
   "bank_transfer",
 ]);
-export const ONLINE_PAYMENT_PROVIDERS = Object.freeze([
-  "stripe",
-  "sumup",
-  "paypal",
-]);
+export { ONLINE_PAYMENT_PROVIDERS };
 
 // Lien de retour du payeur (jeton opaque) : valable une heure
 export const PAYMENT_RETURN_TTL_MS = 60 * 60 * 1000;
@@ -90,12 +94,6 @@ const RECHECK_INTERVAL_MS = 15 * 1000;
 // Même forcée (retour du payeur), une vérification par transfert au plus
 // toutes les quelques secondes
 const FORCED_RECHECK_INTERVAL_MS = 3 * 1000;
-
-let stripeClient = null;
-function getStripe() {
-  if (!stripeClient) stripeClient = new Stripe(process.env.STRIPE_SECRET_KEY);
-  return stripeClient;
-}
 
 const frontendUrl = (env = process.env) =>
   String(env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
@@ -119,13 +117,6 @@ export function paymentReturnBase(origin, env = process.env) {
   }
   return frontendUrl(env);
 }
-
-const toCents = (amount) => Math.round(Number(amount || 0) * 100);
-
-const sameAmount = (a, b) => toCents(a) === toCents(b);
-
-const workspaceKey = (workspaceId) =>
-  workspaceId == null || workspaceId === "" ? null : String(workspaceId);
 
 /** Moyens proposés par un transfert (anciens transferts : carte seule). */
 export function transferPaymentMethods(transfer) {
@@ -188,16 +179,6 @@ export async function hasConnectedBank(workspaceId) {
   });
   return Boolean(account);
 }
-
-/** Compte SumUp de l'espace (jetons compris, jamais renvoyé au site). */
-function findSumupAccount(workspaceId) {
-  const orgId = workspaceKey(workspaceId);
-  return orgId ? SumupMerchantAccount.findOne({ organizationId: orgId }) : null;
-}
-
-/** Compte SumUp utilisable pour encaisser (connexion valide). */
-const isSumupAccountReady = (account) =>
-  Boolean(account?.merchantCode && account.status !== "reconnect");
 
 /**
  * Moyens d'encaissement de l'espace (réglages, formulaire de création).
@@ -486,46 +467,35 @@ async function refundDuplicatePayment({
   accountId,
   refundReference,
 }) {
-  if (provider === "sumup" && refundReference) {
-    try {
-      const account = await findSumupAccount(transfer.workspaceId);
-      if (account) {
-        await refundSumupTransaction(account, refundReference);
-        logger.warn(
-          `[transfer-payment] Second paiement SumUp ${paymentId} du transfert ${transfer._id} remboursé`,
-        );
-        return;
-      }
-    } catch (error) {
-      logger.error(
-        `[transfer-payment] ANOMALIE : second paiement SumUp ${paymentId} du transfert ${transfer._id} non remboursé (${error.message}) : à rembourser depuis le compte SumUp ${accountId || ""}`,
-      );
-      return;
-    }
-  }
-  if (provider === "stripe" && accountId && paymentId?.startsWith("pi_")) {
-    try {
-      await getStripe().refunds.create(
-        {
-          payment_intent: paymentId,
-          reason: "duplicate",
-          metadata: {
-            type: "file_transfer",
-            fileTransferId: String(transfer._id),
-          },
-        },
-        { stripeAccount: accountId, idempotencyKey: `dup-refund-${paymentId}` },
-      );
+  const label = provider === "sumup" ? "SumUp " : "";
+  const where =
+    provider === "sumup"
+      ? `le compte SumUp ${accountId || ""}`
+      : `le compte Stripe ${accountId}`;
+  try {
+    const refunded = await refundDirectPayment({
+      provider,
+      paymentId,
+      accountId,
+      refundReference,
+      workspaceId: transfer.workspaceId,
+      metadata: {
+        type: "file_transfer",
+        fileTransferId: String(transfer._id),
+      },
+      idempotencyKey: `dup-refund-${paymentId}`,
+    });
+    if (refunded) {
       logger.warn(
-        `[transfer-payment] Second paiement ${paymentId} du transfert ${transfer._id} remboursé`,
-      );
-      return;
-    } catch (error) {
-      logger.error(
-        `[transfer-payment] ANOMALIE : second paiement ${paymentId} du transfert ${transfer._id} non remboursé (${error.message}) : à rembourser depuis le compte Stripe ${accountId}`,
+        `[transfer-payment] Second paiement ${label}${paymentId} du transfert ${transfer._id} remboursé`,
       );
       return;
     }
+  } catch (error) {
+    logger.error(
+      `[transfer-payment] ANOMALIE : second paiement ${label}${paymentId} du transfert ${transfer._id} non remboursé (${error.message}) : à rembourser depuis ${where}`,
+    );
+    return;
   }
   logger.error(
     `[transfer-payment] ANOMALIE : second paiement ${provider} ${paymentId} reçu pour le transfert ${transfer._id} déjà payé : à rembourser`,
@@ -736,40 +706,24 @@ const NOT_OFFERED_MESSAGES = {
 const SUMUP_UNAVAILABLE =
   "Le paiement par carte avec SumUp n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.";
 
+const PROVIDER_UNAVAILABLE_MESSAGES = {
+  stripe:
+    "Le paiement par carte n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.",
+  sumup: SUMUP_UNAVAILABLE,
+  paypal:
+    "Le paiement par PayPal n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.",
+};
+
 /** Référence SumUp d'une tentative : rattache le paiement au transfert. */
 export const sumupCheckoutReference = (transferId, returnToken) =>
   `newbi-${transferId}-${String(returnToken).slice(0, 12)}`;
 
 async function closeOpenAttempt(transfer) {
-  const attempt = transfer?.paymentAttempt;
-  if (attempt?.provider === "sumup" && attempt.reference) {
-    try {
-      const account = await findSumupAccount(transfer.workspaceId);
-      if (account) await deactivateSumupCheckout(account, attempt.reference);
-    } catch (error) {
-      logger.warn(
-        `[transfer-payment] Paiement SumUp ${attempt.reference} non fermé : ${error.message}`,
-      );
-    }
-    return;
-  }
-  if (attempt?.provider !== "stripe" || !attempt.reference) return;
-  if (!attempt.accountId) return;
-  try {
-    const session = await getStripe().checkout.sessions.retrieve(
-      attempt.reference,
-      { stripeAccount: attempt.accountId },
-    );
-    if (session?.status === "open") {
-      await getStripe().checkout.sessions.expire(attempt.reference, {
-        stripeAccount: attempt.accountId,
-      });
-    }
-  } catch (error) {
-    logger.warn(
-      `[transfer-payment] Session ${attempt.reference} non expirée : ${error.message}`,
-    );
-  }
+  await closeDirectCheckout(
+    transfer?.paymentAttempt,
+    transfer?.workspaceId,
+    "[transfer-payment]",
+  );
 }
 
 function paymentLabel(transfer) {
@@ -833,109 +787,26 @@ export async function startOnlinePayment(
   let attempt;
   let url;
   try {
-    if (provider === "stripe") {
-      const account = orgId
-        ? await StripeConnectAccount.findOne({ organizationId: orgId })
-        : null;
-      if (
-        !account ||
-        !isDirectStripeAccount(account) ||
-        !account.chargesEnabled
-      ) {
-        return fail(
-          "Le paiement par carte n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.",
-        );
-      }
-      const session = await getStripe().checkout.sessions.create(
-        {
-          mode: "payment",
-          line_items: [
-            {
-              quantity: 1,
-              price_data: {
-                currency: String(
-                  transfer.paymentCurrency || "EUR",
-                ).toLowerCase(),
-                unit_amount: toCents(transfer.paymentAmount),
-                product_data: { name, description },
-              },
-            },
-          ],
-          success_url: `${back}&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${back}&canceled=1`,
-          locale: "fr",
-          expires_at: Math.floor(Date.now() / 1000) + STRIPE_SESSION_TTL_S,
-          metadata,
-          payment_intent_data: { metadata, description: name },
-        },
-        {
-          stripeAccount: account.accountId,
-          idempotencyKey: `transfer-${transfer._id}-${returnToken}`,
-        },
-      );
-      attempt = {
-        provider: "stripe",
-        reference: session.id,
-        accountId: account.accountId,
-        status: "open",
-        createdAt: new Date(),
-      };
-      url = session.url;
-    } else if (provider === "sumup") {
-      const account = await findSumupAccount(orgId);
-      if (!isSumupConfigured() || !isSumupAccountReady(account)) {
-        return fail(SUMUP_UNAVAILABLE);
-      }
-      const checkout = await createSumupCheckout(account, {
-        reference: sumupCheckoutReference(transfer._id, returnToken),
-        amount: transfer.paymentAmount,
-        currency: transfer.paymentCurrency || "EUR",
-        description: `${name} (${description})`,
-        redirectUrl: back,
-      });
-      if (!checkout?.id || !checkout.url) {
-        throw new SumupApiError("Paiement SumUp sans page de paiement");
-      }
-      attempt = {
-        provider: "sumup",
-        reference: checkout.id,
-        accountId: account.merchantCode,
-        status: "open",
-        createdAt: new Date(),
-      };
-      url = checkout.url;
-    } else {
-      const merchant = orgId
-        ? await PaypalMerchantAccount.findOne({ organizationId: orgId }).lean()
-        : null;
-      if (!isPaypalConfigured() || !merchant?.email) {
-        return fail(
-          "Le paiement par PayPal n'est pas disponible pour le moment. Contactez l'expéditeur du transfert.",
-        );
-      }
-      const order = await createPaypalOrder({
-        amount: transfer.paymentAmount,
-        currency: transfer.paymentCurrency || "EUR",
-        payeeEmail: merchant.email,
-        description: `${name} (${description})`,
-        customId: String(transfer._id),
-        brandName: await getSellerName(orgId),
-        returnUrl: back,
-        cancelUrl: `${back}&canceled=1`,
-        requestId: `transfer-${transfer._id}-${returnToken}`,
-      });
-      if (!order?.id || !order.approveUrl) {
-        throw new PaypalApiError("Commande PayPal sans adresse de paiement");
-      }
-      attempt = {
-        provider: "paypal",
-        reference: order.id,
-        status: "open",
-        createdAt: new Date(),
-      };
-      url = order.approveUrl;
-    }
+    ({ attempt, url } = await createDirectCheckout({
+      provider,
+      workspaceId: orgId,
+      amount: transfer.paymentAmount,
+      currency: transfer.paymentCurrency || "EUR",
+      name,
+      description,
+      metadata,
+      returnUrl: back,
+      cancelUrl: `${back}&canceled=1`,
+      stripeExpiresAt: Math.floor(Date.now() / 1000) + STRIPE_SESSION_TTL_S,
+      idempotencyKey: `transfer-${transfer._id}-${returnToken}`,
+      sumupReference: sumupCheckoutReference(transfer._id, returnToken),
+      paypalCustomId: String(transfer._id),
+      brandName: provider === "paypal" ? await getSellerName(orgId) : null,
+    }));
   } catch (error) {
+    if (error instanceof DirectPaymentUnavailableError) {
+      return fail(PROVIDER_UNAVAILABLE_MESSAGES[provider]);
+    }
     logger.error(
       `[transfer-payment] Paiement ${provider} du transfert ${transfer._id} non lancé : ${error.message}`,
     );
@@ -1061,22 +932,13 @@ async function verifyStripeAttempt(transfer, sessionId) {
       : attempt.reference;
   if (!reference) return { status: "unpaid" };
   const accounts = [...(await expectedStripeAccounts(transfer))];
-  for (const accountId of accounts) {
-    try {
-      const session = await getStripe().checkout.sessions.retrieve(reference, {
-        stripeAccount: accountId,
-      });
-      return applyStripeSession(transfer, session, accountId);
-    } catch (error) {
-      // Session inconnue sur ce compte : essayer le suivant
-      if (error?.code !== "resource_missing") {
-        logger.warn(
-          `[transfer-payment] Session ${reference} illisible sur ${accountId} : ${error.message}`,
-        );
-      }
-    }
-  }
-  return { status: "unpaid" };
+  const found = await retrieveStripeSession(
+    reference,
+    accounts,
+    "[transfer-payment]",
+  );
+  if (!found) return { status: "unpaid" };
+  return applyStripeSession(transfer, found.session, found.accountId);
 }
 
 async function verifyPaypalAttempt(transfer, orderId) {
