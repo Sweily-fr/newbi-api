@@ -48,6 +48,7 @@ import {
 import { deliverBookingEmail } from "./bookingEmails.js";
 import {
   buildEventCancelledEmail,
+  buildEventChangedEmail,
   buildEventConfirmationEmail,
   buildEventHostCancelledEmail,
   buildEventHostNewRegistrationEmail,
@@ -98,8 +99,20 @@ export const PENDING_TTL_MS = 30 * MINUTE;
 // Session Stripe : 30 minutes au moins (exigence Stripe), un peu plus que
 // la réservation des places
 const STRIPE_SESSION_TTL_S = 31 * 60;
-// Jeton de retour du payeur : lisible 24 h
-const RETURN_TOKEN_TTL_MS = 24 * HOUR;
+// Jeton de retour du payeur : valable une heure (comme les transferts) ;
+// après la première réponse « confirmée », quelques minutes seulement
+// (double chargement de la page), puis le lien de gestion prend le relais
+export const RETURN_TOKEN_TTL_MS = HOUR;
+const RETURN_TOKEN_GRACE_MS = 5 * MINUTE;
+// Encaissement PayPal revendiqué : une revendication plus ancienne est
+// tenue pour abandonnée (processus arrêté pendant la capture)
+const CAPTURE_CLAIM_MS = 2 * MINUTE;
+// Inscription expirée : paiement encore relu 24 h (paiement tombé pendant
+// la fermeture chez le prestataire)
+const EXPIRED_RECHECK_MS = 24 * HOUR;
+// Inscription annulée ou expirée qui garde ses places (arrêt entre les deux
+// écritures) : places rendues par le balayage au-delà de ce délai
+const SEATS_RECONCILE_DELAY_MS = MINUTE;
 // Relecture chez le prestataire : au plus une fois par intervalle
 const RECHECK_INTERVAL_MS = 15 * 1000;
 const FORCED_RECHECK_INTERVAL_MS = 3 * 1000;
@@ -440,7 +453,23 @@ export async function registrationPayload(
     icsUrl: token ? registrationIcsPath(token) : null,
     canCancel: guestCanCancel(registration),
     cancelledAt: iso(registration.cancelledAt),
+    refundStatus: refundStatusOf(registration),
   };
+}
+
+/**
+ * État du remboursement d'une inscription payée mais non confirmée
+ * (annulée, ou payée après expiration sans place) :
+ *   - REFUNDED : remboursée automatiquement ;
+ *   - MANUAL : à rembourser à la main (remboursement automatique impossible
+ *     ou annulée par l'organisateur après paiement) ;
+ *   - NONE : rien à rembourser.
+ */
+export function refundStatusOf(registration) {
+  const payment = registration?.payment;
+  if (!payment?.paidAt || registration.status === "CONFIRMED") return "NONE";
+  if (payment.refundedAt) return "REFUNDED";
+  return "MANUAL";
 }
 
 // ─── E-mails ──────────────────────────────────────────────────────────────
@@ -634,7 +663,8 @@ export async function registerForEvent({
       currency: price ? price.currency : "EUR",
       status: "PENDING_PAYMENT",
       seatsHeld: true,
-      expiresAt: price ? new Date(now.getTime() + PENDING_TTL_MS) : null,
+      // Gratuit aussi : une confirmation interrompue expire et rend ses places
+      expiresAt: new Date(now.getTime() + PENDING_TTL_MS),
       manageTokenHash: hashManageToken(manageToken),
       manageTokenEncrypted: encryptManageToken(manageToken),
     });
@@ -649,9 +679,18 @@ export async function registerForEvent({
 
   // 4a. Gratuit : confirmé tout de suite
   if (!price) {
-    const confirmed = await confirmWithTickets(registration, [
-      "PENDING_PAYMENT",
-    ]);
+    let confirmed = null;
+    try {
+      confirmed = await confirmWithTickets(registration, ["PENDING_PAYMENT"]);
+    } catch (error) {
+      logger.error(
+        `${LOG} inscription gratuite ${registration._id} non confirmée : ${error.message}`,
+      );
+    }
+    if (!confirmed) {
+      await expireRegistration(registration);
+      throw new Error("inscription gratuite non confirmée");
+    }
     const emails = afterConfirmation(
       confirmed.registration,
       confirmed.tickets,
@@ -823,6 +862,8 @@ export async function markRegistrationPaid(registration, payment) {
   if (!claimed) return { status: "paid" };
 
   if (claimed.status === "EXPIRED") {
+    // Places encore tenues (arrêt pendant l'expiration) : rendues d'abord
+    if (claimed.seatsHeld) await releaseSeats(claimed);
     const reserved = await reserveSeats(
       claimed.appointmentTypeId,
       claimed.quantity,
@@ -998,6 +1039,44 @@ async function applyPaypalSummary(registration, summary) {
   return { status: "unpaid" };
 }
 
+/** Revendique l'encaissement PayPal (inscription toujours en attente). */
+function claimPaypalCapture(registration, now = new Date()) {
+  return EventRegistration.findOneAndUpdate(
+    {
+      _id: registration._id,
+      status: "PENDING_PAYMENT",
+      "payment.paidAt": null,
+      $or: [
+        { "payment.status": { $ne: "capturing" } },
+        {
+          "payment.captureClaimedAt": {
+            $lte: new Date(now.getTime() - CAPTURE_CLAIM_MS),
+          },
+        },
+      ],
+    },
+    {
+      $set: { "payment.status": "capturing", "payment.captureClaimedAt": now },
+    },
+    { new: true },
+  );
+}
+
+/** Capture non aboutie : revendication levée. */
+async function releasePaypalClaim(registration) {
+  await EventRegistration.updateOne(
+    { _id: registration._id, "payment.status": "capturing" },
+    { $set: { "payment.status": "open", "payment.captureClaimedAt": null } },
+  );
+}
+
+/** Encaissement PayPal en cours (revendication récente). */
+const isCapturing = (registration, now = new Date()) =>
+  registration?.payment?.status === "capturing" &&
+  registration.payment.captureClaimedAt &&
+  now.getTime() - new Date(registration.payment.captureClaimedAt).getTime() <
+    CAPTURE_CLAIM_MS;
+
 async function verifyPaypal(registration, orderId) {
   if (!isPaypalConfigured()) return { status: "unpaid" };
   const payment = registration.payment || {};
@@ -1028,10 +1107,33 @@ async function verifyPaypal(registration, orderId) {
     // rembourser pour le vendeur)
     if (
       summary.orderStatus === "APPROVED" &&
-      summary.customId === paypalCustomId(registration._id) &&
-      registration.status === "PENDING_PAYMENT"
+      summary.customId === paypalCustomId(registration._id)
     ) {
-      summary = summarizePaypalOrder(await capturePaypalOrder(reference));
+      // Revendication atomique sur l'état EN BASE (pas sur l'instantané de
+      // l'appelant) : une inscription expirée ou annulée entre-temps n'est
+      // jamais encaissée, et une seule capture à la fois
+      const claimed = await claimPaypalCapture(registration);
+      if (!claimed) {
+        const fresh = await EventRegistration.findById(registration._id)
+          .select("status payment.status")
+          .lean();
+        return {
+          status:
+            fresh?.status === "PENDING_PAYMENT" &&
+            fresh.payment?.status === "capturing"
+              ? "pending"
+              : "unpaid",
+        };
+      }
+      try {
+        summary = summarizePaypalOrder(await capturePaypalOrder(reference));
+      } catch (error) {
+        await releasePaypalClaim(registration);
+        throw error;
+      }
+      const result = await applyPaypalSummary(claimed, summary);
+      if (result.status !== "paid") await releasePaypalClaim(registration);
+      return result;
     }
     return applyPaypalSummary(registration, summary);
   } catch (error) {
@@ -1195,22 +1297,8 @@ export async function handlePaymentReturn({
   orderId,
   now = new Date(),
 }) {
-  if (
-    typeof returnToken !== "string" ||
-    !/^[A-Za-z0-9_-]{43}$/.test(returnToken)
-  ) {
-    return null;
-  }
-  let registration = await EventRegistration.findOne({
-    "payment.returnTokenHash": hashToken(returnToken),
-  });
-  if (
-    !registration ||
-    !registration.payment?.returnTokenExpiresAt ||
-    new Date(registration.payment.returnTokenExpiresAt) <= now
-  ) {
-    return null;
-  }
+  let registration = await findByReturnToken(returnToken);
+  if (!returnTokenUsable(registration, now)) return null;
   let paymentStatus = "unpaid";
   if (registration.payment?.paidAt) {
     paymentStatus = "paid";
@@ -1223,16 +1311,120 @@ export async function handlePaymentReturn({
     paymentStatus = result.status === "free" ? "paid" : result.status;
     registration = await EventRegistration.findById(registration._id);
   }
+  // Confirmée : le jeton de retour ne sert plus que quelques minutes
+  if (
+    registration.status === "CONFIRMED" &&
+    !registration.payment?.returnTokenConsumedAt
+  ) {
+    await EventRegistration.updateOne(
+      { _id: registration._id, "payment.returnTokenConsumedAt": null },
+      { $set: { "payment.returnTokenConsumedAt": now } },
+    );
+  }
   return { paymentStatus, registration };
+}
+
+/** Jeton de retour encore valable (une heure, quelques minutes après confirmation). */
+function returnTokenUsable(registration, now = new Date()) {
+  const payment = registration?.payment;
+  if (!payment?.returnTokenExpiresAt) return false;
+  if (new Date(payment.returnTokenExpiresAt) <= now) return false;
+  if (
+    payment.returnTokenConsumedAt &&
+    now.getTime() - new Date(payment.returnTokenConsumedAt).getTime() >
+      RETURN_TOKEN_GRACE_MS
+  ) {
+    return false;
+  }
+  return true;
+}
+
+async function findByReturnToken(returnToken) {
+  if (
+    typeof returnToken !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(returnToken)
+  ) {
+    return null;
+  }
+  return EventRegistration.findOne({
+    "payment.returnTokenHash": hashToken(returnToken),
+  });
+}
+
+/**
+ * Le payeur abandonne (annulation chez Stripe, PayPal ou SumUp) : paiement
+ * fermé chez le prestataire, relu une dernière fois, puis inscription
+ * expirée et places rendues s'il est bien impayé.
+ * @returns {Promise<{paymentStatus, registration}|null>} null si jeton inconnu ou périmé
+ */
+export async function abandonPayment({ returnToken, now = new Date() }) {
+  const registration = await findByReturnToken(returnToken);
+  if (!returnTokenUsable(registration, now)) return null;
+  if (registration.status !== "PENDING_PAYMENT") {
+    return {
+      paymentStatus: registration.payment?.paidAt ? "paid" : "unpaid",
+      registration,
+    };
+  }
+  await closeDirectCheckout(
+    registration.payment,
+    registration.workspaceId,
+    LOG,
+  );
+  // Relecture immédiate, même juste après une autre
+  await EventRegistration.updateOne(
+    { _id: registration._id },
+    { $set: { "payment.checkedAt": null } },
+  );
+  const fresh = await EventRegistration.findById(registration._id);
+  const result = await refreshRegistrationPayment(fresh, { force: true });
+  if (result.status === "paid" || result.status === "pending") {
+    return {
+      paymentStatus: result.status,
+      registration: await EventRegistration.findById(registration._id),
+    };
+  }
+  const expired = await expireRegistration(fresh, { now });
+  const after = await EventRegistration.findById(registration._id);
+  return {
+    paymentStatus:
+      !expired && after.status === "PENDING_PAYMENT" ? "pending" : "unpaid",
+    registration: after,
+  };
 }
 
 // ─── Expiration et balayage ──────────────────────────────────────────────
 
-/** Passe une inscription échue en EXPIRED et rend ses places. */
-async function expireRegistration(registration) {
+/**
+ * Passe une inscription échue en EXPIRED et rend ses places. Jamais pendant
+ * un encaissement PayPal en cours ni un paiement en confirmation. Le
+ * paiement reste relu 24 h (payment.status « expired »).
+ */
+async function expireRegistration(registration, { now = new Date() } = {}) {
   const expired = await EventRegistration.findOneAndUpdate(
-    { _id: registration._id, status: "PENDING_PAYMENT" },
-    { $set: { status: "EXPIRED", "payment.status": "failed" } },
+    {
+      _id: registration._id,
+      status: "PENDING_PAYMENT",
+      "payment.paidAt": null,
+      "payment.status": { $ne: "pending" },
+      $or: [
+        { "payment.status": { $ne: "capturing" } },
+        {
+          "payment.captureClaimedAt": {
+            $lte: new Date(now.getTime() - CAPTURE_CLAIM_MS),
+          },
+        },
+      ],
+    },
+    {
+      $set: {
+        status: "EXPIRED",
+        expiredAt: now,
+        ...(registration.payment?.reference
+          ? { "payment.status": "expired" }
+          : {}),
+      },
+    },
     { new: true },
   );
   if (!expired) return false;
@@ -1250,7 +1442,13 @@ export async function expireOverdueRegistrations({
   now = new Date(),
   limit = 100,
 } = {}) {
-  const filter = { status: "PENDING_PAYMENT", expiresAt: { $lte: now } };
+  // Paiements en confirmation et encaissements en cours exclus : ils ne
+  // bloquent pas la tête de liste (relus par le balayage)
+  const filter = {
+    status: "PENDING_PAYMENT",
+    expiresAt: { $lte: now },
+    "payment.status": { $nin: ["pending", "capturing"] },
+  };
   if (typeId) filter.appointmentTypeId = typeId;
   const overdue = await EventRegistration.find(filter)
     .sort({ expiresAt: 1 })
@@ -1262,7 +1460,7 @@ export async function expireOverdueRegistrations({
         force: true,
       });
       if (result.status === "paid" || result.status === "pending") continue;
-      if (await expireRegistration(registration)) count += 1;
+      if (await expireRegistration(registration, { now })) count += 1;
     } catch (error) {
       logger.error(
         `${LOG} expiration de l'inscription ${registration._id} : ${error.message}`,
@@ -1284,18 +1482,30 @@ const SWEEP_PENDING_WINDOW_MS = 7 * 24 * HOUR;
  * @returns {Promise<{checked: number, expired: number}>}
  */
 export async function sweepEventRegistrations({ now = new Date() } = {}) {
+  const minAge = new Date(now.getTime() - SWEEP_MIN_AGE_MS);
   const open = await EventRegistration.find({
-    status: { $in: ["PENDING_PAYMENT", "EXPIRED"] },
     "payment.reference": { $ne: null },
     "payment.paidAt": null,
-    "payment.status": { $in: ["open", "pending"] },
-    createdAt: {
-      $lte: new Date(now.getTime() - SWEEP_MIN_AGE_MS),
-      $gte: new Date(now.getTime() - SWEEP_PENDING_WINDOW_MS),
-    },
-    $or: [{ status: "PENDING_PAYMENT" }, { "payment.status": "pending" }],
+    $or: [
+      // En attente : paiements ouverts, en confirmation ou en encaissement
+      {
+        status: "PENDING_PAYMENT",
+        "payment.status": { $in: ["open", "pending", "capturing"] },
+        createdAt: {
+          $lte: minAge,
+          $gte: new Date(now.getTime() - SWEEP_PENDING_WINDOW_MS),
+        },
+      },
+      // Expirées depuis moins de 24 h : paiement tombé pendant la fermeture
+      {
+        status: "EXPIRED",
+        "payment.status": "expired",
+        expiredAt: { $gte: new Date(now.getTime() - EXPIRED_RECHECK_MS) },
+      },
+    ],
   })
-    .sort({ createdAt: 1 })
+    // Les moins récemment relues d'abord : aucune ne bloque les autres
+    .sort({ "payment.checkedAt": 1, createdAt: 1 })
     .limit(100);
   let checked = 0;
   for (const registration of open) {
@@ -1310,7 +1520,30 @@ export async function sweepEventRegistrations({ now = new Date() } = {}) {
   }
   const expired = await expireOverdueRegistrations({ now });
   if (expired) logger.info(`${LOG} ${expired} inscription(s) expirée(s)`);
-  return { checked, expired };
+  const reconciled = await reconcileHeldSeats({ now });
+  return { checked, expired, reconciled };
+}
+
+/**
+ * Inscriptions annulées ou expirées qui tiennent encore leurs places
+ * (processus arrêté entre les deux écritures) : places rendues.
+ * @returns {Promise<number>}
+ */
+export async function reconcileHeldSeats({ now = new Date() } = {}) {
+  const stuck = await EventRegistration.find({
+    status: { $in: ["EXPIRED", "CANCELLED"] },
+    seatsHeld: true,
+    updatedAt: { $lte: new Date(now.getTime() - SEATS_RECONCILE_DELAY_MS) },
+  })
+    .select("_id appointmentTypeId quantity")
+    .limit(100)
+    .lean();
+  let count = 0;
+  for (const registration of stuck) {
+    if (await releaseSeats(registration)) count += 1;
+  }
+  if (count) logger.warn(`${LOG} places rendues par réconciliation : ${count}`);
+  return count;
 }
 
 // ─── Gestion ──────────────────────────────────────────────────────────────
@@ -1327,10 +1560,25 @@ export async function findRegistrationByManageToken(token) {
  * e-mail(s). Payante : pas de remboursement automatique en V1.
  */
 export async function cancelRegistration({ registration, by, reason = null }) {
+  const now = new Date();
   const updated = await EventRegistration.findOneAndUpdate(
     {
       _id: registration._id,
-      status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
+      $or: [
+        { status: "CONFIRMED" },
+        // En attente : jamais pendant un encaissement PayPal en cours
+        {
+          status: "PENDING_PAYMENT",
+          $or: [
+            { "payment.status": { $ne: "capturing" } },
+            {
+              "payment.captureClaimedAt": {
+                $lte: new Date(now.getTime() - CAPTURE_CLAIM_MS),
+              },
+            },
+          ],
+        },
+      ],
     },
     {
       $set: {
@@ -1344,10 +1592,11 @@ export async function cancelRegistration({ registration, by, reason = null }) {
     { new: true },
   );
   if (!updated) {
-    return {
-      registration: await EventRegistration.findById(registration._id),
-      emails: Promise.resolve(null),
-    };
+    const current = await EventRegistration.findById(registration._id);
+    if (isCapturing(current, now)) {
+      throw new EventRegistrationError("PAYMENT_IN_PROGRESS", 409);
+    }
+    return { registration: current, emails: Promise.resolve(null) };
   }
   await releaseSeats(updated);
   if (registration.status === "PENDING_PAYMENT") {
@@ -1660,7 +1909,10 @@ export async function syncEventCalendarEntry(type, { remove = false } = {}) {
 }
 
 /** Instantané des inscriptions après une modification de l'événement. */
-export async function refreshRegistrationSnapshots(type) {
+export async function refreshRegistrationSnapshots(
+  type,
+  { startChanged = false } = {},
+) {
   await EventRegistration.updateMany(
     { appointmentTypeId: type._id },
     {
@@ -1672,7 +1924,50 @@ export async function refreshRegistrationSnapshots(type) {
           kind: type.location.kind,
           value: type.location.value || null,
         },
+        // Début déplacé : le rappel de la veille sera renvoyé
+        ...(startChanged ? { "reminders.h24SentAt": null } : {}),
       },
     },
   );
+}
+
+/**
+ * Date, heure ou lieu changés : e-mail aux inscrits confirmés d'un
+ * événement à venir (pas pour le nom ni la description).
+ * @returns {Promise<{sent: number, failed: number}>}
+ */
+export async function notifyEventChanged(type, diff) {
+  if (!diff?.schedule && !diff?.location) return { sent: 0, failed: 0 };
+  if (!type.endAt || new Date(type.endAt) <= new Date()) {
+    return { sent: 0, failed: 0 };
+  }
+  const registrations = await EventRegistration.find({
+    appointmentTypeId: type._id,
+    status: "CONFIRMED",
+  });
+  if (!registrations.length) return { sent: 0, failed: 0 };
+  const { host, organizationName } = await loadBookingParties(registrations[0]);
+  let sent = 0;
+  let failed = 0;
+  for (const registration of registrations) {
+    const token = decryptManageToken(registration.manageTokenEncrypted);
+    const ok = await deliverBookingEmail({
+      to: registration.buyer.email,
+      replyTo: host.email || undefined,
+      organizationName,
+      ...buildEventChangedEmail({
+        registration,
+        organizationName,
+        host,
+        changes: diff,
+        manageUrl: token ? registrationManageUrlFor(token) : null,
+      }),
+    });
+    if (ok) sent += 1;
+    else failed += 1;
+  }
+  logger.info(
+    `${LOG} événement ${type._id} modifié : ${sent} inscrit(s) prévenu(s), ${failed} en échec`,
+  );
+  return { sent, failed };
 }

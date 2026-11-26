@@ -1,6 +1,7 @@
 import express from "express";
 import AppointmentType from "../models/AppointmentType.js";
 import { decryptManageToken, generateManageToken } from "../models/Booking.js";
+import { hashToken } from "../models/EventRegistration.js";
 import {
   BookingError,
   availableSlots,
@@ -33,6 +34,7 @@ import {
 import logger from "../utils/logger.js";
 import {
   EventRegistrationError,
+  abandonPayment,
   cancelRegistration,
   findRegistrationByManageToken,
   findTicketByToken,
@@ -68,6 +70,7 @@ import { ONLINE_PAYMENT_PROVIDERS } from "../services/payments/directPayments.js
  * Billetterie (types `kind: EVENT`, voir eventRegistrationService.js) :
  *   POST /:slug/:typeSlug/register      inscription (gratuite ou payante)
  *   POST /registrations/return          retour du payeur (paiement relu)
+ *   POST /registrations/return/cancel   abandon : paiement fermé, places rendues
  *   GET  /registrations/:token          inscription du participant
  *   POST /registrations/:token/cancel   annulation (gratuite seulement)
  *   GET  /registrations/:token/ics      fichier .ics
@@ -88,6 +91,16 @@ export const RATE_LIMITS = {
     { window: 3600, max: 20 },
   ],
   manage: [{ window: 60, max: 10 }],
+  // Billetterie : inscriptions groupées possibles derrière une même adresse
+  // (entreprise, école, wifi d'un salon)
+  register: [
+    { window: 60, max: 30 },
+    { window: 3600, max: 300 },
+  ],
+  // Retour de paiement : le site relit toutes les 5 s pendant une minute.
+  // Compté par jeton (un payeur) et, plus largement, par adresse
+  paymentReturnToken: [{ window: 60, max: 30 }],
+  paymentReturnIp: [{ window: 60, max: 120 }],
 };
 // Plage de créneaux demandée en une fois (jours, bornes comprises)
 export const MAX_RANGE_DAYS = 42;
@@ -112,14 +125,18 @@ function privateHeaders(res) {
 
 const clientIp = (req) => req.ip || req.socket?.remoteAddress || "unknown";
 
-function rateLimit(kind) {
+/**
+ * Limite par adresse IP, ou par la clé que renvoie `keyOf(req)` (jeton de
+ * retour…) ; une clé absente retombe sur l'adresse IP.
+ */
+function rateLimit(kind, keyOf = null) {
   return async (req, res, next) => {
     privateHeaders(res);
-    const ip = clientIp(req);
+    const key = (keyOf && keyOf(req)) || clientIp(req);
     try {
       for (const { window, max } of RATE_LIMITS[kind]) {
         const count = await recordAttempt(
-          `booking:${kind}:${window}:${ip}`,
+          `booking:${kind}:${window}:${key}`,
           window,
         );
         if (count > max) {
@@ -385,31 +402,65 @@ router.get("/manage/:token/ics", rateLimit("manage"), async (req, res) => {
 // ─── Billetterie : retour de paiement, inscription, billets ──────────────
 // (avant /:slug pour ne pas être prises pour une page)
 
-router.post("/registrations/return", rateLimit("manage"), async (req, res) => {
-  try {
-    const sessionId =
-      typeof req.body?.sessionId === "string" ? req.body.sessionId : null;
-    const orderId =
-      typeof req.body?.orderId === "string" ? req.body.orderId : null;
-    const result = await handlePaymentReturn({
-      returnToken: req.body?.returnToken,
-      sessionId,
-      orderId,
-    });
-    if (!result) return notFound(res);
-    const { registration, paymentStatus } = result;
-    return res.json({
-      paymentStatus,
-      registration: await registrationPayload(registration),
-      manageUrl:
-        registration.status === "CONFIRMED"
-          ? manageUrlOfRegistration(registration)
-          : null,
-    });
-  } catch (error) {
-    return serverError(res, error, "retour de paiement d'une inscription");
-  }
-});
+// Jeton de retour haché dans la clé du compteur (jamais en clair dans Redis)
+const returnTokenKey = (req) =>
+  typeof req.body?.returnToken === "string" && req.body.returnToken
+    ? `rt:${hashToken(req.body.returnToken).slice(0, 32)}`
+    : null;
+
+/** Réponse commune du retour et de l'abandon de paiement. */
+async function paymentReturnResponse(res, { registration, paymentStatus }) {
+  const payload = await registrationPayload(registration);
+  return res.json({
+    paymentStatus,
+    refundStatus: payload.refundStatus,
+    registration: payload,
+    manageUrl:
+      registration.status === "CONFIRMED"
+        ? manageUrlOfRegistration(registration)
+        : null,
+  });
+}
+
+router.post(
+  "/registrations/return/cancel",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const result = await abandonPayment({
+        returnToken: req.body?.returnToken,
+      });
+      if (!result) return notFound(res);
+      return paymentReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "abandon d'un paiement d'inscription");
+    }
+  },
+);
+
+router.post(
+  "/registrations/return",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const sessionId =
+        typeof req.body?.sessionId === "string" ? req.body.sessionId : null;
+      const orderId =
+        typeof req.body?.orderId === "string" ? req.body.orderId : null;
+      const result = await handlePaymentReturn({
+        returnToken: req.body?.returnToken,
+        sessionId,
+        orderId,
+      });
+      if (!result) return notFound(res);
+      return paymentReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "retour de paiement d'une inscription");
+    }
+  },
+);
 
 router.get("/registrations/:token", rateLimit("manage"), async (req, res) => {
   try {
@@ -677,7 +728,7 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
 
 router.post(
   "/:slug/:typeSlug/register",
-  rateLimit("book"),
+  rateLimit("register"),
   async (req, res) => {
     try {
       // Pot de miel : réponse factice, rien n'est enregistré

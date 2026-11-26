@@ -43,6 +43,7 @@ import { cancelBooking } from "../services/appointments/bookingService.js";
 import EventRegistration from "../models/EventRegistration.js";
 import {
   eventPaymentMethods,
+  notifyEventChanged,
   refreshRegistrationSnapshots,
   seatsLeftOf,
   syncEventCalendarEntry,
@@ -298,6 +299,22 @@ async function typeChanges(input, userId, { event = false } = {}) {
 
 const kindOf = (type) => (type?.kind === "EVENT" ? "EVENT" : "SLOT");
 
+const sameInstant = (a, b) =>
+  (a ? new Date(a).getTime() : null) === (b ? new Date(b).getTime() : null);
+
+/** Ce qui a changé dans un événement : nom, début, horaires, lieu. */
+function eventDiff(before, after) {
+  const start = !sameInstant(before.startAt, after.startAt);
+  return {
+    name: before.name !== after.name,
+    start,
+    schedule: start || !sameInstant(before.endAt, after.endAt),
+    location:
+      before.location.kind !== after.location?.kind ||
+      before.location.value !== (after.location?.value || null),
+  };
+}
+
 /**
  * Champs d'un événement : ceux d'un type (nom, description…) et les siens,
  * contrôlés ensemble. `existing` : l'événement enregistré (modification).
@@ -319,10 +336,16 @@ async function eventTypeChanges(input, ctx, existing = null) {
   if (has(changes, "startAt") || has(changes, "endAt") || !existing) {
     changes.durationMinutes = eventDurationMinutes(merged);
   }
-  // Payant : un moyen de paiement en ligne doit être prêt
+  // Payant : un moyen de paiement en ligne doit être prêt, contrôlé
+  // seulement à la création ou quand le prix change réellement (un moyen
+  // déconnecté ne bloque pas la modification du reste de l'événement)
+  const priceChanged =
+    !existing ||
+    (has(changes, "priceAmount") &&
+      (changes.priceAmount || null) !== (existing.priceAmount || null));
   if (
     merged.priceAmount > 0 &&
-    (has(changes, "priceAmount") || !existing) &&
+    priceChanged &&
     (await eventPaymentMethods(ctx.workspaceId)).length === 0
   ) {
     throw new AppointmentInputError(
@@ -674,7 +697,12 @@ const appointmentsResolvers = {
               "location",
             );
           }
-          changes = { ...(await eventTypeChanges(input, ctx)), kind: "EVENT" };
+          changes = {
+            seatsTaken: 0,
+            maxPerOrder: 5,
+            ...(await eventTypeChanges(input, ctx)),
+            kind: "EVENT",
+          };
         }
         if (!changes.name) {
           throw new AppointmentInputError(
@@ -772,6 +800,18 @@ const appointmentsResolvers = {
           );
         }
       }
+      // Avant modification : date, heure et lieu, pour prévenir les inscrits
+      const before = isEvent
+        ? {
+            name: type.name,
+            startAt: type.startAt,
+            endAt: type.endAt,
+            location: {
+              kind: type.location?.kind,
+              value: type.location?.value || null,
+            },
+          }
+        : null;
       Object.assign(type, changes);
       try {
         await type.save();
@@ -786,12 +826,20 @@ const appointmentsResolvers = {
         throw error;
       }
       if (isEvent) {
-        if (
-          ["name", "startAt", "endAt", "location"].some((key) =>
-            has(changes, key),
-          )
-        ) {
-          await refreshRegistrationSnapshots(type);
+        const diff = eventDiff(before, type);
+        if (diff.name || diff.schedule || diff.location) {
+          await refreshRegistrationSnapshots(type, {
+            startChanged: diff.start,
+          });
+        }
+        if (diff.schedule || diff.location) {
+          // En arrière-plan : la modification n'attend pas les envois
+          notifyEventChanged(type, diff).catch((error) => {
+            logger.error(
+              `[billetterie] e-mails de modification de l'événement ${type._id} : ${error.message}`,
+            );
+            return null;
+          });
         }
         await syncEventCalendarEntry(type);
       }

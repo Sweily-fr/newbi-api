@@ -456,7 +456,9 @@ describe("inscription gratuite", () => {
       body: { reason: "Empêchement" },
     });
     expect(await res.json()).toEqual({ status: "CANCELLED" });
-    expect((await AppointmentType.findById(atelier._id)).seatsTaken).toBe(0);
+    expect((await AppointmentType.findById(atelier._id)).seatsTaken ?? 0).toBe(
+      0,
+    );
     await vi.waitFor(() => expect(mail.sent).toHaveLength(2));
     const ticketToken = body.registration.tickets[0].token;
     const ticket = await (await api(`/tickets/${ticketToken}`)).json();
@@ -581,7 +583,9 @@ describe("inscription payante", () => {
     expect(await paypal.json()).toEqual({
       error: "PAYMENT_METHOD_UNAVAILABLE",
     });
-    expect((await AppointmentType.findById(concert._id)).seatsTaken).toBe(0);
+    expect((await AppointmentType.findById(concert._id)).seatsTaken ?? 0).toBe(
+      0,
+    );
   });
 
   it("prestataire injoignable : places rendues, 502", async () => {
@@ -592,7 +596,9 @@ describe("inscription payante", () => {
     });
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: "PAYMENT_START_FAILED" });
-    expect((await AppointmentType.findById(concert._id)).seatsTaken).toBe(0);
+    expect((await AppointmentType.findById(concert._id)).seatsTaken ?? 0).toBe(
+      0,
+    );
   });
 
   it("webhook Stripe Connect : confirme ; une session d'un autre compte est ignorée", async () => {
@@ -645,7 +651,9 @@ describe("inscription payante", () => {
     expect((await EventRegistration.findById(registration._id)).status).toBe(
       "EXPIRED",
     );
-    expect((await AppointmentType.findById(concert._id)).seatsTaken).toBe(0);
+    expect((await AppointmentType.findById(concert._id)).seatsTaken ?? 0).toBe(
+      0,
+    );
     expect(stripeApi.checkout.sessions.expire).toHaveBeenCalledWith(
       "cs_test_concert",
       { stripeAccount: "acct_vendeur" },

@@ -18,6 +18,7 @@ import {
   recordStoredFile,
 } from "../services/storage/storageService.js";
 import {
+  EventRegistrationError,
   cancelRegistration,
   checkInTicket,
   eventPaymentMethods,
@@ -121,7 +122,11 @@ const PROVIDER_LABELS = { stripe: "Stripe", paypal: "PayPal", sumup: "SumUp" };
 /** Cellule CSV : guillemets doublés, formules neutralisées. */
 export function csvCell(value) {
   let text = value == null ? "" : String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  // Formules neutralisées (=, +, -, @…), sauf un numéro de téléphone
+  // international (« +33 6 12… ») qui reste lisible tel quel
+  if (/^[=+\-@\t\r]/.test(text) && !/^\+[\d\s.()-]+$/.test(text)) {
+    text = `'${text}`;
+  }
   return /[";\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
@@ -342,18 +347,29 @@ const appointmentEventsResolvers = {
           field: "reason",
         });
       }
-      const { registration: updated } = await cancelRegistration({
-        registration,
-        by: "HOST",
-        reason: cleanReason,
-      });
-      return updated;
+      try {
+        const { registration: updated } = await cancelRegistration({
+          registration,
+          by: "HOST",
+          reason: cleanReason,
+        });
+        return updated;
+      } catch (error) {
+        if (error instanceof EventRegistrationError) {
+          throw new AppError(
+            "Le paiement de cette inscription est en cours d'encaissement. Réessayez dans une minute.",
+            ERROR_CODES.VALIDATION_ERROR,
+          );
+        }
+        throw error;
+      }
     }),
 
     checkInTicket: requireWorkspaceAction(
       "appointments",
       "edit",
     )(async (_, { typeId, code }, ctx) => {
+      await checkSubscriptionActive(ctx);
       const type = await ownEvent(ctx, typeId);
       const result = await checkInTicket({
         scope: hostScope(ctx),
@@ -373,6 +389,7 @@ const appointmentEventsResolvers = {
       "appointments",
       "edit",
     )(async (_, { ticketId }, ctx) => {
+      await checkSubscriptionActive(ctx);
       const ticket = await undoTicketCheckIn({
         scope: hostScope(ctx),
         ticketId,

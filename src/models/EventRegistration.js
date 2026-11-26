@@ -97,6 +97,8 @@ const eventRegistrationSchema = new mongoose.Schema(
     seatsHeld: { type: Boolean, default: true },
     // Fin de la réservation des places d'une inscription non payée
     expiresAt: { type: Date, default: null },
+    // Passage en EXPIRED : le paiement est encore relu 24 h après (filet)
+    expiredAt: { type: Date, default: null },
     payment: {
       provider: {
         type: String,
@@ -118,8 +120,14 @@ const eventRegistrationSchema = new mongoose.Schema(
       paidAmount: { type: Number, default: null },
       payerEmail: { type: String, default: null },
       checkedAt: { type: Date, default: null },
+      // PayPal : encaissement revendiqué (une seule capture à la fois, et
+      // jamais sur une inscription expirée ou annulée entre-temps)
+      captureClaimedAt: { type: Date, default: null },
       returnTokenHash: { type: String, default: null },
       returnTokenExpiresAt: { type: Date, default: null },
+      // Première réponse « confirmée » au retour : le jeton ne sert plus
+      // que quelques minutes, ensuite le lien de gestion prend le relais
+      returnTokenConsumedAt: { type: Date, default: null },
       // Paiement arrivé sans place disponible : remboursé
       refundedAt: { type: Date, default: null },
       refundError: { type: String, default: null },

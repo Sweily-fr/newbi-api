@@ -79,28 +79,27 @@ const appointmentTypeSchema = new mongoose.Schema(
     currency: { type: String, default: null },
 
     // ─── Événement (billetterie) ───────────────────────────────────────
-    // Absent en base = créneau : les types existants ne changent pas
-    kind: { type: String, enum: APPOINTMENT_TYPE_KINDS, default: "SLOT" },
-    startAt: { type: Date, default: null },
-    endAt: { type: Date, default: null },
+    // AUCUNE valeur par défaut : un type existant (créneau) enregistré de
+    // nouveau ne doit gagner aucun de ces champs (données clients jamais
+    // modifiées en silence). Lecture avec repli : kind absent = SLOT,
+    // seatsTaken absent = 0, maxPerOrder absent = 5, le reste absent = null.
+    kind: { type: String, enum: APPOINTMENT_TYPE_KINDS },
+    startAt: { type: Date },
+    endAt: { type: Date },
     // Texte long, rendu en texte (jamais en HTML)
-    details: { type: String, maxlength: 10000, default: null },
-    coverImageUrl: { type: String, default: null },
-    imageUrl: { type: String, default: null },
+    details: { type: String, maxlength: 10000 },
+    coverImageUrl: { type: String },
+    imageUrl: { type: String },
     // Places : null = illimité. seatsTaken compte les inscriptions
     // confirmées ET en attente de paiement, réservées par un $inc
     // conditionnel (voir eventRegistrationService.js)
-    capacity: { type: Number, min: 1, default: null },
-    seatsTaken: { type: Number, min: 0, default: 0 },
-    maxPerOrder: { type: Number, min: 1, max: 10, default: 5 },
+    capacity: { type: Number, min: 1 },
+    seatsTaken: { type: Number, min: 0 },
+    maxPerOrder: { type: Number, min: 1, max: 10 },
     // Null = startAt
-    registrationClosesAt: { type: Date, default: null },
+    registrationClosesAt: { type: Date },
     // Entrée du Calendrier de l'organisateur
-    calendarEventId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Event",
-      default: null,
-    },
+    calendarEventId: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
   },
   { timestamps: true, collection: "appointment_types" },
 );

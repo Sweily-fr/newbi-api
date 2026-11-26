@@ -342,3 +342,63 @@ export function buildEventHostCancelledEmail({ registration, pageTimezone }) {
   });
   return { subject: `Inscription annulée : ${event.name} (${name})`, html };
 }
+
+/**
+ * Date, heure ou lieu modifiés par l'organisateur, pour un inscrit
+ * confirmé (fichier .ics mis à jour : même UID, séquence suivante).
+ */
+export function buildEventChangedEmail({
+  registration,
+  organizationName,
+  host,
+  changes,
+  manageUrl,
+}) {
+  const event = registration.event;
+  const when = formatWhen(event.startAt, event.endAt, eventZone(registration));
+  const what =
+    changes.schedule && changes.location
+      ? "la date et le lieu"
+      : changes.schedule
+        ? "la date ou l'heure"
+        : "le lieu";
+  const ics = buildIcsEvent({
+    method: "REQUEST",
+    uid: icsUid(`inscription-${registration._id}`),
+    sequence: Math.floor(Date.now() / 1000),
+    start: event.startAt,
+    end: event.endAt,
+    summary: event.name,
+    description: `${event.name}${organizationName ? ` (${organizationName})` : ""}`,
+    location:
+      event.location?.kind === "CUSTOM_LINK"
+        ? event.location.value
+        : event.location?.value || "",
+    organizer: host?.email ? { name: host.name, email: host.email } : undefined,
+    attendee: registration.buyer?.email
+      ? { name: buyerName(registration.buyer), email: registration.buyer.email }
+      : undefined,
+  });
+  const html = renderEmail({
+    preheader: `${event.name} : nouvelles informations`,
+    badge: "ÉVÉNEMENT MODIFIÉ",
+    iconLabel: "Modifié",
+    iconBg: "#fef3c7",
+    iconColor: "#92400e",
+    title: "L'événement a changé",
+    bodyHtml: `
+          <p ${P}>Bonjour ${escapeHtml(registration.buyer.firstName)},</p>
+          <p ${P}>${escapeHtml(organizationName)} a modifié ${what} de l'événement <strong ${STRONG}>«\u00a0${escapeHtml(event.name)}\u00a0»</strong>. Voici les informations à jour :</p>
+          ${whenRows(event, eventZone(registration))}
+          ${locationRow(event)}
+          <p ${P}>Vos billets restent valables. Le fichier joint met à jour l'événement dans votre agenda.</p>`,
+    ctaLabel: manageUrl ? "Voir mes billets" : undefined,
+    ctaUrl: manageUrl || undefined,
+    footerNoteHtml: guestFooter(organizationName),
+  });
+  return {
+    subject: `Événement modifié : ${event.name}, ${when.shortDate} à ${when.start}`,
+    html,
+    attachments: [icsAttachment(ics, "REQUEST")],
+  };
+}
