@@ -25,7 +25,6 @@ import FileTransfer from "../models/FileTransfer.js";
 import StripeConnectAccount from "../models/StripeConnectAccount.js";
 import PaypalMerchantAccount from "../models/PaypalMerchantAccount.js";
 import SumupMerchantAccount from "../models/SumupMerchantAccount.js";
-import AccountBanking from "../models/AccountBanking.js";
 import Notification from "../models/Notification.js";
 import User from "../models/User.js";
 import logger from "../utils/logger.js";
@@ -73,6 +72,24 @@ import {
   toCents,
   workspaceKey,
 } from "./payments/directPayments.js";
+import {
+  compactLabel,
+  formatIban,
+  generatePaymentReference,
+  hasConnectedBank,
+  claimBankCredit,
+  normalizeIban,
+  releaseBankCredit,
+  uniquePaymentReference,
+} from "./payments/bankTransfer.js";
+
+// Briques du virement partagées avec la prise de rendez-vous
+export {
+  formatIban,
+  generatePaymentReference,
+  hasConnectedBank,
+  normalizeIban,
+};
 
 export const TRANSFER_PAYMENT_METHODS = Object.freeze([
   "stripe",
@@ -129,16 +146,6 @@ export function transferPaymentMethods(transfer) {
   return methods.length ? methods : ["stripe"];
 }
 
-export function normalizeIban(value) {
-  const iban = String(value || "")
-    .replace(/\s+/g, "")
-    .toUpperCase();
-  return /^[A-Z]{2}[0-9]{2}[A-Z0-9]{8,30}$/.test(iban) ? iban : null;
-}
-
-/** IBAN lisible : groupes de quatre caractères. */
-export const formatIban = (iban) => iban.replace(/(.{4})/g, "$1 ").trim();
-
 async function loadOrganization(workspaceId) {
   const id = workspaceKey(workspaceId);
   if (!id || !mongoose.Types.ObjectId.isValid(id)) return null;
@@ -162,22 +169,6 @@ async function loadOrganization(workspaceId) {
 export async function getSellerName(workspaceId) {
   const organization = await loadOrganization(workspaceId);
   return organization?.companyName || organization?.name || null;
-}
-
-/**
- * Compte bancaire de l'espace synchronisé par Bridge : les virements des
- * transferts payants y sont repérés (référence NB-…) et débloquent le
- * transfert sans action du vendeur.
- */
-export async function hasConnectedBank(workspaceId) {
-  const orgId = workspaceKey(workspaceId);
-  if (!orgId) return false;
-  const account = await AccountBanking.exists({
-    workspaceId: orgId,
-    provider: "bridge",
-    status: "active",
-  });
-  return Boolean(account);
 }
 
 /**
@@ -298,16 +289,6 @@ export async function resolveTransferPaymentMethods(
   return wanted;
 }
 
-// Référence de virement : sans 0/O ni 1/I pour éviter les erreurs de saisie
-const REFERENCE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-export function generatePaymentReference() {
-  let code = "";
-  for (let i = 0; i < 6; i += 1) {
-    code += REFERENCE_ALPHABET[crypto.randomInt(REFERENCE_ALPHABET.length)];
-  }
-  return `NB-${code}`;
-}
-
 /**
  * Options de paiement d'un nouveau transfert (création) : espace requis,
  * fonctionnalité ouverte à l'espace, pas de filigrane (le destinataire ne
@@ -343,7 +324,7 @@ export async function prepareTransferPayment({
   return {
     paymentMethods: methods,
     paymentReference: methods.includes("bank_transfer")
-      ? generatePaymentReference()
+      ? await uniquePaymentReference(orgId)
       : undefined,
   };
 }
@@ -621,13 +602,6 @@ export async function declareBankTransfer(
   };
 }
 
-// Libellé bancaire comparable : majuscules, lettres et chiffres seulement
-// (« NB-7K3QXA », « nb 7k3qxa » et « NB7K3QXA » se valent)
-const compactLabel = (value) =>
-  String(value || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-
 /**
  * Virements reçus sur le compte bancaire synchronisé de l'espace : chaque
  * crédit qui porte la référence d'un transfert payant non payé (et au moins
@@ -671,6 +645,22 @@ export async function detectTransferBankPayments(workspaceId, transactions) {
     )?.transaction;
     if (!match) continue;
 
+    // Un crédit ne règle qu'une seule chose (transfert, rendez-vous ou
+    // inscription), contrôlé en base
+    const claim = {
+      workspaceId: orgId,
+      transaction: match,
+      targetKind: "file_transfer",
+      targetId: transfer._id,
+      reference: transfer.paymentReference,
+    };
+    if (!(await claimBankCredit(claim))) {
+      logger.warn(
+        `[transfer-payment] Crédit ${match.externalId || match._id} déjà utilisé : transfert ${transfer._id} non débloqué`,
+      );
+      continue;
+    }
+
     const result = await markTransferPaid(transfer, {
       provider: "bank_transfer",
       paymentId: `bank:${match.externalId || match._id || transfer.paymentReference}`,
@@ -685,6 +675,8 @@ export async function detectTransferBankPayments(workspaceId, transactions) {
       logger.info(
         `[transfer-payment] Virement ${transfer.paymentReference} repéré : transfert ${transfer._id} débloqué`,
       );
+    } else {
+      await releaseBankCredit(claim);
     }
   }
   return unlocked;

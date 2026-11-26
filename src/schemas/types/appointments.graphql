@@ -13,6 +13,10 @@ enum AppointmentLocationKind {
 enum BookingStatus {
   CONFIRMED
   CANCELLED
+  "Rendez-vous payant en attente de son paiement (créneau tenu jusqu'à expiresAt)"
+  PENDING_PAYMENT
+  "Jamais payé : créneau libéré"
+  EXPIRED
 }
 
 "Créneau (prise de rendez-vous) ou événement (billetterie)"
@@ -144,11 +148,11 @@ type AppointmentType {
   maxPerOrder: Int!
   "Null = début de l'événement"
   registrationClosesAt: DateTime
-  "Prix d'un billet (null = gratuit)"
+  "Prix d'un billet ou d'un rendez-vous (null = gratuit)"
   price: Money
-  "Événement payant : ONLINE, DEPOSIT ou ON_SITE (null pour un gratuit ou un créneau)"
+  "Paiement : ONLINE, DEPOSIT ou ON_SITE (null si gratuit)"
   paymentMode: EventPaymentMode
-  "Acompte par place en centimes (DEPOSIT seulement, sinon null)"
+  "Acompte (par place pour un événement) en centimes, DEPOSIT seulement, sinon null"
   depositAmount: Int
   "Inscriptions confirmées"
   registrationsCount: Int!
@@ -208,6 +212,10 @@ type EventRegistration {
   refundedAt: DateTime
   "Paiement arrivé sans place, remboursement automatique impossible : à rembourser à la main"
   refundFailed: Boolean!
+  "Référence du virement (NB-XXXXXX), virement seulement"
+  paymentReference: String
+  "« J'ai fait le virement » cliqué par le participant"
+  bankTransferDeclaredAt: DateTime
   clientId: ID
   tickets: [EventTicket!]!
   checkedInCount: Int!
@@ -256,6 +264,30 @@ type Booking {
   clientId: ID
   eventId: ID
   createdAt: DateTime
+  "Total en centimes (0 = gratuit)"
+  amount: Int!
+  currency: String!
+  "ONLINE, DEPOSIT ou ON_SITE (null si gratuit)"
+  paymentMode: EventPaymentMode
+  "Payé (ou à payer) en ligne à la réservation"
+  amountOnline: Int!
+  "À régler sur place (le dû, réglé ou non : voir onSitePaidAt)"
+  amountDueOnSite: Int!
+  "Reste réglé sur place, marqué par l'organisateur"
+  onSitePaidAt: DateTime
+  "stripe, paypal, sumup, bank_transfer ou null"
+  paymentProvider: String
+  paidAt: DateTime
+  "En attente de paiement : fin de la tenue du créneau"
+  expiresAt: DateTime
+  "Référence du virement (NB-XXXXXX), virement seulement"
+  paymentReference: String
+  "« J'ai fait le virement » cliqué par l'invité"
+  bankTransferDeclaredAt: DateTime
+  "Paiement arrivé sans créneau libre : remboursé automatiquement"
+  refundedAt: DateTime
+  "Paiement arrivé sans créneau libre, remboursement automatique impossible : à rembourser à la main"
+  refundFailed: Boolean!
 }
 
 type BookingList {
@@ -374,8 +406,10 @@ extend type Query {
   ): EventRegistrationList!
   "Export CSV (séparateur ;, UTF-8 avec BOM, un billet par ligne, inscriptions confirmées)"
   eventRegistrationsCsv(workspaceId: ID, typeId: ID!): String!
-  "Moyens de paiement en ligne prêts pour vendre des billets (stripe, paypal, sumup)"
+  "Moyens de paiement prêts pour vendre des billets (stripe, paypal, sumup, bank_transfer)"
   eventPaymentMethods(workspaceId: ID): [String!]!
+  "Moyens de paiement prêts pour les rendez-vous payants (mêmes que eventPaymentMethods)"
+  appointmentPaymentMethods(workspaceId: ID): [String!]!
 }
 
 extend type Mutation {
@@ -423,4 +457,16 @@ extend type Mutation {
     id: ID!
     paid: Boolean!
   ): EventRegistration!
+  """
+  « Marquer comme payé » : virement reçu pour une inscription en attente de
+  virement (ou expirée s'il reste des places). Billets et e-mails envoyés
+  """
+  markEventRegistrationPaid(workspaceId: ID, id: ID!): EventRegistration!
+  """
+  « Marquer comme payé » : virement reçu pour un rendez-vous en attente de
+  virement (ou expiré si le créneau est libre). Agenda et e-mails
+  """
+  markBookingPaid(workspaceId: ID, id: ID!): Booking!
+  "Marque (paid: true) ou démarque le reste dû sur place d'un rendez-vous confirmé"
+  markBookingPaidOnSite(workspaceId: ID, id: ID!, paid: Boolean!): Booking!
 }

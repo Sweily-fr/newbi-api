@@ -1,6 +1,16 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
-import { LOCATION_KINDS } from "../utils/appointmentValidation.js";
+import {
+  EVENT_PAYMENT_MODES,
+  LOCATION_KINDS,
+} from "../utils/appointmentValidation.js";
+
+export const BOOKING_STATUSES = [
+  "CONFIRMED",
+  "CANCELLED",
+  "PENDING_PAYMENT",
+  "EXPIRED",
+];
 
 /**
  * Réservation d'un créneau sur une page de rendez-vous.
@@ -58,9 +68,11 @@ const bookingSchema = new mongoose.Schema(
       message: { type: String, trim: true, maxlength: 2000, default: null },
       timezone: { type: String, default: null },
     },
+    // PENDING_PAYMENT : rendez-vous payant qui attend son paiement, créneau
+    // tenu (compté occupé) jusqu'à `expiresAt` ; EXPIRED : jamais payé
     status: {
       type: String,
-      enum: ["CONFIRMED", "CANCELLED"],
+      enum: BOOKING_STATUSES,
       default: "CONFIRMED",
     },
     cancelledBy: { type: String, enum: ["GUEST", "HOST", null], default: null },
@@ -101,6 +113,51 @@ const bookingSchema = new mongoose.Schema(
       h24SentAt: { type: Date, default: null },
       h1SentAt: { type: Date, default: null },
     },
+
+    // ─── Rendez-vous payant ────────────────────────────────────────────
+    // AUCUNE valeur par défaut : une réservation gratuite (et toutes celles
+    // d'avant) ne gagne aucun de ces champs. Lecture avec repli : absent =
+    // gratuit (montants 0, mode null). Montants en centimes.
+    paymentMode: { type: String, enum: EVENT_PAYMENT_MODES },
+    amount: { type: Number, min: 0 },
+    currency: { type: String },
+    amountOnline: { type: Number, min: 0 },
+    amountDueOnSite: { type: Number, min: 0 },
+    onSitePaidAt: { type: Date },
+    onSitePaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // Fin de la tenue du créneau d'une réservation non payée
+    expiresAt: { type: Date },
+    // Passage en EXPIRED : le paiement est encore relu 24 h après (filet)
+    expiredAt: { type: Date },
+    payment: {
+      provider: {
+        type: String,
+        enum: ["stripe", "paypal", "sumup", "bank_transfer"],
+      },
+      // Session Stripe, commande PayPal ou paiement SumUp
+      reference: { type: String },
+      // Compte Stripe ou code marchand SumUp du vendeur
+      accountId: { type: String },
+      // open | pending | capturing | paid | failed | expired
+      status: { type: String },
+      paymentId: { type: String },
+      captureId: { type: String },
+      refundReference: { type: String },
+      paidAt: { type: Date },
+      paidAmount: { type: Number },
+      payerEmail: { type: String },
+      checkedAt: { type: Date },
+      captureClaimedAt: { type: Date },
+      returnTokenHash: { type: String },
+      returnTokenExpiresAt: { type: Date },
+      returnTokenConsumedAt: { type: Date },
+      refundedAt: { type: Date },
+      refundError: { type: String },
+      // Virement : référence NB-XXXXXX, annonce du payeur, marquage manuel
+      bankReference: { type: String },
+      declaredAt: { type: Date },
+      markedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    },
   },
   { timestamps: true, collection: "bookings" },
 );
@@ -110,12 +167,37 @@ bookingSchema.index(
   { hostUserId: 1, startAt: 1 },
   { unique: true, partialFilterExpression: { status: "CONFIRMED" } },
 );
+// Pas deux rendez-vous confirmés ou tenus (en attente de paiement) au même
+// instant pour un organisateur. Index distinct de l'existant (nom propre) :
+// dernier rempart derrière le verrou de l'organisateur
+bookingSchema.index(
+  { hostUserId: 1, startAt: 1 },
+  {
+    name: "host_start_active_unique",
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
+    },
+  },
+);
 // Tableau de bord : réservations d'un organisateur dans un espace
 bookingSchema.index({ workspaceId: 1, hostUserId: 1, startAt: -1 });
 bookingSchema.index({ manageTokenHash: 1 }, { unique: true });
 // Rappels (cron toutes les 5 minutes)
 bookingSchema.index({ status: 1, startAt: 1 });
 bookingSchema.index({ appointmentTypeId: 1, status: 1, startAt: 1 });
+// Paiements : retour du payeur, expiration et balayage (index clairsemés :
+// les réservations gratuites n'y figurent pas)
+bookingSchema.index({ "payment.returnTokenHash": 1 }, { sparse: true });
+bookingSchema.index({ "payment.reference": 1 }, { sparse: true });
+bookingSchema.index(
+  { status: 1, expiresAt: 1 },
+  { partialFilterExpression: { expiresAt: { $exists: true } } },
+);
+bookingSchema.index(
+  { workspaceId: 1, "payment.bankReference": 1 },
+  { partialFilterExpression: { "payment.bankReference": { $exists: true } } },
+);
 
 // ─── Jeton de gestion ─────────────────────────────────────────────────────
 

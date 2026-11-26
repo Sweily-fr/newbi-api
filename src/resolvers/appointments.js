@@ -37,11 +37,19 @@ import {
   normalizeLocation,
   normalizeSlug,
   optionalText,
+  PAYMENT_METHOD_REQUIRED_MESSAGE,
+  slotDepositAmountOf,
+  slotPaymentModeOf,
   slugify,
 } from "../utils/appointmentValidation.js";
 import { cancelBooking } from "../services/appointments/bookingService.js";
+import {
+  markBookingPaidByHost,
+  markBookingPaidOnSite,
+} from "../services/appointments/bookingPaymentService.js";
 import EventRegistration from "../models/EventRegistration.js";
 import {
+  appointmentPaymentMethods,
   eventPaymentMethods,
   notifyEventChanged,
   refreshRegistrationSnapshots,
@@ -384,12 +392,89 @@ async function eventTypeChanges(input, ctx, existing = null) {
     paymentChanged &&
     (await eventPaymentMethods(ctx.workspaceId)).length === 0
   ) {
-    throw new AppointmentInputError(
-      "Connectez Stripe, PayPal ou SumUp (Paramètres > Applications) pour vendre des billets.",
-      "price",
-    );
+    throw new AppointmentInputError(PAYMENT_METHOD_REQUIRED_MESSAGE, "price");
   }
   return changes;
+}
+
+/**
+ * Paiement d'un créneau : prix, mode et acompte, contrôlés comme ceux d'un
+ * événement. Rien n'est renvoyé (donc rien n'est écrit) si la saisie ne
+ * change pas le paiement effectif du créneau.
+ * Prix > 0 sans mode : ONLINE ; prix nul : gratuit (mode et acompte retirés).
+ */
+async function slotPaymentChanges(input, ctx, existing = null) {
+  if (
+    !has(input, "price") &&
+    !has(input, "paymentMode") &&
+    !has(input, "depositAmount")
+  ) {
+    return {};
+  }
+  const parsed = eventChanges(
+    Object.fromEntries(
+      ["price", "paymentMode", "depositAmount"]
+        .filter((key) => has(input, key))
+        .map((key) => [key, input[key]]),
+    ),
+    { workspaceId: ctx.workspaceId },
+  );
+  // Paiement effectif actuel (un prix sans mode enregistré = gratuit)
+  const currentMode = slotPaymentModeOf(existing);
+  const currentPrice = currentMode ? existing.priceAmount : null;
+  const currentDeposit = slotDepositAmountOf(existing);
+
+  const price = has(parsed, "priceAmount")
+    ? parsed.priceAmount || null
+    : currentPrice;
+  if (!price) {
+    // Gratuit : champs retirés s'ils existent, sinon rien d'écrit
+    const stored =
+      existing &&
+      ["priceAmount", "currency", "paymentMode", "depositAmount"].some(
+        (key) => existing[key] != null,
+      );
+    return stored
+      ? {
+          priceAmount: undefined,
+          currency: undefined,
+          paymentMode: undefined,
+          depositAmount: undefined,
+        }
+      : {};
+  }
+  const mode =
+    (has(parsed, "paymentMode") ? parsed.paymentMode : currentMode) || "ONLINE";
+  let deposit = has(parsed, "depositAmount")
+    ? (parsed.depositAmount ?? null)
+    : (existing?.depositAmount ?? null);
+  if (mode !== "DEPOSIT") deposit = null;
+  assertEventPayment({
+    priceAmount: price,
+    paymentMode: mode,
+    depositAmount: deposit,
+  });
+  if (
+    existing &&
+    price === currentPrice &&
+    mode === currentMode &&
+    deposit === currentDeposit
+  ) {
+    return {};
+  }
+  if (
+    mode !== "ON_SITE" &&
+    (await eventPaymentMethods(ctx.workspaceId)).length === 0
+  ) {
+    throw new AppointmentInputError(PAYMENT_METHOD_REQUIRED_MESSAGE, "price");
+  }
+  return {
+    priceAmount: price,
+    currency: "EUR",
+    paymentMode: mode,
+    // Hors acompte : champ retiré s'il existait, jamais un null écrit
+    depositAmount: deposit ?? undefined,
+  };
 }
 
 /** Adresse de type libre dans la page (« demo », « demo-2 »…). */
@@ -515,13 +600,18 @@ const appointmentsResolvers = {
     registrationClosesAt: (type) =>
       kindOf(type) === "EVENT" ? type.registrationClosesAt || null : null,
     price: (type) =>
-      kindOf(type) === "EVENT" && type.priceAmount > 0
+      (kindOf(type) === "EVENT" || slotPaymentModeOf(type)) &&
+      type.priceAmount > 0
         ? { amount: type.priceAmount, currency: type.currency || "EUR" }
         : null,
     paymentMode: (type) =>
-      kindOf(type) === "EVENT" ? eventPaymentModeOf(type) : null,
+      kindOf(type) === "EVENT"
+        ? eventPaymentModeOf(type)
+        : slotPaymentModeOf(type),
     depositAmount: (type) =>
-      kindOf(type) === "EVENT" ? eventDepositAmountOf(type) : null,
+      kindOf(type) === "EVENT"
+        ? eventDepositAmountOf(type)
+        : slotDepositAmountOf(type),
     registrationsCount: async (type) => (await eventStats(type)).registrations,
     ticketsCount: async (type) => (await eventStats(type)).tickets,
     checkedInCount: async (type) => (await eventStats(type)).checkedIn,
@@ -545,6 +635,27 @@ const appointmentsResolvers = {
       booking.appointmentTypeId ? String(booking.appointmentTypeId) : null,
     clientId: (booking) => (booking.clientId ? String(booking.clientId) : null),
     eventId: (booking) => (booking.eventId ? String(booking.eventId) : null),
+    // Paiement (lecture avec repli : absent = gratuit)
+    amount: (booking) => Number(booking.amount) || 0,
+    currency: (booking) => booking.currency || "EUR",
+    paymentMode: (booking) => booking.paymentMode || null,
+    amountOnline: (booking) => Number(booking.amountOnline) || 0,
+    amountDueOnSite: (booking) => Number(booking.amountDueOnSite) || 0,
+    onSitePaidAt: (booking) => booking.onSitePaidAt || null,
+    paymentProvider: (booking) => booking.payment?.provider || null,
+    paidAt: (booking) => booking.payment?.paidAt || null,
+    expiresAt: (booking) =>
+      booking.status === "PENDING_PAYMENT" ? booking.expiresAt || null : null,
+    paymentReference: (booking) => booking.payment?.bankReference || null,
+    bankTransferDeclaredAt: (booking) => booking.payment?.declaredAt || null,
+    refundedAt: (booking) => booking.payment?.refundedAt || null,
+    refundFailed: (booking) =>
+      Boolean(
+        booking.payment?.paidAt &&
+        !booking.payment?.refundedAt &&
+        booking.status !== "CONFIRMED" &&
+        booking.payment?.refundError,
+      ),
   },
 
   Query: {
@@ -591,7 +702,16 @@ const appointmentsResolvers = {
           ERROR_CODES.VALIDATION_ERROR,
         );
       }
-      if (status) filter.status = status;
+      if (status) {
+        filter.status = status;
+      } else {
+        // Expirées sans paiement masquées (celles payées trop tard restent :
+        // remboursement)
+        filter.$or = [
+          { status: { $ne: "EXPIRED" } },
+          { "payment.paidAt": { $ne: null } },
+        ];
+      }
       const take = Math.min(
         Math.max(Number.parseInt(limit, 10) || BOOKINGS_DEFAULT_LIMIT, 1),
         BOOKINGS_MAX_LIMIT,
@@ -611,6 +731,11 @@ const appointmentsResolvers = {
       if (!isObjectIdString(id)) return null;
       return Booking.findOne({ _id: toObjectId(id), ...hostScope(ctx) }).lean();
     }),
+
+    appointmentPaymentMethods: requireWorkspaceLevel(
+      "appointments",
+      "read",
+    )(async (_, __, ctx) => appointmentPaymentMethods(ctx.workspaceId)),
 
     bookingSlugAvailable: requireWorkspaceLevel(
       "appointments",
@@ -723,7 +848,10 @@ const appointmentsResolvers = {
       let changes;
       try {
         if (!isEvent) {
-          changes = await typeChanges(input || {}, userIdOf(ctx));
+          changes = {
+            ...(await typeChanges(input || {}, userIdOf(ctx))),
+            ...(await slotPaymentChanges(input || {}, ctx)),
+          };
         } else {
           if (!input.name || !String(input.name).trim()) {
             throw new AppointmentInputError(
@@ -817,7 +945,10 @@ const appointmentsResolvers = {
         }
         changes = isEvent
           ? await eventTypeChanges(input || {}, ctx, type)
-          : await typeChanges(input || {}, userIdOf(ctx));
+          : {
+              ...(await typeChanges(input || {}, userIdOf(ctx))),
+              ...(await slotPaymentChanges(input || {}, ctx, type)),
+            };
       } catch (error) {
         throw inputError(error);
       }
@@ -937,7 +1068,7 @@ const appointmentsResolvers = {
         ...hostScope(ctx),
       });
       if (!booking) throw createNotFoundError("Rendez-vous");
-      if (booking.status === "CANCELLED") return booking;
+      if (["CANCELLED", "EXPIRED"].includes(booking.status)) return booking;
       if (new Date(booking.startAt) <= new Date()) {
         throw new AppError(
           "Ce rendez-vous est déjà passé, il ne peut plus être annulé.",
@@ -956,6 +1087,73 @@ const appointmentsResolvers = {
         reason: cleanReason,
       });
       return updated;
+    }),
+
+    markBookingPaid: requireWorkspaceAction(
+      "appointments",
+      "edit",
+    )(async (_, { id }, ctx) => {
+      await checkSubscriptionActive(ctx);
+      const result = await markBookingPaidByHost({
+        scope: hostScope(ctx),
+        bookingId: id,
+        userId: userIdOf(ctx),
+      });
+      if (result.error === "NOT_FOUND")
+        throw createNotFoundError("Rendez-vous");
+      if (result.error === "STARTED") {
+        throw new AppError(
+          "Ce rendez-vous a déjà commencé : il ne peut plus être confirmé. Remboursez l'invité si son virement est arrivé.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error === "BUSY") {
+        throw new AppError(
+          "Une autre réservation est en cours sur votre agenda. Réessayez dans un instant.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error === "SLOT_TAKEN") {
+        throw new AppError(
+          "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error) {
+        throw new AppError(
+          "Seul un rendez-vous en attente de virement peut être marqué comme payé.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      return result.booking;
+    }),
+
+    markBookingPaidOnSite: requireWorkspaceAction(
+      "appointments",
+      "edit",
+    )(async (_, { id, paid }, ctx) => {
+      await checkSubscriptionActive(ctx);
+      const result = await markBookingPaidOnSite({
+        scope: hostScope(ctx),
+        bookingId: id,
+        paid: Boolean(paid),
+        userId: userIdOf(ctx),
+      });
+      if (result.error === "NOT_FOUND")
+        throw createNotFoundError("Rendez-vous");
+      if (result.error === "NOT_CONFIRMED") {
+        throw new AppError(
+          "Seul un rendez-vous confirmé peut être marqué comme réglé sur place.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error === "NOTHING_DUE") {
+        throw new AppError(
+          "Ce rendez-vous n'a rien à régler sur place.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      return result.booking;
     }),
   },
 };
