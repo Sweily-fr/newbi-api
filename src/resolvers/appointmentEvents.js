@@ -24,6 +24,7 @@ import {
   cancelRegistration,
   checkInTicket,
   eventPaymentMethods,
+  markRegistrationPaidByHost,
   markRegistrationPaidOnSite,
   registrationPaymentModeOf,
   undoTicketCheckIn,
@@ -121,7 +122,12 @@ const STATUS_LABELS = {
   CANCELLED: "Annulée",
   EXPIRED: "Expirée",
 };
-const PROVIDER_LABELS = { stripe: "Stripe", paypal: "PayPal", sumup: "SumUp" };
+const PROVIDER_LABELS = {
+  stripe: "Stripe",
+  paypal: "PayPal",
+  sumup: "SumUp",
+  bank_transfer: "Virement",
+};
 
 /** Cellule CSV : guillemets doublés, formules neutralisées. */
 export function csvCell(value) {
@@ -220,6 +226,8 @@ const appointmentEventsResolvers = {
     paymentMode: (r) => registrationPaymentModeOf(r),
     expiresAt: (r) => (r.status === "PENDING_PAYMENT" ? r.expiresAt : null),
     refundedAt: (r) => r.payment?.refundedAt || null,
+    paymentReference: (r) => r.payment?.bankReference || null,
+    bankTransferDeclaredAt: (r) => r.payment?.declaredAt || null,
     refundFailed: (r) =>
       Boolean(
         r.payment?.paidAt &&
@@ -430,6 +438,33 @@ const appointmentEventsResolvers = {
       if (result.error === "NOTHING_DUE") {
         throw new AppError(
           "Cette inscription n'a rien à régler sur place.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      return result.registration;
+    }),
+
+    markEventRegistrationPaid: requireWorkspaceAction(
+      "appointments",
+      "edit",
+    )(async (_, { id }, ctx) => {
+      await checkSubscriptionActive(ctx);
+      const result = await markRegistrationPaidByHost({
+        scope: hostScope(ctx),
+        registrationId: id,
+        userId: userIdOf(ctx),
+      });
+      if (result.error === "NOT_FOUND")
+        throw createNotFoundError("Inscription");
+      if (result.error === "NO_SEATS") {
+        throw new AppError(
+          "Il ne reste plus assez de places pour confirmer cette inscription.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error) {
+        throw new AppError(
+          "Seule une inscription en attente de virement peut être marquée comme payée.",
           ERROR_CODES.VALIDATION_ERROR,
         );
       }

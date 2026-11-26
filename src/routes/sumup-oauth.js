@@ -23,6 +23,7 @@ import {
 } from "../services/sumupService.js";
 import { handleSumupNotification } from "../services/transferPaymentService.js";
 import { handleSumupEventNotification } from "../services/appointments/eventRegistrationService.js";
+import { handleSumupBookingNotification } from "../services/appointments/bookingPaymentService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -238,6 +239,12 @@ export async function handleSumupWebhook(req, res) {
     // événement (billetterie)
     if (result.status === "ignored") {
       result = await handleSumupEventNotification(
+        req.body?.id || req.body?.checkout_id,
+      );
+    }
+    // Sinon peut-être un rendez-vous payant
+    if (result.status === "ignored") {
+      result = await handleSumupBookingNotification(
         req.body?.id || req.body?.checkout_id,
       );
     }

@@ -58,6 +58,38 @@ export const eventDepositAmountOf = (event) =>
     ? event.depositAmount
     : null;
 
+/**
+ * Mode de paiement d'un créneau (type SLOT) : null s'il est gratuit. Un
+ * créneau n'est payant que si son mode est enregistré (les créneaux d'avant
+ * les paiements restent gratuits, même avec un prix égaré).
+ */
+export function slotPaymentModeOf(type) {
+  if (type?.kind === "EVENT" || !(type?.priceAmount > 0)) return null;
+  return EVENT_PAYMENT_MODES.includes(type.paymentMode)
+    ? type.paymentMode
+    : null;
+}
+
+/** Acompte d'un créneau (DEPOSIT seulement, sinon null). */
+export const slotDepositAmountOf = (type) =>
+  slotPaymentModeOf(type) === "DEPOSIT" && type.depositAmount > 0
+    ? type.depositAmount
+    : null;
+
+/** Mode de paiement d'un type, créneau ou événement. */
+export const appointmentPaymentModeOf = (type) =>
+  type?.kind === "EVENT" ? eventPaymentModeOf(type) : slotPaymentModeOf(type);
+
+/** Acompte d'un type, créneau ou événement. */
+export const appointmentDepositAmountOf = (type) =>
+  type?.kind === "EVENT"
+    ? eventDepositAmountOf(type)
+    : slotDepositAmountOf(type);
+
+/** Moyen de paiement manquant pour encaisser en ligne. */
+export const PAYMENT_METHOD_REQUIRED_MESSAGE =
+  "Connectez Stripe, PayPal ou SumUp (Paramètres > Applications), ou renseignez l'IBAN de votre entreprise (Paramètres > Entreprise), pour encaisser en ligne.";
+
 export const SLOT_INTERVALS = [5, 10, 15, 20, 30, 60];
 export const DEFAULT_SLOT_INTERVAL = 30;
 export const MAX_BUFFER_MINUTES = 240;

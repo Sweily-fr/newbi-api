@@ -47,6 +47,8 @@ import {
   isValidTimezone,
   locationLabel,
   providerForLocation,
+  slotDepositAmountOf,
+  slotPaymentModeOf,
 } from "../../utils/appointmentValidation.js";
 import { escapeRegex } from "../../utils/escapeRegex.js";
 import { PHONE_REGEX } from "../../utils/validators.js";
@@ -260,7 +262,13 @@ export async function availableSlots({
   });
 }
 
-async function assertSlotAvailable({ page, type, start, now, excludeBooking }) {
+export async function assertSlotAvailable({
+  page,
+  type,
+  start,
+  now,
+  excludeBooking,
+}) {
   const day = localDayOf(start, pageZone(page));
   const slots = await availableSlots({
     page,
@@ -319,7 +327,7 @@ async function acquireLocalHostLock(hostUserId) {
  * jusqu'à 5 s qu'une réservation en cours se termine. Sans Redis (ou Redis
  * injoignable) : verrou du processus.
  */
-async function acquireHostLock(hostUserId) {
+export async function acquireHostLock(hostUserId) {
   const client = getCacheClient();
   if (!client) return acquireLocalHostLock(hostUserId);
   const key = `booking-lock:${hostUserId}`;
@@ -344,7 +352,7 @@ async function acquireHostLock(hostUserId) {
   throw new BookingError("SLOT_TAKEN", 409);
 }
 
-async function releaseHostLock(lock) {
+export async function releaseHostLock(lock) {
   if (!lock) return;
   if (lock.local) {
     lock.release();
@@ -709,7 +717,12 @@ export async function createBooking({
   timezone,
   now = new Date(),
 }) {
-  const { page, organization, host } = context;
+  const { page } = context;
+  // Payé à la réservation (tout ou acompte) : voir bookingPaymentService.js
+  const mode = slotPaymentModeOf(type);
+  if (mode === "ONLINE" || mode === "DEPOSIT") {
+    throw new Error("rendez-vous payant : createPaidBooking attendu");
+  }
 
   // 1. Client bloqué dans le CRM : refus, sans rien enregistrer
   const existingClient = await findClientByEmail(page.workspaceId, guest.email);
@@ -754,6 +767,8 @@ export async function createBooking({
         // Lien fourni par l'organisateur : connu dès la réservation
         meetingUrl:
           type.location.kind === "CUSTOM_LINK" ? type.location.value : null,
+        // Sur place : tout est dû au rendez-vous (gratuit : aucun champ)
+        ...bookingAmountsFor(type),
       });
     } catch (error) {
       if (error?.code === 11000) throw new BookingError("SLOT_TAKEN", 409);
@@ -766,6 +781,42 @@ export async function createBooking({
   logger.info(
     `[rendez-vous] réservation ${booking._id} (organisateur ${page.userId}, ${startAt.toISOString()})`,
   );
+
+  return finalizeBooking({ booking, context, token });
+}
+
+/**
+ * Montants d'un rendez-vous payant (centimes), écrits à la réservation ;
+ * rien pour un rendez-vous gratuit.
+ */
+export function bookingAmountsFor(type) {
+  const mode = slotPaymentModeOf(type);
+  if (!mode) return {};
+  const amount = type.priceAmount;
+  const amountOnline =
+    mode === "ONLINE"
+      ? amount
+      : mode === "DEPOSIT"
+        ? slotDepositAmountOf(type) || amount
+        : 0;
+  return {
+    paymentMode: mode,
+    amount,
+    currency: type.currency || "EUR",
+    amountOnline,
+    amountDueOnSite: amount - amountOnline,
+  };
+}
+
+/**
+ * Suite d'une réservation confirmée (gratuite, sur place, ou payée) :
+ * client CRM, Calendrier Newbi, agenda connecté et lien de visio,
+ * e-mails. N'annule jamais la réservation : erreurs journalisées.
+ * @returns {Promise<{ booking, token, emails: Promise }>}
+ */
+export async function finalizeBooking({ booking: confirmed, context, token }) {
+  let booking = confirmed;
+  const { page, organization, host } = context;
 
   // 5. Client CRM
   let clientId = null;
@@ -842,12 +893,15 @@ export async function createBooking({
 
   // 8. E-mails, après le lien de visioconférence
   const organizationName = organizationNameOf(organization) || host.name;
+  const manageToken = token || manageTokenOf(booking);
   const emails = sendBoth(
     buildGuestConfirmationEmail({
       booking,
       host,
       organizationName,
-      manageUrl: manageUrlFor(token),
+      manageUrl: manageToken
+        ? manageUrlFor(manageToken)
+        : publicPageUrl(page.slug),
     }),
     buildHostNewBookingEmail({
       booking,
@@ -861,7 +915,7 @@ export async function createBooking({
     return null;
   });
 
-  return { booking, token, emails };
+  return { booking, token: manageToken, emails };
 }
 
 // ─── Gestion par l'invité ─────────────────────────────────────────────────
@@ -894,6 +948,9 @@ export async function loadManageContext(booking, now = new Date()) {
   ]);
   const upcoming =
     booking.status === "CONFIRMED" && new Date(booking.startAt) > now;
+  // Payé en ligne (tout ou acompte) : pas de remboursement automatique, le
+  // participant s'adresse à l'organisateur
+  const paidOnline = Number(booking.amountOnline) > 0;
   const canReschedule =
     upcoming &&
     Boolean(page?.isActive) &&
@@ -905,7 +962,7 @@ export async function loadManageContext(booking, now = new Date()) {
     type: type?.isActive ? type : null,
     organization,
     host: host || { name: "", email: null },
-    canCancel: upcoming,
+    canCancel: upcoming && !paidOnline,
     canReschedule,
   };
 }
@@ -1077,7 +1134,21 @@ export async function cancelBooking({
   now = new Date(),
 }) {
   const updated = await Booking.findOneAndUpdate(
-    { _id: booking._id, status: "CONFIRMED" },
+    booking.status === "PENDING_PAYMENT"
+      ? {
+          _id: booking._id,
+          status: "PENDING_PAYMENT",
+          // Jamais pendant un encaissement PayPal en cours
+          $or: [
+            { "payment.status": { $ne: "capturing" } },
+            {
+              "payment.captureClaimedAt": {
+                $lte: new Date(now.getTime() - 2 * MINUTE),
+              },
+            },
+          ],
+        }
+      : { _id: booking._id, status: "CONFIRMED" },
     {
       $set: {
         status: "CANCELLED",
@@ -1094,6 +1165,19 @@ export async function cancelBooking({
       booking: await Booking.findById(booking._id),
       emails: Promise.resolve(null),
     };
+  }
+  // En attente de paiement : rien d'écrit dans les agendas, aucun e-mail ;
+  // le paiement en ligne encore ouvert est fermé
+  if (booking.status === "PENDING_PAYMENT") {
+    const { closeDirectCheckout } =
+      await import("../payments/directPayments.js");
+    await closeDirectCheckout(
+      updated.payment,
+      updated.workspaceId,
+      "[rendez-vous]",
+    );
+    logger.info(`[rendez-vous] réservation en attente ${updated._id} annulée`);
+    return { booking: updated, emails: Promise.resolve(null) };
   }
 
   const connection = await connectionOf(updated);

@@ -39,6 +39,8 @@ const notificationSchema = new mongoose.Schema(
         "FISCAL_DEADLINE", // Échéance fiscale du jour (déclaration de TVA, Urssaf…)
         "TRANSFER_PAID", // Transfert de fichiers payé par son destinataire
         "TRANSFER_BANK_DECLARED", // Virement annoncé par le destinataire d'un transfert payant
+        "APPOINTMENT_BANK_DECLARED", // Virement annoncé pour un rendez-vous ou une inscription payants
+        "APPOINTMENT_REFUND_NEEDED", // Paiement d'un rendez-vous ou d'une inscription arrivé trop tard : à rembourser
       ],
       index: true,
     },

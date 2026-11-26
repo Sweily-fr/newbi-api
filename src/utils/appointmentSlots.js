@@ -129,8 +129,10 @@ export function computeAvailableSlots({
   const finalDay = to < lastDay ? to : lastDay;
   if (firstDay > finalDay) return [];
 
+  // Confirmées, et en attente de paiement : le créneau est tenu
   const confirmed = bookings.filter(
-    (b) => !b.status || b.status === "CONFIRMED",
+    (b) =>
+      !b.status || b.status === "CONFIRMED" || b.status === "PENDING_PAYMENT",
   );
 
   // Occupé : agendas tels quels, réservations élargies de leurs propres
