@@ -26,6 +26,10 @@ import BookingPage from "../../models/BookingPage.js";
 import Event from "../../models/Event.js";
 import EventRegistration, {
   TICKET_TOKEN_PATTERN,
+  amountDueOnSiteOf,
+  amountOnlineOf,
+  expectedOnlineAmount,
+  registrationPaymentModeOf,
   generateTicketNumber,
   generateTicketToken,
   hashToken,
@@ -89,11 +93,17 @@ import {
 import PaypalMerchantAccount from "../../models/PaypalMerchantAccount.js";
 import { paymentReturnBase } from "../transferPaymentService.js";
 import { publishCalendarEventsChanged } from "../calendar/CalendarWebhookService.js";
-import { locationLabel } from "../../utils/appointmentValidation.js";
+import {
+  eventDepositAmountOf,
+  eventPaymentModeOf,
+  locationLabel,
+} from "../../utils/appointmentValidation.js";
 import logger from "../../utils/logger.js";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
+export { amountDueOnSiteOf, amountOnlineOf, registrationPaymentModeOf };
+
 // Places bloquées pour une inscription non payée
 export const PENDING_TTL_MS = 30 * MINUTE;
 // Session Stripe : 30 minutes au moins (exigence Stripe), un peu plus que
@@ -167,6 +177,17 @@ export const priceOf = (type) =>
     ? { amount: type.priceAmount, currency: type.currency || "EUR" }
     : null;
 
+/** Mode de paiement d'un événement (null s'il est gratuit, ONLINE par défaut). */
+export const paymentModeOf = (type) => eventPaymentModeOf(type);
+
+/** Montant d'une place payé en ligne : prix, acompte ou 0 (sur place). */
+export function onlineUnitAmountOf(type) {
+  const mode = eventPaymentModeOf(type);
+  if (mode === "ONLINE") return type.priceAmount;
+  if (mode === "DEPOSIT") return eventDepositAmountOf(type) || type.priceAmount;
+  return 0;
+}
+
 /**
  * Moyens de paiement en ligne prêts pour vendre des billets
  * (sous-ensemble de stripe, paypal, sumup, dans cet ordre).
@@ -207,6 +228,8 @@ export function publicEventSummary(type, now = new Date()) {
     imageUrl: type.imageUrl || null,
     coverImageUrl: type.coverImageUrl || null,
     price: priceOf(type),
+    paymentMode: paymentModeOf(type),
+    depositAmount: eventDepositAmountOf(type),
     seatsLeft: left,
     soldOut: left === 0,
     registrationOpen: registrationOpen(type, now),
@@ -414,10 +437,13 @@ const ticketPayload = (ticket) => ({
   checkedInAt: iso(ticket.checkedInAt),
 });
 
-/** Le participant peut-il annuler lui-même ? (gratuite, confirmée, à venir) */
+/**
+ * Le participant peut-il annuler lui-même ? (rien payé en ligne : gratuite
+ * ou sur place ; confirmée, à venir)
+ */
 export const guestCanCancel = (registration, now = new Date()) =>
   registration.status === "CONFIRMED" &&
-  !(registration.amount > 0) &&
+  !(amountOnlineOf(registration) > 0) &&
   new Date(registration.event.startAt) > now;
 
 /**
@@ -441,6 +467,7 @@ export async function registrationPayload(
     quantity: registration.quantity,
     amount: registration.amount || 0,
     currency: registration.currency || "EUR",
+    ...paymentFieldsOf(registration),
     buyer: {
       firstName: registration.buyer.firstName,
       lastName: registration.buyer.lastName,
@@ -456,6 +483,14 @@ export async function registrationPayload(
     refundStatus: refundStatusOf(registration),
   };
 }
+
+/** Paiement d'une inscription vu par le participant (acompte, sur place). */
+export const paymentFieldsOf = (registration) => ({
+  paymentMode: registrationPaymentModeOf(registration),
+  amountOnline: amountOnlineOf(registration),
+  amountDueOnSite: amountDueOnSiteOf(registration),
+  onSitePaidAt: iso(registration.onSitePaidAt),
+});
 
 /**
  * État du remboursement d'une inscription payée mais non confirmée
@@ -601,7 +636,10 @@ export async function registerForEvent({
   }
 
   const price = priceOf(type);
-  if (price) {
+  const mode = paymentModeOf(type);
+  // Sur place : comme un gratuit, aucun prestataire ni moyen exigé
+  const online = Boolean(price) && mode !== "ON_SITE";
+  if (online) {
     const methods = await eventPaymentMethods(type.workspaceId);
     if (!provider || !methods.includes(provider)) {
       throw new EventRegistrationError("PAYMENT_METHOD_UNAVAILABLE", 409);
@@ -633,6 +671,7 @@ export async function registerForEvent({
   // 3. Inscription
   const manageToken = generateManageToken();
   const amount = price ? price.amount * quantity : 0;
+  const amountOnline = online ? onlineUnitAmountOf(type) * quantity : 0;
   let registration;
   try {
     registration = await EventRegistration.create({
@@ -661,6 +700,14 @@ export async function registerForEvent({
       unitAmount: price ? price.amount : 0,
       amount,
       currency: price ? price.currency : "EUR",
+      // Payante seulement : une gratuite garde la forme d'avant l'acompte
+      ...(price
+        ? {
+            paymentMode: mode,
+            amountOnline,
+            amountDueOnSite: amount - amountOnline,
+          }
+        : {}),
       status: "PENDING_PAYMENT",
       seatsHeld: true,
       // Gratuit aussi : une confirmation interrompue expire et rend ses places
@@ -677,19 +724,19 @@ export async function registerForEvent({
     `${LOG} inscription ${registration._id} (événement ${type._id}, ${quantity} place(s), ${amount} centimes)`,
   );
 
-  // 4a. Gratuit : confirmé tout de suite
-  if (!price) {
+  // 4a. Gratuit ou sur place : confirmé tout de suite
+  if (!online) {
     let confirmed = null;
     try {
       confirmed = await confirmWithTickets(registration, ["PENDING_PAYMENT"]);
     } catch (error) {
       logger.error(
-        `${LOG} inscription gratuite ${registration._id} non confirmée : ${error.message}`,
+        `${LOG} inscription sans paiement en ligne ${registration._id} non confirmée : ${error.message}`,
       );
     }
     if (!confirmed) {
       await expireRegistration(registration);
-      throw new Error("inscription gratuite non confirmée");
+      throw new Error("inscription sans paiement en ligne non confirmée");
     }
     const emails = afterConfirmation(
       confirmed.registration,
@@ -708,7 +755,7 @@ export async function registerForEvent({
   const returnToken = crypto.randomBytes(32).toString("base64url");
   const back = `${paymentReturnBase(returnOrigin)}/rdv/${page.slug}/${type.slug}/retour?rt=${returnToken}&provider=${provider}`;
   const seats = `${quantity} place${quantity > 1 ? "s" : ""}`;
-  const name = `Billet : ${String(type.name).slice(0, 200)}`;
+  const name = `${mode === "DEPOSIT" ? "Acompte" : "Billet"} : ${String(type.name).slice(0, 200)}`;
   const metadata = {
     type: "event_registration",
     eventRegistrationId: String(registration._id),
@@ -719,7 +766,8 @@ export async function registerForEvent({
     started = await createDirectCheckout({
       provider,
       workspaceId: page.workspaceId,
-      amount: amount / 100,
+      // Acompte ou total : le montant vérifié ensuite chez le prestataire
+      amount: amountOnline / 100,
       currency: price.currency,
       name,
       description: seats,
@@ -946,12 +994,15 @@ export async function applyStripeSessionToRegistration(
   }
   if (session.payment_status === "paid") {
     const currency = String(session.currency || "").toUpperCase();
+    // Acompte ou total : jamais un autre montant (ni le total d'un acompte)
+    const expected = expectedOnlineAmount(registration);
     if (
-      session.amount_total !== registration.amount ||
+      !(expected > 0) ||
+      session.amount_total !== expected ||
       currency !== String(registration.currency || "EUR").toUpperCase()
     ) {
       logger.error(
-        `${LOG} ANOMALIE : session ${session.id} payée ${session.amount_total} ${currency} pour l'inscription ${registration._id} (${registration.amount} ${registration.currency}) : non appliquée`,
+        `${LOG} ANOMALIE : session ${session.id} payée ${session.amount_total} ${currency} pour l'inscription ${registration._id} (${expected} ${registration.currency}) : non appliquée`,
       );
       return { status: "unpaid" };
     }
@@ -1006,8 +1057,10 @@ async function applyPaypalSummary(registration, summary) {
     return { status: "unpaid" };
   }
   if (summary.captureStatus === "COMPLETED") {
+    const expected = expectedOnlineAmount(registration);
     if (
-      !sameAmount(summary.amount, registration.amount / 100) ||
+      !(expected > 0) ||
+      !sameAmount(summary.amount, expected / 100) ||
       String(summary.currency || "").toUpperCase() !==
         String(registration.currency || "EUR").toUpperCase()
     ) {
@@ -1020,7 +1073,7 @@ async function applyPaypalSummary(registration, summary) {
       provider: "paypal",
       paymentId: summary.captureId,
       captureId: summary.captureId,
-      amountCents: registration.amount,
+      amountCents: expected,
       payerEmail: summary.payerEmail,
     });
   }
@@ -1182,8 +1235,10 @@ export async function applySumupSummary(registration, summary, account) {
   }
   if (summary.status === "PAID") {
     const currency = String(summary.currency || "").toUpperCase();
+    const expected = expectedOnlineAmount(registration);
     if (
-      !sameAmount(summary.amount, registration.amount / 100) ||
+      !(expected > 0) ||
+      !sameAmount(summary.amount, expected / 100) ||
       currency !== String(registration.currency || "EUR").toUpperCase()
     ) {
       logger.error(
@@ -1194,7 +1249,7 @@ export async function applySumupSummary(registration, summary, account) {
     return markRegistrationPaid(registration, {
       provider: "sumup",
       paymentId: summary.id,
-      amountCents: registration.amount,
+      amountCents: expected,
       accountId: expectedMerchant || undefined,
       refundReference: summary.transactionId || undefined,
     });
@@ -1213,7 +1268,8 @@ export async function refreshRegistrationPayment(
   registration,
   { force = false, sessionId, orderId } = {},
 ) {
-  if (!(registration.amount > 0)) return { status: "free" };
+  // Gratuite ou sur place : rien à relire
+  if (!(expectedOnlineAmount(registration) > 0)) return { status: "free" };
   const payment = registration.payment || {};
   if (payment.paidAt) return { status: "paid" };
   if (!ONLINE_PAYMENT_PROVIDERS.includes(payment.provider)) {
@@ -1669,6 +1725,8 @@ export async function ticketPagePayload(registration, ticket, token) {
     number: ticket.number,
     attendeeName: ticket.attendeeName,
     checkedInAt: iso(ticket.checkedInAt),
+    currency: registration.currency || "EUR",
+    ...paymentFieldsOf(registration),
     event: eventPayload(registration, context.type, context.page, {
       confirmed: registration.status === "CONFIRMED",
     }),
@@ -1792,6 +1850,57 @@ export async function undoTicketCheckIn({ scope, ticketId }) {
     { new: true },
   );
   return updated ? updated.tickets.id(ticketId) : null;
+}
+
+// ─── Reste réglé sur place ───────────────────────────────────────────────
+
+/**
+ * Marque (paid) ou démarque le reste dû sur place d'une inscription
+ * confirmée de l'organisateur. `scope` : { workspaceId, hostUserId }.
+ * @returns {Promise<{registration}|{error: "NOT_FOUND"|"NOT_CONFIRMED"|"NOTHING_DUE"}>}
+ */
+export async function markRegistrationPaidOnSite({
+  scope,
+  registrationId,
+  paid,
+  userId,
+  now = new Date(),
+}) {
+  if (!isObjectId(String(registrationId))) return { error: "NOT_FOUND" };
+  const filter = {
+    _id: toObjectId(registrationId),
+    workspaceId: scope.workspaceId,
+    hostUserId: scope.hostUserId,
+  };
+  const registration = await EventRegistration.findOne(filter);
+  if (!registration) return { error: "NOT_FOUND" };
+  if (registration.status !== "CONFIRMED") return { error: "NOT_CONFIRMED" };
+  if (!(amountDueOnSiteOf(registration) > 0)) return { error: "NOTHING_DUE" };
+  // Déjà dans l'état demandé : rien n'est réécrit (date du premier marquage)
+  if (Boolean(registration.onSitePaidAt) === Boolean(paid)) {
+    return { registration };
+  }
+  const updated = await EventRegistration.findOneAndUpdate(
+    { ...filter, status: "CONFIRMED", amountDueOnSite: { $gt: 0 } },
+    paid
+      ? {
+          $set: {
+            onSitePaidAt: now,
+            onSitePaidBy: userId ? toObjectId(userId) : null,
+          },
+        }
+      : { $unset: { onSitePaidAt: "", onSitePaidBy: "" } },
+    { new: true },
+  );
+  if (!updated) {
+    const fresh = await EventRegistration.findOne(filter);
+    if (!fresh) return { error: "NOT_FOUND" };
+    return { error: "NOT_CONFIRMED" };
+  }
+  logger.info(
+    `${LOG} inscription ${updated._id} : reste sur place ${paid ? "réglé" : "de nouveau dû"}`,
+  );
+  return { registration: updated };
 }
 
 // ─── Rappels de la veille ────────────────────────────────────────────────

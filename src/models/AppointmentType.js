@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import {
   APPOINTMENT_TYPE_KINDS,
   DEFAULT_SLOT_INTERVAL,
+  EVENT_PAYMENT_MODES,
   EVENT_MAX_DURATION_MINUTES,
   LOCATION_KINDS,
   SLOT_INTERVALS,
@@ -98,6 +99,12 @@ const appointmentTypeSchema = new mongoose.Schema(
     maxPerOrder: { type: Number, min: 1, max: 10 },
     // Null = startAt
     registrationClosesAt: { type: Date },
+    // Paiement d'un événement payant (sans valeur par défaut, lecture avec
+    // repli : absent = ONLINE). ONLINE : tout en ligne ; DEPOSIT : acompte
+    // par place en ligne (depositAmount, centimes), le reste sur place ;
+    // ON_SITE : tout sur place, aucun prestataire
+    paymentMode: { type: String, enum: EVENT_PAYMENT_MODES },
+    depositAmount: { type: Number, min: 1 },
     // Entrée du Calendrier de l'organisateur
     calendarEventId: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
   },

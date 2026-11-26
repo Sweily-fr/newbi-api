@@ -19,9 +19,13 @@ import {
 } from "../services/storage/storageService.js";
 import {
   EventRegistrationError,
+  amountDueOnSiteOf,
+  amountOnlineOf,
   cancelRegistration,
   checkInTicket,
   eventPaymentMethods,
+  markRegistrationPaidOnSite,
+  registrationPaymentModeOf,
   undoTicketCheckIn,
 } from "../services/appointments/eventRegistrationService.js";
 import {
@@ -149,6 +153,9 @@ export function registrationsCsv(registrations, zone) {
     "Téléphone",
     "Places de l'inscription",
     "Montant de l'inscription (€)",
+    "Payé en ligne",
+    "Reste sur place",
+    "Réglé sur place",
     "Moyen de paiement",
     "Statut",
     "Inscrit le",
@@ -167,8 +174,20 @@ export function registrationsCsv(registrations, zone) {
           registration.buyer.phone || "",
           registration.quantity,
           formatAmount(registration.amount),
+          formatAmount(amountOnlineOf(registration)),
+          formatAmount(amountDueOnSiteOf(registration)),
+          // Rien à régler sur place : cellule vide
+          amountDueOnSiteOf(registration) > 0
+            ? registration.onSitePaidAt
+              ? "oui"
+              : "non"
+            : "",
           PROVIDER_LABELS[registration.payment?.provider] ||
-            (registration.amount > 0 ? "" : "Gratuit"),
+            (registration.amount > 0
+              ? registrationPaymentModeOf(registration) === "ON_SITE"
+                ? "Sur place"
+                : ""
+              : "Gratuit"),
           STATUS_LABELS[registration.status] || registration.status,
           formatDate(registration.createdAt, zone),
           formatDate(ticket.checkedInAt, zone),
@@ -195,6 +214,10 @@ const appointmentEventsResolvers = {
     currency: (r) => r.currency || "EUR",
     paymentProvider: (r) => r.payment?.provider || null,
     paidAt: (r) => r.payment?.paidAt || null,
+    amountOnline: (r) => amountOnlineOf(r),
+    amountDueOnSite: (r) => amountDueOnSiteOf(r),
+    onSitePaidAt: (r) => r.onSitePaidAt || null,
+    paymentMode: (r) => registrationPaymentModeOf(r),
     expiresAt: (r) => (r.status === "PENDING_PAYMENT" ? r.expiresAt : null),
     refundedAt: (r) => r.payment?.refundedAt || null,
     refundFailed: (r) =>
@@ -383,6 +406,34 @@ const appointmentEventsResolvers = {
         registration: result.registration || null,
         otherEventName: result.otherEventName || null,
       };
+    }),
+
+    markEventRegistrationPaidOnSite: requireWorkspaceAction(
+      "appointments",
+      "edit",
+    )(async (_, { id, paid }, ctx) => {
+      await checkSubscriptionActive(ctx);
+      const result = await markRegistrationPaidOnSite({
+        scope: hostScope(ctx),
+        registrationId: id,
+        paid: Boolean(paid),
+        userId: userIdOf(ctx),
+      });
+      if (result.error === "NOT_FOUND")
+        throw createNotFoundError("Inscription");
+      if (result.error === "NOT_CONFIRMED") {
+        throw new AppError(
+          "Seule une inscription confirmée peut être marquée comme réglée sur place.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error === "NOTHING_DUE") {
+        throw new AppError(
+          "Cette inscription n'a rien à régler sur place.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      return result.registration;
     }),
 
     undoTicketCheckIn: requireWorkspaceAction(

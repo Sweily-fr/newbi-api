@@ -41,6 +41,7 @@ import {
   guestCanCancel,
   handlePaymentReturn,
   isEvent,
+  paymentModeOf,
   publicEventDetail,
   publicEventSummary,
   registerForEvent,
@@ -238,6 +239,12 @@ const publicType = (type) => ({
 });
 
 /** Événement terminé : plus affiché. */
+/** Événement payé en ligne (tout ou acompte) : un moyen de paiement est choisi. */
+const paysOnline = (type) => {
+  const mode = paymentModeOf(type);
+  return mode === "ONLINE" || mode === "DEPOSIT";
+};
+
 const isPastEvent = (type, now = new Date()) =>
   isEvent(type) && (!type.endAt || new Date(type.endAt) <= now);
 
@@ -298,7 +305,7 @@ export function validateRegistrationBody(body, type) {
   const provider = text(body?.provider) || null;
   if (provider && !ONLINE_PAYMENT_PROVIDERS.includes(provider)) {
     fields.provider = "Moyen de paiement inconnu.";
-  } else if (type.priceAmount > 0 && !provider) {
+  } else if (paysOnline(type) && !provider) {
     fields.provider = "Choisissez un moyen de paiement.";
   }
   return {
@@ -741,6 +748,10 @@ router.post(
             quantity: 1,
             amount: 0,
             currency: "EUR",
+            paymentMode: null,
+            amountOnline: 0,
+            amountDueOnSite: 0,
+            onSitePaidAt: null,
             buyer: { firstName: "", lastName: "", email: "" },
             event: null,
             page: null,
@@ -777,7 +788,8 @@ router.post(
         buyer,
         quantity,
         timezone,
-        provider: type.priceAmount > 0 ? provider : null,
+        // Sur place (ou gratuit) : moyen de paiement ignoré
+        provider: paysOnline(type) ? provider : null,
         returnOrigin: req.get("origin") || null,
       });
       if (result.paymentUrl) {
