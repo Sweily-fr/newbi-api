@@ -15,6 +15,46 @@ enum BookingStatus {
   CANCELLED
 }
 
+"Créneau (prise de rendez-vous) ou événement (billetterie)"
+enum AppointmentTypeKind {
+  SLOT
+  EVENT
+}
+
+enum EventRegistrationStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
+enum TicketCheckInResult {
+  "Billet valide, marqué présent à l'instant"
+  VALID
+  "Déjà scanné (ticket.checkedInAt = premier passage)"
+  ALREADY_CHECKED_IN
+  "Inscription annulée ou expirée"
+  CANCELLED
+  "Inscription en attente de paiement"
+  NOT_PAID
+  "Billet d'un autre de vos événements"
+  OTHER_EVENT
+  "Code illisible, billet inexistant ou d'un autre organisateur"
+  UNKNOWN
+}
+
+"COVER : image de fond (bandeau) ; IMAGE : image de l'événement"
+enum EventImageKind {
+  COVER
+  IMAGE
+}
+
+"Montant en centimes"
+type Money {
+  amount: Int!
+  currency: String!
+}
+
 type AvailabilityInterval {
   "Heure locale HH:mm (fuseau de la page)"
   start: String!
@@ -78,8 +118,93 @@ type AppointmentType {
   requirePhone: Boolean!
   "https://www.newbi.fr/rdv/<slug de la page>/<slug du type>"
   publicUrl: String!
-  "Réservations confirmées à venir"
+  "Réservations confirmées à venir (événement : inscriptions confirmées s'il n'est pas passé)"
   upcomingCount: Int!
+  kind: AppointmentTypeKind!
+  "Événement seulement (null pour un créneau)"
+  startAt: DateTime
+  endAt: DateTime
+  "Texte long, sauts de ligne gardés, à rendre en texte"
+  details: String
+  coverImageUrl: String
+  imageUrl: String
+  "Null = illimité"
+  capacity: Int
+  "Places prises : confirmées et en attente de paiement"
+  seatsTaken: Int!
+  "Null = illimité"
+  seatsLeft: Int
+  maxPerOrder: Int!
+  "Null = début de l'événement"
+  registrationClosesAt: DateTime
+  "Prix d'un billet (null = gratuit)"
+  price: Money
+  "Inscriptions confirmées"
+  registrationsCount: Int!
+  "Billets des inscriptions confirmées"
+  ticketsCount: Int!
+  "Billets marqués présents"
+  checkedInCount: Int!
+}
+
+type EventRegistrationBuyer {
+  firstName: String!
+  lastName: String!
+  email: String!
+  phone: String
+  timezone: String
+}
+
+type EventTicket {
+  id: ID!
+  "« EVT-7K3M9Q »"
+  number: String!
+  attendeeName: String!
+  checkedInAt: DateTime
+  checkedInBy: ID
+}
+
+type EventRegistration {
+  id: ID!
+  appointmentTypeId: ID
+  eventName: String!
+  eventStartAt: DateTime!
+  eventEndAt: DateTime!
+  buyer: EventRegistrationBuyer!
+  quantity: Int!
+  "Total en centimes (0 = gratuit)"
+  amount: Int!
+  currency: String!
+  status: EventRegistrationStatus!
+  "stripe, paypal, sumup ou null"
+  paymentProvider: String
+  paidAt: DateTime
+  "En attente de paiement : fin de la réservation des places"
+  expiresAt: DateTime
+  "GUEST ou HOST"
+  cancelledBy: String
+  cancelledAt: DateTime
+  cancelReason: String
+  "Paiement arrivé sans place disponible : remboursé automatiquement"
+  refundedAt: DateTime
+  clientId: ID
+  tickets: [EventTicket!]!
+  checkedInCount: Int!
+  createdAt: DateTime
+}
+
+type EventRegistrationList {
+  items: [EventRegistration!]!
+  totalCount: Int!
+}
+
+type TicketCheckIn {
+  result: TicketCheckInResult!
+  "Null pour UNKNOWN et OTHER_EVENT"
+  ticket: EventTicket
+  registration: EventRegistration
+  "OTHER_EVENT seulement"
+  otherEventName: String
 }
 
 type BookingGuest {
@@ -167,6 +292,29 @@ input AppointmentTypeInput {
   position: Int
   isActive: Boolean
   requirePhone: Boolean
+  "À la création seulement (SLOT par défaut)"
+  kind: AppointmentTypeKind
+  startAt: DateTime
+  endAt: DateTime
+  details: String
+  "URL renvoyée par uploadAppointmentEventImage, null pour retirer"
+  coverImageUrl: String
+  imageUrl: String
+  "1 à 100 000, null = illimité"
+  capacity: Int
+  "1 à 10"
+  maxPerOrder: Int
+  "Null = début de l'événement"
+  registrationClosesAt: DateTime
+  "Null ou 0 = gratuit ; 50 à 1 000 000 centimes"
+  price: MoneyInput
+}
+
+input MoneyInput {
+  "Centimes"
+  amount: Int!
+  "EUR (défaut)"
+  currency: String
 }
 
 extend type Query {
@@ -187,6 +335,22 @@ extend type Query {
   booking(id: ID!, workspaceId: ID): Booking
   "Adresse de page libre (format valide, non réservée, non prise)"
   bookingSlugAvailable(slug: String!, workspaceId: ID): Boolean!
+  """
+  Inscrits d'un événement, plus récentes d'abord. search : nom, e-mail ou
+  numéro de billet. status absent : toutes sauf EXPIRED
+  """
+  eventRegistrations(
+    workspaceId: ID
+    typeId: ID!
+    search: String
+    status: EventRegistrationStatus
+    limit: Int
+    offset: Int
+  ): EventRegistrationList!
+  "Export CSV (séparateur ;, UTF-8 avec BOM, un billet par ligne, inscriptions confirmées)"
+  eventRegistrationsCsv(workspaceId: ID, typeId: ID!): String!
+  "Moyens de paiement en ligne prêts pour vendre des billets (stripe, paypal, sumup)"
+  eventPaymentMethods(workspaceId: ID): [String!]!
 }
 
 extend type Mutation {
@@ -208,4 +372,24 @@ extend type Mutation {
   deleteAppointmentType(id: ID!, workspaceId: ID): Boolean!
   "Annulation par l'organisateur (e-mail à l'invité)"
   cancelBooking(id: ID!, workspaceId: ID, reason: String): Booking!
+  "Image d'un événement (jpg, png, webp, heic ; 5 Mo max), convertie en WebP"
+  uploadAppointmentEventImage(
+    workspaceId: ID
+    file: Upload!
+    kind: EventImageKind!
+  ): ImageUploadResult!
+  "Annulation d'une inscription par l'organisateur (places rendues, e-mail au participant, pas de remboursement automatique)"
+  cancelEventRegistration(
+    id: ID!
+    workspaceId: ID
+    reason: String
+  ): EventRegistration!
+  """
+  Contrôle d'un billet à l'entrée de l'événement typeId. code : URL du QR
+  code, jeton seul ou numéro (« EVT-7K3M9Q », préfixe facultatif). VALID
+  marque le billet présent
+  """
+  checkInTicket(workspaceId: ID, typeId: ID!, code: String!): TicketCheckIn!
+  "Retire le marquage « présent » d'un billet"
+  undoTicketCheckIn(workspaceId: ID, ticketId: ID!): EventTicket!
 }

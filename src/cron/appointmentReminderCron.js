@@ -11,6 +11,7 @@ import {
   remindersMode,
   runAppointmentReminders,
 } from "../services/appointments/reminderService.js";
+import { runEventReminders } from "../services/appointments/eventRegistrationService.js";
 
 export const APPOINTMENT_REMINDER_CRON = "*/5 * * * *";
 
@@ -31,6 +32,8 @@ export function startAppointmentReminderCron() {
       running = true;
       try {
         await runAppointmentReminders();
+        // Billetterie : rappel la veille aux participants
+        await runEventReminders();
       } catch (error) {
         logger.error(`[appointmentReminderCron] erreur : ${error.message}`);
       } finally {

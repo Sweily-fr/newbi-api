@@ -40,6 +40,18 @@ import {
   slugify,
 } from "../utils/appointmentValidation.js";
 import { cancelBooking } from "../services/appointments/bookingService.js";
+import EventRegistration from "../models/EventRegistration.js";
+import {
+  eventPaymentMethods,
+  refreshRegistrationSnapshots,
+  seatsLeftOf,
+  syncEventCalendarEntry,
+} from "../services/appointments/eventRegistrationService.js";
+import {
+  assertEventConsistency,
+  eventChanges,
+  eventDurationMinutes,
+} from "../utils/eventValidation.js";
 import { publicPageUrl } from "../services/appointments/bookingEmails.js";
 import { isObjectIdString } from "../utils/objectIdString.js";
 import logger from "../utils/logger.js";
@@ -191,7 +203,7 @@ async function pageChanges(input, userId) {
 }
 
 /** Champs de type de rendez-vous à enregistrer, contrôlés. */
-async function typeChanges(input, userId) {
+async function typeChanges(input, userId, { event = false } = {}) {
   const changes = {};
   if (has(input, "name") && input.name !== null) {
     const name = String(input.name).trim();
@@ -215,6 +227,7 @@ async function typeChanges(input, userId) {
     );
   }
   const integer = (key, options) => {
+    if (event && key !== "position") return;
     if (has(input, key) && input[key] !== null) {
       changes[key] = boundedInteger(input[key], { field: key, ...options });
     }
@@ -237,7 +250,11 @@ async function typeChanges(input, userId) {
   });
   integer("maxDaysAhead", { min: 1, max: MAX_DAYS_AHEAD, label: "L'horizon" });
   integer("position", { min: 0, max: 1000, label: "La position" });
-  if (has(input, "slotIntervalMinutes") && input.slotIntervalMinutes !== null) {
+  if (
+    !event &&
+    has(input, "slotIntervalMinutes") &&
+    input.slotIntervalMinutes !== null
+  ) {
     if (!SLOT_INTERVALS.includes(Number(input.slotIntervalMinutes))) {
       throw new AppointmentInputError(
         `L'intervalle entre créneaux doit valoir ${SLOT_INTERVALS.join(", ")} minutes.`,
@@ -246,7 +263,7 @@ async function typeChanges(input, userId) {
     }
     changes.slotIntervalMinutes = Number(input.slotIntervalMinutes);
   }
-  if (has(input, "maxPerDay")) {
+  if (!event && has(input, "maxPerDay")) {
     changes.maxPerDay =
       input.maxPerDay === null
         ? null
@@ -270,10 +287,47 @@ async function typeChanges(input, userId) {
   if (has(input, "requirePhone") && input.requirePhone !== null) {
     changes.requirePhone = Boolean(input.requirePhone);
   }
-  if (has(input, "location") && input.location !== null) {
+  if (!event && has(input, "location") && input.location !== null) {
     changes.location = normalizeLocation(
       input.location,
       await activeProvidersOf(userId),
+    );
+  }
+  return changes;
+}
+
+const kindOf = (type) => (type?.kind === "EVENT" ? "EVENT" : "SLOT");
+
+/**
+ * Champs d'un événement : ceux d'un type (nom, description…) et les siens,
+ * contrôlés ensemble. `existing` : l'événement enregistré (modification).
+ */
+async function eventTypeChanges(input, ctx, existing = null) {
+  const changes = {
+    ...(await typeChanges(input, userIdOf(ctx), { event: true })),
+    ...eventChanges(input, { workspaceId: ctx.workspaceId }),
+  };
+  const merged = {
+    ...(existing
+      ? typeof existing.toObject === "function"
+        ? existing.toObject()
+        : existing
+      : {}),
+    ...changes,
+  };
+  assertEventConsistency(merged, { isCreation: !existing });
+  if (has(changes, "startAt") || has(changes, "endAt") || !existing) {
+    changes.durationMinutes = eventDurationMinutes(merged);
+  }
+  // Payant : un moyen de paiement en ligne doit être prêt
+  if (
+    merged.priceAmount > 0 &&
+    (has(changes, "priceAmount") || !existing) &&
+    (await eventPaymentMethods(ctx.workspaceId)).length === 0
+  ) {
+    throw new AppointmentInputError(
+      "Connectez Stripe, PayPal ou SumUp (Paramètres > Applications) pour vendre des billets.",
+      "price",
     );
   }
   return changes;
@@ -319,6 +373,40 @@ const withPageSlug = (type, pageSlug, upcoming) => {
 
 const isDuplicateKey = (error) => error?.code === 11000;
 
+/**
+ * Inscriptions confirmées, billets et présents d'un événement (calculés
+ * une fois par objet, mémorisés sur l'objet résolu).
+ */
+async function eventStats(type) {
+  const empty = { registrations: 0, tickets: 0, checkedIn: 0 };
+  if (kindOf(type) !== "EVENT") return empty;
+  if (!type._eventStats) {
+    type._eventStats = EventRegistration.aggregate([
+      { $match: { appointmentTypeId: type._id, status: "CONFIRMED" } },
+      {
+        $group: {
+          _id: null,
+          registrations: { $sum: 1 },
+          tickets: { $sum: { $size: "$tickets" } },
+          checkedIn: {
+            $sum: {
+              $size: {
+                $filter: {
+                  input: "$tickets",
+                  cond: {
+                    $ne: [{ $ifNull: ["$$this.checkedInAt", null] }, null],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ]).then((rows) => rows[0] || empty);
+  }
+  return type._eventStats;
+}
+
 const appointmentsResolvers = {
   BookingPage: {
     id: (page) => String(page._id || page.id),
@@ -353,7 +441,32 @@ const appointmentsResolvers = {
       }
       return publicPageUrl(slug, type.slug);
     },
+    kind: (type) => kindOf(type),
+    startAt: (type) => (kindOf(type) === "EVENT" ? type.startAt : null),
+    endAt: (type) => (kindOf(type) === "EVENT" ? type.endAt : null),
+    details: (type) => (kindOf(type) === "EVENT" ? type.details : null),
+    coverImageUrl: (type) =>
+      kindOf(type) === "EVENT" ? type.coverImageUrl : null,
+    imageUrl: (type) => (kindOf(type) === "EVENT" ? type.imageUrl : null),
+    capacity: (type) =>
+      kindOf(type) === "EVENT" ? (type.capacity ?? null) : null,
+    seatsTaken: (type) => type.seatsTaken || 0,
+    seatsLeft: (type) => (kindOf(type) === "EVENT" ? seatsLeftOf(type) : null),
+    maxPerOrder: (type) => type.maxPerOrder || 5,
+    registrationClosesAt: (type) =>
+      kindOf(type) === "EVENT" ? type.registrationClosesAt || null : null,
+    price: (type) =>
+      kindOf(type) === "EVENT" && type.priceAmount > 0
+        ? { amount: type.priceAmount, currency: type.currency || "EUR" }
+        : null,
+    registrationsCount: async (type) => (await eventStats(type)).registrations,
+    ticketsCount: async (type) => (await eventStats(type)).tickets,
+    checkedInCount: async (type) => (await eventStats(type)).checkedIn,
     upcomingCount: async (type) => {
+      if (kindOf(type) === "EVENT") {
+        if (type.endAt && new Date(type.endAt) < new Date()) return 0;
+        return (await eventStats(type)).registrations;
+      }
       if (Number.isInteger(type._upcomingCount)) return type._upcomingCount;
       return Booking.countDocuments({
         appointmentTypeId: type._id,
@@ -543,9 +656,27 @@ const appointmentsResolvers = {
           ERROR_CODES.NOT_FOUND,
         );
       }
+      const isEvent = input?.kind === "EVENT";
       let changes;
       try {
-        changes = await typeChanges(input || {}, userIdOf(ctx));
+        if (!isEvent && !changes) {
+          changes = await typeChanges(input || {}, userIdOf(ctx));
+        }
+        if (isEvent) {
+          if (!input.name || !String(input.name).trim()) {
+            throw new AppointmentInputError(
+              "Indiquez le nom de l'événement.",
+              "name",
+            );
+          }
+          if (!input.location) {
+            throw new AppointmentInputError(
+              "Indiquez l'adresse ou le lien de l'événement.",
+              "location",
+            );
+          }
+          changes = { ...(await eventTypeChanges(input, ctx)), kind: "EVENT" };
+        }
         if (!changes.name) {
           throw new AppointmentInputError(
             "Indiquez le nom du rendez-vous.",
@@ -575,6 +706,10 @@ const appointmentsResolvers = {
           slug,
           position,
         });
+        if (isEvent) {
+          const eventId = await syncEventCalendarEntry(type);
+          if (eventId) type.calendarEventId = eventId;
+        }
         return withPageSlug(type, page.slug, 0);
       } catch (error) {
         if (isDuplicateKey(error)) {
@@ -600,11 +735,43 @@ const appointmentsResolvers = {
         ...ownerScope(ctx),
       });
       if (!type) throw createNotFoundError("Type de rendez-vous");
+      const isEvent = kindOf(type) === "EVENT";
       let changes;
       try {
-        changes = await typeChanges(input || {}, userIdOf(ctx));
+        if (
+          has(input || {}, "kind") &&
+          input.kind &&
+          input.kind !== kindOf(type)
+        ) {
+          throw new AppointmentInputError(
+            "Un créneau ne peut pas devenir un événement, ni l'inverse : créez un nouveau type.",
+            "kind",
+          );
+        }
+        changes = isEvent
+          ? await eventTypeChanges(input || {}, ctx, type)
+          : await typeChanges(input || {}, userIdOf(ctx));
       } catch (error) {
         throw inputError(error);
+      }
+      // Places : jamais sous celles déjà prises (contrôle atomique)
+      if (isEvent && has(changes, "capacity") && changes.capacity !== null) {
+        const ok = await AppointmentType.updateOne(
+          {
+            _id: type._id,
+            $expr: {
+              $lte: [{ $ifNull: ["$seatsTaken", 0] }, changes.capacity],
+            },
+          },
+          { $set: { capacity: changes.capacity } },
+        );
+        if (!ok.matchedCount) {
+          throw new AppError(
+            "Le nombre de places ne peut pas être inférieur aux places déjà prises.",
+            ERROR_CODES.VALIDATION_ERROR,
+            { field: "capacity" },
+          );
+        }
       }
       Object.assign(type, changes);
       try {
@@ -619,6 +786,16 @@ const appointmentsResolvers = {
         }
         throw error;
       }
+      if (isEvent) {
+        if (
+          ["name", "startAt", "endAt", "location"].some((key) =>
+            has(changes, key),
+          )
+        ) {
+          await refreshRegistrationSnapshots(type);
+        }
+        await syncEventCalendarEntry(type);
+      }
       return type;
     }),
 
@@ -629,12 +806,36 @@ const appointmentsResolvers = {
       await checkSubscriptionActive(ctx);
       if (!isObjectIdString(id))
         throw createNotFoundError("Type de rendez-vous");
+      const existing = await AppointmentType.findOne({
+        _id: toObjectId(id),
+        ...ownerScope(ctx),
+      }).lean();
+      if (!existing) throw createNotFoundError("Type de rendez-vous");
+      // Événement à venir avec des inscrits : leurs billets resteraient
+      // orphelins
+      if (
+        kindOf(existing) === "EVENT" &&
+        existing.endAt &&
+        new Date(existing.endAt) > new Date() &&
+        (await EventRegistration.exists({
+          appointmentTypeId: existing._id,
+          status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
+        }))
+      ) {
+        throw new AppError(
+          "Annulez d'abord les inscriptions ou désactivez l'événement.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
       // Les réservations gardent leur instantané (nom, durée, lieu)
       const deleted = await AppointmentType.findOneAndDelete({
-        _id: toObjectId(id),
+        _id: existing._id,
         ...ownerScope(ctx),
       });
       if (!deleted) throw createNotFoundError("Type de rendez-vous");
+      if (kindOf(deleted) === "EVENT") {
+        await syncEventCalendarEntry(deleted, { remove: true });
+      }
       return true;
     }),
 
