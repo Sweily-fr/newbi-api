@@ -14,6 +14,7 @@ import mongoose from "mongoose";
 import Client from "../models/Client.js";
 import EmailCampaign, { EMPTY_STATS } from "../models/EmailCampaign.js";
 import EmailCampaignRecipient from "../models/EmailCampaignRecipient.js";
+import EmailSignatureV2 from "../models/EmailSignatureV2.js";
 import EmailSuppression from "../models/EmailSuppression.js";
 import EmailTrackingConsent from "../models/EmailTrackingConsent.js";
 import {
@@ -59,6 +60,12 @@ import {
 } from "../services/emailCampaigns/personalize.js";
 import { parseHttpUrl } from "../services/emailCampaigns/html.js";
 import { renderCampaignEmail } from "../services/emailCampaigns/render.js";
+import { listCampaignLinkTargets } from "../services/emailCampaigns/linkTargets.js";
+import {
+  loadCampaignSignatures,
+  renderCampaignSignature,
+  workspacePhoneRegion,
+} from "../services/emailCampaigns/signatures.js";
 import { aggregateLinkStats } from "../services/emailCampaigns/retention.js";
 import { resolveCampaignSender } from "../services/emailCampaigns/sendingDomains.js";
 import {
@@ -89,6 +96,8 @@ import { buildSearchRegex } from "../utils/searchRegex.js";
 import { isValidEmail } from "../utils/validators.js";
 
 const MODULE = "emailCampaigns";
+// Signatures proposées au bloc Signature (celles de l'utilisateur)
+const MAX_LISTED_SIGNATURES = 50;
 const NAME_MAX = 120;
 const SUBJECT_MAX = 200;
 const PREHEADER_MAX = 250;
@@ -488,8 +497,14 @@ const emailCampaignsResolvers = {
         const identity = campaign.snapshot?.companyName
           ? campaign.snapshot
           : await loadWorkspaceIdentity(ctx.workspaceId);
+        // Campagne lancée : signatures figées ; sinon leur version du moment
+        const signatures =
+          campaign.snapshot?.signatures && design == null
+            ? campaign.snapshot.signatures
+            : await loadCampaignSignatures(ctx.workspaceId, content);
         const rendered = renderCampaignEmail({
           design: content,
+          signatures,
           subject: subject ?? campaign.subject,
           preheader: preheader ?? campaign.preheader,
           vars,
@@ -504,6 +519,48 @@ const emailCampaignsResolvers = {
         };
       },
     ),
+
+    emailCampaignLinkTargets: can("view")(async (_, __, ctx) =>
+      listCampaignLinkTargets(ctx.workspaceId),
+    ),
+
+    emailCampaignSignatures: can("view")(async (_, { ids }, ctx) => {
+      const workspace = toObjectId(ctx.workspaceId);
+      const userId = String(ctx.user?._id || ctx.user?.id || "");
+      const own = mongoose.Types.ObjectId.isValid(userId)
+        ? await EmailSignatureV2.find({
+            workspaceId: workspace,
+            createdBy: toObjectId(userId),
+          })
+            .sort({ isDefault: -1, updatedAt: -1 })
+            .limit(MAX_LISTED_SIGNATURES)
+            .lean()
+        : [];
+      const ownIds = new Set(own.map((doc) => String(doc._id)));
+      const others = [...new Set((ids || []).map(String))]
+        .filter((id) => isObjectIdString(id) && !ownIds.has(id))
+        .slice(0, MAX_LISTED_SIGNATURES);
+      const extra = others.length
+        ? await EmailSignatureV2.find({
+            _id: { $in: others.map(toObjectId) },
+            workspaceId: workspace,
+          }).lean()
+        : [];
+      const docs = [...own, ...extra];
+      if (!docs.length) return [];
+      const region = await workspacePhoneRegion(ctx.workspaceId);
+      const rendered = await Promise.all(
+        docs.map((doc) => renderCampaignSignature(doc, { region })),
+      );
+      return docs.map((doc, index) => ({
+        id: String(doc._id),
+        name: doc.name || "Signature",
+        isDefault: Boolean(doc.isDefault),
+        mine: ownIds.has(String(doc._id)),
+        html: rendered[index].html,
+        text: rendered[index].text,
+      }));
+    }),
 
     emailCampaignDeliverability: can("view")(async (_, { id }, ctx) =>
       evaluateDeliverability(await findCampaign(ctx, id, { lean: true })),

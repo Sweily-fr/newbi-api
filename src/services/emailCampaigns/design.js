@@ -3,7 +3,9 @@
  *
  *   { version: 1, style: { …couleurs, police, largeur… }, blocks: [ … ] }
  *
- * Blocs : heading, text, button, image, divider, spacer, social, imageText.
+ * Blocs : heading, text, button, image, divider, spacer, social, imageText,
+ * signature (référence à une signature de l'outil Signatures de mail, rendue
+ * par services/emailCampaigns/signatures.js).
  * Toute propriété absente ou hors bornes prend sa valeur par défaut, tout
  * bloc de type inconnu est ignoré : une donnée abîmée ne casse jamais le
  * rendu. Le texte riche (heading, text, imageText) est nettoyé avec une
@@ -53,6 +55,7 @@ export const BLOCK_TYPES = [
   "spacer",
   "social",
   "imageText",
+  "signature",
 ];
 
 export const SOCIAL_NETWORKS = [
@@ -76,6 +79,7 @@ export const DEFAULT_PADDING = Object.freeze({
   divider: { top: 16, right: 32, bottom: 16, left: 32 },
   social: { top: 16, right: 32, bottom: 16, left: 32 },
   imageText: { top: 16, right: 32, bottom: 16, left: 32 },
+  signature: { top: 16, right: 32, bottom: 16, left: 32 },
 });
 
 export const MAX_BLOCKS = 80;
@@ -199,6 +203,14 @@ function padding(value, fallback) {
   };
 }
 
+const OBJECT_ID = /^[a-f0-9]{24}$/i;
+
+/** Identifiant d'une signature (24 caractères hexadécimaux), vide sinon. */
+const signatureIdOf = (value) => {
+  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return OBJECT_ID.test(id) ? id : "";
+};
+
 const newBlockId = () => `b_${crypto.randomBytes(5).toString("hex")}`;
 
 // ─── Blocs ─────────────────────────────────────────────────────────────────
@@ -269,6 +281,12 @@ const BLOCKS = {
     buttonLabel: plainText(b.buttonLabel, MAX_LABEL_LENGTH),
     buttonUrl: urlText(b.buttonUrl),
     padding: padding(b.padding, DEFAULT_PADDING.imageText),
+  }),
+  // Vide : bloc pas encore réglé, rien n'est envoyé
+  signature: (b) => ({
+    signatureId: signatureIdOf(b.signatureId),
+    align: oneOf(b.align, ALIGNMENTS, "left"),
+    padding: padding(b.padding, DEFAULT_PADDING.signature),
   }),
 };
 
