@@ -802,3 +802,132 @@ describe("inscriptions existantes", () => {
     expect(body.registration.bankTransfer.autoDetect).toBe(true);
   });
 });
+
+// ─── Corrections de relecture ────────────────────────────────────────────
+
+describe("relecture : délais, limites, paiement après le début", () => {
+  it("événement à moins de 48 h : virement indisponible et refusé ; garde bornée au début - 24 h", async () => {
+    await setIban();
+    const soonStart = new Date(Date.now() + 36 * 3600000);
+    const soon = await createEvent({
+      name: "Bientôt",
+      startAt: soonStart.toISOString(),
+      endAt: new Date(soonStart.getTime() + 3600000).toISOString(),
+    });
+    const detail = await (await api(`/jean-dupont/${soon.slug}`)).json();
+    expect(detail.type.event.bankTransferAvailable).toBe(false);
+    const refused = await register(soon);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "BANK_TRANSFER_TOO_LATE" });
+    expect((await AppointmentType.findById(soon._id)).seatsTaken).toBe(0);
+
+    const start = new Date(Date.now() + 60 * 3600000);
+    const later = await createEvent({
+      name: "Plus tard",
+      startAt: start.toISOString(),
+      endAt: new Date(start.getTime() + 3600000).toISOString(),
+    });
+    expect(
+      (await (await api(`/jean-dupont/${later.slug}`)).json()).type.event
+        .bankTransferAvailable,
+    ).toBe(true);
+    const { body } = await pendingRegistration(later);
+    expect(Date.parse(body.expiresAt)).toBe(start.getTime() - DAY);
+  });
+
+  it("une seule inscription par virement en attente par adresse et par événement", async () => {
+    await setIban();
+    const type = await createEvent({ capacity: 10 });
+    await pendingRegistration(type, { quantity: 1 });
+    const again = await register(type, { quantity: 1 });
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: "TOO_MANY_PENDING_TRANSFERS" });
+  });
+
+  it("limite par adresse IP : 5 virements par jour", async () => {
+    await setIban();
+    const type = await createEvent({ capacity: 20 });
+    for (let i = 0; i < 5; i += 1) {
+      expect((await register(type, { quantity: 1, i })).status).toBe(201);
+    }
+    const sixth = await register(type, { quantity: 1, i: 9 });
+    expect(sixth.status).toBe(429);
+    expect(await sixth.json()).toEqual({ error: "BANK_TRANSFER_LIMIT" });
+  });
+
+  it("virement repéré après le début : jamais de billets, organisateur et payeur prévenus", async () => {
+    await setIban();
+    const type = await createEvent();
+    const { registration } = await pendingRegistration(type);
+    await EventRegistration.updateOne(
+      { _id: registration._id },
+      { $set: { "event.startAt": new Date(Date.now() - 60000) } },
+    );
+    mail.sent = [];
+    await detectAppointmentBankPayments(String(workspaceId), [
+      credit({ description: `VIR ${registration.payment.bankReference}` }),
+    ]);
+    const after = await EventRegistration.findById(registration._id);
+    expect(after.status).toBe("EXPIRED");
+    expect(after.tickets).toHaveLength(0);
+    expect(R.refundFailed(after)).toBe(true);
+    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(0);
+    expect(mailTo("jean@cabinet.fr")).toHaveLength(1);
+    const payer = mailTo("elise0@exemple.fr");
+    expect(payer).toHaveLength(1);
+    expect(payer[0].subject).toContain("Réservation non confirmée");
+    // « Marquer comme payé » d'une autre inscription après le début : refusé
+    const other = await pendingRegistration(type, { i: 1 });
+    await EventRegistration.updateOne(
+      { _id: other.registration._id },
+      { $set: { "event.startAt": new Date(Date.now() - 60000) } },
+    );
+    expect(
+      await errorOf(
+        call(Events.Mutation.markEventRegistrationPaid, owner, {
+          id: String(other.registration._id),
+        }),
+      ),
+    ).toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("paiement carte « pending » au-delà de 7 jours : inscription expirée, places rendues", async () => {
+    await StripeConnectAccount.create({
+      organizationId: String(workspaceId),
+      accountId: "acct_vendeur",
+      connectionType: "oauth",
+      chargesEnabled: true,
+    });
+    stripeApi.checkout.sessions.create.mockResolvedValue({
+      id: "cs_test_evt",
+      url: "https://checkout.stripe.com/c/pay/cs_test_evt",
+    });
+    const type = await createEvent();
+    const res = await register(type, { provider: "stripe" });
+    expect(res.status).toBe(201);
+    const registration = await EventRegistration.findOne({});
+    await mongoose.connection.db.collection("event_registrations").updateOne(
+      { _id: registration._id },
+      {
+        $set: {
+          "payment.status": "pending",
+          createdAt: new Date(Date.now() - 8 * DAY),
+        },
+      },
+    );
+    stripeApi.checkout.sessions.retrieve.mockResolvedValue({
+      id: "cs_test_evt",
+      status: "complete",
+      payment_status: "unpaid",
+      metadata: {
+        type: "event_registration",
+        eventRegistrationId: String(registration._id),
+      },
+    });
+    await sweepEventRegistrations({ now: new Date() });
+    const after = await EventRegistration.findById(registration._id);
+    expect(after.status).toBe("EXPIRED");
+    expect(after.payment.status).toBe("expired_pending");
+    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(0);
+  });
+});
