@@ -19,6 +19,7 @@ import EmailSuppression from "../../models/EmailSuppression.js";
 import logger from "../../utils/logger.js";
 import { toObjectIdOrNull } from "../../utils/objectIdString.js";
 import { normalizeEmail } from "./audience.js";
+import { recipientTracked } from "./tracking.js";
 
 // Seuils sous ceux que Resend impose au compte entier (rejets sous 4 %,
 // plaintes sous 0,08 %, sous peine de pause des envois, voire de fermeture
@@ -39,13 +40,15 @@ const incrementStats = (campaignId, inc) =>
 /**
  * Ajoute une adresse à la liste d'exclusion de l'espace (idempotent). Un
  * motif plus fort remplace le précédent (MANUAL < UNSUBSCRIBED < BOUNCED <
- * COMPLAINED).
+ * COMPLAINED). Liste commune aux campagnes (`campaignId`) et à la
+ * prospection (`sequenceId`).
  */
 export async function upsertSuppression({
   workspaceId,
   email,
   reason,
   campaignId = null,
+  sequenceId = null,
   source = null,
   createdBy = null,
 }) {
@@ -59,6 +62,7 @@ export async function upsertSuppression({
         ...filter,
         reason,
         campaignId,
+        sequenceId,
         source,
         createdBy,
       });
@@ -72,17 +76,25 @@ export async function upsertSuppression({
     existing.reason = reason;
     existing.source = source;
     if (campaignId) existing.campaignId = campaignId;
+    if (sequenceId) existing.sequenceId = sequenceId;
     await existing.save();
   }
   return existing;
 }
+
+// Destinataire sans accord de suivi, ou suivi effacé (durée de conservation
+// dépassée, refus de l'adresse) : rien n'est enregistré pour lui
+const STILL_TRACKED = {
+  trackingAllowed: { $ne: false },
+  trackingExpired: { $ne: true },
+};
 
 /** Ouverture (pixel) : première ouverture et ouvertures totales. */
 export async function recordOpen(recipientId, now = new Date()) {
   const id = toObjectIdOrNull(recipientId);
   if (!id) return false;
   const first = await EmailCampaignRecipient.findOneAndUpdate(
-    { _id: id, openedAt: null },
+    { _id: id, openedAt: null, ...STILL_TRACKED },
     { $set: { openedAt: now }, $inc: { openCount: 1 } },
     { projection: { campaignId: 1 } },
   ).lean();
@@ -94,7 +106,7 @@ export async function recordOpen(recipientId, now = new Date()) {
     return true;
   }
   const again = await EmailCampaignRecipient.findOneAndUpdate(
-    { _id: id },
+    { _id: id, ...STILL_TRACKED },
     { $inc: { openCount: 1 } },
     { projection: { campaignId: 1 } },
   ).lean();
@@ -103,8 +115,13 @@ export async function recordOpen(recipientId, now = new Date()) {
   return true;
 }
 
-/** Clic sur le lien n° `linkIndex` (vaut aussi ouverture si aucune). */
+/**
+ * Clic sur le lien n° `linkIndex` (vaut aussi ouverture si aucune). Rien
+ * n'est enregistré pour un destinataire non suivi (`trackingAllowed`,
+ * `trackingExpired`, à lire avec lui).
+ */
 export async function recordClick(recipient, linkIndex, now = new Date()) {
+  if (!recipientTracked(recipient)) return;
   await EmailCampaignClick.create({
     workspaceId: recipient.workspaceId,
     campaignId: recipient.campaignId,
@@ -114,19 +131,19 @@ export async function recordClick(recipient, linkIndex, now = new Date()) {
   });
   const inc = { "stats.clicks": 1 };
   const first = await EmailCampaignRecipient.updateOne(
-    { _id: recipient._id, clickedAt: null },
+    { _id: recipient._id, clickedAt: null, ...STILL_TRACKED },
     { $set: { clickedAt: now }, $inc: { clickCount: 1 } },
   );
   if (first.modifiedCount) {
     inc["stats.clicked"] = 1;
   } else {
     await EmailCampaignRecipient.updateOne(
-      { _id: recipient._id },
+      { _id: recipient._id, ...STILL_TRACKED },
       { $inc: { clickCount: 1 } },
     );
   }
   const opened = await EmailCampaignRecipient.updateOne(
-    { _id: recipient._id, openedAt: null },
+    { _id: recipient._id, openedAt: null, ...STILL_TRACKED },
     { $set: { openedAt: now }, $inc: { openCount: 1 } },
   );
   if (opened.modifiedCount) {

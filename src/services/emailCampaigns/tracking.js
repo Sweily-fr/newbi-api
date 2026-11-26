@@ -1,11 +1,21 @@
 /**
- * Jetons signés des campagnes e-mail (HMAC-SHA256, sans expiration : un lien
- * de désinscription doit marcher pour toujours) et adresses publiques :
+ * Jetons signés des campagnes e-mail et de la prospection (HMAC-SHA256,
+ * sans expiration : un lien de désinscription doit marcher pour toujours)
+ * et adresses publiques :
  *
- *   u  désinscription d'un destinataire   /api/email-campaigns/unsubscribe?t=
- *   o  ouverture (pixel)                  /api/email-campaigns/o/<jeton>.gif
- *   c  clic sur un lien                   /api/email-campaigns/c/<jeton>/<n>
- *   t  désinscription d'un e-mail de test (aucun effet, page d'explication)
+ *   u   désinscription d'un destinataire   /api/email-campaigns/unsubscribe?t=
+ *   p   préférences d'un destinataire      /api/email-campaigns/preferences?t=
+ *       (accord ou refus du suivi, désinscription)
+ *   o   ouverture (pixel)                  /api/email-campaigns/o/<jeton>.gif
+ *   c   clic sur un lien                   /api/email-campaigns/c/<jeton>/<n>
+ *   t   désinscription ou préférences d'un e-mail de test (aucun effet,
+ *       page d'explication)
+ *   pu  désinscription d'un destinataire   /api/prospection/desinscription?t=
+ *       de prospection (ProspectingRecipient)
+ *   pt  désinscription d'un e-mail de test de prospection (aucun effet ;
+ *       identifiant = la prospection)
+ *   pd  page « Vos données » d'un espace   /api/prospection/donnees/<jeton>
+ *       (identifiant = l'espace)
  *
  * Jeton = `<identifiant>.<signature>` ; la signature couvre le type et
  * l'identifiant (un jeton d'ouverture ne désinscrit pas). Comparaison en
@@ -15,9 +25,13 @@ import crypto from "crypto";
 
 export const TOKEN_KINDS = Object.freeze({
   unsubscribe: "u",
+  preferences: "p",
   open: "o",
   click: "c",
   testUnsubscribe: "t",
+  prospectingUnsubscribe: "pu",
+  prospectingTestUnsubscribe: "pt",
+  prospectingData: "pd",
 });
 
 const OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -84,6 +98,12 @@ export const unsubscribeUrlFor = (recipientId) =>
 export const testUnsubscribeUrlFor = (campaignId) =>
   `${routesBase()}/unsubscribe?t=${createCampaignToken(TOKEN_KINDS.testUnsubscribe, campaignId)}`;
 
+export const preferencesUrlFor = (recipientId) =>
+  `${routesBase()}/preferences?t=${createCampaignToken(TOKEN_KINDS.preferences, recipientId)}`;
+
+export const testPreferencesUrlFor = (campaignId) =>
+  `${routesBase()}/preferences?t=${createCampaignToken(TOKEN_KINDS.testUnsubscribe, campaignId)}`;
+
 export const openPixelUrlFor = (recipientId) =>
   `${routesBase()}/o/${createCampaignToken(TOKEN_KINDS.open, recipientId)}.gif`;
 
@@ -92,3 +112,47 @@ export function clickUrlBuilder(recipientId) {
   const token = createCampaignToken(TOKEN_KINDS.click, recipientId);
   return (index) => `${routesBase()}/c/${token}/${index}`;
 }
+
+// Suivi coupé tant qu'il n'est pas activé explicitement (recommandation CNIL
+// sur les pixels de suivi : consentement préalable des destinataires)
+export const tracksOpens = (campaign) => campaign?.trackOpens === true;
+export const tracksClicks = (campaign) => campaign?.trackClicks === true;
+export const isTracked = (campaign) =>
+  tracksOpens(campaign) || tracksClicks(campaign);
+
+/**
+ * Destinataire suivi : accord donné au lancement (absent = campagne lancée
+ * avant le suivi par contact, où tous l'étaient) et suivi pas effacé.
+ */
+export const recipientTracked = (recipient) =>
+  Boolean(recipient) &&
+  recipient.trackingAllowed !== false &&
+  recipient.trackingExpired !== true;
+
+/**
+ * Pied d'un e-mail de test ou d'un aperçu : celui d'un destinataire suivi
+ * (render.js), lien de préférences sans effet.
+ */
+export const campaignTrackingNotice = (campaign) => ({
+  opens: tracksOpens(campaign),
+  clicks: tracksClicks(campaign),
+  privacyPolicyUrl: campaign?.privacyPolicyUrl || "",
+  preferencesUrl:
+    isTracked(campaign) && campaign?._id
+      ? testPreferencesUrlFor(campaign._id)
+      : null,
+});
+
+// ─── Prospection (aucun lien suivi : seuls ces deux liens sont propres au
+// destinataire) ────────────────────────────────────────────────────────────
+
+const prospectingBase = () => `${apiBaseUrl()}/api/prospection`;
+
+export const prospectingUnsubscribeUrlFor = (recipientId) =>
+  `${prospectingBase()}/desinscription?t=${createCampaignToken(TOKEN_KINDS.prospectingUnsubscribe, recipientId)}`;
+
+export const prospectingTestUnsubscribeUrlFor = (sequenceId) =>
+  `${prospectingBase()}/desinscription?t=${createCampaignToken(TOKEN_KINDS.prospectingTestUnsubscribe, sequenceId)}`;
+
+export const prospectingDataUrlFor = (workspaceId) =>
+  `${prospectingBase()}/donnees/${createCampaignToken(TOKEN_KINDS.prospectingData, workspaceId)}`;

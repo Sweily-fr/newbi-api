@@ -4,7 +4,9 @@
  * espace, création depuis un modèle, brouillon seul modifiable et saisies
  * contrôlées, duplication, suppression, envoi (consentement, vérification),
  * programmation, pause, reprise, annulation, aperçu, envoi de test, rapport,
- * liste d'exclusion, image. Aucun envoi réel (Resend simulé).
+ * liste d'exclusion, image, suivi (coupé par défaut et dans une copie,
+ * attestation à l'envoi, lien de confidentialité, totaux gardés après
+ * effacement). Aucun envoi réel (Resend simulé).
  */
 import {
   describe,
@@ -100,11 +102,13 @@ import EmailCampaign from "../../src/models/EmailCampaign.js";
 import EmailCampaignClick from "../../src/models/EmailCampaignClick.js";
 import EmailCampaignRecipient from "../../src/models/EmailCampaignRecipient.js";
 import EmailSuppression from "../../src/models/EmailSuppression.js";
+import EmailTrackingConsent from "../../src/models/EmailTrackingConsent.js";
 import emailCampaignsResolvers from "../../src/resolvers/emailCampaigns.js";
 import { resetDnsCache } from "../../src/services/emailCampaigns/deliverability.js";
 import { resetResendClient } from "../../src/services/emailCampaigns/sender.js";
 import { resetNewbiDomainCache } from "../../src/services/emailCampaigns/sendingDomains.js";
 import { getCampaignQuota } from "../../src/services/emailCampaigns/quota.js";
+import { purgeExpiredCampaignTracking } from "../../src/services/emailCampaigns/retention.js";
 
 const { Query, Mutation } = emailCampaignsResolvers;
 const Types = emailCampaignsResolvers;
@@ -460,6 +464,51 @@ describe("brouillon", () => {
     expect(Types.EmailCampaign.stats(copy).recipients).toBe(0);
   });
 
+  it("suivi coupé à la création et dans une copie, lien de confidentialité contrôlé", async () => {
+    const campaign = await draft();
+    expect(Types.EmailCampaign.trackOpens(campaign)).toBe(false);
+    expect(Types.EmailCampaign.trackClicks(campaign)).toBe(false);
+    expect(Types.EmailCampaign.privacyPolicyUrl(campaign)).toBe("");
+    expect(Types.EmailCampaign.trackingPurgedAt(campaign)).toBeNull();
+
+    const id = String(campaign._id);
+    const tracked = await call(Mutation.updateEmailCampaign, owner, {
+      id,
+      input: {
+        trackOpens: true,
+        trackClicks: true,
+        privacyPolicyUrl: "  https://atelier.fr/rgpd  ",
+      },
+    });
+    expect(Types.EmailCampaign.trackOpens(tracked)).toBe(true);
+    expect(Types.EmailCampaign.trackClicks(tracked)).toBe(true);
+    expect(tracked.privacyPolicyUrl).toBe("https://atelier.fr/rgpd");
+    for (const invalid of ["atelier.fr/rgpd", "javascript:alert(1)"]) {
+      expect(
+        await messageOf(
+          call(Mutation.updateEmailCampaign, owner, {
+            id,
+            input: { privacyPolicyUrl: invalid },
+          }),
+        ),
+        invalid,
+      ).toMatch(
+        /^Le lien vers la politique de confidentialité doit être une adresse web/,
+      );
+    }
+
+    const copy = await call(Mutation.duplicateEmailCampaign, owner, { id });
+    expect(copy.trackOpens).toBe(false);
+    expect(copy.trackClicks).toBe(false);
+    expect(copy.privacyPolicyUrl).toBe("https://atelier.fr/rgpd");
+
+    const cleared = await call(Mutation.updateEmailCampaign, owner, {
+      id,
+      input: { privacyPolicyUrl: "" },
+    });
+    expect(cleared.privacyPolicyUrl).toBe("");
+  });
+
   it("liste : filtre, recherche sans accents, pages, contenu chargé à la demande", async () => {
     await draft();
     const other = await call(Mutation.createEmailCampaign, owner, {
@@ -535,6 +584,53 @@ describe("envoi", () => {
     ).toBe(
       "Confirmez que ces contacts sont vos clients ou ont accepté de recevoir vos e-mails.",
     );
+  });
+
+  it("suivi actif : pas d'attestation globale, seules les adresses qui ont accepté sont suivies", async () => {
+    await call(Mutation.grantEmailTracking, editor, {
+      emails: ["marie@exemple.fr"],
+      attestation: true,
+    });
+    const campaign = await draft(owner, { trackOpens: true });
+    const count = await call(Query.emailCampaignAudienceCount, viewer, {
+      audience: { mode: "ALL" },
+    });
+    expect(count).toMatchObject({ sendable: 3, trackingGranted: 1 });
+    // trackingConsent (étape 1) accepté mais ignoré
+    const sent = await call(Mutation.sendEmailCampaign, owner, {
+      id: String(campaign._id),
+      consent: true,
+      trackingConsent: false,
+    });
+    expect(sent.status).toBe("SENDING");
+    expect(Types.EmailCampaign.trackedRecipients(sent)).toBe(1);
+    const recipients = await EmailCampaignRecipient.find({
+      campaignId: campaign._id,
+    })
+      .sort({ email: 1 })
+      .lean();
+    expect(
+      recipients.map((r) => [r.email, Types.EmailCampaignRecipient.tracked(r)]),
+    ).toEqual([
+      ["ines@exemple.fr", false],
+      ["luc@exemple.fr", false],
+      ["marie@exemple.fr", true],
+    ]);
+    // « N'ont pas ouvert » : seulement parmi les destinataires suivis
+    await EmailCampaignRecipient.updateMany(
+      { campaignId: campaign._id },
+      { $set: { status: "DELIVERED" } },
+    );
+    const notOpened = await call(Query.emailCampaignRecipients, viewer, {
+      campaignId: String(campaign._id),
+      filter: "NOT_OPENED",
+    });
+    expect(notOpened.items.map((r) => r.email)).toEqual(["marie@exemple.fr"]);
+    // Campagne lancée avant le suivi par contact : tous étaient suivis
+    expect(
+      Types.EmailCampaign.trackedRecipients({ trackedCount: null }),
+    ).toBeNull();
+    expect(Types.EmailCampaignRecipient.tracked({})).toBe(true);
   });
 
   it("refus expliqué par la première erreur de la vérification", async () => {
@@ -668,7 +764,29 @@ describe("aperçu, vérification, audience", () => {
       sendable: 2,
       suppressed: 1,
       missingFirstName: 1,
+      prospects: 0,
     });
+  });
+
+  it("comptage de l'audience : les prospects générés sont comptés à part, jamais destinataires", async () => {
+    await Client.create(
+      buildClientDoc({
+        workspaceId,
+        createdBy: owner,
+        type: "COMPANY",
+        name: "Menuiserie Lemoine",
+        email: "contact@menuiserie-lemoine.fr",
+        prospect: {
+          provider: "societeinfo",
+          siren: "123456789",
+          unlockedAt: new Date(),
+        },
+      }),
+    );
+    const count = await call(Query.emailCampaignAudienceCount, owner, {
+      audience: { mode: "ALL" },
+    });
+    expect(count).toMatchObject({ total: 4, sendable: 3, prospects: 1 });
   });
 
   it("réglages et modèles", async () => {
@@ -785,6 +903,24 @@ describe("rapport", () => {
       { url: "https://b.fr/", clicks: 3, uniqueClicks: 2 },
       { url: "https://a.fr/", clicks: 1, uniqueClicks: 1 },
     ]);
+
+    // Suivi effacé après 13 mois : totaux par lien gardés, clics effacés
+    await purgeExpiredCampaignTracking({
+      now: new Date(Date.now() + 14 * 31 * 24 * 60 * 60 * 1000),
+    });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
+    const purged = await call(Query.emailCampaign, viewer, {
+      id: String(campaign._id),
+    });
+    expect(Types.EmailCampaign.trackingPurgedAt(purged)).toBeInstanceOf(Date);
+    expect(
+      await call(Query.emailCampaignLinkStats, viewer, {
+        campaignId: String(campaign._id),
+      }),
+    ).toEqual([
+      { url: "https://b.fr/", clicks: 3, uniqueClicks: 2 },
+      { url: "https://a.fr/", clicks: 1, uniqueClicks: 1 },
+    ]);
   });
 });
 
@@ -871,6 +1007,158 @@ describe("e-mail de test", () => {
         }),
       ),
     ).toBe("Trop d'e-mails de test envoyés : réessayez dans une heure.");
+  });
+});
+
+describe("accords de suivi", () => {
+  it("accords saisis : attestation obligatoire, adresses contrôlées, refus du contact respecté", async () => {
+    expect(
+      await messageOf(
+        call(Mutation.grantEmailTracking, editor, {
+          emails: ["marie@exemple.fr"],
+          attestation: false,
+        }),
+      ),
+    ).toMatch(/^Confirmez que ces contacts vous ont donné leur accord/);
+    expect(
+      await codeOf(
+        call(Mutation.grantEmailTracking, editor, {
+          emails: [],
+          attestation: true,
+        }),
+      ),
+    ).toBe("VALIDATION_ERROR");
+    expect(
+      await messageOf(
+        call(Mutation.grantEmailTracking, editor, {
+          emails: Array.from({ length: 501 }, (_, i) => `c${i}@exemple.fr`),
+          attestation: true,
+        }),
+      ),
+    ).toMatch(/^500 adresses au plus/);
+    await EmailTrackingConsent.create({
+      workspaceId,
+      email: "luc@exemple.fr",
+      status: "REFUSED",
+      source: "CONTACT",
+      decidedAt: new Date(),
+    });
+    const result = await call(Mutation.grantEmailTracking, editor, {
+      emails: [
+        " Marie@Exemple.fr ",
+        "marie@exemple.fr",
+        "pas-une-adresse",
+        "luc@exemple.fr",
+      ],
+      note: "Case cochée sur le formulaire d'inscription",
+      attestation: true,
+    });
+    expect(result).toEqual({
+      granted: 1,
+      skipped: [
+        { email: "pas-une-adresse", reason: "INVALID" },
+        { email: "luc@exemple.fr", reason: "CONTACT_REFUSED" },
+      ],
+    });
+    const page = await call(Query.emailTrackingConsents, viewer, {
+      status: "GRANTED",
+    });
+    expect(page.total).toBe(1);
+    const [marie] = page.items;
+    expect(marie).toMatchObject({
+      email: "marie@exemple.fr",
+      status: "GRANTED",
+      source: "SENDER",
+      decidedByName: "Paul Martin",
+    });
+    expect(Types.EmailTrackingConsent.note(marie)).toBe(
+      "Case cochée sur le formulaire d'inscription",
+    );
+    expect(marie.history).toBeUndefined();
+    // Membre en lecture seule : pas de saisie
+    expect(
+      await codeOf(
+        call(Mutation.grantEmailTracking, viewer, {
+          emails: ["ines@exemple.fr"],
+          attestation: true,
+        }),
+      ),
+    ).toBe("FORBIDDEN");
+  });
+
+  it("refus noté et retrait : suivi effacé ; le choix du contact ne se retire pas", async () => {
+    await call(Mutation.grantEmailTracking, editor, {
+      emails: ["marie@exemple.fr", "ines@exemple.fr"],
+      attestation: true,
+    });
+    const campaign = await draft(owner, { trackOpens: true });
+    await call(Mutation.sendEmailCampaign, owner, {
+      id: String(campaign._id),
+      consent: true,
+    });
+    await EmailCampaignRecipient.updateMany(
+      {
+        campaignId: campaign._id,
+        email: { $in: ["marie@exemple.fr", "ines@exemple.fr"] },
+      },
+      { $set: { openedAt: new Date(), openCount: 2 } },
+    );
+    const refused = await call(Mutation.refuseEmailTracking, editor, {
+      email: "Marie@exemple.fr",
+    });
+    expect(refused).toMatchObject({ status: "REFUSED", source: "SENDER" });
+    const marie = await EmailCampaignRecipient.findOne({
+      campaignId: campaign._id,
+      email: "marie@exemple.fr",
+    }).lean();
+    expect(marie).toMatchObject({
+      trackingAllowed: false,
+      trackingExpired: true,
+      openedAt: null,
+      openCount: 0,
+    });
+    // Retrait d'un accord saisi : effacé aussi
+    const ines = await EmailTrackingConsent.findOne({
+      email: "ines@exemple.fr",
+    });
+    expect(
+      await call(Mutation.removeEmailTrackingConsent, editor, {
+        id: String(ines._id),
+      }),
+    ).toBe(true);
+    expect(
+      await EmailCampaignRecipient.findOne({
+        campaignId: campaign._id,
+        email: "ines@exemple.fr",
+      }).lean(),
+    ).toMatchObject({ trackingExpired: true, openCount: 0 });
+    // Choix du contact : ni retrait ni accord par l'espace
+    const contact = await EmailTrackingConsent.create({
+      workspaceId,
+      email: "luc@exemple.fr",
+      status: "REFUSED",
+      source: "CONTACT",
+      decidedAt: new Date(),
+    });
+    expect(
+      await messageOf(
+        call(Mutation.removeEmailTrackingConsent, editor, {
+          id: String(contact._id),
+        }),
+      ),
+    ).toMatch(/^Ce choix vient du contact lui-même/);
+    expect(
+      await codeOf(
+        call(Mutation.removeEmailTrackingConsent, editor, {
+          id: "pas-un-id",
+        }),
+      ),
+    ).toBe("NOT_FOUND");
+    expect(
+      await codeOf(
+        call(Mutation.refuseEmailTracking, editor, { email: "nope" }),
+      ),
+    ).toBe("VALIDATION_ERROR");
   });
 });
 

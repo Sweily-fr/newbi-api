@@ -8,6 +8,10 @@
  * services/emailCampaigns/sendingDomains.js) relus chez Resend, retirés au
  * bout de 7 jours sans validation.
  *
+ * Chaque nuit (3 h 30) : détail du suivi (ouvertures, clics) effacé pour les
+ * campagnes lancées il y a plus de 13 mois (voir
+ * services/emailCampaigns/retention.js).
+ *
  * Câblé dans server.js derrière le garde `instanceId === 0` (une seule
  * instance PM2) ; chaque campagne est de toute façon verrouillée le temps
  * de son lot.
@@ -15,10 +19,12 @@
 import cron from "node-cron";
 import logger from "../utils/logger.js";
 import { runEmailCampaignTick } from "../services/emailCampaigns/campaignService.js";
+import { purgeExpiredCampaignTracking } from "../services/emailCampaigns/retention.js";
 import { refreshSendingDomains } from "../services/emailCampaigns/sendingDomains.js";
 
 export const EMAIL_CAMPAIGN_CRON = "* * * * *";
 export const EMAIL_SENDING_DOMAIN_CRON = "*/10 * * * *";
+export const EMAIL_TRACKING_RETENTION_CRON = "30 3 * * *";
 
 /** Tâche sans chevauchement : un passage peut durer (lots, appels espacés). */
 function exclusive(name, run) {
@@ -47,8 +53,13 @@ export function startEmailCampaignCron() {
     exclusive("domaines d'envoi", () => refreshSendingDomains()),
     { scheduled: true, timezone: "Europe/Paris" },
   );
-  logger.info(
-    "[emailCampaignCron] envoi des campagnes e-mail planifié chaque minute, domaines d'envoi toutes les 10 minutes",
+  const retentionTask = cron.schedule(
+    EMAIL_TRACKING_RETENTION_CRON,
+    exclusive("effacement du suivi", () => purgeExpiredCampaignTracking()),
+    { scheduled: true, timezone: "Europe/Paris" },
   );
-  return { task, domainsTask };
+  logger.info(
+    "[emailCampaignCron] envoi des campagnes e-mail planifié chaque minute, domaines d'envoi toutes les 10 minutes, effacement du suivi expiré chaque nuit",
+  );
+  return { task, domainsTask, retentionTask };
 }

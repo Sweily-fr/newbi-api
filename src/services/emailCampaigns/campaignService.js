@@ -60,11 +60,18 @@ import {
   resolveCampaignSender,
 } from "./sendingDomains.js";
 import {
+  campaignTrackingNotice,
   clickUrlBuilder,
+  isTracked,
   openPixelUrlFor,
+  preferencesUrlFor,
+  recipientTracked,
   testUnsubscribeUrlFor,
+  tracksClicks,
+  tracksOpens,
   unsubscribeUrlFor,
 } from "./tracking.js";
+import { grantedEmailSet } from "./trackingConsent.js";
 
 export const MAX_ATTEMPTS = 3;
 const STALE_RECIPIENT_LOCK_MS = 10 * 60 * 1000;
@@ -179,14 +186,13 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
     vars: EXAMPLE_VARIABLES,
     identity: resolvedIdentity,
     unsubscribeUrl: unsubscribeUrlFor(SAMPLE_RECIPIENT_ID),
-    trackClick:
-      campaign.trackClicks !== false
-        ? clickUrlBuilder(SAMPLE_RECIPIENT_ID)
-        : null,
-    openPixelUrl:
-      campaign.trackOpens !== false
-        ? openPixelUrlFor(SAMPLE_RECIPIENT_ID)
-        : null,
+    trackClick: tracksClicks(campaign)
+      ? clickUrlBuilder(SAMPLE_RECIPIENT_ID)
+      : null,
+    openPixelUrl: tracksOpens(campaign)
+      ? openPixelUrlFor(SAMPLE_RECIPIENT_ID)
+      : null,
+    trackingNotice: campaignTrackingNotice(campaign),
   });
   const replyTo = singleLine(campaign.replyTo);
   return buildDeliverability({
@@ -202,7 +208,11 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
 
 // ─── Lancement ─────────────────────────────────────────────────────────────
 
-async function insertRecipients(campaign, recipients) {
+/**
+ * Crée les destinataires ; `tracked` : adresses suivies (accord donné, campagne
+ * qui suit quelque chose), les autres reçoivent l'e-mail sans suivi.
+ */
+async function insertRecipients(campaign, recipients, tracked = new Set()) {
   for (let i = 0; i < recipients.length; i += INSERT_CHUNK) {
     const chunk = recipients.slice(i, i + INSERT_CHUNK).map((recipient) => ({
       workspaceId: campaign.workspaceId,
@@ -212,6 +222,7 @@ async function insertRecipients(campaign, recipients) {
       name: recipient.name,
       vars: recipient.vars,
       status: "PENDING",
+      trackingAllowed: tracked.has(recipient.email),
     }));
     try {
       await EmailCampaignRecipient.insertMany(chunk, { ordered: false });
@@ -294,7 +305,14 @@ export async function startSending(campaign, { from, now = new Date() }) {
         ERROR_CODES.VALIDATION_ERROR,
       );
     }
-    await insertRecipients(locked, recipients);
+    // Suivi : seulement les adresses qui l'ont accepté (recommandation CNIL)
+    const tracked = isTracked(locked)
+      ? await grantedEmailSet(
+          locked.workspaceId,
+          recipients.map((recipient) => recipient.email),
+        )
+      : new Set();
+    await insertRecipients(locked, recipients, tracked);
     // Autre lancement entre-temps : le quota du mois ne doit pas être dépassé
     const after = await getCampaignQuota(locked.workspaceId, now);
     if (after.usedThisMonth > after.monthlyLimit) {
@@ -311,6 +329,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
       {
         $set: {
           "stats.recipients": recipients.length,
+          trackedCount: tracked.size,
           lockedUntil: null,
         },
       },
@@ -318,7 +337,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
     );
     prepareSocialIcons(locked.design);
     logger.info(
-      `[campagnes] campagne ${locked._id} lancée : ${recipients.length} destinataire(s), mode ${campaignSendMode()}`,
+      `[campagnes] campagne ${locked._id} lancée : ${recipients.length} destinataire(s) dont ${tracked.size} suivi(s), mode ${campaignSendMode()}`,
     );
     return updated || locked;
   } catch (error) {
@@ -341,6 +360,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
           pausedReason: reason,
           ...(from === "SCHEDULED" ? { scheduledAt: null } : {}),
           "stats.recipients": 0,
+          trackedCount: null,
         },
       },
     );
@@ -350,7 +370,9 @@ export async function startSending(campaign, { from, now = new Date() }) {
 
 /**
  * Lancement demandé par l'utilisateur : maintenant, ou programmé à
- * `scheduledAt`. La vérification avant envoi doit être sans erreur.
+ * `scheduledAt`. La vérification avant envoi doit être sans erreur. Le
+ * suivi éventuel ne concerne que les adresses qui l'ont accepté (figées au
+ * lancement, voir startSending).
  */
 export async function requestSend(
   campaign,
@@ -362,6 +384,7 @@ export async function requestSend(
       ERROR_CODES.VALIDATION_ERROR,
     );
   }
+  const consents = { consentAt: now, consentBy: userId };
   const report = await evaluateDeliverability(campaign);
   if (!report.canSend) {
     throw new AppError(
@@ -377,8 +400,7 @@ export async function requestSend(
         $set: {
           status: "SCHEDULED",
           scheduledAt,
-          consentAt: now,
-          consentBy: userId,
+          ...consents,
           pausedReason: null,
         },
       },
@@ -389,7 +411,7 @@ export async function requestSend(
   }
   await EmailCampaign.updateOne(
     { _id: campaign._id, status: "DRAFT" },
-    { $set: { consentAt: now, consentBy: userId, scheduledAt: null } },
+    { $set: { ...consents, scheduledAt: null } },
   );
   return startSending(campaign, { from: "DRAFT", now });
 }
@@ -583,10 +605,17 @@ async function pauseForService(campaignId, reason) {
   );
 }
 
-/** Rendu personnalisé d'un destinataire, prêt pour Resend. */
+/**
+ * Rendu personnalisé d'un destinataire, prêt pour Resend. Pixel et liens
+ * suivis seulement pour un destinataire suivi (accord donné, suivi pas
+ * effacé) ; le lien de préférences dans toute campagne qui suit quelque chose.
+ */
 function recipientPayload(campaign, recipient, { trackLinks }) {
   const snapshot = campaign.snapshot || {};
   const unsubscribeUrl = unsubscribeUrlFor(recipient._id);
+  const tracked = recipientTracked(recipient);
+  const opens = tracksOpens(campaign) && tracked;
+  const clicks = trackLinks && tracked;
   const rendered = renderCampaignEmail({
     design: campaign.design,
     subject: campaign.subject,
@@ -597,9 +626,17 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
       companyAddress: snapshot.companyAddress,
     },
     unsubscribeUrl,
-    trackClick: trackLinks ? clickUrlBuilder(recipient._id) : null,
-    openPixelUrl:
-      campaign.trackOpens !== false ? openPixelUrlFor(recipient._id) : null,
+    trackClick: clicks ? clickUrlBuilder(recipient._id) : null,
+    openPixelUrl: opens ? openPixelUrlFor(recipient._id) : null,
+    // Annonce le suivi réellement fait dans cet e-mail
+    trackingNotice: {
+      opens,
+      clicks,
+      privacyPolicyUrl: campaign.privacyPolicyUrl,
+      preferencesUrl: isTracked(campaign)
+        ? preferencesUrlFor(recipient._id)
+        : null,
+    },
   });
   return buildEmailPayload({
     fromName: snapshot.fromName,
@@ -620,7 +657,7 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
  * lancement (sinon un clic mènerait ailleurs : on garde les adresses).
  */
 function canTrackLinks(campaign) {
-  if (campaign.trackClicks === false) return false;
+  if (!tracksClicks(campaign)) return false;
   const { links } = renderCampaignEmail({ design: campaign.design });
   const frozen = campaign.links || [];
   const same =
@@ -970,6 +1007,8 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
     vars: vars || EXAMPLE_VARIABLES,
     identity: resolvedIdentity,
     unsubscribeUrl,
+    // Rien n'est suivi dans un test, mais le pied est celui des destinataires
+    trackingNotice: campaignTrackingNotice(campaign),
   });
   const subject = `[Test] ${rendered.subject || "(sans objet)"}`;
   const real = emails.filter((email) => isRealSendAllowed(email, mode));

@@ -5,7 +5,9 @@
  * reprise à l'autre, erreurs temporaires (3 essais), définitives et de
  * configuration, modes simulation et restreint, plafond par minute, pause,
  * reprise, annulation, envoi programmé, e-mails de test, adresse d'envoi
- * (domaine connecté validé ou non, domaine Newbi non validé chez Resend).
+ * (domaine connecté validé ou non, domaine Newbi non validé chez Resend),
+ * suivi des ouvertures et des clics (coupé par défaut, attestation exigée et
+ * tracée quand il est actif, mention dans le pied).
  */
 import {
   describe,
@@ -96,6 +98,7 @@ import EmailCampaign from "../../../src/models/EmailCampaign.js";
 import EmailCampaignRecipient from "../../../src/models/EmailCampaignRecipient.js";
 import EmailSendingDomain from "../../../src/models/EmailSendingDomain.js";
 import EmailSuppression from "../../../src/models/EmailSuppression.js";
+import EmailTrackingConsent from "../../../src/models/EmailTrackingConsent.js";
 import {
   MAX_ATTEMPTS,
   cancelCampaign,
@@ -311,10 +314,131 @@ describe("lancement", () => {
   });
 });
 
+/** Accord de suivi donné par ces adresses (saisi par l'espace). */
+const grantTracking = (...emails) =>
+  EmailTrackingConsent.insertMany(
+    emails.map((email) => ({
+      workspaceId,
+      email,
+      status: "GRANTED",
+      source: "SENDER",
+      decidedAt: now(),
+    })),
+  );
+
+describe("suivi des ouvertures et des clics", () => {
+  it("coupé par défaut : ni pixel, ni lien suivi, ni mention, ni préférences", async () => {
+    await seedClients(1);
+    await grantTracking("client0@exemple.fr");
+    const campaign = await createCampaign();
+    expect(campaign.trackOpens).toBe(false);
+    expect(campaign.trackClicks).toBe(false);
+    await requestSend(campaign, { userId, now: now() });
+    const saved = await EmailCampaign.findById(campaign._id).lean();
+    expect(saved.consentBy).toEqual(userId);
+    expect(saved.trackedCount).toBe(0);
+    expect((await recipientsOf(campaign._id))[0].trackingAllowed).toBe(false);
+    await tick();
+    const payload = resendMock.calls[0].payloads[0];
+    expect(payload.html).toContain('href="https://atelier.fr/nouveautes"');
+    expect(payload.html).not.toContain("/api/email-campaigns/c/");
+    expect(payload.html).not.toContain("/api/email-campaigns/o/");
+    expect(payload.text).not.toContain("mesure");
+    expect(payload.text).not.toContain("Gérer mes préférences");
+  });
+
+  it("actif : seules les adresses qui ont accepté sont suivies, sans attestation globale", async () => {
+    await seedClients(3);
+    await grantTracking("client1@exemple.fr");
+    await EmailTrackingConsent.create({
+      workspaceId,
+      email: "client2@exemple.fr",
+      status: "REFUSED",
+      source: "CONTACT",
+      decidedAt: now(),
+    });
+    const campaign = await createCampaign({
+      trackOpens: true,
+      trackClicks: true,
+      privacyPolicyUrl: "https://atelier.fr/confidentialite",
+    });
+    const launched = await requestSend(campaign, { userId, now: now() });
+    expect(launched.status).toBe("SENDING");
+    expect(launched.trackedCount).toBe(1);
+    const recipients = await recipientsOf(campaign._id);
+    expect(recipients.map((r) => [r.email, r.trackingAllowed])).toEqual([
+      ["client0@exemple.fr", false],
+      ["client1@exemple.fr", true],
+      ["client2@exemple.fr", false],
+    ]);
+    await tick();
+    const byEmail = new Map(
+      resendMock.calls[0].payloads.map((p) => [p.to[0], p]),
+    );
+    // Accord donné : pixel, liens suivis, phrase, préférences
+    const tracked = byEmail.get("client1@exemple.fr");
+    expect(tracked.html).toContain("/api/email-campaigns/o/");
+    expect(tracked.html).toContain("/api/email-campaigns/c/");
+    expect(tracked.text).toContain(
+      "Atelier Durand mesure l'ouverture de cet e-mail et les clics sur ses liens, avec votre accord.\nPolitique de confidentialité : https://atelier.fr/confidentialite\nGérer mes préférences : https://api.exemple.test/api/email-campaigns/preferences?t=",
+    );
+    const prefToken = tracked.text.split("preferences?t=")[1].split("\n")[0];
+    expect(verifyCampaignToken(TOKEN_KINDS.preferences, prefToken)).toBe(
+      String(recipients[1]._id),
+    );
+    // Aucun choix ou refus : même e-mail sans suivi, préférences quand même
+    for (const email of ["client0@exemple.fr", "client2@exemple.fr"]) {
+      const untracked = byEmail.get(email);
+      expect(untracked.html, email).toContain(
+        'href="https://atelier.fr/nouveautes"',
+      );
+      expect(untracked.html, email).not.toContain("/api/email-campaigns/o/");
+      expect(untracked.html, email).not.toContain("/api/email-campaigns/c/");
+      expect(untracked.text, email).not.toContain("mesure");
+      expect(untracked.text, email).toContain("Gérer mes préférences : ");
+    }
+  });
+
+  it("refus pendant l'envoi : les e-mails encore à partir partent sans suivi", async () => {
+    await seedClients(1);
+    await grantTracking("client0@exemple.fr");
+    const campaign = await createCampaign({ trackOpens: true });
+    await requestSend(campaign, { userId, now: now() });
+    await EmailCampaignRecipient.updateOne(
+      { campaignId: campaign._id },
+      { $set: { trackingAllowed: false, trackingExpired: true } },
+    );
+    await tick();
+    const payload = resendMock.calls[0].payloads[0];
+    expect(payload.html).not.toContain("/api/email-campaigns/o/");
+    expect(payload.text).not.toContain("mesure");
+  });
+
+  it("clics seulement : liens suivis sans pixel, seuls les clics annoncés", async () => {
+    await seedClients(1);
+    await grantTracking("client0@exemple.fr");
+    const campaign = await createCampaign({ trackClicks: true });
+    await requestSend(campaign, { userId, now: now() });
+    await tick();
+    const payload = resendMock.calls[0].payloads[0];
+    expect(payload.html).toContain("/api/email-campaigns/c/");
+    expect(payload.html).not.toContain("/api/email-campaigns/o/");
+    expect(payload.text).toContain(
+      "Atelier Durand mesure les clics sur les liens de cet e-mail, avec votre accord.",
+    );
+    expect(payload.text).not.toContain("Politique de confidentialité");
+  });
+});
+
 describe("envoi par lots", () => {
   it("lots de 100, espacés, en-têtes de désinscription, puis SENT", async () => {
     await seedClients(250);
-    const campaign = await createCampaign();
+    await grantTracking("client0@exemple.fr");
+    const campaign = await createCampaign({
+      trackOpens: true,
+      trackClicks: true,
+      privacyPolicyUrl: "https://atelier.fr/confidentialite",
+    });
     await requestSend(campaign, { userId, now: now() });
     const totals = await tick();
     expect(totals).toMatchObject({ batches: 3, sent: 250, failed: 0 });
@@ -353,6 +477,14 @@ describe("envoi par lots", () => {
     expect(payload.html).not.toContain('href="https://atelier.fr/nouveautes"');
     expect(payload.html).toContain("/api/email-campaigns/o/");
     expect(payload.text).toContain("Bonjour Marie,");
+    // Suivi annoncé dans le pied, avec la politique de confidentialité
+    expect(payload.text).toContain(
+      "Atelier Durand mesure l'ouverture de cet e-mail et les clics sur ses liens, avec votre accord.",
+    );
+    expect(payload.text).toContain(
+      "Politique de confidentialité : https://atelier.fr/confidentialite",
+    );
+    expect(payload.html).toContain('href="https://atelier.fr/confidentialite"');
 
     const done = await EmailCampaign.findById(campaign._id).lean();
     expect(done.status).toBe("SENT");
@@ -807,6 +939,33 @@ describe("adresse d'envoi", () => {
 });
 
 describe("e-mails de test", () => {
+  it("suivi actif : rien n'est suivi, mais le pied l'annonce comme aux destinataires", async () => {
+    const campaign = await createCampaign({
+      trackOpens: true,
+      trackClicks: true,
+      privacyPolicyUrl: "https://atelier.fr/confidentialite",
+    });
+    await sendCampaignTest(campaign, ["moi@atelier.fr"], {});
+    const payload = resendMock.calls[0].payloads[0];
+    expect(payload.html).toContain('href="https://atelier.fr/nouveautes"');
+    expect(payload.html).not.toContain("/api/email-campaigns/c/");
+    expect(payload.html).not.toContain("/api/email-campaigns/o/");
+    expect(payload.text).toContain(
+      "Atelier Durand mesure l'ouverture de cet e-mail et les clics sur ses liens, avec votre accord.",
+    );
+    expect(payload.text).toContain(
+      "Politique de confidentialité : https://atelier.fr/confidentialite",
+    );
+    // Lien de préférences d'un e-mail de test : sans effet
+    const prefToken = payload.text
+      .split("Gérer mes préférences : ")[1]
+      .split("\n")[0]
+      .split("preferences?t=")[1];
+    expect(verifyCampaignToken(TOKEN_KINDS.testUnsubscribe, prefToken)).toBe(
+      String(campaign._id),
+    );
+  });
+
   it("objet préfixé, liens non suivis, désinscription sans effet", async () => {
     const campaign = await createCampaign();
     const result = await sendCampaignTest(

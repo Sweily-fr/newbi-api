@@ -5,7 +5,8 @@
  *
  * BETA_FEATURES       fonctionnalités réservées, séparées par des virgules
  *                     (vat, urssaf, appointments, documentShares,
- *                     socialPublishing, emailCampaigns, transferPayments) ;
+ *                     socialPublishing, emailCampaigns, transferPayments,
+ *                     prospecting) ;
  *                     « none » = aucune. Absente ou vide : toutes réservées
  *                     en production, aucune ailleurs (local, CI, staging),
  *                     pour qu'un oubli de variable n'ouvre rien à tout le
@@ -31,6 +32,7 @@ export const BETA_FEATURE_KEYS = Object.freeze([
   "socialPublishing",
   "emailCampaigns",
   "transferPayments",
+  "prospecting",
 ]);
 
 export const FEATURE_NOT_AVAILABLE = "FEATURE_NOT_AVAILABLE";
@@ -77,8 +79,33 @@ export function featureWorkspaceIds(feature, env = process.env) {
   );
 }
 
+/**
+ * Interrupteurs généraux : en production, la fonctionnalité est fermée à
+ * TOUS les espaces (même ceux de BETA_WORKSPACE_IDS) tant que sa variable ne
+ * vaut pas « true ». Garde contre une release de develop qui la livrerait
+ * avant que BETA_FEATURES (liste explicite sur le serveur) ne la réserve :
+ * une clé absente de cette liste serait sinon ouverte à tout le monde.
+ * Sans effet hors production (local, CI, staging).
+ */
+export const FEATURE_SWITCHES = Object.freeze({
+  prospecting: "PROSPECTING_ENABLED",
+});
+
+/** Vrai si l'interrupteur général de la fonctionnalité la ferme. */
+export function isFeatureSwitchedOff(feature, env = process.env) {
+  assertKnownFeature(feature);
+  const variable = FEATURE_SWITCHES[feature];
+  if (!variable || env.NODE_ENV !== "production") return false;
+  return (
+    String(env[variable] ?? "")
+      .trim()
+      .toLowerCase() !== "true"
+  );
+}
+
 /** Vrai si l'espace a accès à la fonctionnalité. */
 export function isFeatureEnabled(feature, workspaceId, env = process.env) {
+  if (isFeatureSwitchedOff(feature, env)) return false;
   if (!isFeatureRestricted(feature, env)) return true;
   if (workspaceId == null || workspaceId === "") return false;
   return featureWorkspaceIds(feature, env).includes(String(workspaceId));
@@ -123,7 +150,7 @@ function requestedWorkspaceIds(args, context) {
  * withRBAC prendrait l'espace par défaut de l'utilisateur : refusé aussi.
  */
 export function assertFeatureForRequest(feature, args, context) {
-  if (!isFeatureRestricted(feature)) return;
+  if (!isFeatureSwitchedOff(feature) && !isFeatureRestricted(feature)) return;
   const ids = requestedWorkspaceIds(args, context);
   if (!ids.length || !ids.every((id) => isFeatureEnabled(feature, id))) {
     throw featureUnavailableError();

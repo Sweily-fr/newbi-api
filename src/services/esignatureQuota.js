@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import SignatureRequest from "../models/SignatureRequest.js";
 import { ACTIVE_SUBSCRIPTION_STATUSES } from "../middlewares/rbac.js";
 import { AppError, ERROR_CODES } from "../utils/errors.js";
+import { canonicalPlanKey } from "./storage/storageConfig.js";
 
 /**
  * Quota mensuel de demandes de signature électronique par plan (-1 = illimité).
@@ -77,8 +78,10 @@ export async function getWorkspacePlan(workspaceId) {
 }
 
 /**
- * Plan (en minuscules) de l'abonnement en cours de l'espace, ou null sans
- * abonnement actif ni période payée en cours (essai géré par l'app).
+ * Plan de l'abonnement en cours de l'espace (clé actuelle : les anciennes
+ * clés « pro » et « enterprise » sont lues comme « pme » et « entreprise »),
+ * ou null sans abonnement actif ni période payée en cours (essai géré par
+ * l'app).
  */
 export async function getLiveSubscriptionPlan(workspaceId) {
   const db = mongoose.connection.db;
@@ -109,7 +112,7 @@ export async function getLiveSubscriptionPlan(workspaceId) {
 
   if (!live) return null;
   return typeof live.plan === "string" && live.plan
-    ? live.plan.toLowerCase()
+    ? canonicalPlanKey(live.plan)
     : "";
 }
 

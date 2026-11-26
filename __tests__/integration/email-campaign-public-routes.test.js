@@ -5,7 +5,11 @@
  *     effet ; jeton invalide refusé ;
  *   - pixel d'ouverture jamais mis en cache ;
  *   - clic : redirection vers le lien figé au lancement seulement, jamais
- *     de redirection ouverte (jeton, numéro ou lien invalides = page).
+ *     de redirection ouverte (jeton, numéro ou lien invalides = page) ;
+ *   - suivi effacé (durée de conservation dépassée) ou sans accord : image
+ *     et redirection servies, plus rien d'enregistré ;
+ *   - préférences : page sans effet en GET, accord ou refus du suivi en
+ *     POST (refus : suivi effacé), jeton de test sans effet.
  */
 import {
   describe,
@@ -38,6 +42,7 @@ import EmailCampaign from "../../src/models/EmailCampaign.js";
 import EmailCampaignClick from "../../src/models/EmailCampaignClick.js";
 import EmailCampaignRecipient from "../../src/models/EmailCampaignRecipient.js";
 import EmailSuppression from "../../src/models/EmailSuppression.js";
+import EmailTrackingConsent from "../../src/models/EmailTrackingConsent.js";
 import emailCampaignRoutes, {
   RATE_LIMITS,
   maskEmail,
@@ -226,6 +231,19 @@ describe("pixel d'ouverture", () => {
     expect(res.headers.get("content-type")).toBe("image/gif");
     expect((await statsOf()).opens).toBe(0);
   });
+
+  it("suivi effacé (conservation dépassée) : l'image, rien d'enregistré", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { trackingExpired: true } },
+    );
+    const res = await api(`/o/${token(TOKEN_KINDS.open)}.gif`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/gif");
+    const saved = await EmailCampaignRecipient.findById(recipient._id).lean();
+    expect(saved).toMatchObject({ openedAt: null, openCount: 0 });
+    expect(await statsOf()).toMatchObject({ opened: 0, opens: 0 });
+  });
 });
 
 describe("clic suivi", () => {
@@ -247,6 +265,20 @@ describe("clic suivi", () => {
     });
     const clicks = await EmailCampaignClick.find().lean();
     expect(clicks.map((c) => c.linkIndex)).toEqual([1, 1]);
+  });
+
+  it("suivi effacé (conservation dépassée) : redirection, rien d'enregistré", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { trackingExpired: true } },
+    );
+    const res = await api(`/c/${token(TOKEN_KINDS.click)}/0`);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://atelier.fr/nouveautes");
+    const saved = await EmailCampaignRecipient.findById(recipient._id).lean();
+    expect(saved).toMatchObject({ clickCount: 0, openCount: 0 });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
+    expect(await statsOf()).toMatchObject({ clicks: 0, opens: 0 });
   });
 
   it("jamais de redirection ouverte", async () => {
@@ -272,5 +304,135 @@ describe("clic suivi", () => {
     const res = await api(`/c/${token(TOKEN_KINDS.click)}/0`);
     expect(res.status).toBe(400);
     expect((await statsOf()).clicks).toBe(0);
+  });
+});
+
+describe("préférences", () => {
+  const preferences = (kind = TOKEN_KINDS.preferences) =>
+    `/preferences?t=${encodeURIComponent(token(kind))}`;
+  const choose = (action) =>
+    api(preferences(), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: `action=${action}`,
+    });
+
+  it("GET : choix actuel, boutons et désinscription, aucun effet", async () => {
+    await EmailCampaign.updateOne(
+      { _id: campaign._id },
+      { $set: { privacyPolicyUrl: "https://atelier.fr/rgpd" } },
+    );
+    const res = await api(preferences());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    const html = await res.text();
+    expect(html).toContain("Vos préférences");
+    expect(html).toContain("Atelier &lt;Durand&gt;");
+    expect(html).not.toContain("Atelier <Durand>");
+    expect(html).toContain(maskEmail("marie.durand@exemple.fr"));
+    expect(html).not.toContain("marie.durand@exemple.fr");
+    expect(html).toContain("Aucun choix");
+    expect(html).toContain("ne mesure ni vos ouvertures ni");
+    expect(html).toContain('value="accept"');
+    expect(html).toContain('value="refuse"');
+    expect(html).toContain('href="https://atelier.fr/rgpd"');
+    expect(html).toContain('action="unsubscribe?t=');
+    expect(html).not.toContain("—");
+    expect(await EmailTrackingConsent.countDocuments()).toBe(0);
+  });
+
+  it("POST accepter : accord du contact enregistré, page à jour", async () => {
+    const res = await choose("accept");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("vous acceptez le suivi des ouvertures et");
+    expect(html).toContain("qu'Atelier");
+    expect(html).toContain("Vous avez accepté");
+    expect(html).toContain('value="refuse"');
+    expect(html).not.toContain('value="accept"');
+    const consent = await EmailTrackingConsent.findOne().lean();
+    expect(consent).toMatchObject({
+      email: "marie.durand@exemple.fr",
+      status: "GRANTED",
+      source: "CONTACT",
+    });
+    expect(String(consent.campaignId)).toBe(String(campaign._id));
+    expect(consent.history).toHaveLength(1);
+  });
+
+  it("POST refuser : refus enregistré, suivi déjà fait effacé", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { openedAt: new Date(), openCount: 3, clickCount: 1 } },
+    );
+    await EmailCampaignClick.create({
+      workspaceId,
+      campaignId: campaign._id,
+      recipientId: recipient._id,
+      linkIndex: 0,
+    });
+    const res = await choose("refuse");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Vous avez refusé ce suivi");
+    expect(await EmailTrackingConsent.findOne().lean()).toMatchObject({
+      status: "REFUSED",
+      source: "CONTACT",
+    });
+    expect(
+      await EmailCampaignRecipient.findById(recipient._id).lean(),
+    ).toMatchObject({
+      trackingAllowed: false,
+      trackingExpired: true,
+      openedAt: null,
+      openCount: 0,
+      clickCount: 0,
+    });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
+    // Le pixel n'enregistre plus rien
+    await api(`/o/${token(TOKEN_KINDS.open)}.gif`);
+    expect(
+      (await EmailCampaignRecipient.findById(recipient._id)).openCount,
+    ).toBe(0);
+  });
+
+  it("jeton de test : page d'explication ; jeton ou action invalides : refus", async () => {
+    const test = await api(
+      preferences(TOKEN_KINDS.testUnsubscribe).replace(
+        encodeURIComponent(token(TOKEN_KINDS.testUnsubscribe)),
+        encodeURIComponent(
+          createCampaignToken(
+            TOKEN_KINDS.testUnsubscribe,
+            String(campaign._id),
+          ),
+        ),
+      ),
+    );
+    expect(test.status).toBe(200);
+    expect(await test.text()).toContain("E-mail de test");
+    expect((await api(preferences(TOKEN_KINDS.unsubscribe))).status).toBe(400);
+    const bad = await api(preferences(), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "action=pirate",
+    });
+    expect(bad.status).toBe(400);
+    expect(await EmailTrackingConsent.countDocuments()).toBe(0);
+  });
+
+  it("destinataire sans accord : pixel et clic servis, rien d'enregistré", async () => {
+    await EmailCampaignRecipient.updateOne(
+      { _id: recipient._id },
+      { $set: { trackingAllowed: false } },
+    );
+    await api(`/o/${token(TOKEN_KINDS.open)}.gif`);
+    const res = await api(`/c/${token(TOKEN_KINDS.click)}/0`);
+    expect(res.status).toBe(302);
+    expect(
+      await EmailCampaignRecipient.findById(recipient._id).lean(),
+    ).toMatchObject({
+      openCount: 0,
+      clickCount: 0,
+    });
+    expect(await EmailCampaignClick.countDocuments()).toBe(0);
   });
 });

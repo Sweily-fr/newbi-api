@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch: # Permet le déclenchement manuel
+    inputs:
+      host:
+        description: "IP du serveur cible (vide = serveur habituel)"
+        required: false
+        default: ""
 
 # Un seul déploiement prod à la fois, même raison qu'en staging : deux runs
 # simultanés partagent le dossier ~/api.newbi.fr/.deploy/next et se
@@ -17,6 +22,11 @@ jobs:
   deploy:
     name: Deploy to Production Server
     runs-on: ubuntu-latest
+    # Serveur cible : l'entrée « host » d'un lancement manuel, sinon la
+    # variable de dépôt VPS_HOST_PRODUCTION (changement de serveur), sinon le
+    # serveur actuel.
+    env:
+      VPS_HOST: ${{ inputs.host || vars.VPS_HOST_PRODUCTION || '51.91.254.74' }}
 
     steps:
       - name: Checkout code
@@ -27,10 +37,17 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_key
           chmod 600 ~/.ssh/vps_key
+          # Hôte venu d'une entrée ou d'une variable : une IPv4 ou un nom,
+          # rien d'autre (ni espace ni caractère interprété par le shell)
+          if ! printf '%s' "$VPS_HOST" | grep -Eq '^[A-Za-z0-9.-]+$'; then
+            echo "❌ Serveur cible invalide : $VPS_HOST"
+            exit 1
+          fi
+          echo "🎯 Serveur cible : $VPS_HOST"
           # Une seule connexion (clé ed25519) au lieu d'une par type de clé ;
           # si le VPS la refuse, la clé est prise à la première connexion
           # (StrictHostKeyChecking=no, comme avant)
-          ssh-keyscan -t ed25519 -H 51.91.254.74 >> ~/.ssh/known_hosts || true
+          ssh-keyscan -t ed25519 -H "$VPS_HOST" >> ~/.ssh/known_hosts || true
 
       - name: Deploy to Production
         run: |
@@ -41,7 +58,7 @@ jobs:
           # 1re commande, 4 déploiements sur 9 le 22/11/2026, relances OK).
           SSH="ssh -i $HOME/.ssh/vps_key -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ControlMaster=auto -o ControlPath=$HOME/.ssh/cm-%C -o ControlPersist=20m"
           for essai in $(seq 1 30); do
-            if $SSH -o ConnectTimeout=15 joaquim@51.91.254.74 true; then break; fi
+            if $SSH -o ConnectTimeout=15 "joaquim@$VPS_HOST" true; then break; fi
             if [ "$essai" -eq 30 ]; then
               echo "❌ VPS injoignable en SSH depuis 15 minutes"
               exit 1
@@ -54,13 +71,13 @@ jobs:
           # ligne n'est modifiée qu'après un démarrage d'essai réussi, puis ses
           # instances sont remplacées une par une, sans coupure
           # (scripts/deploy/deploy-vps.sh).
-          $SSH joaquim@51.91.254.74 'mkdir -p ~/api.newbi.fr/.deploy/next'
+          $SSH "joaquim@$VPS_HOST" 'mkdir -p ~/api.newbi.fr/.deploy/next'
           rsync -az --delete --exclude='uploads' --exclude='node_modules' --exclude='.git' \
             --exclude='.env' --exclude='.env.*' \
             -e "$SSH" \
-            ./* joaquim@51.91.254.74:~/api.newbi.fr/.deploy/next/
+            ./* "joaquim@$VPS_HOST:~/api.newbi.fr/.deploy/next/"
 
-          $SSH joaquim@51.91.254.74 'bash ~/api.newbi.fr/.deploy/next/scripts/deploy/deploy-vps.sh production'
+          $SSH "joaquim@$VPS_HOST" 'bash ~/api.newbi.fr/.deploy/next/scripts/deploy/deploy-vps.sh production'
 
       - name: Cleanup SSH Key
         if: always()

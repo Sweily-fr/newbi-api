@@ -85,6 +85,7 @@ import socialPublishingResolvers from "./socialPublishing.js";
 import appointmentsResolvers from "./appointments.js";
 import emailCampaignsResolvers from "./emailCampaigns.js";
 import emailSendingDomainsResolvers from "./emailSendingDomains.js";
+import prospectingResolvers from "./prospecting.js";
 import workspaceFeaturesResolvers from "./workspaceFeatures.js";
 import { gateFeatureResolvers } from "../utils/featureAccess.js";
 
@@ -180,6 +181,10 @@ const resolvers = mergeResolvers([
   // jamais fermées, seul le tableau de bord l'est
   gateFeatureResolvers("emailCampaigns", emailCampaignsResolvers),
   gateFeatureResolvers("emailCampaigns", emailSendingDomainsResolvers),
+  // Prospection depuis la boîte mail du membre : pages publiques
+  // (désinscription, « Vos données ») jamais fermées, seul le tableau de
+  // bord l'est
+  gateFeatureResolvers("prospecting", prospectingResolvers),
   workspaceFeaturesResolvers,
 ]);
 

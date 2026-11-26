@@ -12,6 +12,13 @@ import mongoose from "mongoose";
  * `lockedAt` / `batchKey` : destinataire réservé par un lot en cours
  * d'envoi ; un verrou de plus de 10 minutes (processus arrêté en plein
  * envoi) est levé par le cron et le destinataire repart avec le lot suivant.
+ *
+ * `trackingAllowed` : l'adresse avait accepté le suivi au lancement d'une
+ * campagne suivie (absent : campagne lancée avant le suivi par contact, où
+ * tous les destinataires l'étaient). `trackingExpired` : suivi effacé
+ * (durée de conservation dépassée, voir services/emailCampaigns/retention.js,
+ * ou refus de l'adresse, voir trackingConsent.js) ; le pixel et les liens
+ * suivis n'enregistrent plus rien pour ce destinataire.
  */
 
 export const RECIPIENT_STATUSES = [
@@ -69,6 +76,8 @@ const emailCampaignRecipientSchema = new mongoose.Schema(
     openCount: { type: Number, default: 0 },
     clickedAt: { type: Date, default: null },
     clickCount: { type: Number, default: 0 },
+    trackingAllowed: { type: Boolean, default: undefined },
+    trackingExpired: { type: Boolean, default: false },
     bouncedAt: { type: Date, default: null },
     bounceType: { type: String, default: null },
     complainedAt: { type: Date, default: null },
@@ -90,6 +99,8 @@ emailCampaignRecipientSchema.index({ campaignId: 1, status: 1, _id: 1 });
 // Quota du mois : e-mails envoyés (et en attente d'envoi) par l'espace
 emailCampaignRecipientSchema.index({ workspaceId: 1, sentAt: 1 });
 emailCampaignRecipientSchema.index({ workspaceId: 1, status: 1 });
+// Refus du suivi : toutes les campagnes de l'espace reçues par l'adresse
+emailCampaignRecipientSchema.index({ workspaceId: 1, email: 1 });
 
 export default mongoose.models.EmailCampaignRecipient ||
   mongoose.model("EmailCampaignRecipient", emailCampaignRecipientSchema);

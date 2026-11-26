@@ -11,7 +11,8 @@
  *   prospects      prospect issu de « Générer des prospects » : il ne
  *                  connaît pas l'expéditeur, une campagne ne lui est jamais
  *                  envoyée (le service d'envoi interdit les contacts achetés
- *                  ou collectés) ; non exposé en GraphQL, expliqué par la
+ *                  ou collectés) ; compté dans
+ *                  EmailCampaignAudienceCount.prospects et expliqué par la
  *                  vérification avant envoi
  *   suppressed     adresse de la liste d'exclusion (désinscription, rejet,
  *                  plainte, ajout à la main)

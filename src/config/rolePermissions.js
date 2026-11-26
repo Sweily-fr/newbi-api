@@ -406,6 +406,21 @@ export const MODULES = [
       action("send", "Envoyer et programmer"),
     ],
   },
+  {
+    // Prospection depuis la boîte mail de chaque membre (Gmail, Outlook) :
+    // prospections communes à l'espace, chacune part de la boîte de son
+    // auteur, que lui seul lance, met en pause, reprend ou arrête
+    key: "prospecting",
+    group: "communication",
+    label: "Prospection",
+    actions: [
+      VIEW,
+      CREATE,
+      EDIT,
+      DELETE,
+      action("send", "Lancer, mettre en pause, reprendre et arrêter"),
+    ],
+  },
   // Compte
   {
     key: "team",
@@ -646,7 +661,8 @@ const PERSONAL_MODULES = new Set(["signatures", "appointments"]);
  *     partagés et listes de clients ouverts à tout membre ; kanban et
  *     signatures fermés à l'écran ; transferts créés depuis les documents
  *     partagés). Prise de rendez-vous fermée (outil personnel), campagnes
- *     e-mail aussi (envoi commercial, sans rapport avec la comptabilité).
+ *     e-mail et prospection aussi (envoi commercial, sans rapport avec la
+ *     comptabilité).
  *
  * Une grille enregistrée avant l'ajout d'une page (campagnes e-mail…) ne
  * casse rien : rôle prédéfini ajusté, la page prend ses droits par défaut ;
@@ -676,6 +692,7 @@ const ACCOUNTANT_LEVELS = fill("read", {
   signatures: "none",
   appointments: "none",
   emailCampaigns: "none",
+  prospecting: "none",
   team: "read",
   billing: "read",
   orgSettings: "read",

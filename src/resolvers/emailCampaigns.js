@@ -13,9 +13,9 @@
 import mongoose from "mongoose";
 import Client from "../models/Client.js";
 import EmailCampaign, { EMPTY_STATS } from "../models/EmailCampaign.js";
-import EmailCampaignClick from "../models/EmailCampaignClick.js";
 import EmailCampaignRecipient from "../models/EmailCampaignRecipient.js";
 import EmailSuppression from "../models/EmailSuppression.js";
+import EmailTrackingConsent from "../models/EmailTrackingConsent.js";
 import {
   checkSubscriptionActive,
   requireWorkspaceAction,
@@ -57,8 +57,23 @@ import {
   EXAMPLE_VARIABLES,
   contactVariables,
 } from "../services/emailCampaigns/personalize.js";
+import { parseHttpUrl } from "../services/emailCampaigns/html.js";
 import { renderCampaignEmail } from "../services/emailCampaigns/render.js";
+import { aggregateLinkStats } from "../services/emailCampaigns/retention.js";
 import { resolveCampaignSender } from "../services/emailCampaigns/sendingDomains.js";
+import {
+  campaignTrackingNotice,
+  recipientTracked,
+  tracksClicks,
+  tracksOpens,
+} from "../services/emailCampaigns/tracking.js";
+import {
+  MAX_GRANT_EMAILS,
+  grantBySender,
+  grantedEmailSet,
+  refuseBySender,
+  removeSenderConsent,
+} from "../services/emailCampaigns/trackingConsent.js";
 import {
   DEFAULT_TEMPLATE_KEY,
   isTemplateKey,
@@ -78,6 +93,7 @@ const NAME_MAX = 120;
 const SUBJECT_MAX = 200;
 const PREHEADER_MAX = 250;
 const FROM_NAME_MAX = 60;
+const URL_MAX = 500;
 const MAX_TEST_ADDRESSES = 5;
 // E-mails de test : envois hors quota, limités par espace
 const TEST_SENDS_PER_HOUR = 20;
@@ -243,7 +259,23 @@ async function campaignChanges(input, ctx) {
   if (has(input, "trackClicks")) {
     changes.trackClicks = Boolean(input.trackClicks);
   }
+  if (input.privacyPolicyUrl !== undefined) {
+    changes.privacyPolicyUrl = privacyPolicyUrlInput(input.privacyPolicyUrl);
+  }
   return changes;
+}
+
+/** Lien vers la politique de confidentialité de l'expéditeur (vide permis). */
+function privacyPolicyUrlInput(value) {
+  const raw = singleLine(value ?? "");
+  if (!raw) return "";
+  const url = raw.length <= URL_MAX ? parseHttpUrl(raw) : null;
+  if (!url) {
+    throw validation(
+      "Le lien vers la politique de confidentialité doit être une adresse web (https://…).",
+    );
+  }
+  return url.href;
 }
 
 /** Image envoyée par l'éditeur, lue avec une limite de taille. */
@@ -288,9 +320,13 @@ const RECIPIENT_FILTERS = {
   ALL: {},
   OPENED: { openedAt: { $ne: null } },
   CLICKED: { clickedAt: { $ne: null } },
+  // Seulement les destinataires suivis : sans accord, une ouverture n'est
+  // jamais connue
   NOT_OPENED: {
     openedAt: null,
     status: { $in: ["SENT", "DELIVERED", "SIMULATED"] },
+    trackingAllowed: { $ne: false },
+    trackingExpired: { $ne: true },
   },
   BOUNCED: { bouncedAt: { $ne: null } },
   UNSUBSCRIBED: { unsubscribedAt: { $ne: null } },
@@ -345,8 +381,12 @@ const emailCampaignsResolvers = {
       listIds: (campaign.audience?.listIds || []).map(String),
       excludeListIds: (campaign.audience?.excludeListIds || []).map(String),
     }),
-    trackOpens: (campaign) => campaign.trackOpens !== false,
-    trackClicks: (campaign) => campaign.trackClicks !== false,
+    trackOpens: (campaign) => tracksOpens(campaign),
+    trackClicks: (campaign) => tracksClicks(campaign),
+    privacyPolicyUrl: (campaign) => campaign.privacyPolicyUrl || "",
+    trackingPurgedAt: (campaign) => campaign.trackingPurgedAt || null,
+    trackedRecipients: (campaign) =>
+      Number.isInteger(campaign.trackedCount) ? campaign.trackedCount : null,
     pausedReason: (campaign) => campaign.pausedReason || null,
     stats: (campaign) => ({ ...EMPTY_STATS, ...asObject(campaign.stats) }),
     createdByName: (campaign) => campaign.createdByName || null,
@@ -359,13 +399,24 @@ const emailCampaignsResolvers = {
     name: (recipient) => recipient.name || null,
     openCount: (recipient) => recipient.openCount || 0,
     clickCount: (recipient) => recipient.clickCount || 0,
+    tracked: (recipient) => recipientTracked(recipient),
     error: (recipient) => recipient.error || null,
+  },
+
+  EmailCampaignAudienceCount: {
+    trackingGranted: (count) => count.trackingGranted || 0,
   },
 
   EmailSuppression: {
     id: (suppression) => String(suppression._id || suppression.id),
     campaignId: (suppression) =>
       suppression.campaignId ? String(suppression.campaignId) : null,
+  },
+
+  EmailTrackingConsent: {
+    id: (consent) => String(consent._id || consent.id),
+    note: (consent) => consent.note || null,
+    decidedByName: (consent) => consent.decidedByName || null,
   },
 
   Query: {
@@ -416,8 +467,17 @@ const emailCampaignsResolvers = {
     ),
 
     emailCampaignAudienceCount: can("view")(async (_, { audience }, ctx) => {
-      const { counts } = await resolveAudience(ctx.workspaceId, audience);
-      return counts;
+      const { counts, recipients } = await resolveAudience(
+        ctx.workspaceId,
+        audience,
+        { withRecipients: true },
+      );
+      // Destinataires qui seraient suivis (accord donné)
+      const granted = await grantedEmailSet(
+        toObjectId(ctx.workspaceId),
+        recipients.map((recipient) => recipient.email),
+      );
+      return { ...counts, trackingGranted: granted.size };
     }),
 
     emailCampaignPreview: can("view")(
@@ -434,6 +494,7 @@ const emailCampaignsResolvers = {
           preheader: preheader ?? campaign.preheader,
           vars,
           identity,
+          trackingNotice: campaignTrackingNotice(campaign),
         });
         return {
           subject: rendered.subject,
@@ -481,29 +542,16 @@ const emailCampaignsResolvers = {
       const campaign = await findCampaign(ctx, campaignId, { lean: true });
       const links = campaign.links || [];
       if (!links.length) return [];
-      const rows = await EmailCampaignClick.aggregate([
-        { $match: { campaignId: campaign._id } },
-        {
-          $group: {
-            _id: { link: "$linkIndex", recipient: "$recipientId" },
-            clicks: { $sum: 1 },
-          },
-        },
-        {
-          $group: {
-            _id: "$_id.link",
-            clicks: { $sum: "$clicks" },
-            uniqueClicks: { $sum: 1 },
-          },
-        },
-      ]);
-      const byIndex = new Map(rows.map((row) => [row._id, row]));
+      // Suivi effacé (plus de 13 mois) : totaux gardés au moment de l'effacement
+      const totals = Array.isArray(campaign.linkStats)
+        ? campaign.linkStats
+        : await aggregateLinkStats(campaign._id, links.length);
       return links
         .map((url, index) => ({
           url,
           index,
-          clicks: byIndex.get(index)?.clicks || 0,
-          uniqueClicks: byIndex.get(index)?.uniqueClicks || 0,
+          clicks: totals[index]?.clicks || 0,
+          uniqueClicks: totals[index]?.uniqueClicks || 0,
         }))
         .sort((a, b) => b.clicks - a.clicks || a.index - b.index)
         .map(({ url, clicks, uniqueClicks }) => ({
@@ -532,6 +580,32 @@ const emailCampaignsResolvers = {
       ]);
       return { items, total, page: bounds.page, limit: bounds.limit };
     }),
+
+    emailTrackingConsents: can("view")(
+      async (_, { status, search, page, limit }, ctx) => {
+        const bounds = boundedPage(page, limit, {
+          defaultLimit: 50,
+          maxLimit: 200,
+        });
+        const filter = { ...scope(ctx) };
+        if (status === "GRANTED" || status === "REFUSED") {
+          filter.status = status;
+        }
+        if (typeof search === "string" && search.trim()) {
+          filter.email = buildSearchRegex(search);
+        }
+        const [items, total] = await Promise.all([
+          EmailTrackingConsent.find(filter)
+            .sort({ decidedAt: -1, _id: -1 })
+            .skip(bounds.skip)
+            .limit(bounds.limit)
+            .select("-history")
+            .lean(),
+          EmailTrackingConsent.countDocuments(filter),
+        ]);
+        return { items, total, page: bounds.page, limit: bounds.limit };
+      },
+    ),
   },
 
   Mutation: {
@@ -592,8 +666,10 @@ const emailCampaignsResolvers = {
         replyTo: source.replyTo,
         design: normalizeDesign(source.design),
         audience: source.audience,
-        trackOpens: source.trackOpens !== false,
-        trackClicks: source.trackClicks !== false,
+        // Suivi coupé dans la copie : à réactiver, attestation comprise
+        trackOpens: false,
+        trackClicks: false,
+        privacyPolicyUrl: source.privacyPolicyUrl || "",
         createdBy: ctx.user._id,
         createdByName: await userDisplayName(ctx.user),
       });
@@ -673,6 +749,8 @@ const emailCampaignsResolvers = {
       },
     ),
 
+    // `trackingConsent` (attestation globale de l'étape 1) est ignoré : le
+    // suivi ne concerne plus que les adresses qui l'ont accepté
     sendEmailCampaign: can("send")(
       async (_, { id, scheduledAt, consent }, ctx) => {
         await checkSubscriptionActive(ctx);
@@ -797,6 +875,67 @@ const emailCampaignsResolvers = {
         ...scope(ctx),
         reason: "MANUAL",
       });
+      return true;
+    }),
+
+    // Accords de suivi recueillis par l'espace : attestation obligatoire,
+    // abonnement actif exigé (le suivi reprend pour ces adresses)
+    grantEmailTracking: can("edit")(
+      async (_, { emails, note, attestation }, ctx) => {
+        await checkSubscriptionActive(ctx);
+        if (attestation !== true) {
+          throw validation(
+            "Confirmez que ces contacts vous ont donné leur accord et que vous pouvez le prouver.",
+          );
+        }
+        const list = Array.isArray(emails) ? emails : [];
+        if (!list.length) throw validation("Ajoutez au moins une adresse.");
+        if (list.length > MAX_GRANT_EMAILS) {
+          throw validation(
+            `${MAX_GRANT_EMAILS} adresses au plus à la fois : enregistrez-les en plusieurs fois.`,
+          );
+        }
+        const result = await grantBySender({
+          workspaceId: toObjectId(ctx.workspaceId),
+          emails: list,
+          note,
+          userId: ctx.user._id,
+          userName: await userDisplayName(ctx.user),
+        });
+        logger.info(
+          `[campagnes] ${result.granted} accord(s) de suivi saisi(s) dans l'espace ${ctx.workspaceId} par ${ctx.user._id}`,
+        );
+        return result;
+      },
+    ),
+
+    // Refus noté par l'espace : toujours possible, suivi effacé
+    refuseEmailTracking: can("edit")(async (_, { email }, ctx) => {
+      const address = normalizeEmail(email);
+      if (!isValidEmail(address)) {
+        throw validation("Adresse e-mail invalide.");
+      }
+      return refuseBySender({
+        workspaceId: toObjectId(ctx.workspaceId),
+        email: address,
+        userId: ctx.user._id,
+        userName: await userDisplayName(ctx.user),
+      });
+    }),
+
+    removeEmailTrackingConsent: can("edit")(async (_, { id }, ctx) => {
+      const missing = () => notFound("Accord de suivi introuvable.");
+      if (!isObjectIdString(id)) throw missing();
+      const outcome = await removeSenderConsent({
+        workspaceId: toObjectId(ctx.workspaceId),
+        id: toObjectId(id),
+      });
+      if (outcome === "not_found") throw missing();
+      if (outcome === "contact_choice") {
+        throw validation(
+          "Ce choix vient du contact lui-même : lui seul peut le changer, avec le lien « Gérer mes préférences » de vos e-mails.",
+        );
+      }
       return true;
     }),
   },

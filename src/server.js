@@ -100,6 +100,8 @@ import backofficeAdminRoutes from "./routes/backofficeAdmin.js";
 import adminServiceRoutes from "./routes/adminService.js";
 import trialNudgeRoutes from "./routes/trialNudges.js";
 import emailCampaignRoutes from "./routes/emailCampaigns.js";
+import prospectingPublicRoutes from "./routes/prospecting.js";
+import mailboxConnectRoutes from "./routes/mailbox-connect.js";
 import bankingRoutes from "./routes/banking.js";
 import bankingConnectRoutes from "./routes/banking-connect.js";
 import bankingSyncRoutes from "./routes/banking-sync.js";
@@ -158,6 +160,7 @@ import { startSocialPostSyncCron } from "./cron/socialPostSyncCron.js";
 import { startSocialDirectPublishCron } from "./cron/socialDirectPublishCron.js";
 import { startAppointmentReminderCron } from "./cron/appointmentReminderCron.js";
 import { startEmailCampaignCron } from "./cron/emailCampaignCron.js";
+import { startProspectingCron } from "./cron/prospectingCron.js";
 import fileTransferReminderService from "./services/fileTransferReminderService.js";
 import Event from "./models/Event.js";
 
@@ -536,6 +539,13 @@ async function startServer() {
   // l'accès anticipé)
   app.use("/api/email-campaigns", emailCampaignRoutes);
 
+  // Prospection : désinscription et page « Vos données » (publiques, jeton
+  // signé, rate-limitées ; jamais fermées par l'accès anticipé)
+  app.use("/api/prospection", prospectingPublicRoutes);
+
+  // Connexion de la boîte d'envoi de la prospection (OAuth Gmail / Outlook)
+  app.use("/mailbox-connect", mailboxConnectRoutes);
+
   // Annuaire facturation électronique (publique, sans auth, rate-limitée) :
   // simulateur « Es-tu concerné ? » des LP
   app.use("/api/public/einvoicing", publicEInvoicingDirectoryRoutes);
@@ -832,7 +842,12 @@ async function startServer() {
       process.env.NODE_APP_INSTANCE || process.env.pm_id || "0",
       10,
     );
-    if (instanceId === 0) {
+    // Changement de serveur : CRONS_DISABLED=true coupe les crons de toutes
+    // les instances de ce serveur, pour qu'ils ne tournent jamais sur deux
+    // serveurs à la fois pendant une bascule. Pour les rallumer, écrire
+    // CRONS_DISABLED=false (plutôt que de retirer la ligne) puis pm2 reload.
+    const cronsDisabled = process.env.CRONS_DISABLED === "true";
+    if (instanceId === 0 && !cronsDisabled) {
       setupScheduledJobs();
 
       // Démarrer le scheduler de rappels email
@@ -930,6 +945,15 @@ async function startServer() {
       // Campagnes e-mail : programmées arrivées à échéance et lots en cours,
       // chaque minute (EMAIL_CAMPAIGN_SEND_MODE, EMAIL_CAMPAIGN_MAX_PER_MINUTE)
       startEmailCampaignCron();
+
+      // Prospection : un message au plus par boîte d'envoi et par passage,
+      // chaque minute (plage de Paris, jours fériés, limite du jour,
+      // espacement de 3 à 8 minutes ; mode d'envoi des campagnes)
+      startProspectingCron();
+    } else if (cronsDisabled) {
+      logger.warn(
+        `⏸️ Instance PM2 #${instanceId} : crons/schedulers coupés sur ce serveur (CRONS_DISABLED=true)`,
+      );
     } else {
       logger.info(
         `⏭️ Instance PM2 #${instanceId} — crons/schedulers désactivés (gérés par l'instance #0)`,

@@ -135,6 +135,9 @@ const OPEN_TO_ANY_MEMBER = {
     "setTaskPresence", // présence sur une tâche consultée
     "disconnectCalendar", // retirer l'accès à son propre agenda externe
     "disconnectGmail", // retirer l'accès à sa propre boîte
+    // retirer l'accès à sa propre boîte d'envoi de prospection (refus pour
+    // la boîte d'un autre membre)
+    "disconnectProspectingMailbox",
     // Lien d'abonnement à son propre calendrier : il ne montre que ce que
     // le rôle voit déjà (« Voir » du calendrier exigé)
     "regenerateCalendarFeedLink",

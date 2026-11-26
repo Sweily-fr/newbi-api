@@ -6,7 +6,11 @@
  * caché, `color-scheme: light`, une seule media query (< 620 px : cadre à
  * 100 %, colonnes image + texte empilées). Le pied de page (identité de
  * l'expéditeur, raison de l'envoi, lien de désinscription) est toujours
- * ajouté.
+ * ajouté ; quand la campagne suit les ouvertures ou les clics
+ * (`trackingNotice`), il porte le lien « Gérer mes préférences » et, pour
+ * un destinataire suivi (accord donné), la phrase qui l'annonce avec le
+ * lien vers la politique de confidentialité de l'expéditeur
+ * (recommandation CNIL sur les pixels).
  *
  * Liens : chaque adresse web distincte reçoit un numéro dans l'ordre du
  * rendu (`links`). Avec `trackClick`, le lien de l'e-mail passe par l'API
@@ -494,11 +498,47 @@ const RENDERERS = {
 
 // ─── Pied et document ──────────────────────────────────────────────────────
 
-function footerHtml(ctx, identity, unsubscribeUrl) {
+/**
+ * Suivi dans le pied : phrase (seulement si cet e-mail suit quelque chose ;
+ * les clics seulement s'il a des liens web) avec le lien vers la politique
+ * de confidentialité, et lien « Gérer mes préférences » (campagne suivie,
+ * même pour un destinataire sans accord, qui peut l'y donner). Null : rien
+ * à ajouter.
+ *
+ * @param {string} companyName nom de l'expéditeur (non échappé)
+ * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string, preferencesUrl?: string|null }|null} notice
+ * @param {boolean} hasLinks
+ * @returns {{ sentence: string|null, privacyUrl: string|null, preferencesUrl: string|null }|null}
+ */
+export function trackingNoticeOf(companyName, notice, hasLinks) {
+  const opens = Boolean(notice?.opens);
+  const clicks = Boolean(notice?.clicks) && hasLinks;
+  const preferencesUrl = parseHttpUrl(notice?.preferencesUrl)?.href || null;
+  if (!opens && !clicks) {
+    return preferencesUrl
+      ? { sentence: null, privacyUrl: null, preferencesUrl }
+      : null;
+  }
+  const measured =
+    opens && clicks
+      ? "l'ouverture de cet e-mail et les clics sur ses liens"
+      : opens
+        ? "l'ouverture de cet e-mail"
+        : "les clics sur les liens de cet e-mail";
+  return {
+    sentence: `${companyName} mesure ${measured}, avec votre accord.`,
+    privacyUrl: parseHttpUrl(notice?.privacyPolicyUrl)?.href || null,
+    preferencesUrl,
+  };
+}
+
+function footerHtml(ctx, identity, unsubscribeUrl, notice) {
   const name = escapeHtml(singleLine(identity?.companyName) || "l'expéditeur");
   const address = singleLine(identity?.companyAddress);
   const p = (margin) =>
     `margin:${margin};font-family:${ctx.font};font-size:12px;line-height:18px;color:${ctx.style.footerTextColor};`;
+  const footerLink = (href, label) =>
+    `<a href="${escapeHtml(href)}" target="_blank" style="color:${ctx.style.footerTextColor};text-decoration:underline;">${label}</a>`;
   return (
     `<table role="presentation" class="nb-container" width="${ctx.style.contentWidth}" border="0" cellpadding="0" cellspacing="0" style="width:100%;max-width:${ctx.style.contentWidth}px;">` +
     `<tr><td align="center" style="padding:24px 24px 8px 24px;text-align:center;">` +
@@ -509,18 +549,36 @@ function footerHtml(ctx, identity, unsubscribeUrl) {
     `<p style="${p("0 0 12px 0")}">${typo(
       `Vous recevez cet e-mail car vous êtes en relation avec ${name}.`,
     )}</p>` +
-    `<p style="${p("0")}"><a href="${escapeHtml(unsubscribeUrl || "#")}" target="_blank" style="color:${ctx.style.footerTextColor};text-decoration:underline;">Se désinscrire</a></p>` +
+    (notice?.sentence
+      ? `<p style="${p("0 0 12px 0")}">${typo(escapeHtml(notice.sentence))}${
+          notice.privacyUrl
+            ? ` ${footerLink(notice.privacyUrl, "Politique de confidentialité")}`
+            : ""
+        }</p>`
+      : "") +
+    `<p style="${p("0")}">${
+      notice?.preferencesUrl
+        ? `${footerLink(notice.preferencesUrl, "Gérer mes préférences")} &middot; `
+        : ""
+    }${footerLink(unsubscribeUrl || "#", "Se désinscrire")}</p>` +
     `</td></tr></table>`
   );
 }
 
-function footerText(identity, unsubscribeUrl) {
+function footerText(identity, unsubscribeUrl, notice) {
   const name = singleLine(identity?.companyName) || "l'expéditeur";
   return [
     "--",
     name,
     singleLine(identity?.companyAddress),
     `Vous recevez cet e-mail car vous êtes en relation avec ${name}.`,
+    notice?.sentence,
+    notice?.privacyUrl
+      ? `Politique de confidentialité : ${notice.privacyUrl}`
+      : null,
+    notice?.preferencesUrl
+      ? `Gérer mes préférences : ${notice.preferencesUrl}`
+      : null,
     unsubscribeUrl ? `Se désinscrire : ${unsubscribeUrl}` : "Se désinscrire",
   ]
     .filter(Boolean)
@@ -551,6 +609,10 @@ const MEDIA_QUERY = `@media only screen and (max-width: 620px) {
  * @param {string} [options.unsubscribeUrl] lien de désinscription (« # » sinon)
  * @param {(index: number) => string} [options.trackClick] lien suivi d'une adresse
  * @param {string} [options.openPixelUrl] pixel d'ouverture
+ * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string, preferencesUrl?: string|null }} [options.trackingNotice]
+ *   suivi à annoncer dans le pied : celui fait dans cet e-mail (e-mail de
+ *   test, aperçu : celui de la campagne, même s'ils ne suivent rien) et le
+ *   lien de préférences
  * @returns {{ html: string, text: string, subject: string, preheader: string, links: string[] }}
  */
 export function renderCampaignEmail({
@@ -562,6 +624,7 @@ export function renderCampaignEmail({
   unsubscribeUrl = null,
   trackClick = null,
   openPixelUrl = null,
+  trackingNotice = null,
 } = {}) {
   const normalized = normalizeDesign(design);
   const { style } = normalized;
@@ -588,6 +651,11 @@ export function renderCampaignEmail({
   const rendered = normalized.blocks
     .map((block) => RENDERERS[block.type](block, ctx))
     .filter(Boolean);
+  const notice = trackingNoticeOf(
+    singleLine(identity?.companyName) || "l'expéditeur",
+    trackingNotice,
+    links.length > 0,
+  );
 
   const finalSubject = singleLine(substituteText(subject, ctx.vars), 300);
   const finalPreheader = singleLine(substituteText(preheader, ctx.vars), 300);
@@ -631,7 +699,7 @@ ${preheaderHtml}
 <table role="presentation" class="nb-container" width="${width}" border="0" cellpadding="0" cellspacing="0" bgcolor="${style.contentBackgroundColor}" style="width:100%;max-width:${width}px;background-color:${style.contentBackgroundColor};border-radius:${style.contentRadius}px;border-collapse:separate;overflow:hidden;">
 ${rows}
 </table>
-${footerHtml(ctx, identity, unsubscribeUrl)}
+${footerHtml(ctx, identity, unsubscribeUrl, notice)}
 <!--[if mso]></td></tr></table><![endif]-->
 ${pixel}
 </td></tr>
@@ -641,7 +709,7 @@ ${pixel}
 
   const text = [
     ...rendered.map((block) => block.text).filter(Boolean),
-    footerText(identity, unsubscribeUrl),
+    footerText(identity, unsubscribeUrl, notice),
   ].join("\n\n");
 
   return {
