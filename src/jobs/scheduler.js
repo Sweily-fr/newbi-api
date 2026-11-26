@@ -8,6 +8,7 @@ import { cleanupOrphanChunks } from "./cleanupOrphanChunks.js";
 import { cleanupOrphanTransferFiles } from "./cleanupOrphanTransferFiles.js";
 import { processAccountDeletions } from "./processAccountDeletions.js";
 import { sweepOpenTransferPayments } from "../services/transferPaymentService.js";
+import { sweepEventRegistrations } from "../services/appointments/eventRegistrationService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -82,6 +83,18 @@ function setupScheduledJobs() {
     }
   });
 
+  // Billetterie : paiements d'inscriptions revérifiés, inscriptions non
+  // payées après 30 minutes expirées (places rendues), toutes les 5 minutes
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      await sweepEventRegistrations();
+    } catch (error) {
+      logger.error(
+        `Erreur lors du balayage des inscriptions aux événements : ${error.message}`,
+      );
+    }
+  });
+
   logger.info("Jobs planifiés configurés avec succès");
   logger.info("  - Nettoyage fichiers expirés: tous les jours à 3h UTC");
   logger.info("  - Nettoyage chunks orphelins: toutes les 6 heures");
@@ -90,6 +103,7 @@ function setupScheduledJobs() {
   );
   logger.info("  - Suppressions RGPD: tous les jours à 4h UTC");
   logger.info("  - Rattrapage des paiements de transferts: toutes les 10 min");
+  logger.info("  - Billetterie (paiements, expirations): toutes les 5 min");
 }
 
 export { setupScheduledJobs };

@@ -297,6 +297,8 @@ describe("lecture des pages", () => {
         durationMinutes: 15,
         locationKind: "PHONE",
         requirePhone: true,
+        kind: "SLOT",
+        event: null,
       },
       {
         slug: "decouverte",
@@ -305,6 +307,8 @@ describe("lecture des pages", () => {
         durationMinutes: 30,
         locationKind: "CUSTOM_LINK",
         requirePhone: false,
+        kind: "SLOT",
+        event: null,
       },
     ]);
   });
@@ -322,6 +326,8 @@ describe("lecture des pages", () => {
       locationLabel: "Visioconférence",
       requirePhone: false,
       maxDaysAhead: 60,
+      kind: "SLOT",
+      event: null,
     });
   });
 

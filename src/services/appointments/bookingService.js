@@ -99,7 +99,7 @@ const idForms = (id) => {
   return mongoose.Types.ObjectId.isValid(s) ? [toObjectId(s), s] : [s];
 };
 
-const pageZone = (page) =>
+export const pageZone = (page) =>
   isValidTimezone(page?.timezone) ? page.timezone : DEFAULT_TIMEZONE;
 
 // ─── Page publique ────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ export function displayName(user) {
   return full || user.email || "";
 }
 
-async function loadHost(userId) {
+export async function loadHost(userId) {
   const user = await mongoose.connection.db
     .collection("user")
     .findOne(
@@ -131,7 +131,7 @@ async function loadHost(userId) {
     : null;
 }
 
-async function loadOrganization(workspaceId) {
+export async function loadOrganization(workspaceId) {
   return mongoose.connection.db
     .collection("organization")
     .findOne(
@@ -140,7 +140,7 @@ async function loadOrganization(workspaceId) {
     );
 }
 
-const organizationNameOf = (organization) =>
+export const organizationNameOf = (organization) =>
   String(organization?.companyName || organization?.name || "").trim();
 
 /**
@@ -148,7 +148,7 @@ const organizationNameOf = (organization) =>
  * organisateur toujours membre, avec le droit de voir la prise de
  * rendez-vous. Sinon : même 404 que pour une page inconnue.
  */
-async function pageIsPublishable(page) {
+export async function pageIsPublishable(page) {
   // Accès anticipé : page fermée tant que l'espace n'a pas la fonctionnalité
   if (!isFeatureEnabled("appointments", page.workspaceId)) return false;
   try {
@@ -364,7 +364,7 @@ async function releaseHostLock(lock) {
 // ─── Client CRM ───────────────────────────────────────────────────────────
 
 /** Client de l'espace à cette adresse (insensible à la casse). */
-async function findClientByEmail(workspaceId, email) {
+export async function findClientByEmail(workspaceId, email) {
   return Client.findOne({
     workspaceId,
     email: { $regex: `^${escapeRegex(email, 320)}$`, $options: "i" },
@@ -417,10 +417,15 @@ function activityEntry({ booking, hostId, hostName, type, description }) {
  * particulier créé avec ses prénom, nom, e-mail et téléphone.
  * @returns {Promise<ObjectId|null>}
  */
-async function attachClient({ booking, page, host }) {
+export async function attachClient({
+  booking,
+  page,
+  host,
+  description = `a pris rendez-vous (« ${booking.typeName} »)`,
+  createdDescription = `Client créé par la prise de rendez-vous (« ${booking.typeName} »)`,
+}) {
   const workspaceId = page.workspaceId;
   const hostName = host?.name || "Prise de rendez-vous";
-  const description = `a pris rendez-vous (« ${booking.typeName} »)`;
   const existing = await findClientByEmail(workspaceId, booking.guest.email);
   if (existing) {
     await Client.updateOne(
@@ -473,7 +478,7 @@ async function attachClient({ booking, page, host }) {
           hostId: page.userId,
           hostName,
           type: "created",
-          description: `Client créé par la prise de rendez-vous (« ${booking.typeName} »)`,
+          description: createdDescription,
         }),
       ],
     });

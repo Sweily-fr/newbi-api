@@ -526,6 +526,17 @@ class CloudflareService {
           key = `${organizationId}/products/${uniqueId}${fileExtension}`;
           break;
         }
+        case "eventImage": {
+          // Images des événements (billetterie de la prise de rendez-vous)
+          // Structure: {organizationId}/events/{uniqueId}.ext
+          if (!organizationId) {
+            throw new Error(
+              "Organization ID requis pour les images d'événement",
+            );
+          }
+          key = `${organizationId}/events/${uniqueId}${fileExtension}`;
+          break;
+        }
         case "ocr": {
           // Pour les reçus OCR, organiser par organisation (ID organisation uniquement)
           if (!organizationId) {
@@ -605,7 +616,11 @@ class CloudflareService {
       ) {
         targetBucket = this.signatureBucketName;
         targetPublicUrl = this.signaturePublicUrl;
-      } else if (imageType === "imgCompany" || imageType === "productImage") {
+      } else if (
+        imageType === "imgCompany" ||
+        imageType === "productImage" ||
+        imageType === "eventImage"
+      ) {
         // Utiliser le bucket dédié aux images d'entreprise
         targetBucket = this.companyImagesBucketName || this.bucketName;
         targetPublicUrl = this.companyImagesPublicUrl || this.publicUrl;

@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import {
+  APPOINTMENT_TYPE_KINDS,
   DEFAULT_SLOT_INTERVAL,
+  EVENT_MAX_DURATION_MINUTES,
   LOCATION_KINDS,
   SLOT_INTERVALS,
 } from "../utils/appointmentValidation.js";
@@ -36,7 +38,20 @@ const appointmentTypeSchema = new mongoose.Schema(
     slug: { type: String, required: true, trim: true, lowercase: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
     description: { type: String, trim: true, maxlength: 1000, default: null },
-    durationMinutes: { type: Number, required: true, min: 5, max: 480 },
+    // Créneau : 5 min à 8 h ; événement : durée réelle (30 jours au plus)
+    durationMinutes: {
+      type: Number,
+      required: true,
+      min: 5,
+      validate: {
+        validator(value) {
+          return this.kind === "EVENT"
+            ? value <= EVENT_MAX_DURATION_MINUTES
+            : value <= 480;
+        },
+        message: "Durée invalide",
+      },
+    },
     slotIntervalMinutes: {
       type: Number,
       enum: SLOT_INTERVALS,
@@ -58,9 +73,33 @@ const appointmentTypeSchema = new mongoose.Schema(
     position: { type: Number, default: 0 },
     isActive: { type: Boolean, default: true },
     requirePhone: { type: Boolean, default: false },
-    // Réservés au paiement en ligne (V2), jamais lus en V1
+    // Prix d'un billet d'événement, en CENTIMES (null ou 0 = gratuit).
+    // Jamais lus pour un créneau.
     priceAmount: { type: Number, default: null },
     currency: { type: String, default: null },
+
+    // ─── Événement (billetterie) ───────────────────────────────────────
+    // AUCUNE valeur par défaut : un type existant (créneau) enregistré de
+    // nouveau ne doit gagner aucun de ces champs (données clients jamais
+    // modifiées en silence). Lecture avec repli : kind absent = SLOT,
+    // seatsTaken absent = 0, maxPerOrder absent = 5, le reste absent = null.
+    kind: { type: String, enum: APPOINTMENT_TYPE_KINDS },
+    startAt: { type: Date },
+    endAt: { type: Date },
+    // Texte long, rendu en texte (jamais en HTML)
+    details: { type: String, maxlength: 10000 },
+    coverImageUrl: { type: String },
+    imageUrl: { type: String },
+    // Places : null = illimité. seatsTaken compte les inscriptions
+    // confirmées ET en attente de paiement, réservées par un $inc
+    // conditionnel (voir eventRegistrationService.js)
+    capacity: { type: Number, min: 1 },
+    seatsTaken: { type: Number, min: 0 },
+    maxPerOrder: { type: Number, min: 1, max: 10 },
+    // Null = startAt
+    registrationClosesAt: { type: Date },
+    // Entrée du Calendrier de l'organisateur
+    calendarEventId: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
   },
   { timestamps: true, collection: "appointment_types" },
 );
