@@ -216,6 +216,15 @@ async function pendingRegistration(type, options) {
     manageTokenHash: { $exists: true },
     "buyer.email": `elise${options?.i || 0}@exemple.fr`,
   });
+  // Virement : l'e-mail des coordonnées part en arrière-plan ; attendu ici,
+  // sinon il peut arriver après un « mail.sent = [] » du test (CI plus lente)
+  if ((options?.provider || "bank_transfer") === "bank_transfer") {
+    await vi.waitFor(() =>
+      expect(
+        mailTo(`elise${options?.i || 0}@exemple.fr`).length,
+      ).toBeGreaterThan(0),
+    );
+  }
   return { body, registration };
 }
 
