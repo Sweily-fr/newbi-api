@@ -50,6 +50,9 @@ import {
 } from "../services/appointments/eventRegistrationService.js";
 import {
   assertEventConsistency,
+  assertEventPayment,
+  eventDepositAmountOf,
+  eventPaymentModeOf,
   eventChanges,
   eventDurationMinutes,
 } from "../utils/eventValidation.js";
@@ -336,16 +339,49 @@ async function eventTypeChanges(input, ctx, existing = null) {
   if (has(changes, "startAt") || has(changes, "endAt") || !existing) {
     changes.durationMinutes = eventDurationMinutes(merged);
   }
-  // Payant : un moyen de paiement en ligne doit être prêt, contrôlé
-  // seulement à la création ou quand le prix change réellement (un moyen
-  // déconnecté ne bloque pas la modification du reste de l'événement)
-  const priceChanged =
+  // Mode de paiement et acompte : écrits seulement s'ils changent vraiment
+  // (un type existant ne gagne aucun champ sans modification réelle)
+  if (has(changes, "paymentMode")) {
+    if (
+      existing &&
+      changes.paymentMode === (existing.paymentMode || "ONLINE")
+    ) {
+      delete changes.paymentMode;
+    }
+  }
+  if (has(changes, "depositAmount")) {
+    const next = changes.depositAmount ?? null;
+    if (existing && next === (existing.depositAmount ?? null)) {
+      delete changes.depositAmount;
+    } else if (next === null) {
+      // Retiré : champ effacé (jamais un null écrit)
+      changes.depositAmount = undefined;
+    }
+  }
+  const final = {
+    ...(existing
+      ? typeof existing.toObject === "function"
+        ? existing.toObject()
+        : existing
+      : {}),
+    ...changes,
+  };
+  assertEventPayment(final);
+  // Paiement en ligne (tout ou acompte) : un moyen de paiement en ligne
+  // doit être prêt, contrôlé seulement à la création ou quand le prix, le
+  // mode ou l'acompte change réellement (un moyen déconnecté ne bloque pas
+  // la modification du reste de l'événement). Sur place : aucun moyen exigé
+  const mode = eventPaymentModeOf(final);
+  const paymentChanged =
     !existing ||
     (has(changes, "priceAmount") &&
-      (changes.priceAmount || null) !== (existing.priceAmount || null));
+      (changes.priceAmount || null) !== (existing.priceAmount || null)) ||
+    mode !== eventPaymentModeOf(existing) ||
+    eventDepositAmountOf(final) !== eventDepositAmountOf(existing);
   if (
-    merged.priceAmount > 0 &&
-    priceChanged &&
+    mode &&
+    mode !== "ON_SITE" &&
+    paymentChanged &&
     (await eventPaymentMethods(ctx.workspaceId)).length === 0
   ) {
     throw new AppointmentInputError(
@@ -482,6 +518,10 @@ const appointmentsResolvers = {
       kindOf(type) === "EVENT" && type.priceAmount > 0
         ? { amount: type.priceAmount, currency: type.currency || "EUR" }
         : null,
+    paymentMode: (type) =>
+      kindOf(type) === "EVENT" ? eventPaymentModeOf(type) : null,
+    depositAmount: (type) =>
+      kindOf(type) === "EVENT" ? eventDepositAmountOf(type) : null,
     registrationsCount: async (type) => (await eventStats(type)).registrations,
     ticketsCount: async (type) => (await eventStats(type)).tickets,
     checkedInCount: async (type) => (await eventStats(type)).checkedIn,
