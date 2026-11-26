@@ -58,9 +58,13 @@ import {
 } from "./bookingEmails.js";
 import {
   BANK_TRANSFER,
-  BANK_TRANSFER_HOLD_MS,
   ONLINE_HOLD_MS,
+  PENDING_PAYMENT_CAP_MS,
+  bankTransferDueAt,
+  bankTransferOpenFor,
   bankTransferPayload,
+  buildLatePaymentEmail,
+  latePaymentReason,
   buildBankTransferPendingEmail,
   buildPaymentExpiredEmail,
   declareBankTransfer,
@@ -112,6 +116,8 @@ const FORCED_RECHECK_INTERVAL_MS = 3 * 1000;
 const SWEEP_MIN_AGE_MS = 2 * MINUTE;
 const SWEEP_PENDING_WINDOW_MS = 7 * 24 * HOUR;
 const LOG = "[rendez-vous]";
+// Réservations par virement en attente par adresse et par organisateur
+export const MAX_PENDING_TRANSFERS_PER_GUEST = 2;
 
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 const isObjectId = (id) =>
@@ -241,12 +247,17 @@ export async function createPaidBooking({
     throw new BookingError("UNAVAILABLE", 403);
   }
 
-  // 2. Réservations échues : créneaux libérés avant le calcul
-  await expireOverdueBookings({ hostUserId: page.userId, now });
+  // 2. Réservations échues : créneaux libérés avant le calcul (en base
+  // seulement, la relecture chez les prestataires reste au balayage)
+  await expireOverdueBookings({ hostUserId: page.userId, now, recheck: false });
 
   const bank = provider === BANK_TRANSFER;
-  const bankReference = bank ? await newBankReference(page.workspaceId) : null;
   const startAt = new Date(start);
+  // Virement : début à 48 h au moins
+  if (bank && !bankTransferOpenFor(startAt, now)) {
+    throw new BookingError("BANK_TRANSFER_TOO_LATE", 409);
+  }
+  const bankReference = bank ? await newBankReference(page.workspaceId) : null;
   const endAt = new Date(startAt.getTime() + type.durationMinutes * MINUTE);
   const token = generateManageToken();
   const amounts = bookingAmountsFor(type);
@@ -255,6 +266,19 @@ export async function createPaidBooking({
   let booking;
   const lock = await acquireHostLock(page.userId);
   try {
+    // Au plus deux réservations par virement en attente par adresse chez
+    // un même organisateur (créneaux gardés 3 jours)
+    if (
+      bank &&
+      (await Booking.countDocuments({
+        hostUserId: page.userId,
+        "guest.email": guest.email,
+        status: "PENDING_PAYMENT",
+        "payment.provider": BANK_TRANSFER,
+      })) >= MAX_PENDING_TRANSFERS_PER_GUEST
+    ) {
+      throw new BookingError("TOO_MANY_PENDING_TRANSFERS", 409);
+    }
     await assertSlotAvailable({ page, type, start: startAt, now });
     booking = await Booking.create({
       workspaceId: page.workspaceId,
@@ -281,12 +305,16 @@ export async function createPaidBooking({
       manageTokenHash: hashManageToken(token),
       manageTokenEncrypted: encryptManageToken(token),
       ...amounts,
-      expiresAt: new Date(
-        now.getTime() + (bank ? BANK_TRANSFER_HOLD_MS : ONLINE_HOLD_MS),
-      ),
+      expiresAt: bank
+        ? bankTransferDueAt(startAt, now)
+        : new Date(now.getTime() + ONLINE_HOLD_MS),
       payment: bank
         ? { provider: BANK_TRANSFER, status: "open", bankReference }
         : { provider, status: "starting" },
+    }).catch((error) => {
+      // Index unique des créneaux tenus ou confirmés : dernier rempart
+      if (error?.code === 11000) throw new BookingError("SLOT_TAKEN", 409);
+      throw error;
     });
   } finally {
     await releaseHostLock(lock);
@@ -438,42 +466,45 @@ async function afterBookingConfirmed(booking) {
 }
 
 /**
- * Autre rendez-vous (confirmé ou tenu) sur le créneau de la réservation ?
- * Chevauchement strict, la réservation elle-même exclue.
- */
-async function slotTakenByOther(booking) {
-  return Boolean(
-    await Booking.exists({
-      _id: { $ne: booking._id },
-      hostUserId: booking.hostUserId,
-      status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
-      startAt: { $lt: booking.endAt },
-      endAt: { $gt: booking.startAt },
-    }),
-  );
-}
-
-/**
- * Réservation expirée (ou annulée) payée : confirmée si son créneau est
- * encore libre, sous le verrou de l'organisateur.
+ * Réservation expirée payée : confirmée si son créneau passe encore le
+ * calcul complet des créneaux (agendas, marges, horaires, préavis, date
+ * passée), la réservation elle-même exclue. Le verrou de l'organisateur
+ * doit être tenu par l'appelant.
  * @returns {Promise<object|null>} la réservation confirmée, sinon null
  */
 async function confirmIfSlotFree(booking, set, extraFilter = {}) {
   if (booking.status !== "EXPIRED") return null;
-  // Verrou indisponible (réservation en cours trop longue) : contrôle sans
-  // verrou plutôt qu'un remboursement à tort ; l'index unique des
-  // rendez-vous confirmés reste le dernier rempart
-  const lock = await acquireHostLock(booking.hostUserId).catch(() => null);
+  if (new Date(booking.startAt) <= new Date()) return null;
+  const [page, storedType] = await Promise.all([
+    BookingPage.findById(booking.bookingPageId).lean(),
+    booking.appointmentTypeId
+      ? AppointmentType.findById(booking.appointmentTypeId).lean()
+      : null,
+  ]);
+  if (!page) return null;
+  // Règles du type actuel, durée réservée conservée (comme un déplacement)
+  const type = {
+    ...(storedType || { _id: booking.appointmentTypeId }),
+    durationMinutes: booking.durationMinutes,
+  };
   try {
-    if (await slotTakenByOther(booking)) return null;
-    const confirmed = await confirmFrom(booking, "EXPIRED", set, extraFilter);
-    return confirmed && confirmed !== "TAKEN" ? confirmed : null;
-  } finally {
-    await releaseHostLock(lock);
+    await assertSlotAvailable({
+      page,
+      type,
+      start: new Date(booking.startAt),
+      now: new Date(),
+      excludeBooking: booking,
+    });
+  } catch (error) {
+    if (error instanceof BookingError) return null;
+    throw error;
   }
+  const confirmed = await confirmFrom(booking, "EXPIRED", set, extraFilter);
+  return confirmed && confirmed !== "TAKEN" ? confirmed : null;
 }
 
 async function refundLateBookingPayment(booking, payment) {
+  const reason = latePaymentReason(booking, booking.startAt);
   try {
     const refunded = await refundDirectPayment({
       provider: payment.provider,
@@ -496,6 +527,7 @@ async function refundLateBookingPayment(booking, payment) {
       logger.warn(
         `${LOG} paiement ${payment.paymentId} de la réservation ${booking._id} arrivé sans créneau : remboursé`,
       );
+      await sendLatePaymentEmail(booking, payment, true, reason);
       return true;
     }
     throw new Error("remboursement automatique non pris en charge");
@@ -517,53 +549,100 @@ async function refundLateBookingPayment(booking, payment) {
       provider: payment.provider,
       reference: booking.payment?.bankReference || null,
       label: `le rendez-vous « ${booking.typeName} » du ${whenTextOf(booking)}`,
+      reason,
     }).catch((notifyError) =>
       logger.error(
         `${LOG} avis de remboursement de la réservation ${booking._id} : ${notifyError.message}`,
       ),
     );
+    await sendLatePaymentEmail(booking, payment, false, reason);
     return false;
   }
 }
 
+/** Au payeur : paiement arrivé sans créneau (remboursé ou à rembourser). */
+async function sendLatePaymentEmail(booking, payment, refunded, reason) {
+  try {
+    const { host, organizationName } = await bookingContext(booking);
+    await deliverBookingEmail({
+      to: booking.guest.email,
+      replyTo: host.email || undefined,
+      organizationName,
+      ...buildLatePaymentEmail({
+        firstName: booking.guest.firstName,
+        title: booking.typeName,
+        amountCents: payment.amountCents ?? expectedBookingAmount(booking),
+        currency: booking.currency,
+        refunded,
+        reason,
+        organizationName,
+      }),
+    });
+  } catch (error) {
+    logger.error(
+      `${LOG} e-mail de paiement tardif de la réservation ${booking._id} : ${error.message}`,
+    );
+  }
+}
+
+/** Paiement à rendre : réservation passée EXPIRED avec son paiement. */
+async function closeAndRefund(current, set, payment) {
+  const closed = await Booking.findOneAndUpdate(
+    { _id: current._id, status: "PENDING_PAYMENT", "payment.paidAt": null },
+    {
+      $set: {
+        status: "EXPIRED",
+        expiredAt: new Date(),
+        ...set,
+        "payment.provider": payment.provider,
+      },
+    },
+    { new: true },
+  );
+  if (closed) {
+    await refundLateBookingPayment(closed, {
+      ...payment,
+      accountId: payment.accountId || closed.payment?.accountId,
+    });
+  }
+  return closed;
+}
+
 /**
- * Paiement vérifié : confirme la réservation (une seule fois). Expirée ou
- * annulée : confirmée si le créneau est encore libre (expirée), sinon
- * remboursée ou signalée à l'organisateur.
+ * Paiement vérifié : confirme la réservation (une seule fois).
+ * - début passé : jamais confirmée, paiement rendu ;
+ * - expirée : confirmée si le créneau passe encore le calcul complet,
+ *   sinon remboursée ou signalée « à rembourser à la main » ;
+ * - annulée : remboursée ou signalée.
  * @param {object} payment - { provider, paymentId, amountCents, captureId,
  *   refundReference, payerEmail, accountId, markedBy }
- * @returns {Promise<{status: "paid"}>}
+ * @returns {Promise<{status: "paid"|"pending"}>} pending : verrou de
+ *   l'organisateur indisponible, rien d'enregistré (réessayé au balayage)
  */
 export async function markBookingPaid(booking, payment, depth = 0) {
   const current = await Booking.findById(booking._id);
   if (!current || current.status === "CONFIRMED") return { status: "paid" };
   const set = paidSetOf(payment, current);
+  const started = new Date(current.startAt) <= new Date();
 
   if (current.status === "PENDING_PAYMENT") {
-    const confirmed = await confirmFrom(current, "PENDING_PAYMENT", set);
-    if (confirmed && confirmed !== "TAKEN") {
-      logger.info(
-        `${LOG} réservation ${current._id} payée (${payment.provider}, ${payment.amountCents} centimes)`,
-      );
-      await afterBookingConfirmed(confirmed);
-      return { status: "paid" };
-    }
-    if (confirmed === "TAKEN") {
+    if (started) {
+      const closed = await closeAndRefund(current, set, payment);
+      if (closed) return { status: "paid" };
+    } else {
+      const confirmed = await confirmFrom(current, "PENDING_PAYMENT", set);
+      if (confirmed && confirmed !== "TAKEN") {
+        logger.info(
+          `${LOG} réservation ${current._id} payée (${payment.provider}, ${payment.amountCents} centimes)`,
+        );
+        await afterBookingConfirmed(confirmed);
+        return { status: "paid" };
+      }
       // Créneau pris malgré la tenue (dernier rempart) : paiement à rendre
-      const expired = await Booking.findOneAndUpdate(
-        { _id: current._id, status: "PENDING_PAYMENT" },
-        {
-          $set: {
-            status: "EXPIRED",
-            expiredAt: new Date(),
-            ...set,
-            "payment.provider": payment.provider,
-          },
-        },
-        { new: true },
-      );
-      if (expired) await refundLateBookingPayment(expired, payment);
-      return { status: "paid" };
+      if (confirmed === "TAKEN") {
+        await closeAndRefund(current, set, payment);
+        return { status: "paid" };
+      }
     }
     // État changé entre-temps (expirée, annulée) : nouvel essai
     return depth < 3
@@ -571,14 +650,29 @@ export async function markBookingPaid(booking, payment, depth = 0) {
       : { status: "paid" };
   }
 
-  // Paiement tardif : revendiqué une seule fois
-  const claimed = await Booking.findOneAndUpdate(
-    { _id: current._id, status: current.status, "payment.paidAt": null },
-    { $set: { ...set, "payment.provider": payment.provider } },
-    { new: true },
-  );
+  // Paiement tardif : sous le verrou de l'organisateur, revendiqué une
+  // seule fois. Verrou indisponible : rien n'est enregistré, le paiement
+  // est relu au prochain passage (jamais de contrôle sans verrou)
+  const lock = await acquireHostLock(current.hostUserId).catch(() => null);
+  if (!lock) {
+    logger.warn(
+      `${LOG} paiement tardif de la réservation ${current._id} : verrou indisponible, réessayé plus tard`,
+    );
+    return { status: "pending" };
+  }
+  let claimed = null;
+  let confirmed = null;
+  try {
+    claimed = await Booking.findOneAndUpdate(
+      { _id: current._id, status: current.status, "payment.paidAt": null },
+      { $set: { ...set, "payment.provider": payment.provider } },
+      { new: true },
+    );
+    if (claimed && !started) confirmed = await confirmIfSlotFree(claimed, {});
+  } finally {
+    await releaseHostLock(lock);
+  }
   if (!claimed) return { status: "paid" };
-  const confirmed = await confirmIfSlotFree(claimed, {});
   if (confirmed) {
     logger.info(
       `${LOG} réservation ${claimed._id} payée après expiration : confirmée (créneau encore libre)`,
@@ -1060,14 +1154,15 @@ export async function abandonBookingPayment({ returnToken, now = new Date() }) {
  */
 async function expireBooking(
   booking,
-  { now = new Date(), notify = true } = {},
+  { now = new Date(), notify = true, pendingCapped = false } = {},
 ) {
   const expired = await Booking.findOneAndUpdate(
     {
       _id: booking._id,
       status: "PENDING_PAYMENT",
       "payment.paidAt": null,
-      "payment.status": { $ne: "pending" },
+      // Paiement en confirmation : seulement au-delà du plafond
+      ...(pendingCapped ? {} : { "payment.status": { $ne: "pending" } }),
       $or: [
         { "payment.status": { $ne: "capturing" } },
         {
@@ -1081,7 +1176,12 @@ async function expireBooking(
       $set: {
         status: "EXPIRED",
         expiredAt: now,
-        ...(booking.payment?.reference ? { "payment.status": "expired" } : {}),
+        ...(booking.payment?.reference
+          ? {
+              // Paiement encore en confirmation : relu 7 jours (filet)
+              "payment.status": pendingCapped ? "expired_pending" : "expired",
+            }
+          : {}),
       },
     },
     { new: true },
@@ -1099,19 +1199,48 @@ async function expireBooking(
   return true;
 }
 
+const isPendingCapped = (booking, now) =>
+  booking.payment?.status === "pending" &&
+  (new Date(booking.createdAt).getTime() <=
+    now.getTime() - PENDING_PAYMENT_CAP_MS ||
+    new Date(booking.startAt) <= now);
+
 /**
- * Réservations en attente échues (d'un organisateur, ou toutes) : dernière
- * vérification du paiement, puis EXPIRED. @returns {Promise<number>}
+ * Réservations en attente échues (d'un organisateur, ou toutes), puis
+ * EXPIRED. `recheck` : dernière vérification chez le prestataire (balayage) ;
+ * sans elle (réservation d'un invité), expiration en base seulement, un
+ * paiement arrivé ensuite suit la règle du paiement tardif. Paiement en
+ * confirmation chez le prestataire : expiré au plus tard à min(7 jours,
+ * début). @returns {Promise<number>}
  */
 export async function expireOverdueBookings({
   hostUserId = null,
   now = new Date(),
   limit = 100,
+  recheck = true,
 } = {}) {
-  const filter = {
-    status: "PENDING_PAYMENT",
+  const overdueFilter = {
     expiresAt: { $lte: now },
     "payment.status": { $nin: ["pending", "capturing"] },
+  };
+  const filter = {
+    status: "PENDING_PAYMENT",
+    $or: recheck
+      ? [
+          overdueFilter,
+          {
+            "payment.status": "pending",
+            $or: [
+              {
+                createdAt: {
+                  $lte: new Date(now.getTime() - PENDING_PAYMENT_CAP_MS),
+                },
+              },
+              { startAt: { $lte: now } },
+            ],
+          },
+        ]
+      : [overdueFilter],
   };
   if (hostUserId) filter.hostUserId = hostUserId;
   const overdue = await Booking.find(filter)
@@ -1120,9 +1249,13 @@ export async function expireOverdueBookings({
   let count = 0;
   for (const booking of overdue) {
     try {
-      const result = await refreshBookingPayment(booking, { force: true });
-      if (result.status === "paid" || result.status === "pending") continue;
-      if (await expireBooking(booking, { now })) count += 1;
+      const pendingCapped = isPendingCapped(booking, now);
+      if (recheck) {
+        const result = await refreshBookingPayment(booking, { force: true });
+        if (result.status === "paid") continue;
+        if (result.status === "pending" && !pendingCapped) continue;
+      }
+      if (await expireBooking(booking, { now, pendingCapped })) count += 1;
     } catch (error) {
       logger.error(
         `${LOG} expiration de la réservation ${booking._id} : ${error.message}`,
@@ -1154,6 +1287,12 @@ export async function sweepAppointmentBookings({ now = new Date() } = {}) {
         status: "EXPIRED",
         "payment.status": "expired",
         expiredAt: { $gte: new Date(now.getTime() - EXPIRED_RECHECK_MS) },
+      },
+      // Expirées avec un paiement encore en confirmation : relues 7 jours
+      {
+        status: "EXPIRED",
+        "payment.status": "expired_pending",
+        expiredAt: { $gte: new Date(now.getTime() - PENDING_PAYMENT_CAP_MS) },
       },
     ],
   })
@@ -1285,6 +1424,8 @@ export async function markBookingPaidByHost({ scope, bookingId, userId }) {
   ) {
     return { error: "NOT_PENDING" };
   }
+  // Rendez-vous commencé : plus confirmable (l'organisateur rembourse)
+  if (new Date(booking.startAt) <= new Date()) return { error: "STARTED" };
   const payment = {
     provider: BANK_TRANSFER,
     paymentId: `manual:${userId}`,
@@ -1294,13 +1435,20 @@ export async function markBookingPaidByHost({ scope, bookingId, userId }) {
   if (booking.status === "PENDING_PAYMENT") {
     await markBookingPaid(booking, payment);
   } else {
-    // Expirée : confirmée seulement si le créneau est encore libre (rien
-    // n'est marqué sinon)
-    const confirmed = await confirmIfSlotFree(
-      booking,
-      paidSetOf(payment, booking),
-      { "payment.paidAt": null },
-    );
+    // Expirée : confirmée seulement si le créneau passe encore le calcul
+    // complet, sous le verrou (rien n'est marqué sinon)
+    const lock = await acquireHostLock(booking.hostUserId).catch(() => null);
+    if (!lock) return { error: "BUSY" };
+    let confirmed;
+    try {
+      confirmed = await confirmIfSlotFree(
+        booking,
+        paidSetOf(payment, booking),
+        { "payment.paidAt": null },
+      );
+    } finally {
+      await releaseHostLock(lock);
+    }
     if (!confirmed) return { error: "SLOT_TAKEN" };
     await afterBookingConfirmed(confirmed);
   }

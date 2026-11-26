@@ -16,8 +16,10 @@ import EventRegistration, {
 } from "../../models/EventRegistration.js";
 import {
   bankPaymentId,
+  claimBankCredit,
   findBankCredit,
   labelledCredits,
+  releaseBankCredit,
 } from "../payments/bankTransfer.js";
 import { workspaceKey } from "../payments/directPayments.js";
 import { BANK_TRANSFER } from "./appointmentPayments.js";
@@ -76,6 +78,15 @@ export async function detectAppointmentBankPayments(
       currency: registration.currency,
     });
     if (!match) continue;
+    // Un crédit ne règle qu'une seule chose (contrôle en base)
+    const claim = {
+      workspaceId: orgId,
+      transaction: match,
+      targetKind: "event_registration",
+      targetId: registration._id,
+      reference,
+    };
+    if (!(await claimBankCredit(claim))) continue;
     try {
       await markRegistrationPaid(registration, {
         provider: BANK_TRANSFER,
@@ -87,6 +98,7 @@ export async function detectAppointmentBankPayments(
         `[billetterie] virement ${reference} repéré pour l'inscription ${registration._id}`,
       );
     } catch (error) {
+      await releaseBankCredit(claim).catch(() => {});
       logger.error(
         `[billetterie] virement ${reference} de l'inscription ${registration._id} : ${error.message}`,
       );
@@ -101,17 +113,31 @@ export async function detectAppointmentBankPayments(
       currency: booking.currency,
     });
     if (!match) continue;
+    const claim = {
+      workspaceId: orgId,
+      transaction: match,
+      targetKind: "appointment_booking",
+      targetId: booking._id,
+      reference,
+    };
+    if (!(await claimBankCredit(claim))) continue;
     try {
-      await markBookingPaid(booking, {
+      const result = await markBookingPaid(booking, {
         provider: BANK_TRANSFER,
         paymentId: bankPaymentId(match, reference),
         amountCents: Math.round(Number(match.amount) * 100),
       });
+      // Verrou indisponible : rien d'enregistré, crédit libéré
+      if (result.status === "pending") {
+        await releaseBankCredit(claim);
+        continue;
+      }
       done.bookings.push(String(booking._id));
       logger.info(
         `[rendez-vous] virement ${reference} repéré pour la réservation ${booking._id}`,
       );
     } catch (error) {
+      await releaseBankCredit(claim).catch(() => {});
       logger.error(
         `[rendez-vous] virement ${reference} de la réservation ${booking._id} : ${error.message}`,
       );

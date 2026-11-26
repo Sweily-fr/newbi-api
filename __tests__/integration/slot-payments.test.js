@@ -208,9 +208,9 @@ const updateSlot = (type, input) =>
   call(Mutation.updateAppointmentType, owner, { id: String(type._id), input });
 
 const today = () => localDayOf(new Date(), "Europe/Paris");
-async function freeSlots(type) {
+async function freeSlots(type, fromDay = 1) {
   const res = await api(
-    `/jean-dupont/${type.slug}/slots?from=${addDays(today(), 1)}&to=${addDays(today(), 14)}`,
+    `/jean-dupont/${type.slug}/slots?from=${addDays(today(), fromDay)}&to=${addDays(today(), fromDay + 13)}`,
   );
   return (await res.json()).slots;
 }
@@ -898,7 +898,8 @@ describe("PayPal", () => {
 
 describe("virement", () => {
   async function pendingBank(type, i = 0) {
-    const [slot] = await freeSlots(type);
+    // Virement : début à 48 h au moins (ici une semaine)
+    const [slot] = await freeSlots(type, 7);
     const res = await book(type, slot.start, { provider: "bank_transfer", i });
     expect(res.status).toBe(201);
     const body = await res.json();

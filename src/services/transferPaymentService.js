@@ -77,7 +77,10 @@ import {
   formatIban,
   generatePaymentReference,
   hasConnectedBank,
+  claimBankCredit,
   normalizeIban,
+  releaseBankCredit,
+  uniquePaymentReference,
 } from "./payments/bankTransfer.js";
 
 // Briques du virement partagées avec la prise de rendez-vous
@@ -321,7 +324,7 @@ export async function prepareTransferPayment({
   return {
     paymentMethods: methods,
     paymentReference: methods.includes("bank_transfer")
-      ? generatePaymentReference()
+      ? await uniquePaymentReference(orgId)
       : undefined,
   };
 }
@@ -642,6 +645,22 @@ export async function detectTransferBankPayments(workspaceId, transactions) {
     )?.transaction;
     if (!match) continue;
 
+    // Un crédit ne règle qu'une seule chose (transfert, rendez-vous ou
+    // inscription), contrôlé en base
+    const claim = {
+      workspaceId: orgId,
+      transaction: match,
+      targetKind: "file_transfer",
+      targetId: transfer._id,
+      reference: transfer.paymentReference,
+    };
+    if (!(await claimBankCredit(claim))) {
+      logger.warn(
+        `[transfer-payment] Crédit ${match.externalId || match._id} déjà utilisé : transfert ${transfer._id} non débloqué`,
+      );
+      continue;
+    }
+
     const result = await markTransferPaid(transfer, {
       provider: "bank_transfer",
       paymentId: `bank:${match.externalId || match._id || transfer.paymentReference}`,
@@ -656,6 +675,8 @@ export async function detectTransferBankPayments(workspaceId, transactions) {
       logger.info(
         `[transfer-payment] Virement ${transfer.paymentReference} repéré : transfert ${transfer._id} débloqué`,
       );
+    } else {
+      await releaseBankCredit(claim);
     }
   }
   return unlocked;
