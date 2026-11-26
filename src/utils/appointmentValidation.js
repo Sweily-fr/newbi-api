@@ -65,6 +65,8 @@ export const RESERVED_SLUGS = new Set([
   "billets",
   "tickets",
   "registrations",
+  // /rdv/inscription/<jeton> (page de l'inscription côté site)
+  "inscription",
   "inscriptions",
   "embed",
   "dashboard",
