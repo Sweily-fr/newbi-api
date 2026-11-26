@@ -411,7 +411,7 @@ describe("adresse saisie", () => {
     const free = await errorOf(connect(workspaceA, "atelier.durand@gmail.com"));
     expect(free.code).toBe("FREE_EMAIL_PROVIDER");
     expect(free.message).toBe(
-      "Les adresses Gmail, Orange, Yahoo… ne peuvent pas être connectées : seul leur fournisseur peut les authentifier. Utilisez une adresse de votre propre domaine.",
+      "Pas besoin de connecter une adresse Gmail, Orange, Outlook ou Yahoo : vos campagnes partent déjà de l'adresse Newbi de votre espace, avec le nom de votre entreprise, et les réponses arrivent sur votre adresse. Connecter un domaine sert seulement à envoyer depuis une adresse à votre nom de domaine (ex. contact@votre-entreprise.fr).",
     );
     expect(await codeOf(connect(workspaceA, "contact@orange.fr"))).toBe(
       "FREE_EMAIL_PROVIDER",

@@ -178,6 +178,38 @@ type EmailCampaignPreview {
   text: String!
 }
 
+"Destination proposée au bouton d'une campagne (« Lien vers »)"
+enum EmailCampaignLinkTargetKind {
+  BOOKING_PAGE
+  APPOINTMENT_TYPE
+  EVENT
+}
+
+type EmailCampaignLinkTarget {
+  id: ID!
+  kind: EmailCampaignLinkTargetKind!
+  "Titre de la page, nom du type de rendez-vous ou de l'événement"
+  label: String!
+  pageId: ID!
+  pageTitle: String!
+  "Adresse publique de la page (www.newbi.fr/rdv/…)"
+  url: String!
+  "Début de l'événement (null pour une page ou un type de rendez-vous)"
+  startAt: DateTime
+}
+
+"Signature de l'outil Signatures de mail, rendue pour le bloc Signature"
+type EmailCampaignSignature {
+  id: ID!
+  name: String!
+  isDefault: Boolean!
+  "Signature de l'utilisateur connecté ; sinon, déjà choisie dans le contenu par un autre membre"
+  mine: Boolean!
+  "HTML envoyé dans l'e-mail (tableaux, styles en ligne)"
+  html: String!
+  text: String!
+}
+
 type EmailCampaignCheck {
   id: String!
   category: String!
@@ -421,6 +453,10 @@ extend type Query {
   ): EmailTrackingConsentPage!
   "Domaine d'envoi connecté (null si aucun)"
   emailSendingDomain(workspaceId: ID!): EmailSendingDomain
+  "Pages de rendez-vous, types et événements publics de l'espace, pour le bouton « Lien vers » (vide sans accès à la prise de rendez-vous)"
+  emailCampaignLinkTargets(workspaceId: ID!): [EmailCampaignLinkTarget!]!
+  "Signatures de l'utilisateur pour le bloc Signature, plus celles de `ids` (déjà choisies dans le contenu) si elles appartiennent à l'espace"
+  emailCampaignSignatures(workspaceId: ID!, ids: [ID!]): [EmailCampaignSignature!]!
 }
 
 extend type Mutation {

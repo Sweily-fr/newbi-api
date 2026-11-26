@@ -275,6 +275,10 @@ export function analyzeDesign(design) {
         block.items.forEach((item) => addLink(item.url, "réseau social"));
         if (block.items.length) renderedBlocks += 1;
         break;
+      case "signature":
+        // Signature introuvable : signalée par signatureChecks
+        if (block.signatureId) renderedBlocks += 1;
+        break;
       case "imageText":
         addImage(block.src, block.alt);
         if (parseHttpUrl(block.src) || visibleText(block.html)) {
@@ -720,6 +724,25 @@ function imageChecks(images) {
   return checks;
 }
 
+/**
+ * Blocs Signature qui n'afficheront rien (aucune signature choisie, ou
+ * signature supprimée depuis) : avertissement, l'e-mail part sans eux.
+ */
+function signatureChecks(missing) {
+  if (!missing) return [];
+  return [
+    check(
+      "signature_missing",
+      CATEGORY.content,
+      "WARNING",
+      missing > 1 ? "Signatures introuvables" : "Signature introuvable",
+      missing > 1
+        ? `${missing} blocs Signature n'ont pas de signature (aucune choisie, ou supprimée depuis) : ils n'apparaîtront pas. Choisissez une signature dans chaque bloc ou retirez-les.`
+        : "Un bloc Signature n'a pas de signature (aucune choisie, ou supprimée depuis) : il n'apparaîtra pas. Choisissez une signature dans le bloc ou retirez-le.",
+    ),
+  ];
+}
+
 function linkChecks({ buttons, links }) {
   const checks = [];
   for (const button of buttons) {
@@ -996,6 +1019,7 @@ export function scoreChecks(checks) {
  * @param {object|null} input.audienceCount voir audience.js
  * @param {object|null} input.quota voir quota.js
  * @param {number} input.htmlBytes poids du HTML d'un destinataire
+ * @param {number} [input.missingSignatures] blocs Signature sans signature
  */
 export function buildDeliverability({
   campaign,
@@ -1005,6 +1029,7 @@ export function buildDeliverability({
   audienceCount,
   quota,
   htmlBytes = 0,
+  missingSignatures = 0,
 }) {
   const analysis = analyzeDesign(campaign.design);
   const preheader = singleLine(campaign.preheader);
@@ -1026,6 +1051,7 @@ export function buildDeliverability({
           "Il s'affiche après l'objet dans la boîte de réception et donne envie d'ouvrir.",
         ),
     ...contentChecks(analysis, htmlBytes),
+    ...signatureChecks(missingSignatures),
     ...imageChecks(analysis.images),
     ...linkChecks(analysis),
     ...variableChecks(

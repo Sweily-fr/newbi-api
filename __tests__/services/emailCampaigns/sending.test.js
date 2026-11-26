@@ -70,6 +70,8 @@ vi.mock("resend", () => ({
 }));
 vi.mock("../../../src/services/signatureAssets.js", () => ({
   ensureIcons: vi.fn(async () => {}),
+  ensureRoundPhoto: vi.fn(async () => null),
+  roundPhotoUrl: vi.fn(() => null),
 }));
 const dnsRecords = vi.hoisted(() => new Map());
 vi.mock("node:dns", () => {
@@ -97,6 +99,7 @@ import Client from "../../../src/models/Client.js";
 import EmailCampaign from "../../../src/models/EmailCampaign.js";
 import EmailCampaignRecipient from "../../../src/models/EmailCampaignRecipient.js";
 import EmailSendingDomain from "../../../src/models/EmailSendingDomain.js";
+import EmailSignatureV2 from "../../../src/models/EmailSignatureV2.js";
 import EmailSuppression from "../../../src/models/EmailSuppression.js";
 import EmailTrackingConsent from "../../../src/models/EmailTrackingConsent.js";
 import {
@@ -935,6 +938,80 @@ describe("adresse d'envoi", () => {
       requestSend(await createCampaign(), { userId, now: now() }),
     ).rejects.toThrow(SENDING_UNAVAILABLE_MESSAGE);
     expect(resendMock.listCalls).toBe(1);
+  });
+});
+
+describe("bloc Signature", () => {
+  async function campaignWithSignature(overrides = {}) {
+    const signature = await EmailSignatureV2.create({
+      name: "Ma signature",
+      workspaceId,
+      createdBy: userId,
+      identity: { firstName: "Jean", lastName: "Dupont" },
+      contact: { website: "https://atelier.fr/contact" },
+    });
+    const campaign = await createCampaign({
+      design: {
+        ...DESIGN,
+        blocks: [
+          ...DESIGN.blocks,
+          { type: "signature", signatureId: String(signature._id) },
+        ],
+      },
+      ...overrides,
+    });
+    return { signature, campaign };
+  }
+
+  it("figée au lancement : modifiée pendant l'envoi, les destinataires reçoivent la même", async () => {
+    await seedClients(2);
+    await grantTracking("client0@exemple.fr");
+    const { signature, campaign } = await campaignWithSignature({
+      trackClicks: true,
+    });
+    const launched = await requestSend(campaign, { userId, now: now() });
+    expect(launched.links).toEqual([
+      "https://atelier.fr/nouveautes",
+      "https://atelier.fr/contact",
+    ]);
+    const frozen = launched.snapshot.signatures[String(signature._id)];
+    expect(frozen.html).toContain("Dupont");
+    expect(frozen.text).toContain("Jean Dupont");
+
+    await EmailSignatureV2.updateOne(
+      { _id: signature._id },
+      {
+        $set: {
+          "identity.lastName": "Martin",
+          "contact.website": "https://ailleurs.fr",
+        },
+      },
+    );
+    await tick();
+    const payloads = resendMock.calls.flatMap((call) => call.payloads);
+    expect(payloads).toHaveLength(2);
+    for (const payload of payloads) {
+      expect(payload.html).toContain("Dupont");
+      expect(payload.html).not.toContain("Martin");
+      expect(payload.html).not.toContain("ailleurs.fr");
+      expect(payload.text).toContain("Jean Dupont");
+    }
+    // Destinataire suivi : lien de la signature suivi comme celui du bouton
+    const tracked = payloads.find((p) => p.to[0] === "client0@exemple.fr");
+    expect(tracked.html).not.toContain('href="https://atelier.fr/contact"');
+    const untracked = payloads.find((p) => p.to[0] === "client1@exemple.fr");
+    expect(untracked.html).toContain('href="https://atelier.fr/contact"');
+  });
+
+  it("e-mail de test : signature du moment ; supprimée, l'e-mail part sans elle", async () => {
+    const { signature, campaign } = await campaignWithSignature();
+    await sendCampaignTest(campaign, ["moi@atelier.fr"], {});
+    expect(resendMock.calls[0].payloads[0].html).toContain("Dupont");
+    await EmailSignatureV2.deleteOne({ _id: signature._id });
+    await sendCampaignTest(campaign, ["moi@atelier.fr"], {});
+    const html = resendMock.calls[1].payloads[0].html;
+    expect(html).not.toContain("Dupont");
+    expect(html).not.toContain("nb-signature");
   });
 });
 

@@ -540,3 +540,117 @@ describe("modèles de départ", () => {
     }
   });
 });
+
+describe("bloc Signature", () => {
+  const SIGNATURE_ID = "65a1b2c3d4e5f6a7b8c9d0e2";
+  const signatureHtml =
+    '<table role="presentation"><tr><td>Jean Dupont<br>' +
+    '<a href="https://atelier.fr/?a=1&amp;b=2" style="color:#5a50ff;">atelier.fr</a> ' +
+    '<a href="mailto:jean@atelier.fr">jean@atelier.fr</a> ' +
+    '<a href="tel:+33612345678">06 12 34 56 78</a></td></tr></table>';
+  const signatures = {
+    [SIGNATURE_ID]: {
+      html: signatureHtml,
+      text: "Jean Dupont\natelier.fr",
+    },
+  };
+
+  it("normalise l'identifiant, l'alignement et les marges", () => {
+    const result = normalizeDesign(
+      design([
+        {
+          id: "s1",
+          type: "signature",
+          signatureId: ` ${SIGNATURE_ID.toUpperCase()} `,
+          align: "center",
+        },
+        { id: "s2", type: "signature", signatureId: "pas-un-id", align: "x" },
+        { id: "s3", type: "signature" },
+      ]),
+    );
+    expect(result.blocks[0]).toEqual({
+      id: "s1",
+      type: "signature",
+      signatureId: SIGNATURE_ID,
+      align: "center",
+      padding: DEFAULT_PADDING.signature,
+    });
+    expect(result.blocks[1]).toMatchObject({ signatureId: "", align: "left" });
+    expect(result.blocks[2]).toMatchObject({ signatureId: "", align: "left" });
+  });
+
+  it("rend la signature, ses liens numérotés et suivis comme les autres", () => {
+    const { html, text, links } = renderCampaignEmail({
+      design: design([
+        { type: "button", label: "Voir", url: "https://atelier.fr/?a=1&b=2" },
+        { type: "signature", signatureId: SIGNATURE_ID },
+      ]),
+      identity,
+      signatures,
+      trackClick: clickUrlBuilder(RECIPIENT),
+    });
+    expect(html).toContain("Jean Dupont<br>");
+    // Même adresse que le bouton : un seul numéro
+    expect(links).toEqual(["https://atelier.fr/?a=1&b=2"]);
+    const track = clickUrlBuilder(RECIPIENT);
+    expect(html).toContain(`href="${track(0)}" style="color:#5a50ff;"`);
+    expect(html).not.toContain('href="https://atelier.fr/?a=1&amp;b=2"');
+    // mailto: et tel: jamais suivis
+    expect(html).toContain('href="mailto:jean@atelier.fr"');
+    expect(html).toContain('href="tel:+33612345678"');
+    expect(text).toContain("Jean Dupont\natelier.fr");
+  });
+
+  it("sans suivi : liens d'origine ; alignée à gauche par défaut, sinon dans une table alignée", () => {
+    const left = renderCampaignEmail({
+      design: design([{ type: "signature", signatureId: SIGNATURE_ID }]),
+      signatures,
+    });
+    expect(left.html).toContain('href="https://atelier.fr/?a=1&amp;b=2"');
+    expect(left.html).toMatch(
+      /<td align="left" class="nb-signature" style="padding:16px 32px 16px 32px;text-align:left;"><table role="presentation"><tr><td>Jean Dupont/,
+    );
+    const centered = renderCampaignEmail({
+      design: design([
+        { type: "signature", signatureId: SIGNATURE_ID, align: "center" },
+      ]),
+      signatures,
+    });
+    expect(centered.html).toContain(
+      '<table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" style="margin:0 auto;">',
+    );
+  });
+
+  it("signature absente, supprimée ou non choisie : rien n'est rendu", () => {
+    const blocks = [
+      { type: "signature", signatureId: SIGNATURE_ID },
+      { type: "signature", signatureId: "" },
+    ];
+    for (const options of [{}, { signatures: {} }, { signatures: null }]) {
+      const { html, text } = renderCampaignEmail({
+        design: design(blocks),
+        ...options,
+      });
+      expect(html).not.toContain("nb-signature");
+      expect(text).not.toContain("Jean Dupont");
+    }
+  });
+
+  it("signature réelle du générateur des signatures : liens suivis, aucun tiret cadratin", async () => {
+    const { renderSignature, SAMPLE_SIGNATURE } =
+      await import("../../../src/services/signatureRenderer/index.js");
+    const rendered = renderSignature(SAMPLE_SIGNATURE);
+    expect(rendered.html).toContain("<table");
+    const { html, links } = renderCampaignEmail({
+      design: design([{ type: "signature", signatureId: SIGNATURE_ID }]),
+      signatures: { [SIGNATURE_ID]: rendered },
+      trackClick: clickUrlBuilder(RECIPIENT),
+    });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(html).not.toContain(`href="${link}"`);
+    }
+    expect(html).toContain(clickUrlBuilder(RECIPIENT)(0));
+    expect(Buffer.byteLength(html)).toBeLessThan(100 * 1024);
+  });
+});

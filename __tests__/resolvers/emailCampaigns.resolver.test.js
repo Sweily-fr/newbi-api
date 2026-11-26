@@ -19,6 +19,12 @@ import {
   vi,
 } from "vitest";
 
+// Lus à l'import : adresse publique des pages de rendez-vous, chiffrement
+// des agendas connectés (règle de publication des pages)
+vi.hoisted(() => {
+  process.env.FRONTEND_URL = "https://www.newbi.fr";
+  process.env.CALENDAR_ENCRYPTION_KEY ||= "a".repeat(64);
+});
 vi.mock("../../src/config/redis.js", () => ({
   getPubSub: () => ({ publish: async () => {} }),
   cacheGet: async () => null,
@@ -101,6 +107,9 @@ import ClientList from "../../src/models/ClientList.js";
 import EmailCampaign from "../../src/models/EmailCampaign.js";
 import EmailCampaignClick from "../../src/models/EmailCampaignClick.js";
 import EmailCampaignRecipient from "../../src/models/EmailCampaignRecipient.js";
+import EmailSignatureV2 from "../../src/models/EmailSignatureV2.js";
+import BookingPage from "../../src/models/BookingPage.js";
+import AppointmentType from "../../src/models/AppointmentType.js";
 import EmailSuppression from "../../src/models/EmailSuppression.js";
 import EmailTrackingConsent from "../../src/models/EmailTrackingConsent.js";
 import emailCampaignsResolvers from "../../src/resolvers/emailCampaigns.js";
@@ -820,6 +829,120 @@ describe("aperçu, vérification, audience", () => {
       "event",
       "plain",
     ]);
+  });
+});
+
+describe("signatures et liens vers les rendez-vous", () => {
+  const signatureOf = (createdBy, name, overrides = {}) =>
+    EmailSignatureV2.create({
+      name,
+      workspaceId,
+      createdBy,
+      identity: { firstName: name, lastName: "Durand" },
+      contact: { website: "https://atelier.fr" },
+      ...overrides,
+    });
+
+  it("signatures de l'utilisateur, la principale d'abord ; celle d'un collègue seulement si déjà choisie", async () => {
+    const mine = await signatureOf(owner, "Jean");
+    const main = await signatureOf(owner, "Principale", { isDefault: true });
+    const colleague = await signatureOf(editor, "Paul");
+    const foreign = await signatureOf(outsider, "Autre", {
+      workspaceId: otherWorkspace,
+    });
+    const list = await call(Query.emailCampaignSignatures, owner);
+    expect(list.map((s) => [s.name, s.isDefault, s.mine])).toEqual([
+      ["Principale", true, true],
+      ["Jean", false, true],
+    ]);
+    expect(list[1].id).toBe(String(mine._id));
+    expect(list[0].id).toBe(String(main._id));
+    expect(list[1].html).toContain("<table");
+    expect(list[1].html).toContain("Jean");
+    expect(list[1].text).toContain("Jean Durand");
+
+    const withIds = await call(Query.emailCampaignSignatures, owner, {
+      ids: [String(colleague._id), String(foreign._id), "pas-un-id"],
+    });
+    expect(withIds.map((s) => [s.name, s.mine])).toEqual([
+      ["Principale", true],
+      ["Jean", true],
+      ["Paul", false],
+    ]);
+    // Comptable : aucun accès aux campagnes
+    expect(
+      await codeOf(call(Query.emailCampaignSignatures, accountant)),
+    ).toBeTruthy();
+    expect(await call(Query.emailCampaignSignatures, viewer)).toEqual([]);
+  });
+
+  it("aperçu et e-mail de test avec la signature ; supprimée : signalée avant l'envoi", async () => {
+    const signature = await signatureOf(owner, "Jean");
+    const campaign = await draft(owner, {
+      design: {
+        version: 1,
+        blocks: [
+          { type: "text", html: GOOD_TEXT },
+          { type: "signature", signatureId: String(signature._id) },
+        ],
+      },
+    });
+    const preview = await call(Query.emailCampaignPreview, owner, {
+      id: String(campaign._id),
+    });
+    expect(preview.html).toContain("nb-signature");
+    expect(preview.html).toContain("Jean");
+    expect(preview.text).toContain("Jean Durand");
+    const ok = await call(Query.emailCampaignDeliverability, owner, {
+      id: String(campaign._id),
+    });
+    expect(ok.checks.find((c) => c.id === "signature_missing")).toBeUndefined();
+
+    await EmailSignatureV2.deleteOne({ _id: signature._id });
+    const without = await call(Query.emailCampaignPreview, owner, {
+      id: String(campaign._id),
+    });
+    expect(without.html).not.toContain("nb-signature");
+    const report = await call(Query.emailCampaignDeliverability, owner, {
+      id: String(campaign._id),
+    });
+    expect(
+      report.checks.find((c) => c.id === "signature_missing"),
+    ).toMatchObject({ level: "WARNING", title: "Signature introuvable" });
+    expect(report.canSend).toBe(true);
+  });
+
+  it("destinations du bouton : pages et événements publics de l'espace, vide sans accès", async () => {
+    const page = await BookingPage.create({
+      workspaceId,
+      userId: owner,
+      slug: "atelier-durand",
+      title: "Atelier Durand",
+    });
+    await AppointmentType.create({
+      workspaceId,
+      bookingPageId: page._id,
+      userId: owner,
+      slug: "decouverte",
+      name: "Appel découverte",
+      durationMinutes: 30,
+      location: { kind: "PHONE" },
+    });
+    const targets = await call(Query.emailCampaignLinkTargets, viewer);
+    expect(targets.map(({ kind, url }) => [kind, url])).toEqual([
+      ["BOOKING_PAGE", "https://www.newbi.fr/rdv/atelier-durand"],
+      [
+        "APPOINTMENT_TYPE",
+        "https://www.newbi.fr/rdv/atelier-durand/decouverte",
+      ],
+    ]);
+    // Espace sans accès anticipé à la prise de rendez-vous : rien, sans erreur
+    vi.stubEnv("BETA_FEATURES", "appointments");
+    vi.stubEnv("BETA_WORKSPACE_IDS", String(otherWorkspace));
+    expect(await call(Query.emailCampaignLinkTargets, viewer)).toEqual([]);
+    expect(
+      await codeOf(call(Query.emailCampaignLinkTargets, accountant)),
+    ).toBeTruthy();
   });
 });
 
