@@ -311,6 +311,20 @@ function imageHtml(ctx, { src, alt, href, width, align, borderRadius }) {
   );
 }
 
+// ─── Signature ─────────────────────────────────────────────────────────────
+
+/**
+ * Liens d'une signature (HTML du générateur des signatures, déjà échappé)
+ * passés par `linkHref`, comme ceux des autres blocs : numérotés, suivis
+ * si la campagne suit les clics. Un lien que linkHref refuse reste tel quel.
+ */
+function signatureLinks(html, ctx) {
+  return String(html || "").replace(/\bhref="([^"]*)"/gi, (match, raw) => {
+    const href = ctx.linkHref(decodeEntities(raw).trim());
+    return href ? `href="${escapeHtml(href)}"` : match;
+  });
+}
+
 // ─── Blocs ─────────────────────────────────────────────────────────────────
 
 const innerWidth = (ctx, p) =>
@@ -494,6 +508,25 @@ const RENDERERS = {
       text: textVersion,
     };
   },
+
+  // Signature de l'outil Signatures de mail (rendue à part, voir
+  // signatures.js) ; centrée ou à droite dans une table alignée, comprise
+  // aussi d'Outlook bureau
+  signature(block, ctx) {
+    const signature = block.signatureId
+      ? ctx.signatures[block.signatureId]
+      : null;
+    if (!signature?.html) return null;
+    const html = signatureLinks(signature.html, ctx);
+    const aligned =
+      block.align === "left"
+        ? html
+        : `<table role="presentation" align="${block.align}" border="0" cellpadding="0" cellspacing="0" style="margin:${block.align === "center" ? "0 auto" : "0 0 0 auto"};"><tr><td align="left" style="text-align:left;">${html}</td></tr></table>`;
+    return {
+      html: `<tr><td align="${block.align}" class="nb-signature" style="padding:${padding(block.padding)};text-align:${block.align};">${aligned}</td></tr>`,
+      text: signature.text || "",
+    };
+  },
 };
 
 // ─── Pied et document ──────────────────────────────────────────────────────
@@ -609,6 +642,9 @@ const MEDIA_QUERY = `@media only screen and (max-width: 620px) {
  * @param {string} [options.unsubscribeUrl] lien de désinscription (« # » sinon)
  * @param {(index: number) => string} [options.trackClick] lien suivi d'une adresse
  * @param {string} [options.openPixelUrl] pixel d'ouverture
+ * @param {Record<string, { html: string, text: string }>} [options.signatures]
+ *   signatures des blocs Signature, par identifiant (voir signatures.js) ;
+ *   absente : le bloc n'affiche rien
  * @param {{ opens?: boolean, clicks?: boolean, privacyPolicyUrl?: string, preferencesUrl?: string|null }} [options.trackingNotice]
  *   suivi à annoncer dans le pied : celui fait dans cet e-mail (e-mail de
  *   test, aperçu : celui de la campagne, même s'ils ne suivent rien) et le
@@ -625,6 +661,7 @@ export function renderCampaignEmail({
   trackClick = null,
   openPixelUrl = null,
   trackingNotice = null,
+  signatures = {},
 } = {}) {
   const normalized = normalizeDesign(design);
   const { style } = normalized;
@@ -633,6 +670,7 @@ export function renderCampaignEmail({
     style,
     font: FONT_STACKS[style.fontFamily],
     vars: vars || {},
+    signatures: signatures || {},
     linkHref(raw) {
       const value = String(raw ?? "").trim();
       if (!value) return null;
