@@ -4,7 +4,11 @@ import ProspectCreditPurchase from "../../models/ProspectCreditPurchase.js";
 import ProspectCreditAdjustment from "../../models/ProspectCreditAdjustment.js";
 import { parisMonthBounds } from "../esignatureQuota.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
-import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
+import {
+  PLAN_LABELS,
+  PLAN_ORDER,
+  canonicalPlanKey,
+} from "../storage/storageConfig.js";
 
 /**
  * Crédits de prospection d'un espace. 1 crédit = 1 page de 25 entreprises
@@ -66,8 +70,9 @@ function paidPlanOf(subscriptions) {
       (s) =>
         s.status === "canceled" && s.periodEnd && new Date(s.periodEnd) > now,
     );
-  const plan = paid?.plan?.toLowerCase();
-  return plan in PROSPECT_MONTHLY_CREDITS ? plan : null;
+  // Anciennes clés (« pro », « enterprise ») lues comme l'offre actuelle
+  const plan = canonicalPlanKey(paid?.plan);
+  return Object.hasOwn(PROSPECT_MONTHLY_CREDITS, plan) ? plan : null;
 }
 
 /**
@@ -152,6 +157,12 @@ export function computeProspectBalance({
   const purchasedPending = bought.pending || 0;
   const purchasedUsed = spent.purchased || 0;
   const purchasedRemaining = Math.max(0, purchasedTotal - purchasedUsed);
+  // Dont offerts par Newbi (ajustements nets de l'admin), dépensés avant les
+  // crédits achetés : seul l'affichage les distingue, le solde est le même
+  const offeredRemaining = Math.min(
+    purchasedRemaining,
+    Math.max(0, (adjusted.purchased || 0) - purchasedUsed),
+  );
   const available = monthlyRemaining + purchasedRemaining;
   const nextPlan = nextProspectPlan(plan);
 
@@ -167,6 +178,7 @@ export function computeProspectBalance({
     purchasedTotal,
     purchasedUsed,
     purchasedRemaining,
+    offeredRemaining,
     purchasedPending,
     available,
     // Par solde : deux dépenses simultanées ont pris le même dernier crédit

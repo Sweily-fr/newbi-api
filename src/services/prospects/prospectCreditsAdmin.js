@@ -14,6 +14,7 @@ import {
 } from "./prospectOrders.js";
 import { isProspectGenerationEnabled } from "./prospectService.js";
 import { isSocieteinfoConfigured } from "./societeinfoClient.js";
+import { canonicalPlanKey } from "../storage/storageConfig.js";
 import logger from "../../utils/logger.js";
 
 /**
@@ -136,6 +137,7 @@ function balanceDto(balance) {
     monthlyUsed: balance.monthlyUsed,
     monthlyRemaining: balance.monthlyRemaining,
     purchasedRemaining: balance.purchasedRemaining,
+    offeredRemaining: balance.offeredRemaining,
     purchasedPending: balance.purchasedPending,
     available: balance.available,
     resetsAt: balance.resetsAt,
@@ -170,7 +172,7 @@ function mainSubscription(subscriptions) {
   );
   return first
     ? {
-        plan: first.plan?.toLowerCase() || null,
+        plan: canonicalPlanKey(first.plan) || null,
         status: first.status || null,
         periodEnd: first.periodEnd || null,
       }

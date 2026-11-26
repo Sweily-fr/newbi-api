@@ -449,6 +449,68 @@ describe("ajustement du solde d'un espace", () => {
   });
 });
 
+describe("crédits offerts par Newbi, à part des crédits achetés", () => {
+  it("un geste commercial est compté comme offert, pas comme acheté", async () => {
+    await abonnement("entreprise");
+    await achat(25);
+    await ajuster(145);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedRemaining: 45,
+      offeredRemaining: 20,
+      available: 145,
+    });
+  });
+
+  it("les crédits offerts sont dépensés avant les crédits achetés", async () => {
+    await abonnement("entreprise");
+    await depense(100);
+    await achat(25);
+    await ajuster(45);
+    await depense(12, "purchased");
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedRemaining: 33,
+      offeredRemaining: 8,
+    });
+    await depense(10, "purchased");
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedRemaining: 23,
+      offeredRemaining: 0,
+    });
+  });
+
+  it("un retrait (remboursement partiel) n'invente pas de crédits offerts", async () => {
+    await abonnement("entreprise");
+    await depense(100);
+    await achat(25);
+    await ajuster(20);
+    expect(await getProspectBalance(workspaceId)).toMatchObject({
+      purchasedRemaining: 20,
+      offeredRemaining: 0,
+    });
+  });
+
+  it("la liste de l'admin les montre aussi", async () => {
+    await abonnement("pme");
+    await ajuster(40);
+    const list = await listProspectCredits();
+    expect(list.workspaces[0].balance).toMatchObject({
+      purchasedRemaining: 10,
+      offeredRemaining: 10,
+    });
+  });
+});
+
+describe("anciennes clés d'offre", () => {
+  it("la liste de l'admin affiche l'offre actuelle (« pro » = Premium)", async () => {
+    await abonnement("pro");
+    const list = await listProspectCredits();
+    expect(list.workspaces[0]).toMatchObject({
+      subscription: { plan: "pme", status: "active" },
+      balance: { plan: "pme", monthlyCredits: 30 },
+    });
+  });
+});
+
 describe("commandes et crédits ajoutés", () => {
   it("les crédits ajoutés sont dus aux clients : le stock les garde avant d'activer une commande", async () => {
     await abonnement("entreprise");
