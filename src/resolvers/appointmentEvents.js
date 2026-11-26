@@ -456,6 +456,12 @@ const appointmentEventsResolvers = {
       });
       if (result.error === "NOT_FOUND")
         throw createNotFoundError("Inscription");
+      if (result.error === "STARTED") {
+        throw new AppError(
+          "L'événement a déjà commencé : cette inscription ne peut plus être confirmée. Remboursez le participant si son virement est arrivé.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
       if (result.error === "NO_SEATS") {
         throw new AppError(
           "Il ne reste plus assez de places pour confirmer cette inscription.",

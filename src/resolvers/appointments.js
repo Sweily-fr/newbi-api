@@ -1101,6 +1101,18 @@ const appointmentsResolvers = {
       });
       if (result.error === "NOT_FOUND")
         throw createNotFoundError("Rendez-vous");
+      if (result.error === "STARTED") {
+        throw new AppError(
+          "Ce rendez-vous a déjà commencé : il ne peut plus être confirmé. Remboursez l'invité si son virement est arrivé.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
+      if (result.error === "BUSY") {
+        throw new AppError(
+          "Une autre réservation est en cours sur votre agenda. Réessayez dans un instant.",
+          ERROR_CODES.VALIDATION_ERROR,
+        );
+      }
       if (result.error === "SLOT_TAKEN") {
         throw new AppError(
           "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé.",

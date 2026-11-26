@@ -10,15 +10,12 @@
  * « Marquer comme payé » de l'organisateur.
  */
 import mongoose from "mongoose";
-import Booking from "../../models/Booking.js";
-import EventRegistration from "../../models/EventRegistration.js";
-import FileTransfer from "../../models/FileTransfer.js";
 import Notification from "../../models/Notification.js";
 import User from "../../models/User.js";
 import {
-  generatePaymentReference,
   getOrganizationBankAccount,
   hasConnectedBank,
+  uniquePaymentReference,
 } from "../payments/bankTransfer.js";
 import { workspaceKey } from "../payments/directPayments.js";
 import { APP_URL, escapeHtml, renderEmail } from "../../utils/trialEmails.js";
@@ -41,39 +38,31 @@ export const BANK_TRANSFER = "bank_transfer";
 const iso = (date) => (date ? new Date(date).toISOString() : null);
 const appUrl = () => String(APP_URL).replace(/\/+$/, "");
 
-/**
- * Référence de virement libre dans l'espace (aucune autre inscription,
- * réservation ou transfert ne la porte) : un crédit bancaire ne règle
- * jamais deux paiements.
- */
-export async function newBankReference(workspaceId) {
-  const orgId = workspaceKey(workspaceId);
-  const objectId =
-    orgId && mongoose.Types.ObjectId.isValid(orgId)
-      ? new mongoose.Types.ObjectId(orgId)
-      : null;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const reference = generatePaymentReference();
-    const [registration, booking, transfer] = await Promise.all([
-      objectId
-        ? EventRegistration.exists({
-            workspaceId: objectId,
-            "payment.bankReference": reference,
-          })
-        : null,
-      objectId
-        ? Booking.exists({
-            workspaceId: objectId,
-            "payment.bankReference": reference,
-          })
-        : null,
-      FileTransfer.exists({ workspaceId: orgId, paymentReference: reference }),
-    ]);
-    if (!registration && !booking && !transfer) return reference;
-  }
-  // Huit tirages pris sur un milliard de références : hautement improbable
-  return generatePaymentReference();
-}
+/** Référence de virement libre dans l'espace (voir bankTransfer.js). */
+export const newBankReference = (workspaceId) =>
+  uniquePaymentReference(workspaceId);
+
+/** Virement proposé seulement si le début est à 48 h au moins. */
+export const BANK_TRANSFER_MIN_LEAD_MS = 48 * 60 * MINUTE;
+/** La garde d'un virement finit au plus tard 24 h avant le début. */
+export const BANK_TRANSFER_START_MARGIN_MS = 24 * 60 * MINUTE;
+
+/** Virement encore possible pour un début donné. */
+export const bankTransferOpenFor = (startAt, now = new Date()) =>
+  Boolean(startAt) &&
+  new Date(startAt).getTime() - now.getTime() >= BANK_TRANSFER_MIN_LEAD_MS;
+
+/** Fin de la garde d'un virement : min(création + 3 jours, début - 24 h). */
+export const bankTransferDueAt = (startAt, now = new Date()) =>
+  new Date(
+    Math.min(
+      now.getTime() + BANK_TRANSFER_HOLD_MS,
+      new Date(startAt).getTime() - BANK_TRANSFER_START_MARGIN_MS,
+    ),
+  );
+
+/** Paiement en confirmation chez le prestataire : gardé 7 jours au plus. */
+export const PENDING_PAYMENT_CAP_MS = 7 * DAY;
 
 /**
  * Coordonnées de virement montrées au payeur (null si le moyen n'est pas
@@ -380,8 +369,28 @@ export async function notifyHostBankDeclared({
 }
 
 /**
+ * Pourquoi un paiement arrivé n'a pas pu être confirmé :
+ *   - started : le rendez-vous ou l'événement avait déjà commencé ;
+ *   - cancelled : la réservation avait été annulée ;
+ *   - expired : la réservation avait expiré et la place a été reprise.
+ */
+export function latePaymentReason(doc, startAt, now = new Date()) {
+  if (startAt && new Date(startAt) <= now) return "started";
+  if (doc?.status === "CANCELLED") return "cancelled";
+  return "expired";
+}
+
+const REASON_TEXTS = {
+  started: "la date de début était déjà passée",
+  cancelled: "la réservation avait été annulée",
+  expired: "la réservation avait expiré et la place a été reprise entre-temps",
+};
+
+/**
  * Paiement arrivé sans place ou sans créneau, non remboursable
  * automatiquement : à rembourser à la main (jamais perdu en silence).
+ * E-mail envoyé quelle que soit la préférence « paiement reçu » : c'est une
+ * action à faire, pas une information.
  */
 export async function notifyHostRefundNeeded({
   hostUserId,
@@ -393,9 +402,11 @@ export async function notifyHostRefundNeeded({
   provider,
   reference,
   label,
+  reason = "expired",
 }) {
   const amount = formatCents(amountCents, currency);
   const who = payerName || payerEmail || "Un client";
+  const why = REASON_TEXTS[reason] || REASON_TEXTS.expired;
   const how =
     provider === BANK_TRANSFER
       ? "Remboursez-le par virement depuis votre banque."
@@ -405,23 +416,20 @@ export async function notifyHostRefundNeeded({
     workspaceId,
     type: "APPOINTMENT_REFUND_NEEDED",
     title: "Remboursement à faire",
-    message: `${who} a payé ${amount} pour ${label}, mais la réservation avait expiré et la place n'est plus libre. ${how}`,
+    message: `${who} a payé ${amount} pour ${label}, mais ${why}. ${how}`,
     amountCents,
   });
-  const to = await hostEmailRecipient(hostUserId);
-  if (!to) return false;
+  const host = await User.findById(hostUserId).select("email").lean();
+  if (!host?.email) return false;
   return deliverBookingEmail({
-    to,
+    to: host.email,
     replyTo: payerEmail || undefined,
     organizationName: "Newbi",
     subject: `Remboursement à faire : ${amount}`,
     html: hostEmail({
       badge: "REMBOURSEMENT À FAIRE",
       title: "Un paiement est arrivé trop tard",
-      paragraphs: [
-        `${who} a payé ${amount} pour ${label}, mais la réservation avait expiré et la place a été reprise entre-temps.`,
-        how,
-      ],
+      paragraphs: [`${who} a payé ${amount} pour ${label}, mais ${why}.`, how],
       rows: [
         ["Montant", amount],
         reference ? ["Référence", reference] : null,
@@ -430,4 +438,47 @@ export async function notifyHostRefundNeeded({
       ctaLabel: "Voir mes rendez-vous",
     }),
   });
+}
+
+/**
+ * Au payeur : son paiement est arrivé alors que la place n'était plus
+ * disponible. Remboursé automatiquement, ou l'organisateur va le
+ * rembourser.
+ */
+export function buildLatePaymentEmail({
+  firstName,
+  title,
+  amountCents,
+  currency,
+  refunded,
+  reason = "expired",
+  organizationName,
+}) {
+  const amount = formatCents(amountCents, currency);
+  const why = REASON_TEXTS[reason] || REASON_TEXTS.expired;
+  const next = refunded
+    ? `Votre paiement de ${amount} vous a été remboursé : il apparaîtra sur votre compte sous quelques jours.`
+    : `${organizationName} va vous rembourser ${amount}. Pour toute question, répondez à cet e-mail.`;
+  const html = renderEmail({
+    preheader: refunded
+      ? `Paiement remboursé : ${title}`
+      : `Paiement à rembourser : ${title}`,
+    badge: refunded ? "PAIEMENT REMBOURSÉ" : "REMBOURSEMENT À VENIR",
+    iconLabel: refunded ? "Remboursé" : "À rembourser",
+    iconBg: "#fee2e2",
+    iconColor: "#991b1b",
+    title: "Votre réservation n'a pas pu être confirmée",
+    bodyHtml: `
+          <p ${P}>Bonjour ${escapeHtml(firstName)},</p>
+          <p ${P}>Votre paiement pour <strong ${STRONG}>«\u00a0${escapeHtml(title)}\u00a0»</strong> est bien arrivé, mais ${escapeHtml(why)} : la réservation n'a pas pu être confirmée.</p>
+          <p ${P}>${escapeHtml(next)}</p>`,
+    footerNoteHtml: `Vous recevez cet e-mail car vous avez réservé auprès de ${escapeHtml(organizationName)} via Newbi`,
+  });
+  return {
+    subject: refunded
+      ? `Paiement remboursé : ${title}`
+      : `Réservation non confirmée : ${title}`,
+    html,
+    attachments: [],
+  };
 }

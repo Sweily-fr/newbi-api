@@ -68,6 +68,7 @@ import {
   slotPaymentModeOf,
 } from "../utils/appointmentValidation.js";
 import { appointmentPaymentMethods } from "../services/appointments/eventRegistrationService.js";
+import { bankTransferOpenFor } from "../services/appointments/appointmentPayments.js";
 
 // Moyens acceptés à la réservation et à l'inscription (virement compris)
 const PAYMENT_PROVIDERS = [...ONLINE_PAYMENT_PROVIDERS, "bank_transfer"];
@@ -123,7 +124,29 @@ export const RATE_LIMITS = {
   // Compté par jeton (un payeur) et, plus largement, par adresse
   paymentReturnToken: [{ window: 60, max: 30 }],
   paymentReturnIp: [{ window: 60, max: 120 }],
+  // Virement : place ou créneau gardé jusqu'à 3 jours, donc compté à part
+  bankTransfer: [{ window: 86400, max: 5 }],
 };
+
+/**
+ * Réservations ou inscriptions par virement depuis cette adresse IP :
+ * au-delà de la limite du jour, refus `429 BANK_TRANSFER_LIMIT`.
+ * @returns {Promise<boolean>} true si la limite est dépassée
+ */
+async function overBankTransferLimit(req) {
+  try {
+    for (const { window, max } of RATE_LIMITS.bankTransfer) {
+      const count = await recordAttempt(
+        `booking:bankTransfer:${window}:${clientIp(req)}`,
+        window,
+      );
+      if (count > max) return true;
+    }
+  } catch (error) {
+    logger.warn(`[rendez-vous] limitation indisponible : ${error.message}`);
+  }
+  return false;
+}
 // Plage de créneaux demandée en une fois (jours, bornes comprises)
 export const MAX_RANGE_DAYS = 42;
 
@@ -283,7 +306,14 @@ function slotPaymentPayload(type, methods) {
       depositAmount: slotDepositAmountOf(type),
       amountOnline,
       amountDueOnSite: amount - amountOnline,
-      ...(methods ? { paymentMethods: methods } : {}),
+      ...(methods
+        ? {
+            paymentMethods: methods,
+            // Virement : seulement pour un créneau qui commence dans 48 h
+            // au moins (voir slots[].bankTransferAvailable)
+            bankTransferMinLeadHours: 48,
+          }
+        : {}),
     },
   };
 }
@@ -840,11 +870,21 @@ router.get("/:slug/:typeSlug/slots", rateLimit("read"), async (req, res) => {
       to,
       excludeBooking,
     });
+    // Créneau payable par virement : indiqué créneau par créneau
+    const bankOffered =
+      slotPaysOnline(type) &&
+      (await appointmentPaymentMethods(type.workspaceId)).includes(
+        "bank_transfer",
+      );
+    const now = new Date();
     return res.json({
       timezone: zone,
       slots: slots.map((slot) => ({
         start: slot.start.toISOString(),
         end: slot.end.toISOString(),
+        ...(bankOffered
+          ? { bankTransferAvailable: bankTransferOpenFor(slot.start, now) }
+          : {}),
       })),
     });
   } catch (error) {
@@ -895,6 +935,10 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
 
     // Créneau payé à la réservation : tenu jusqu'au paiement
     if (slotPaysOnline(type)) {
+      if (provider === "bank_transfer" && (await overBankTransferLimit(req))) {
+        res.set("Retry-After", "86400");
+        return res.status(429).json({ error: "BANK_TRANSFER_LIMIT" });
+      }
       const result = await createPaidBooking({
         context,
         type,
@@ -921,7 +965,11 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
     }
 
     // Réservations payantes échues de l'organisateur : créneaux libérés
-    await expireOverdueBookings({ hostUserId: context.page.userId });
+    // (en base seulement, la relecture des paiements reste au balayage)
+    await expireOverdueBookings({
+      hostUserId: context.page.userId,
+      recheck: false,
+    });
     const { booking, token } = await createBooking({
       context,
       type,
@@ -991,6 +1039,14 @@ router.post(
         });
       }
 
+      if (
+        paysOnline(type) &&
+        provider === "bank_transfer" &&
+        (await overBankTransferLimit(req))
+      ) {
+        res.set("Retry-After", "86400");
+        return res.status(429).json({ error: "BANK_TRANSFER_LIMIT" });
+      }
       const result = await registerForEvent({
         context,
         type,

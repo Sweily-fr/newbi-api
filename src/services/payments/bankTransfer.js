@@ -12,6 +12,10 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
 import AccountBanking from "../../models/AccountBanking.js";
+import BankCreditClaim from "../../models/BankCreditClaim.js";
+import Booking from "../../models/Booking.js";
+import EventRegistration from "../../models/EventRegistration.js";
+import FileTransfer from "../../models/FileTransfer.js";
 import { toCents, workspaceKey } from "./directPayments.js";
 
 export function normalizeIban(value) {
@@ -129,3 +133,103 @@ export function findBankCredit(labelled, { reference, amountCents, currency }) {
 /** Identifiant du paiement d'un virement repéré (unique par transaction). */
 export const bankPaymentId = (transaction, reference) =>
   `bank:${transaction?.externalId || transaction?._id || reference}`;
+
+/**
+ * Référence de virement libre dans l'espace : aucun transfert, aucune
+ * réservation ni inscription ne la porte (un crédit bancaire ne doit
+ * jamais pouvoir régler deux paiements).
+ */
+export async function uniquePaymentReference(workspaceId) {
+  const orgId = workspaceKey(workspaceId);
+  const objectId =
+    orgId && mongoose.Types.ObjectId.isValid(orgId)
+      ? new mongoose.Types.ObjectId(orgId)
+      : null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const reference = generatePaymentReference();
+    const [registration, booking, transfer] = await Promise.all([
+      objectId
+        ? EventRegistration.exists({
+            workspaceId: objectId,
+            "payment.bankReference": reference,
+          })
+        : null,
+      objectId
+        ? Booking.exists({
+            workspaceId: objectId,
+            "payment.bankReference": reference,
+          })
+        : null,
+      orgId
+        ? FileTransfer.exists({
+            workspaceId: orgId,
+            paymentReference: reference,
+          })
+        : null,
+    ]);
+    if (!registration && !booking && !transfer) return reference;
+  }
+  // Huit tirages pris sur un milliard de références : hautement improbable
+  return generatePaymentReference();
+}
+
+/** Identifiant de la transaction bancaire (null si inconnu). */
+export const bankTransactionIdOf = (transaction) => {
+  const id = transaction?.externalId || transaction?._id;
+  return id ? String(id) : null;
+};
+
+/**
+ * Réserve un crédit bancaire pour un paiement (une seule fois, contrôle en
+ * base par index unique). Sans identifiant de transaction : rien à
+ * réserver, le crédit est accepté (comportement d'avant).
+ * @returns {Promise<boolean>} false si le crédit a déjà réglé autre chose
+ */
+export async function claimBankCredit({
+  workspaceId,
+  transaction,
+  targetKind,
+  targetId,
+  reference = null,
+}) {
+  const transactionId = bankTransactionIdOf(transaction);
+  const orgId = workspaceKey(workspaceId);
+  if (!transactionId || !orgId) return true;
+  try {
+    await BankCreditClaim.create({
+      workspaceId: orgId,
+      transactionId,
+      targetKind,
+      targetId: String(targetId),
+      reference,
+    });
+    return true;
+  } catch (error) {
+    if (error?.code !== 11000) throw error;
+    // Déjà réservé pour ce même paiement (resynchronisation) : accepté
+    return Boolean(
+      await BankCreditClaim.exists({
+        workspaceId: orgId,
+        transactionId,
+        targetKind,
+        targetId: String(targetId),
+      }),
+    );
+  }
+}
+
+/** Libère un crédit réservé dont le paiement n'a pas abouti. */
+export async function releaseBankCredit({
+  workspaceId,
+  transaction,
+  targetId,
+}) {
+  const transactionId = bankTransactionIdOf(transaction);
+  const orgId = workspaceKey(workspaceId);
+  if (!transactionId || !orgId) return;
+  await BankCreditClaim.deleteOne({
+    workspaceId: orgId,
+    transactionId,
+    targetId: String(targetId),
+  });
+}

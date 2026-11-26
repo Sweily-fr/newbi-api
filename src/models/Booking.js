@@ -158,8 +158,6 @@ const bookingSchema = new mongoose.Schema(
       declaredAt: { type: Date },
       markedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
-    // E-mails de confirmation d'un rendez-vous payé envoyés (une fois)
-    confirmedAt: { type: Date },
   },
   { timestamps: true, collection: "bookings" },
 );
@@ -168,6 +166,19 @@ const bookingSchema = new mongoose.Schema(
 bookingSchema.index(
   { hostUserId: 1, startAt: 1 },
   { unique: true, partialFilterExpression: { status: "CONFIRMED" } },
+);
+// Pas deux rendez-vous confirmés ou tenus (en attente de paiement) au même
+// instant pour un organisateur. Index distinct de l'existant (nom propre) :
+// dernier rempart derrière le verrou de l'organisateur
+bookingSchema.index(
+  { hostUserId: 1, startAt: 1 },
+  {
+    name: "host_start_active_unique",
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
+    },
+  },
 );
 // Tableau de bord : réservations d'un organisateur dans un espace
 bookingSchema.index({ workspaceId: 1, hostUserId: 1, startAt: -1 });
