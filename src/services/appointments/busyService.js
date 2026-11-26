@@ -193,7 +193,9 @@ export async function getHostOccupation({
   ]);
 
   let busy = [...external.flat(), ...newbi];
-  if (excludeBooking) {
+  // Son événement d'agenda n'existe que s'il y a été écrit (rendez-vous
+  // confirmé) : une réservation jamais confirmée n'écarte rien
+  if (excludeBooking?.externalEventId) {
     const start = new Date(excludeBooking.startAt).getTime();
     const end = new Date(excludeBooking.endAt).getTime();
     // Son événement d'agenda : par identifiant (Microsoft, Apple), sinon par

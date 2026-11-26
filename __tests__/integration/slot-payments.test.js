@@ -101,6 +101,7 @@ vi.mock("../../src/services/emailReminderService.js", () => ({
   },
 }));
 
+import crypto from "crypto";
 import express from "express";
 import mongoose from "mongoose";
 import { startMongo, stopMongo, clearMongo } from "../helpers/mongo.js";
@@ -113,6 +114,7 @@ import {
 import { invalidateOrganizationRoles } from "../../src/services/organizationRoleService.js";
 import { resetMemoryAttempts } from "../../src/utils/attemptLimiter.js";
 import AppointmentType from "../../src/models/AppointmentType.js";
+import BankCreditClaim from "../../src/models/BankCreditClaim.js";
 import Booking from "../../src/models/Booking.js";
 import BookingPage from "../../src/models/BookingPage.js";
 import CalendarConnection from "../../src/models/CalendarConnection.js";
@@ -128,6 +130,7 @@ import {
   sweepAppointmentBookings,
 } from "../../src/services/appointments/bookingPaymentService.js";
 import { detectAppointmentBankPayments } from "../../src/services/appointments/appointmentBankDetection.js";
+import { uniquePaymentReference } from "../../src/services/payments/bankTransfer.js";
 import { runAppointmentReminders } from "../../src/services/appointments/reminderService.js";
 import { addDays, localDayOf } from "../../src/utils/appointmentSlots.js";
 
@@ -1123,5 +1126,318 @@ describe("réservations existantes", () => {
     expect(B.paymentMode(item)).toBeNull();
     expect(B.refundFailed(item)).toBe(false);
     expect(JSON.stringify(await rawBooking(insertedId))).toBe(before);
+  });
+});
+
+// ─── Corrections de relecture ────────────────────────────────────────────
+
+describe("relecture : délais du virement et début passé", () => {
+  it("virement refusé à moins de 48 h, disponibilité par créneau, garde bornée au début - 24 h", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const soon = await freeSlots(type, 1);
+    const now = Date.now();
+    const tooSoon = soon.find((s) => Date.parse(s.start) - now < 48 * 3600000);
+    const later = soon.find(
+      (s) =>
+        Date.parse(s.start) - now >= 49 * 3600000 &&
+        Date.parse(s.start) - now < 4 * DAY,
+    );
+    expect(tooSoon.bankTransferAvailable).toBe(false);
+    expect(later.bankTransferAvailable).toBe(true);
+    const detail = await (await api(`/jean-dupont/${type.slug}`)).json();
+    expect(detail.type.payment.bankTransferMinLeadHours).toBe(48);
+
+    const refused = await book(type, tooSoon.start, {
+      provider: "bank_transfer",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "BANK_TRANSFER_TOO_LATE" });
+
+    const res = await book(type, later.start, { provider: "bank_transfer" });
+    expect(res.status).toBe(201);
+    const { expiresAt } = await res.json();
+    // Garde : début - 24 h (plus tôt que création + 3 jours)
+    expect(Date.parse(expiresAt)).toBe(Date.parse(later.start) - DAY);
+  });
+
+  it("paiement arrivé après le début : jamais confirmé, remboursé, payeur prévenu", async () => {
+    await connectStripe();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const { booking } = await pendingStripeBooking(type);
+    // Début passé entre-temps
+    await Booking.updateOne(
+      { _id: booking._id },
+      { $set: { startAt: new Date(Date.now() - MINUTE) } },
+    );
+    await dispatchConnectEvent({
+      type: "checkout.session.completed",
+      account: "acct_vendeur",
+      data: { object: stripeSession(booking) },
+    });
+    const after = await Booking.findById(booking._id);
+    expect(after.status).toBe("EXPIRED");
+    expect(after.payment.refundedAt).toBeInstanceOf(Date);
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
+    expect(await Event.countDocuments()).toBe(0);
+    const email = mailTo("elise0@exemple.fr")[0];
+    expect(email.subject).toContain("Paiement remboursé");
+    expect(textOf(email.html)).toContain("la date de début était déjà passée");
+  });
+
+  it("« Marquer comme payé » après le début : refusé", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const [slot] = await freeSlots(type, 7);
+    await book(type, slot.start, { provider: "bank_transfer" });
+    const booking = await Booking.findOne({});
+    await Booking.updateOne(
+      { _id: booking._id },
+      { $set: { startAt: new Date(Date.now() - MINUTE) } },
+    );
+    expect(
+      await errorOf(
+        call(Mutation.markBookingPaid, owner, { id: String(booking._id) }),
+      ),
+    ).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(
+      (await Booking.findById(booking._id)).payment.paidAt,
+    ).toBeUndefined();
+  });
+});
+
+describe("relecture : paiement tardif, calcul complet du créneau", () => {
+  it("créneau désormais occupé dans l'agenda connecté : remboursé, pas confirmé", async () => {
+    await connectStripe();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const { slot, booking } = await pendingStripeBooking(type);
+    await Booking.updateOne(
+      { _id: booking._id },
+      { $set: { status: "EXPIRED", "payment.status": "expired" } },
+    );
+    // Rendez-vous personnel ajouté entre-temps dans Google
+    google.getBusyIntervals = vi.fn(async () => [
+      { start: slot.start, end: slot.end },
+    ]);
+    await dispatchConnectEvent({
+      type: "checkout.session.completed",
+      account: "acct_vendeur",
+      data: { object: stripeSession(booking) },
+    });
+    const after = await Booking.findById(booking._id);
+    expect(after.status).toBe("EXPIRED");
+    expect(stripeApi.refunds.create).toHaveBeenCalledTimes(1);
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
+  });
+});
+
+describe("relecture : limites des virements", () => {
+  it("au plus 2 virements en attente par adresse et par organisateur", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const slots = await freeSlots(type, 7);
+    for (const slot of slots.slice(0, 2)) {
+      expect(
+        (await book(type, slot.start, { provider: "bank_transfer" })).status,
+      ).toBe(201);
+    }
+    const third = await book(type, slots[2].start, {
+      provider: "bank_transfer",
+    });
+    expect(third.status).toBe(409);
+    expect(await third.json()).toEqual({ error: "TOO_MANY_PENDING_TRANSFERS" });
+    // Autre adresse : acceptée
+    expect(
+      (await book(type, slots[2].start, { provider: "bank_transfer", i: 1 }))
+        .status,
+    ).toBe(201);
+  });
+});
+
+describe("relecture : un crédit ne règle qu'une seule chose", () => {
+  it("crédit portant deux références : un seul rendez-vous réglé ; crédit déjà pris par un transfert : refusé", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const slots = await freeSlots(type, 7);
+    await book(type, slots[0].start, { provider: "bank_transfer", i: 0 });
+    await book(type, slots[1].start, { provider: "bank_transfer", i: 1 });
+    const [a, b] = await Booking.find({}).sort({ startAt: 1 });
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-double",
+        amount: 80,
+        currency: "EUR",
+        description: `VIR ${a.payment.bankReference} ${b.payment.bankReference}`,
+      },
+    ]);
+    const statuses = (await Booking.find({}).sort({ startAt: 1 })).map(
+      (x) => x.status,
+    );
+    expect(statuses.filter((x) => x === "CONFIRMED")).toHaveLength(1);
+    // Resynchronisation : le même crédit ne règle pas l'autre
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-double",
+        amount: 80,
+        currency: "EUR",
+        description: `VIR ${a.payment.bankReference} ${b.payment.bankReference}`,
+      },
+    ]);
+    expect(await Booking.countDocuments({ status: "CONFIRMED" })).toBe(1);
+
+    // Crédit déjà utilisé par un transfert payant
+    const pending = await Booking.findOne({ status: "PENDING_PAYMENT" });
+    await BankCreditClaim.create({
+      workspaceId: String(workspaceId),
+      transactionId: "tx-transfert",
+      targetKind: "file_transfer",
+      targetId: "un-transfert",
+    });
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-transfert",
+        amount: 40,
+        currency: "EUR",
+        description: `VIR ${pending.payment.bankReference}`,
+      },
+    ]);
+    expect((await Booking.findById(pending._id)).status).toBe(
+      "PENDING_PAYMENT",
+    );
+  });
+
+  it("références uniques dans les deux sens (transferts, réservations, inscriptions)", async () => {
+    const page = await BookingPage.findOne({ userId: owner });
+    await mongoose.connection.db.collection("bookings").insertOne({
+      workspaceId,
+      bookingPageId: page._id,
+      hostUserId: owner,
+      startAt: new Date(),
+      status: "EXPIRED",
+      payment: { bankReference: "NB-AAAAAA" },
+    });
+    await mongoose.connection.db.collection("filetransfers").insertOne({
+      workspaceId: String(workspaceId),
+      paymentReference: "NB-BBBBBB",
+    });
+    const spy = vi.spyOn(crypto, "randomInt");
+    // Tirages : AAAAAA (pris), BBBBBB (pris), CCCCCC (libre)
+    for (const index of [0, 1, 2]) {
+      for (let k = 0; k < 6; k += 1) spy.mockReturnValueOnce(index);
+    }
+    expect(await uniquePaymentReference(workspaceId)).toBe("NB-CCCCCC");
+    spy.mockRestore();
+  });
+});
+
+describe("relecture : paiement en confirmation plafonné", () => {
+  it("paiement « pending » depuis plus de 7 jours : expiré, puis règle du paiement tardif", async () => {
+    await connectStripe();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const { booking } = await pendingStripeBooking(type);
+    stripeApi.checkout.sessions.retrieve.mockResolvedValue({
+      ...stripeSession(booking),
+      payment_status: "unpaid",
+      status: "complete",
+    });
+    await mongoose.connection.db.collection("bookings").updateOne(
+      { _id: booking._id },
+      {
+        $set: {
+          "payment.status": "pending",
+          createdAt: new Date(Date.now() - 8 * DAY),
+        },
+      },
+    );
+    await sweepAppointmentBookings({ now: new Date() });
+    const expired = await Booking.findById(booking._id);
+    expect(expired.status).toBe("EXPIRED");
+    expect(expired.payment.status).toBe("expired_pending");
+    // Le paiement aboutit ensuite : créneau encore libre, confirmé
+    stripeApi.checkout.sessions.retrieve.mockResolvedValue(
+      stripeSession(booking),
+    );
+    await Booking.updateOne(
+      { _id: booking._id },
+      { $set: { "payment.checkedAt": null } },
+    );
+    await sweepAppointmentBookings({ now: new Date() });
+    expect((await Booking.findById(booking._id)).status).toBe("CONFIRMED");
+  });
+});
+
+describe("relecture : unicité en base", () => {
+  it("index : un rendez-vous tenu et un confirmé ne peuvent pas commencer au même instant", async () => {
+    await Booking.init();
+    const page = await BookingPage.findOne({ userId: owner });
+    const base = {
+      workspaceId,
+      bookingPageId: page._id,
+      hostUserId: owner,
+      startAt: new Date(Date.now() + 9 * DAY),
+    };
+    const raw = mongoose.connection.db.collection("bookings");
+    await raw.insertOne({
+      ...base,
+      status: "PENDING_PAYMENT",
+      manageTokenHash: "h1",
+    });
+    await expect(
+      raw.insertOne({ ...base, status: "CONFIRMED", manageTokenHash: "h2" }),
+    ).rejects.toMatchObject({ code: 11000 });
+    // Expirée ou annulée : libre
+    await raw.insertOne({ ...base, status: "EXPIRED", manageTokenHash: "h3" });
+  });
+});
+
+describe("relecture : organisateur prévenu, chemin gratuit", () => {
+  it("« Remboursement à faire » envoyé malgré la préférence, motif « annulée »", async () => {
+    await setIban();
+    await mongoose.connection.db.collection("user").updateOne(
+      { _id: owner },
+      {
+        $set: {
+          notificationPreferences: { payment_received: { email: false } },
+        },
+      },
+    );
+    const type = await createSlot({ price: { amount: 4000 } });
+    const [slot] = await freeSlots(type, 7);
+    await book(type, slot.start, { provider: "bank_transfer" });
+    const booking = await Booking.findOne({});
+    await call(Mutation.cancelBooking, owner, { id: String(booking._id) });
+    mail.sent = [];
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-annule",
+        amount: 40,
+        currency: "EUR",
+        description: `VIR ${booking.payment.bankReference}`,
+      },
+    ]);
+    const hostMail = mailTo("jean@cabinet.fr");
+    expect(hostMail).toHaveLength(1);
+    expect(textOf(hostMail[0].html)).toContain(
+      "la réservation avait été annulée",
+    );
+    const payerMail = mailTo("elise0@exemple.fr");
+    expect(payerMail).toHaveLength(1);
+    expect(textOf(payerMail[0].html)).toContain("va vous rembourser");
+  });
+
+  it("réservation gratuite : expiration en base sans appel aux prestataires", async () => {
+    await connectStripe();
+    const paid = await createSlot({ price: { amount: 4000 } });
+    const { booking } = await pendingStripeBooking(paid);
+    await Booking.updateOne(
+      { _id: booking._id },
+      { $set: { expiresAt: new Date(Date.now() - MINUTE) } },
+    );
+    stripeApi.checkout.sessions.retrieve.mockClear();
+    const free = await createSlot({ name: "Gratuit" });
+    const [slot] = await freeSlots(free, 3);
+    expect((await book(free, slot.start, { i: 5 })).status).toBe(201);
+    expect(stripeApi.checkout.sessions.retrieve).not.toHaveBeenCalled();
+    expect((await Booking.findById(booking._id)).status).toBe("EXPIRED");
   });
 });

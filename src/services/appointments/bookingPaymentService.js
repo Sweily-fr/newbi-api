@@ -1154,7 +1154,12 @@ export async function abandonBookingPayment({ returnToken, now = new Date() }) {
  */
 async function expireBooking(
   booking,
-  { now = new Date(), notify = true, pendingCapped = false } = {},
+  {
+    now = new Date(),
+    notify = true,
+    pendingCapped = false,
+    closeCheckout = true,
+  } = {},
 ) {
   const expired = await Booking.findOneAndUpdate(
     {
@@ -1187,7 +1192,11 @@ async function expireBooking(
     { new: true },
   );
   if (!expired) return false;
-  await closeDirectCheckout(expired.payment, expired.workspaceId, LOG);
+  // Sans appel au prestataire (réservation d'un invité) : la session se
+  // ferme seule, un paiement tardif suit la règle du paiement tardif
+  if (closeCheckout) {
+    await closeDirectCheckout(expired.payment, expired.workspaceId, LOG);
+  }
   logger.info(`${LOG} réservation ${expired._id} expirée : créneau libéré`);
   if (notify) {
     await sendBookingExpiredEmail(expired).catch((error) =>
@@ -1255,7 +1264,14 @@ export async function expireOverdueBookings({
         if (result.status === "paid") continue;
         if (result.status === "pending" && !pendingCapped) continue;
       }
-      if (await expireBooking(booking, { now, pendingCapped })) count += 1;
+      if (
+        await expireBooking(booking, {
+          now,
+          pendingCapped,
+          closeCheckout: recheck,
+        })
+      )
+        count += 1;
     } catch (error) {
       logger.error(
         `${LOG} expiration de la réservation ${booking._id} : ${error.message}`,
