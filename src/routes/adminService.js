@@ -13,6 +13,11 @@ import {
   sendTrialNudgeTest,
   updateTrialNudgeSettings,
 } from "../services/trialNudgeService.js";
+import {
+  ProspectCreditsAdminError,
+  adjustProspectCredits,
+  listProspectCredits,
+} from "../services/prospects/prospectCreditsAdmin.js";
 
 /**
  * Écritures du back-office newbi-admin (admin.newbi.fr), qui n'a qu'un accès
@@ -27,7 +32,8 @@ router.use(requireAdminServiceToken);
 function sendError(res, error, context) {
   if (
     error instanceof AccountManagerError ||
-    error instanceof TrialNudgeError
+    error instanceof TrialNudgeError ||
+    error instanceof ProspectCreditsAdminError
   ) {
     return res.status(error.status).json({ error: error.message });
   }
@@ -97,6 +103,35 @@ router.post("/trial-nudges/test", async (req, res) => {
     return res.json({ sentTo: req.adminEmail });
   } catch (error) {
     return sendError(res, error, "test d'une relance");
+  }
+});
+
+// ─── Crédits de prospection (page Crédits de prospection) ──────────────────
+
+// Organisations abonnées (ou ayant des crédits) avec leur solde calculé ici,
+// comme pour le client, leurs commandes en attente et le stock fournisseur ;
+// l'historique des ajustements est lu directement en base par l'admin
+router.get("/prospect-credits", async (req, res) => {
+  try {
+    return res.json(await listProspectCredits());
+  } catch (error) {
+    return sendError(res, error, "liste des crédits de prospection");
+  }
+});
+
+// Ajustement : { balance (nouveau solde voulu), reason, expectedBalance }
+// La différence est enregistrée, tracée avec l'e-mail de l'admin ; le solde
+// n'est jamais écrasé
+router.post("/prospect-credits/:workspaceId/adjustments", async (req, res) => {
+  try {
+    const result = await adjustProspectCredits(
+      req.params.workspaceId,
+      req.body,
+      req.adminEmail,
+    );
+    return res.status(201).json(result);
+  } catch (error) {
+    return sendError(res, error, "ajustement de crédits de prospection");
   }
 });
 

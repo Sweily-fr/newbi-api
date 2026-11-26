@@ -61,17 +61,35 @@ export const STORAGE_FULL_RATIO = 1;
 export const DEFAULT_PLAN = "freelance";
 
 /**
+ * Anciennes clés d'offre encore portées par des abonnements en base, jamais
+ * réécrits : même correspondance que planLabel() du site (« pro » = Premium,
+ * « enterprise » = Entreprise).
+ */
+export const PLAN_KEY_ALIASES = {
+  pro: "pme",
+  tpe: "pme",
+  enterprise: "entreprise",
+};
+
+/**
+ * Clé d'offre actuelle (freelance, pme, entreprise) d'une clé lue en base,
+ * ancienne ou non, en minuscules. Une clé inconnue est rendue telle quelle
+ * (chaque lecteur garde sa propre offre par défaut), absente = "".
+ */
+export function canonicalPlanKey(plan) {
+  const value = String(plan || "")
+    .trim()
+    .toLowerCase();
+  return PLAN_KEY_ALIASES[value] || value;
+}
+
+/**
  * Clé d'offre normalisée : « pro » et « pme » = TPE, « enterprise » et
  * « entreprise » = Entreprise. Inconnue ou absente : Freelance.
  */
 export function normalizePlan(plan) {
-  const value = String(plan || "")
-    .trim()
-    .toLowerCase();
-  if (value === "pro" || value === "pme" || value === "tpe") return "pme";
-  if (value === "entreprise" || value === "enterprise") return "entreprise";
-  if (value === "freelance") return "freelance";
-  return DEFAULT_PLAN;
+  const value = canonicalPlanKey(plan);
+  return PLAN_ORDER.includes(value) ? value : DEFAULT_PLAN;
 }
 
 export function normalizeInterval(interval) {

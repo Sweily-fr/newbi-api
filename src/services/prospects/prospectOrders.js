@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import ProspectCreditPurchase from "../../models/ProspectCreditPurchase.js";
 import ProspectCreditUsage from "../../models/ProspectCreditUsage.js";
+import ProspectCreditAdjustment from "../../models/ProspectCreditAdjustment.js";
 import { getKeyInfo, isSocieteinfoConfigured } from "./societeinfoClient.js";
 import {
   getMonthlyPlanCreditsUsed,
@@ -25,19 +26,29 @@ import logger from "../../utils/logger.js";
  * avec ce qu'il manque pour l'activer ; le client, à l'activation.
  */
 
-/** Crédits achetés activés et pas encore dépensés, tous espaces confondus. */
+/**
+ * Crédits sans expiration pas encore dépensés, tous espaces confondus :
+ * achats activés plus ajustements de l'admin (gestes commerciaux, retraits),
+ * moins les crédits achetés déjà dépensés.
+ */
 export async function getPurchasedCreditsOwed() {
-  const [[bought], [spent]] = await Promise.all([
+  const [[bought], [adjusted], [spent]] = await Promise.all([
     ProspectCreditPurchase.aggregate([
       { $match: { status: "paid" } },
       { $group: { _id: null, credits: { $sum: "$credits" } } },
+    ]),
+    ProspectCreditAdjustment.aggregate([
+      { $group: { _id: null, credits: { $sum: "$purchasedCredits" } } },
     ]),
     ProspectCreditUsage.aggregate([
       { $match: { source: "purchased" } },
       { $group: { _id: null, credits: { $sum: "$credits" } } },
     ]),
   ]);
-  return Math.max(0, (bought?.credits || 0) - (spent?.credits || 0));
+  return Math.max(
+    0,
+    (bought?.credits || 0) + (adjusted?.credits || 0) - (spent?.credits || 0),
+  );
 }
 
 /** Part du stock gardée pour les crédits offerts restants du mois. */
@@ -49,7 +60,7 @@ export async function getPlanCreditsReserve(now = new Date()) {
 }
 
 /** Stock de crédits chez Societeinfo, null s'il est illisible. */
-async function readProviderStock() {
+export async function readProviderStock() {
   if (!isSocieteinfoConfigured()) return null;
   try {
     const left = Number((await getKeyInfo())?.totalAvailableCredits);

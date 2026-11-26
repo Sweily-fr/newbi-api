@@ -1,4 +1,5 @@
 import logger from "../utils/logger.js";
+import { canonicalPlanKey } from "../services/storage/storageConfig.js";
 import {
   RETIRED_TRANSFER_UPLOADS,
   retireTransferUploads,
@@ -95,7 +96,7 @@ async function getMaxFileSize(userId) {
       status: { $in: ["active", "trialing"] },
     });
 
-    const plan = subscription?.plan?.toLowerCase() || "freelance";
+    const plan = canonicalPlanKey(subscription?.plan) || "freelance";
     const limitGB =
       FILE_TRANSFER_LIMITS[plan] || FILE_TRANSFER_LIMITS.freelance;
     return limitGB * 1024 * 1024 * 1024;
