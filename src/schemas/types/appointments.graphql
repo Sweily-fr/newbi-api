@@ -187,6 +187,8 @@ type EventRegistration {
   cancelReason: String
   "Paiement arrivé sans place disponible : remboursé automatiquement"
   refundedAt: DateTime
+  "Paiement arrivé sans place, remboursement automatique impossible : à rembourser à la main"
+  refundFailed: Boolean!
   clientId: ID
   tickets: [EventTicket!]!
   checkedInCount: Int!

@@ -75,7 +75,15 @@ function registrationFilter(ctx, type, { search, status }) {
     }
     filter.status = status;
   } else {
-    filter.status = { $ne: "EXPIRED" };
+    // Expirées masquées, sauf celles payées trop tard (remboursement)
+    filter.$and = [
+      {
+        $or: [
+          { status: { $ne: "EXPIRED" } },
+          { "payment.paidAt": { $ne: null } },
+        ],
+      },
+    ];
   }
   const term = typeof search === "string" ? search.trim() : "";
   if (term) {
@@ -184,6 +192,13 @@ const appointmentEventsResolvers = {
     paidAt: (r) => r.payment?.paidAt || null,
     expiresAt: (r) => (r.status === "PENDING_PAYMENT" ? r.expiresAt : null),
     refundedAt: (r) => r.payment?.refundedAt || null,
+    refundFailed: (r) =>
+      Boolean(
+        r.payment?.paidAt &&
+        !r.payment?.refundedAt &&
+        r.status !== "CONFIRMED" &&
+        r.payment?.refundError,
+      ),
     clientId: (r) => (r.clientId ? String(r.clientId) : null),
     tickets: (r) => r.tickets || [],
     checkedInCount: (r) =>

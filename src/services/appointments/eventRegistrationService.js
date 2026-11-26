@@ -1022,9 +1022,14 @@ async function verifyPaypal(registration, orderId) {
       );
     }
     let summary = summarizePaypalOrder(await getPaypalOrder(reference));
+    // Commande approuvée : encaissée seulement si l'inscription attend
+    // encore son paiement. Expirée ou annulée, elle n'est jamais encaissée
+    // (le payeur n'est pas débité, PayPal ne permet pas à Newbi de
+    // rembourser pour le vendeur)
     if (
       summary.orderStatus === "APPROVED" &&
-      summary.customId === paypalCustomId(registration._id)
+      summary.customId === paypalCustomId(registration._id) &&
+      registration.status === "PENDING_PAYMENT"
     ) {
       summary = summarizePaypalOrder(await capturePaypalOrder(reference));
     }

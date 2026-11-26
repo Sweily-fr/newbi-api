@@ -659,10 +659,9 @@ const appointmentsResolvers = {
       const isEvent = input?.kind === "EVENT";
       let changes;
       try {
-        if (!isEvent && !changes) {
+        if (!isEvent) {
           changes = await typeChanges(input || {}, userIdOf(ctx));
-        }
-        if (isEvent) {
+        } else {
           if (!input.name || !String(input.name).trim()) {
             throw new AppointmentInputError(
               "Indiquez le nom de l'événement.",
