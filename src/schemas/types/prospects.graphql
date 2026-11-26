@@ -60,7 +60,7 @@ type ProspectQuota {
   monthlyCredits: Int!
   monthlyUsed: Int!
   monthlyRemaining: Int!
-  "Crédits achetés pas encore dépensés (sans expiration)"
+  "Crédits sans expiration pas encore dépensés : achetés, ou ajoutés par Newbi (geste commercial)"
   purchasedRemaining: Int!
   "Crédits commandés (payés) pas encore activés : en attente du stock du fournisseur"
   purchasedPending: Int!

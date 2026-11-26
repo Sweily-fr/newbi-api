@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import ProspectCreditUsage from "../../models/ProspectCreditUsage.js";
 import ProspectCreditPurchase from "../../models/ProspectCreditPurchase.js";
+import ProspectCreditAdjustment from "../../models/ProspectCreditAdjustment.js";
 import { parisMonthBounds } from "../esignatureQuota.js";
 import { AppError, ERROR_CODES } from "../../utils/errors.js";
 import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
@@ -17,6 +18,8 @@ import { PLAN_LABELS, PLAN_ORDER } from "../storage/storageConfig.js";
  * qu'on ne puisse pas enchaîner les comptes d'essai.
  * Les crédits du mois repartent le 1er (heure de Paris), sans report, et
  * passent avant les crédits achetés, qui n'expirent pas.
+ * Les ajustements du back-office (ProspectCreditAdjustment) s'ajoutent aux
+ * crédits sans expiration, ou retirent des crédits du mois en cours.
  */
 export const PROSPECT_MONTHLY_CREDITS = {
   freelance: 0,
@@ -53,25 +56,8 @@ export function dailySearchLimit() {
   return Number.isFinite(limit) && limit > 0 ? limit : 20;
 }
 
-/**
- * Plan de l'abonnement payé de l'espace, ou null (essai, pas d'abonnement,
- * abonnement terminé).
- */
-export async function getPaidPlan(workspaceId) {
-  const db = mongoose.connection.db;
-  if (!db || !workspaceId) return null;
-
-  const id = String(workspaceId);
-  const refs = [{ referenceId: id }, { organizationId: id }];
-  if (mongoose.Types.ObjectId.isValid(id)) {
-    const oid = new mongoose.Types.ObjectId(id);
-    refs.push({ referenceId: oid }, { organizationId: oid });
-  }
-  const subscriptions = await db
-    .collection("subscription")
-    .find({ $or: refs }, { projection: { plan: 1, status: 1, periodEnd: 1 } })
-    .toArray();
-
+/** Offre payée parmi les abonnements d'un espace, null sinon. */
+function paidPlanOf(subscriptions) {
   const now = new Date();
   const paid =
     subscriptions.find((s) => PAID_STATUSES.includes(s.status)) ||
@@ -84,54 +70,85 @@ export async function getPaidPlan(workspaceId) {
   return plan in PROSPECT_MONTHLY_CREDITS ? plan : null;
 }
 
+/**
+ * Abonnements des espaces, par id d'espace (référence en texte ou en
+ * ObjectId, `referenceId` ou `organizationId`).
+ */
+async function subscriptionsByWorkspace(workspaceIds) {
+  const byWorkspace = new Map(workspaceIds.map((id) => [id, []]));
+  const db = mongoose.connection.db;
+  if (!db || !workspaceIds.length) return byWorkspace;
+
+  const refs = [
+    ...workspaceIds,
+    ...workspaceIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id)),
+  ];
+  const subscriptions = await db
+    .collection("subscription")
+    .find(
+      {
+        $or: [
+          { referenceId: { $in: refs } },
+          { organizationId: { $in: refs } },
+        ],
+      },
+      {
+        projection: {
+          plan: 1,
+          status: 1,
+          periodEnd: 1,
+          referenceId: 1,
+          organizationId: 1,
+        },
+      },
+    )
+    .toArray();
+  for (const subscription of subscriptions) {
+    const owners = new Set(
+      [subscription.referenceId, subscription.organizationId]
+        .filter(Boolean)
+        .map(String),
+    );
+    for (const owner of owners) byWorkspace.get(owner)?.push(subscription);
+  }
+  return byWorkspace;
+}
+
+/**
+ * Plan de l'abonnement payé de l'espace, ou null (essai, pas d'abonnement,
+ * abonnement terminé).
+ */
+export async function getPaidPlan(workspaceId) {
+  if (!workspaceId) return null;
+  const id = String(workspaceId);
+  const subscriptions = await subscriptionsByWorkspace([id]);
+  return paidPlanOf(subscriptions.get(id) || []);
+}
+
 const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
 
 /**
- * Solde de crédits de l'espace : offerts ce mois-ci (selon l'offre payée)
- * plus achetés et pas encore dépensés.
+ * Solde d'un espace à partir de ses totaux. Le solde n'est jamais stocké :
+ * - crédits du mois = ceux de l'offre + ajustements du mois (retraits),
+ *   moins ceux dépensés ce mois-ci ;
+ * - crédits sans expiration = achats activés + ajustements, moins ceux
+ *   dépensés depuis toujours.
  */
-export async function getProspectBalance(workspaceId, now = new Date()) {
-  const plan = await getPaidPlan(workspaceId);
-  const { start, end } = parisMonthBounds(now);
-  const wid = toObjectId(workspaceId);
-
-  const [usage, purchases] = await Promise.all([
-    // Crédits du mois (tout sauf achetés) et crédits achetés déjà dépensés
-    ProspectCreditUsage.aggregate([
-      {
-        $match: {
-          workspaceId: wid,
-          $or: [
-            { source: "purchased" },
-            { createdAt: { $gte: start, $lt: end } },
-          ],
-        },
-      },
-      {
-        $group: {
-          _id: {
-            $cond: [{ $eq: ["$source", "purchased"] }, "purchased", "plan"],
-          },
-          credits: { $sum: "$credits" },
-        },
-      },
-    ]),
-    // Achats disponibles (« paid ») et commandés pas encore activés
-    // (« pending » : en attente du stock du fournisseur, prospectOrders.js)
-    ProspectCreditPurchase.aggregate([
-      { $match: { workspaceId: wid, status: { $in: ["paid", "pending"] } } },
-      { $group: { _id: "$status", credits: { $sum: "$credits" } } },
-    ]),
-  ]);
-  const spent = Object.fromEntries(usage.map((row) => [row._id, row.credits]));
-  const bought = Object.fromEntries(
-    purchases.map((row) => [row._id, row.credits]),
-  );
-
-  const monthlyCredits = plan ? PROSPECT_MONTHLY_CREDITS[plan] : 0;
+export function computeProspectBalance({
+  plan = null,
+  spent = {},
+  bought = {},
+  adjusted = {},
+  resetsAt = null,
+}) {
+  const planCredits = plan ? PROSPECT_MONTHLY_CREDITS[plan] : 0;
+  const monthlyAdjustment = adjusted.plan || 0;
+  const monthlyCredits = Math.max(0, planCredits + monthlyAdjustment);
   const monthlyUsed = spent.plan || 0;
   const monthlyRemaining = Math.max(0, monthlyCredits - monthlyUsed);
-  const purchasedTotal = bought.paid || 0;
+  const purchasedTotal = (bought.paid || 0) + (adjusted.purchased || 0);
   const purchasedPending = bought.pending || 0;
   const purchasedUsed = spent.purchased || 0;
   const purchasedRemaining = Math.max(0, purchasedTotal - purchasedUsed);
@@ -140,9 +157,15 @@ export async function getProspectBalance(workspaceId, now = new Date()) {
 
   return {
     plan,
+    // Crédits de l'offre, avant les retraits du mois faits par l'admin
+    planCredits,
+    monthlyAdjustment,
     monthlyCredits,
     monthlyUsed,
     monthlyRemaining,
+    // Crédits sans expiration : achats activés + ajustements de l'admin
+    purchasedTotal,
+    purchasedUsed,
     purchasedRemaining,
     purchasedPending,
     available,
@@ -151,7 +174,7 @@ export async function getProspectBalance(workspaceId, now = new Date()) {
       plan: monthlyUsed > monthlyCredits,
       purchased: purchasedUsed > purchasedTotal,
     },
-    resetsAt: plan ? end : null,
+    resetsAt: plan ? resetsAt : null,
     nextPlan,
     nextPlanCredits: nextPlan ? PROSPECT_MONTHLY_CREDITS[nextPlan] : null,
     canPurchase: plan === PURCHASE_PLAN,
@@ -161,6 +184,112 @@ export async function getProspectBalance(workspaceId, now = new Date()) {
     used: monthlyUsed,
     remaining: available,
   };
+}
+
+/**
+ * Soldes de plusieurs espaces (Map id → solde, voir computeProspectBalance),
+ * en quatre requêtes quel que soit leur nombre.
+ */
+export async function getProspectBalances(workspaceIds, now = new Date()) {
+  const ids = [...new Set(workspaceIds.map(String))];
+  if (!ids.length) return new Map();
+  const oids = ids.map(toObjectId);
+  const { start, end } = parisMonthBounds(now);
+  const inMonth = {
+    $and: [{ $gte: ["$createdAt", start] }, { $lt: ["$createdAt", end] }],
+  };
+
+  const [subscriptions, usage, purchases, adjustments] = await Promise.all([
+    subscriptionsByWorkspace(ids),
+    // Crédits du mois (tout sauf achetés) et crédits achetés déjà dépensés
+    ProspectCreditUsage.aggregate([
+      {
+        $match: {
+          workspaceId: { $in: oids },
+          $or: [
+            { source: "purchased" },
+            { createdAt: { $gte: start, $lt: end } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: {
+            workspaceId: "$workspaceId",
+            source: {
+              $cond: [{ $eq: ["$source", "purchased"] }, "purchased", "plan"],
+            },
+          },
+          credits: { $sum: "$credits" },
+        },
+      },
+    ]),
+    // Achats disponibles (« paid ») et commandés pas encore activés
+    // (« pending » : en attente du stock du fournisseur, prospectOrders.js)
+    ProspectCreditPurchase.aggregate([
+      {
+        $match: {
+          workspaceId: { $in: oids },
+          status: { $in: ["paid", "pending"] },
+        },
+      },
+      {
+        $group: {
+          _id: { workspaceId: "$workspaceId", status: "$status" },
+          credits: { $sum: "$credits" },
+        },
+      },
+    ]),
+    // Ajustements de l'admin : sans expiration depuis toujours, retraits de
+    // crédits du mois pour ce mois-ci seulement
+    ProspectCreditAdjustment.aggregate([
+      { $match: { workspaceId: { $in: oids } } },
+      {
+        $group: {
+          _id: "$workspaceId",
+          purchased: { $sum: "$purchasedCredits" },
+          plan: { $sum: { $cond: [inMonth, "$planCredits", 0] } },
+        },
+      },
+    ]),
+  ]);
+
+  const totals = new Map(
+    ids.map((id) => [id, { spent: {}, bought: {}, adjusted: {} }]),
+  );
+  for (const row of usage) {
+    totals.get(String(row._id.workspaceId)).spent[row._id.source] = row.credits;
+  }
+  for (const row of purchases) {
+    totals.get(String(row._id.workspaceId)).bought[row._id.status] =
+      row.credits;
+  }
+  for (const row of adjustments) {
+    totals.get(String(row._id)).adjusted = {
+      purchased: row.purchased || 0,
+      plan: row.plan || 0,
+    };
+  }
+
+  return new Map(
+    ids.map((id) => [
+      id,
+      computeProspectBalance({
+        plan: paidPlanOf(subscriptions.get(id) || []),
+        ...totals.get(id),
+        resetsAt: end,
+      }),
+    ]),
+  );
+}
+
+/**
+ * Solde de crédits de l'espace : offerts ce mois-ci (selon l'offre payée)
+ * plus achetés et pas encore dépensés, ajustements de l'admin compris.
+ */
+export async function getProspectBalance(workspaceId, now = new Date()) {
+  const balances = await getProspectBalances([workspaceId], now);
+  return balances.get(String(workspaceId));
 }
 
 /** Solde à débiter pour le prochain crédit, null s'il n'en reste aucun. */
@@ -180,12 +309,15 @@ const plural = (n, word) => `${n} ${word}${n > 1 ? "s" : ""}`;
 export function insufficientCreditsError(balance, needed, detail = "") {
   const { plan, available, monthlyCredits, nextPlan, nextPlanCredits } =
     balance;
+  // Crédits de l'offre elle-même : un retrait du mois fait par l'admin ne
+  // doit pas faire croire que l'offre n'en donne pas
+  const planCredits = balance.planCredits ?? monthlyCredits;
   let message;
   let reason = "QUOTA_EXCEEDED";
   if (!plan && available === 0) {
     message = "La génération de prospects est réservée aux abonnements payés.";
     reason = "PAID_PLAN_REQUIRED";
-  } else if (available === 0 && monthlyCredits === 0 && nextPlan) {
+  } else if (available === 0 && planCredits === 0 && nextPlan) {
     message = `La génération de prospects est incluse à partir de l'offre ${PLAN_LABELS[nextPlan]} (${nextPlanCredits} crédits par mois).`;
     reason = "PLAN_UPGRADE_REQUIRED";
   } else if (available === 0) {
