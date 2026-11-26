@@ -22,6 +22,7 @@ import {
   tokenAllowsPayments,
 } from "../services/sumupService.js";
 import { handleSumupNotification } from "../services/transferPaymentService.js";
+import { handleSumupEventNotification } from "../services/appointments/eventRegistrationService.js";
 import logger from "../utils/logger.js";
 
 /**
@@ -232,7 +233,14 @@ router.get("/callback", async (req, res) => {
  */
 export async function handleSumupWebhook(req, res) {
   try {
-    const result = await handleSumupNotification(req.body);
+    let result = await handleSumupNotification(req.body);
+    // Paiement inconnu des transferts : peut-être une inscription à un
+    // événement (billetterie)
+    if (result.status === "ignored") {
+      result = await handleSumupEventNotification(
+        req.body?.id || req.body?.checkout_id,
+      );
+    }
     logger.info(
       `[sumup] Notification ${req.body?.id || "?"} : ${result.status}`,
     );

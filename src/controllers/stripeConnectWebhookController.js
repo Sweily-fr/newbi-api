@@ -6,6 +6,7 @@ import logger from "../utils/logger.js";
 import { applyStripeSession } from "../services/transferPaymentService.js";
 import { syncStripeAccountFromEvent } from "../services/stripeConnectService.js";
 import { applyInvoiceCheckoutSession } from "./invoicePaymentController.js";
+import { applyEventSessionEvent } from "../services/appointments/eventRegistrationService.js";
 
 /**
  * Webhook des comptes Stripe connectés (endpoint « Connected accounts »).
@@ -13,7 +14,8 @@ import { applyInvoiceCheckoutSession } from "./invoicePaymentController.js";
  *
  * Les paiements des comptes connectés par OAuth sont créés sur le compte du
  * client : leurs événements portent `event.account` et n'arrivent qu'à cet
- * endpoint. Ils débloquent les transferts payants, soldent les factures, et
+ * endpoint. Ils débloquent les transferts payants, confirment les
+ * inscriptions payantes aux événements, soldent les factures, et
  * tiennent à jour l'état des comptes (account.updated) et leur déconnexion
  * depuis Stripe (account.application.deauthorized).
  *
@@ -78,6 +80,9 @@ export async function dispatchConnectEvent(event) {
       const type = session?.metadata?.type;
       if (type === "file_transfer") {
         return applyTransferSessionEvent(event.type, session, accountId);
+      }
+      if (type === "event_registration") {
+        return applyEventSessionEvent(event.type, session, accountId);
       }
       if (
         type === "invoice_payment" &&

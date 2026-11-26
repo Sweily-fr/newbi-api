@@ -1,6 +1,7 @@
 import express from "express";
 import AppointmentType from "../models/AppointmentType.js";
-import { generateManageToken } from "../models/Booking.js";
+import { decryptManageToken, generateManageToken } from "../models/Booking.js";
+import { hashToken } from "../models/EventRegistration.js";
 import {
   BookingError,
   availableSlots,
@@ -31,6 +32,27 @@ import {
   phoneRequired,
 } from "../utils/appointmentValidation.js";
 import logger from "../utils/logger.js";
+import {
+  EventRegistrationError,
+  abandonPayment,
+  cancelRegistration,
+  findRegistrationByManageToken,
+  findTicketByToken,
+  guestCanCancel,
+  handlePaymentReturn,
+  isEvent,
+  publicEventDetail,
+  publicEventSummary,
+  registerForEvent,
+  registrationPayload,
+  ticketPagePayload,
+  ticketQrPng,
+} from "../services/appointments/eventRegistrationService.js";
+import {
+  registrationIcs,
+  registrationManageUrlFor,
+} from "../services/appointments/eventEmails.js";
+import { ONLINE_PAYMENT_PROVIDERS } from "../services/payments/directPayments.js";
 
 /**
  * Prise de rendez-vous, routes publiques (sans compte) montées sous
@@ -44,6 +66,16 @@ import logger from "../utils/logger.js";
  *   POST /manage/:token/cancel          annulation par l'invité
  *   POST /manage/:token/reschedule      déplacement par l'invité
  *   GET  /manage/:token/ics             fichier .ics
+ *
+ * Billetterie (types `kind: EVENT`, voir eventRegistrationService.js) :
+ *   POST /:slug/:typeSlug/register      inscription (gratuite ou payante)
+ *   POST /registrations/return          retour du payeur (paiement relu)
+ *   POST /registrations/return/cancel   abandon : paiement fermé, places rendues
+ *   GET  /registrations/:token          inscription du participant
+ *   POST /registrations/:token/cancel   annulation (gratuite seulement)
+ *   GET  /registrations/:token/ics      fichier .ics
+ *   GET  /tickets/:token                billet (page du QR code)
+ *   GET  /tickets/:token/qr.png         QR code du billet (e-mails)
  *
  * Page inconnue, inactive, type inactif, organisation sans abonnement actif
  * ou en lecture seule : même 404 { error: "NOT_FOUND" }, rien n'est révélé.
@@ -59,6 +91,16 @@ export const RATE_LIMITS = {
     { window: 3600, max: 20 },
   ],
   manage: [{ window: 60, max: 10 }],
+  // Billetterie : inscriptions groupées possibles derrière une même adresse
+  // (entreprise, école, wifi d'un salon)
+  register: [
+    { window: 60, max: 30 },
+    { window: 3600, max: 300 },
+  ],
+  // Retour de paiement : le site relit toutes les 5 s pendant une minute.
+  // Compté par jeton (un payeur) et, plus largement, par adresse
+  paymentReturnToken: [{ window: 60, max: 30 }],
+  paymentReturnIp: [{ window: 60, max: 120 }],
 };
 // Plage de créneaux demandée en une fois (jours, bornes comprises)
 export const MAX_RANGE_DAYS = 42;
@@ -83,14 +125,18 @@ function privateHeaders(res) {
 
 const clientIp = (req) => req.ip || req.socket?.remoteAddress || "unknown";
 
-function rateLimit(kind) {
+/**
+ * Limite par adresse IP, ou par la clé que renvoie `keyOf(req)` (jeton de
+ * retour…) ; une clé absente retombe sur l'adresse IP.
+ */
+function rateLimit(kind, keyOf = null) {
   return async (req, res, next) => {
     privateHeaders(res);
-    const ip = clientIp(req);
+    const key = (keyOf && keyOf(req)) || clientIp(req);
     try {
       for (const { window, max } of RATE_LIMITS[kind]) {
         const count = await recordAttempt(
-          `booking:${kind}:${window}:${ip}`,
+          `booking:${kind}:${window}:${key}`,
           window,
         );
         if (count > max) {
@@ -187,7 +233,82 @@ const publicType = (type) => ({
   durationMinutes: type.durationMinutes,
   locationKind: type.location?.kind || null,
   requirePhone: phoneRequired(type),
+  kind: isEvent(type) ? "EVENT" : "SLOT",
+  event: isEvent(type) ? publicEventSummary(type) : null,
 });
+
+/** Événement terminé : plus affiché. */
+const isPastEvent = (type, now = new Date()) =>
+  isEvent(type) && (!type.endAt || new Date(type.endAt) <= now);
+
+function eventErrorResponse(res, error) {
+  if (error instanceof EventRegistrationError) {
+    return res
+      .status(error.status)
+      .json({ error: error.code, ...(error.extra || {}) });
+  }
+  return null;
+}
+
+/**
+ * Contrôle du formulaire d'inscription à un événement.
+ * @returns {{ fields: object|null, buyer, quantity, timezone, provider }}
+ */
+export function validateRegistrationBody(body, type) {
+  const fields = {};
+  const raw = body?.buyer && typeof body.buyer === "object" ? body.buyer : {};
+  const buyer = {
+    firstName: text(raw.firstName),
+    lastName: text(raw.lastName),
+    email: text(raw.email).toLowerCase(),
+    phone: text(raw.phone) || null,
+  };
+  if (!buyer.firstName) fields.firstName = "Indiquez votre prénom.";
+  else if (buyer.firstName.length > 100)
+    fields.firstName = "Prénom trop long (100 caractères au plus).";
+  if (!buyer.lastName) fields.lastName = "Indiquez votre nom.";
+  else if (buyer.lastName.length > 100)
+    fields.lastName = "Nom trop long (100 caractères au plus).";
+  if (
+    !buyer.email ||
+    buyer.email.length > 254 ||
+    !EMAIL_PATTERN.test(buyer.email)
+  ) {
+    fields.email = "Adresse e-mail invalide.";
+  }
+  if (buyer.phone) {
+    const digits = buyer.phone.replace(/\D/g, "").length;
+    if (!PHONE_PATTERN.test(buyer.phone) || digits < 6) {
+      fields.phone = "Numéro de téléphone invalide.";
+    }
+  } else if (type.requirePhone) {
+    fields.phone = "Indiquez votre numéro de téléphone.";
+  }
+  const max = Math.max(1, Math.min(type.maxPerOrder || 5, 10));
+  const quantity = Number(body?.quantity ?? 1);
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > max) {
+    fields.quantity =
+      max === 1
+        ? "Une seule place par inscription."
+        : `Choisissez entre 1 et ${max} places.`;
+  }
+  const timezone = text(body?.timezone);
+  if (timezone && !isValidTimezone(timezone))
+    fields.timezone = "Fuseau horaire invalide.";
+  const provider = text(body?.provider) || null;
+  if (provider && !ONLINE_PAYMENT_PROVIDERS.includes(provider)) {
+    fields.provider = "Moyen de paiement inconnu.";
+  } else if (type.priceAmount > 0 && !provider) {
+    fields.provider = "Choisissez un moyen de paiement.";
+  }
+  return {
+    fields: Object.keys(fields).length ? fields : null,
+    buyer,
+    quantity,
+    timezone: timezone || null,
+    provider,
+  };
+}
 
 // ─── Gestion par l'invité (avant /:slug pour ne pas être prise pour une page)
 
@@ -278,6 +399,168 @@ router.get("/manage/:token/ics", rateLimit("manage"), async (req, res) => {
   }
 });
 
+// ─── Billetterie : retour de paiement, inscription, billets ──────────────
+// (avant /:slug pour ne pas être prises pour une page)
+
+// Jeton de retour haché dans la clé du compteur (jamais en clair dans Redis)
+const returnTokenKey = (req) =>
+  typeof req.body?.returnToken === "string" && req.body.returnToken
+    ? `rt:${hashToken(req.body.returnToken).slice(0, 32)}`
+    : null;
+
+/** Réponse commune du retour et de l'abandon de paiement. */
+async function paymentReturnResponse(res, { registration, paymentStatus }) {
+  const payload = await registrationPayload(registration);
+  return res.json({
+    paymentStatus,
+    refundStatus: payload.refundStatus,
+    registration: payload,
+    manageUrl:
+      registration.status === "CONFIRMED"
+        ? manageUrlOfRegistration(registration)
+        : null,
+  });
+}
+
+router.post(
+  "/registrations/return/cancel",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const result = await abandonPayment({
+        returnToken: req.body?.returnToken,
+      });
+      if (!result) return notFound(res);
+      return paymentReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "abandon d'un paiement d'inscription");
+    }
+  },
+);
+
+router.post(
+  "/registrations/return",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const sessionId =
+        typeof req.body?.sessionId === "string" ? req.body.sessionId : null;
+      const orderId =
+        typeof req.body?.orderId === "string" ? req.body.orderId : null;
+      const result = await handlePaymentReturn({
+        returnToken: req.body?.returnToken,
+        sessionId,
+        orderId,
+      });
+      if (!result) return notFound(res);
+      return paymentReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "retour de paiement d'une inscription");
+    }
+  },
+);
+
+router.get("/registrations/:token", rateLimit("manage"), async (req, res) => {
+  try {
+    const registration = await findRegistrationByManageToken(req.params.token);
+    if (!registration) return notFound(res);
+    return res.json(
+      await registrationPayload(registration, {
+        manageToken: req.params.token,
+      }),
+    );
+  } catch (error) {
+    return serverError(res, error, "lecture d'une inscription");
+  }
+});
+
+router.post(
+  "/registrations/:token/cancel",
+  rateLimit("manage"),
+  async (req, res) => {
+    try {
+      const registration = await findRegistrationByManageToken(
+        req.params.token,
+      );
+      if (!registration) return notFound(res);
+      if (registration.status === "CANCELLED") {
+        return res.json({ status: "CANCELLED" });
+      }
+      if (!guestCanCancel(registration)) {
+        return res.status(409).json({ error: "NOT_ALLOWED" });
+      }
+      const reason = text(req.body?.reason).slice(0, 1000) || null;
+      const { registration: updated } = await cancelRegistration({
+        registration,
+        by: "GUEST",
+        reason,
+      });
+      return res.json({ status: updated?.status || "CANCELLED" });
+    } catch (error) {
+      return serverError(res, error, "annulation d'une inscription");
+    }
+  },
+);
+
+router.get(
+  "/registrations/:token/ics",
+  rateLimit("manage"),
+  async (req, res) => {
+    try {
+      const registration = await findRegistrationByManageToken(
+        req.params.token,
+      );
+      if (!registration) return notFound(res);
+      const { host, organizationName } = await loadBookingParties(registration);
+      const ics = registrationIcs(registration, {
+        method: registration.status === "CANCELLED" ? "CANCEL" : "PUBLISH",
+        host,
+        organizationName,
+      });
+      res.set({
+        "Content-Type": "text/calendar; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="evenement.ics"',
+      });
+      return res.status(200).send(ics);
+    } catch (error) {
+      return serverError(res, error, "fichier .ics d'une inscription");
+    }
+  },
+);
+
+router.get("/tickets/:token/qr.png", rateLimit("read"), async (req, res) => {
+  try {
+    const found = await findTicketByToken(req.params.token);
+    if (!found) return notFound(res);
+    const png = await ticketQrPng(req.params.token);
+    res.set({
+      "Content-Type": "image/png",
+      "Cache-Control": "private, max-age=86400",
+    });
+    return res.status(200).send(png);
+  } catch (error) {
+    return serverError(res, error, "QR code d'un billet");
+  }
+});
+
+router.get("/tickets/:token", rateLimit("read"), async (req, res) => {
+  try {
+    const found = await findTicketByToken(req.params.token);
+    if (!found) return notFound(res);
+    return res.json(
+      await ticketPagePayload(
+        found.registration,
+        found.ticket,
+        req.params.token,
+      ),
+    );
+  } catch (error) {
+    return serverError(res, error, "billet");
+  }
+});
+
 // ─── Pages publiques ──────────────────────────────────────────────────────
 
 router.get("/:slug", rateLimit("read"), async (req, res) => {
@@ -292,7 +575,7 @@ router.get("/:slug", rateLimit("read"), async (req, res) => {
       .lean();
     return res.json({
       page: publicPagePayload(context),
-      types: types.map(publicType),
+      types: types.filter((type) => !isPastEvent(type)).map(publicType),
     });
   } catch (error) {
     return serverError(res, error, "page publique");
@@ -304,13 +587,17 @@ router.get("/:slug/:typeSlug", rateLimit("read"), async (req, res) => {
     const context = await loadPublicPage(req.params.slug);
     if (!context) return notFound(res);
     const type = await loadPublicType(context.page, req.params.typeSlug);
-    if (!type) return notFound(res);
+    if (!type || isPastEvent(type)) return notFound(res);
     return res.json({
       page: publicPagePayload(context),
       type: {
         ...publicType(type),
-        locationLabel: locationLabel(type.location),
+        locationLabel:
+          isEvent(type) && type.location?.kind === "CUSTOM_LINK"
+            ? "En ligne"
+            : locationLabel(type.location),
         maxDaysAhead: type.maxDaysAhead,
+        event: isEvent(type) ? await publicEventDetail(type) : null,
       },
     });
   } catch (error) {
@@ -323,7 +610,7 @@ router.get("/:slug/:typeSlug/slots", rateLimit("read"), async (req, res) => {
     const context = await loadPublicPage(req.params.slug);
     if (!context) return notFound(res);
     const type = await loadPublicType(context.page, req.params.typeSlug);
-    if (!type) return notFound(res);
+    if (!type || isEvent(type)) return notFound(res);
 
     const zone = isValidTimezone(context.page.timezone)
       ? context.page.timezone
@@ -405,7 +692,7 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
     const context = await loadPublicPage(req.params.slug);
     if (!context) return notFound(res);
     const type = await loadPublicType(context.page, req.params.typeSlug);
-    if (!type) return notFound(res);
+    if (!type || isEvent(type)) return notFound(res);
 
     const { fields, start, guest, timezone } = validateBookingBody(
       req.body,
@@ -438,5 +725,91 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
     );
   }
 });
+
+router.post(
+  "/:slug/:typeSlug/register",
+  rateLimit("register"),
+  async (req, res) => {
+    try {
+      // Pot de miel : réponse factice, rien n'est enregistré
+      if (req.body?.website) {
+        logger.warn(`[billetterie] pot de miel déclenché (${clientIp(req)})`);
+        return res.status(201).json({
+          status: "CONFIRMED",
+          registration: {
+            status: "CONFIRMED",
+            quantity: 1,
+            amount: 0,
+            currency: "EUR",
+            buyer: { firstName: "", lastName: "", email: "" },
+            event: null,
+            page: null,
+            typeSlug: null,
+            tickets: [],
+            icsUrl: null,
+            canCancel: false,
+            cancelledAt: null,
+          },
+          manageUrl: registrationManageUrlFor(generateManageToken()),
+        });
+      }
+
+      const context = await loadPublicPage(req.params.slug);
+      if (!context) return notFound(res);
+      const type = await loadPublicType(context.page, req.params.typeSlug);
+      if (!type || !isEvent(type) || isPastEvent(type)) return notFound(res);
+
+      const { fields, buyer, quantity, timezone, provider } =
+        validateRegistrationBody(req.body, type);
+      if (fields) return validation(res, fields);
+      if (
+        !(await verifyTurnstileToken(req.body?.turnstileToken, clientIp(req)))
+      ) {
+        return validation(res, {
+          turnstileToken:
+            "Vérification anti-robot échouée. Veuillez réessayer.",
+        });
+      }
+
+      const result = await registerForEvent({
+        context,
+        type,
+        buyer,
+        quantity,
+        timezone,
+        provider: type.priceAmount > 0 ? provider : null,
+        returnOrigin: req.get("origin") || null,
+      });
+      if (result.paymentUrl) {
+        return res.status(201).json({
+          status: "PENDING_PAYMENT",
+          paymentUrl: result.paymentUrl,
+          expiresAt: result.registration.expiresAt
+            ? new Date(result.registration.expiresAt).toISOString()
+            : null,
+        });
+      }
+      return res.status(201).json({
+        status: result.registration.status,
+        registration: await registrationPayload(result.registration, {
+          tickets: result.tickets,
+          manageToken: result.manageToken,
+        }),
+        manageUrl: registrationManageUrlFor(result.manageToken),
+      });
+    } catch (error) {
+      return (
+        eventErrorResponse(res, error) ||
+        serverError(res, error, "inscription à un événement")
+      );
+    }
+  },
+);
+
+/** Lien de gestion d'une inscription (jeton déchiffré), ou null. */
+function manageUrlOfRegistration(registration) {
+  const token = decryptManageToken(registration.manageTokenEncrypted);
+  return token ? registrationManageUrlFor(token) : null;
+}
 
 export default router;

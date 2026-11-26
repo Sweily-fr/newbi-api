@@ -25,6 +25,19 @@ export const LOCATION_KINDS = [
   "PHONE",
   "IN_PERSON",
 ];
+// Créneau (prise de rendez-vous) ou événement (billetterie)
+export const APPOINTMENT_TYPE_KINDS = ["SLOT", "EVENT"];
+// Lieux possibles d'un événement (V1)
+export const EVENT_LOCATION_KINDS = ["IN_PERSON", "CUSTOM_LINK"];
+export const EVENT_MAX_DURATION_MINUTES = 30 * 24 * 60;
+export const EVENT_MAX_PER_ORDER = 10;
+export const EVENT_DEFAULT_MAX_PER_ORDER = 5;
+export const EVENT_MAX_CAPACITY = 100000;
+export const EVENT_DETAILS_MAX = 10000;
+// Prix d'un billet, en centimes : 0,50 € à 10 000 €
+export const EVENT_MIN_PRICE = 50;
+export const EVENT_MAX_PRICE = 1000000;
+
 export const SLOT_INTERVALS = [5, 10, 15, 20, 30, 60];
 export const DEFAULT_SLOT_INTERVAL = 30;
 export const MAX_BUFFER_MINUTES = 240;
@@ -47,6 +60,14 @@ export const RESERVED_SLUGS = new Set([
   "nouveau",
   "gerer",
   "manage",
+  // Billetterie : /rdv/billet/<jeton>, routes publiques /tickets, /registrations
+  "billet",
+  "billets",
+  "tickets",
+  "registrations",
+  // /rdv/inscription/<jeton> (page de l'inscription côté site)
+  "inscription",
+  "inscriptions",
   "embed",
   "dashboard",
   "newbi",
