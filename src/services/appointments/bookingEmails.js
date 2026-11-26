@@ -8,6 +8,7 @@ import {
   locationLabel,
 } from "../../utils/appointmentValidation.js";
 import logger from "../../utils/logger.js";
+import { paymentLineOf } from "../../utils/paymentLine.js";
 
 /**
  * E-mails de la prise de rendez-vous : confirmation, déplacement,
@@ -86,6 +87,23 @@ function whenRows(booking, zone) {
     row("Heure", `De ${when.start} à ${when.end} (${escapeHtml(when.zone)})`),
     row("Durée", escapeHtml(durationLabel(booking.durationMinutes))),
   ].join("\n");
+}
+
+/** Ligne de paiement d'un rendez-vous payant (vide s'il est gratuit). */
+export const bookingPaymentLine = (booking) =>
+  paymentLineOf({
+    amount: booking?.amount,
+    currency: booking?.currency,
+    amountOnline: booking?.amountOnline,
+    amountDueOnSite: booking?.amountDueOnSite,
+    onSitePaidAt: booking?.onSitePaidAt,
+    status: booking?.status,
+    provider: booking?.payment?.provider,
+  });
+
+function paymentRow(booking) {
+  const line = bookingPaymentLine(booking);
+  return line ? row("Paiement", escapeHtml(line)) : "";
 }
 
 /** Ligne « Lieu » vue par l'invité. */
@@ -220,8 +238,13 @@ export function buildGuestConfirmationEmail({
           <p ${P}>Votre rendez-vous <strong ${STRONG}>«\u00a0${escapeHtml(booking.typeName)}\u00a0»</strong> avec ${escapeHtml(host.name)} (${escapeHtml(organizationName)}) est confirmé.</p>
           ${whenRows(booking, zone)}
           ${guestLocationRow(booking, host.name)}
+          ${paymentRow(booking)}
           ${warning}
-          <p ${P}>Le fichier joint ajoute le rendez-vous à votre agenda. Pour le déplacer ou l'annuler, utilisez le bouton ci-dessous.</p>`,
+          <p ${P}>Le fichier joint ajoute le rendez-vous à votre agenda. ${
+            Number(booking.amountOnline) > 0
+              ? `Pour le déplacer, utilisez le bouton ci-dessous ; pour l'annuler, contactez ${escapeHtml(host.name)}.`
+              : "Pour le déplacer ou l'annuler, utilisez le bouton ci-dessous."
+          }</p>`,
     ctaLabel: "Gérer mon rendez-vous",
     ctaUrl: manageUrl,
     footerNoteHtml: guestFooter(organizationName),
@@ -261,6 +284,7 @@ export function buildHostNewBookingEmail({
           <p ${P}>${escapeHtml(name)} a réservé <strong ${STRONG}>«\u00a0${escapeHtml(booking.typeName)}\u00a0»</strong> sur votre page de prise de rendez-vous.</p>
           ${whenRows(booking, pageTimezone)}
           ${hostLocationRow(booking)}
+          ${paymentRow(booking)}
           ${guestRows(booking)}
           ${warning}`,
     ctaLabel: "Voir mes rendez-vous",
@@ -448,7 +472,12 @@ export function buildGuestReminderEmail({
           <p ${P}>Petit rappel de votre rendez-vous <strong ${STRONG}>«\u00a0${escapeHtml(booking.typeName)}\u00a0»</strong> avec ${escapeHtml(host.name)} (${escapeHtml(organizationName)}).</p>
           ${whenRows(booking, zone)}
           ${guestLocationRow(booking, host.name)}
-          <p ${P}>Un empêchement ? Déplacez ou annulez le rendez-vous avec le bouton ci-dessous.</p>`,
+          ${paymentRow(booking)}
+          <p ${P}>${
+            Number(booking.amountOnline) > 0
+              ? `Un empêchement ? Déplacez le rendez-vous avec le bouton ci-dessous, ou contactez ${escapeHtml(host.name)} pour l'annuler.`
+              : "Un empêchement ? Déplacez ou annulez le rendez-vous avec le bouton ci-dessous."
+          }</p>`,
     ctaLabel: manageUrl
       ? "Gérer mon rendez-vous"
       : "Voir la page de rendez-vous",

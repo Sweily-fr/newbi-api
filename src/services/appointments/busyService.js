@@ -16,7 +16,8 @@ import logger from "../../utils/logger.js";
  *     événements externes en lecture seule et hors rendez-vous, comptés via
  *     leurs réservations) ;
  *   - réservations confirmées de l'organisateur, toutes pages confondues,
- *     avec les marges de leur type.
+ *     et celles en attente de paiement (créneau tenu), avec les marges de
+ *     leur type.
  * Ne lève jamais d'erreur à cause d'un fournisseur : la page publique doit
  * toujours répondre.
  */
@@ -118,11 +119,14 @@ async function newbiBusy(hostUserId, timeMin, timeMax) {
   return events.map(toInterval);
 }
 
-/** Réservations confirmées, avec les marges de leur type (si connu). */
+/**
+ * Réservations confirmées, et celles qui attendent leur paiement (créneau
+ * tenu jusqu'à leur expiration), avec les marges de leur type (si connu).
+ */
 async function hostBookings(hostUserId, timeMin, timeMax, excludeBookingId) {
   const filter = {
     hostUserId,
-    status: "CONFIRMED",
+    status: { $in: ["CONFIRMED", "PENDING_PAYMENT"] },
     startAt: { $lt: new Date(timeMax.getTime() + MAX_BUFFER_MS) },
     endAt: { $gt: new Date(timeMin.getTime() - MAX_BUFFER_MS) },
   };

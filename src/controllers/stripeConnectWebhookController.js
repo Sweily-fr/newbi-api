@@ -7,6 +7,7 @@ import { applyStripeSession } from "../services/transferPaymentService.js";
 import { syncStripeAccountFromEvent } from "../services/stripeConnectService.js";
 import { applyInvoiceCheckoutSession } from "./invoicePaymentController.js";
 import { applyEventSessionEvent } from "../services/appointments/eventRegistrationService.js";
+import { applyBookingSessionEvent } from "../services/appointments/bookingPaymentService.js";
 
 /**
  * Webhook des comptes Stripe connectés (endpoint « Connected accounts »).
@@ -83,6 +84,9 @@ export async function dispatchConnectEvent(event) {
       }
       if (type === "event_registration") {
         return applyEventSessionEvent(event.type, session, accountId);
+      }
+      if (type === "appointment_booking") {
+        return applyBookingSessionEvent(event.type, session, accountId);
       }
       if (
         type === "invoice_payment" &&
