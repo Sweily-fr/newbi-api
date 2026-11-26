@@ -909,6 +909,15 @@ describe("virement", () => {
     const booking = await Booking.findOne({
       "guest.email": `elise${i}@exemple.fr`,
     });
+    // L'e-mail des coordonnées part en arrière-plan : attendu ici, sinon il
+    // peut arriver après un « mail.sent = [] » du test (CI plus lente)
+    await vi.waitFor(() =>
+      expect(
+        mailTo(`elise${i}@exemple.fr`).some((m) =>
+          String(m.subject).includes("Virement"),
+        ),
+      ).toBe(true),
+    );
     return { slot, body, booking };
   }
 
