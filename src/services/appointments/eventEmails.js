@@ -1,6 +1,10 @@
 import { APP_URL, escapeHtml, renderEmail } from "../../utils/trialEmails.js";
 import { buildIcsEvent, icsUid } from "../../utils/ics.js";
 import { DASHBOARD_PATH, formatWhen } from "./bookingEmails.js";
+import {
+  amountDueOnSiteOf,
+  amountOnlineOf,
+} from "../../models/EventRegistration.js";
 
 /**
  * E-mails de la billetterie (événements de la prise de rendez-vous) :
@@ -43,6 +47,36 @@ export function formatEventPrice(cents, currency = "EUR") {
     .format(cents / 100)
     .replace(/\u202f/g, "\u00a0");
 }
+
+/**
+ * Ligne de paiement d'une inscription payante (null si gratuite) :
+ * « Payé en ligne : 10,00 € », « Acompte payé : 5,00 €. Reste à régler sur
+ * place : 15,00 € », « À régler sur place : 20,00 € » (reste marqué réglé :
+ * « réglé sur place »).
+ */
+export function eventPaymentLine(registration) {
+  if (!(registration?.amount > 0)) return null;
+  const currency = registration.currency || "EUR";
+  const online = amountOnlineOf(registration);
+  const onSite = amountDueOnSiteOf(registration);
+  const price = (cents) => formatEventPrice(cents, currency);
+  const settled = Boolean(registration.onSitePaidAt);
+  if (!(onSite > 0))
+    return `Payé en ligne\u00a0: ${price(online || registration.amount)}`;
+  if (!(online > 0)) {
+    return settled
+      ? `Réglé sur place\u00a0: ${price(onSite)}`
+      : `À régler sur place\u00a0: ${price(onSite)}`;
+  }
+  return `Acompte payé\u00a0: ${price(online)}. ${
+    settled ? "Reste réglé sur place" : "Reste à régler sur place"
+  }\u00a0: ${price(onSite)}`;
+}
+
+const paymentRow = (registration) => {
+  const line = eventPaymentLine(registration);
+  return line ? row("Paiement", escapeHtml(line)) : "";
+};
 
 const row = (label, valueHtml) =>
   `<p ${ROW}><span ${LABEL}>${escapeHtml(label)}</span><br>${valueHtml}</p>`;
@@ -165,7 +199,6 @@ export function buildEventConfirmationEmail({
 }) {
   const event = registration.event;
   const when = formatWhen(event.startAt, event.endAt, eventZone(registration));
-  const paid = registration.amount > 0;
   const html = renderEmail({
     preheader: `${event.name} le ${when.shortDate} à ${when.start}`,
     badge: "INSCRIPTION CONFIRMÉE",
@@ -179,7 +212,7 @@ export function buildEventConfirmationEmail({
           ${whenRows(event, eventZone(registration))}
           ${locationRow(event)}
           ${row("Places", escapeHtml(placesLabel(registration.quantity)))}
-          ${paid ? row("Montant payé", escapeHtml(formatEventPrice(registration.amount, registration.currency))) : ""}
+          ${paymentRow(registration)}
           <p ${P}>Présentez ${tickets.length > 1 ? "ces QR codes" : "ce QR code"} à l'entrée, sur votre téléphone ou imprimé.</p>
           ${ticketBlocks(tickets)}
           <p ${P}>Le fichier joint ajoute l'événement à votre agenda.</p>`,
@@ -230,6 +263,7 @@ export function buildEventHostNewRegistrationEmail({
           ${registration.buyer.phone ? row("Téléphone", escapeHtml(registration.buyer.phone)) : ""}
           ${row("Places", escapeHtml(placesLabel(registration.quantity)))}
           ${row("Montant", escapeHtml(formatEventPrice(registration.amount, registration.currency)))}
+          ${paymentRow(registration)}
           ${row("Remplissage", escapeHtml(seats))}`,
     ctaLabel: "Voir les inscrits",
     ctaUrl: `${appUrl()}${DASHBOARD_PATH}`,
@@ -261,6 +295,7 @@ export function buildEventReminderEmail({
           <p ${P}>L'événement <strong ${STRONG}>«\u00a0${escapeHtml(event.name)}\u00a0»</strong> (${escapeHtml(organizationName)}) approche.</p>
           ${whenRows(event, eventZone(registration))}
           ${locationRow(event)}
+          ${paymentRow(registration)}
           ${tickets.length ? `<p ${P}>Vos billets, à présenter à l'entrée :</p>${ticketBlocks(tickets)}` : ""}`,
     ctaLabel: manageUrl ? "Voir mes billets" : undefined,
     ctaUrl: manageUrl || undefined,

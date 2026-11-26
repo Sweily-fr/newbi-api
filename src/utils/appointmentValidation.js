@@ -37,6 +37,26 @@ export const EVENT_DETAILS_MAX = 10000;
 // Prix d'un billet, en centimes : 0,50 € à 10 000 €
 export const EVENT_MIN_PRICE = 50;
 export const EVENT_MAX_PRICE = 1000000;
+// Paiement d'un événement payant : tout en ligne, acompte en ligne et le
+// reste sur place, ou tout sur place (aucun prestataire)
+export const EVENT_PAYMENT_MODES = ["ONLINE", "DEPOSIT", "ON_SITE"];
+
+/**
+ * Mode de paiement effectif d'un événement : null s'il est gratuit, ONLINE
+ * si le champ est absent (événements créés avant l'acompte).
+ */
+export function eventPaymentModeOf(event) {
+  if (!(event?.priceAmount > 0)) return null;
+  return EVENT_PAYMENT_MODES.includes(event.paymentMode)
+    ? event.paymentMode
+    : "ONLINE";
+}
+
+/** Acompte par place (DEPOSIT seulement, sinon null). */
+export const eventDepositAmountOf = (event) =>
+  eventPaymentModeOf(event) === "DEPOSIT" && event.depositAmount > 0
+    ? event.depositAmount
+    : null;
 
 export const SLOT_INTERVALS = [5, 10, 15, 20, 30, 60];
 export const DEFAULT_SLOT_INTERVAL = 30;

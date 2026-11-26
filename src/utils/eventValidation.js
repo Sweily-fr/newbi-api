@@ -10,7 +10,14 @@ import {
   EVENT_MAX_PER_ORDER,
   EVENT_MAX_PRICE,
   EVENT_MIN_PRICE,
+  EVENT_PAYMENT_MODES,
+  eventPaymentModeOf,
   normalizeLocation,
+} from "./appointmentValidation.js";
+
+export {
+  eventDepositAmountOf,
+  eventPaymentModeOf,
 } from "./appointmentValidation.js";
 
 /**
@@ -197,6 +204,30 @@ export function eventChanges(input, { workspaceId }) {
       changes.currency = currency;
     }
   }
+  if (has(input, "paymentMode")) {
+    if (input.paymentMode === null) {
+      changes.paymentMode = "ONLINE";
+    } else if (!EVENT_PAYMENT_MODES.includes(input.paymentMode)) {
+      throw new AppointmentInputError(
+        "Mode de paiement inconnu.",
+        "paymentMode",
+      );
+    } else {
+      changes.paymentMode = input.paymentMode;
+    }
+  }
+  if (has(input, "depositAmount")) {
+    // Bornes par rapport au prix : voir assertEventConsistency
+    changes.depositAmount =
+      input.depositAmount === null
+        ? null
+        : integerIn(input.depositAmount, {
+            min: EVENT_MIN_PRICE,
+            max: EVENT_MAX_PRICE,
+            field: "depositAmount",
+            message: "L'acompte doit être d'au moins 0,50 € par place.",
+          });
+  }
   if (has(input, "location") && input.location !== null) {
     if (!EVENT_LOCATION_KINDS.includes(input.location?.kind)) {
       throw new AppointmentInputError(
@@ -256,6 +287,26 @@ export function assertEventConsistency(
     throw new AppointmentInputError(
       "Un événement a lieu à une adresse ou en ligne (lien https).",
       "location",
+    );
+  }
+}
+
+/**
+ * Acompte d'un événement payant : obligatoire en DEPOSIT, strictement
+ * inférieur au prix d'une place.
+ */
+export function assertEventPayment(event) {
+  if (eventPaymentModeOf(event) !== "DEPOSIT") return;
+  if (!(event.depositAmount > 0)) {
+    throw new AppointmentInputError(
+      "Indiquez le montant de l'acompte par place.",
+      "depositAmount",
+    );
+  }
+  if (event.depositAmount >= event.priceAmount) {
+    throw new AppointmentInputError(
+      "L'acompte doit être inférieur au prix d'une place.",
+      "depositAmount",
     );
   }
 }

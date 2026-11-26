@@ -21,6 +21,13 @@ enum AppointmentTypeKind {
   EVENT
 }
 
+"Paiement d'un événement payant : tout en ligne, acompte en ligne et le reste sur place, ou tout sur place"
+enum EventPaymentMode {
+  ONLINE
+  DEPOSIT
+  ON_SITE
+}
+
 enum EventRegistrationStatus {
   PENDING_PAYMENT
   CONFIRMED
@@ -139,6 +146,10 @@ type AppointmentType {
   registrationClosesAt: DateTime
   "Prix d'un billet (null = gratuit)"
   price: Money
+  "Événement payant : ONLINE, DEPOSIT ou ON_SITE (null pour un gratuit ou un créneau)"
+  paymentMode: EventPaymentMode
+  "Acompte par place en centimes (DEPOSIT seulement, sinon null)"
+  depositAmount: Int
   "Inscriptions confirmées"
   registrationsCount: Int!
   "Billets des inscriptions confirmées"
@@ -172,9 +183,17 @@ type EventRegistration {
   eventEndAt: DateTime!
   buyer: EventRegistrationBuyer!
   quantity: Int!
-  "Total en centimes (0 = gratuit)"
+  "Total dû en centimes, prix × quantité (0 = gratuit)"
   amount: Int!
   currency: String!
+  "Montant à payer en ligne (acompte ou total ; 0 sur place ou gratuit)"
+  amountOnline: Int!
+  "Montant à régler sur place (le dû, qu'il soit réglé ou non : voir onSitePaidAt)"
+  amountDueOnSite: Int!
+  "Reste réglé sur place, marqué par l'organisateur"
+  onSitePaidAt: DateTime
+  "ONLINE, DEPOSIT ou ON_SITE (null si gratuite)"
+  paymentMode: EventPaymentMode
   status: EventRegistrationStatus!
   "stripe, paypal, sumup ou null"
   paymentProvider: String
@@ -310,6 +329,10 @@ input AppointmentTypeInput {
   registrationClosesAt: DateTime
   "Null ou 0 = gratuit ; 50 à 1 000 000 centimes"
   price: MoneyInput
+  "Événement payant : ONLINE (défaut), DEPOSIT ou ON_SITE"
+  paymentMode: EventPaymentMode
+  "Centimes par place, DEPOSIT seulement (au moins 50, inférieur au prix) ; null pour retirer"
+  depositAmount: Int
 }
 
 input MoneyInput {
@@ -394,4 +417,10 @@ extend type Mutation {
   checkInTicket(workspaceId: ID, typeId: ID!, code: String!): TicketCheckIn!
   "Retire le marquage « présent » d'un billet"
   undoTicketCheckIn(workspaceId: ID, ticketId: ID!): EventTicket!
+  "Marque (paid: true) ou démarque le reste dû sur place d'une inscription confirmée"
+  markEventRegistrationPaidOnSite(
+    workspaceId: ID
+    id: ID!
+    paid: Boolean!
+  ): EventRegistration!
 }

@@ -1,6 +1,9 @@
 import crypto from "crypto";
 import mongoose from "mongoose";
-import { LOCATION_KINDS } from "../utils/appointmentValidation.js";
+import {
+  EVENT_PAYMENT_MODES,
+  LOCATION_KINDS,
+} from "../utils/appointmentValidation.js";
 
 /**
  * Inscription à un événement (type de rendez-vous `kind: EVENT`) :
@@ -88,6 +91,17 @@ const eventRegistrationSchema = new mongoose.Schema(
     unitAmount: { type: Number, required: true, min: 0, default: 0 },
     amount: { type: Number, required: true, min: 0, default: 0 },
     currency: { type: String, default: "EUR" },
+    // Paiement d'un événement payant (inscriptions créées après l'ajout de
+    // l'acompte ; AUCUNE valeur par défaut, lecture avec repli : voir
+    // amountOnlineOf et amountDueOnSiteOf dans eventRegistrationService.js).
+    // amountOnline : payé en ligne (acompte ou total, 0 sur place) ;
+    // amountDueOnSite : reste à régler sur place (amount - amountOnline)
+    paymentMode: { type: String, enum: EVENT_PAYMENT_MODES },
+    amountOnline: { type: Number, min: 0 },
+    amountDueOnSite: { type: Number, min: 0 },
+    // Reste réglé sur place, marqué par l'organisateur
+    onSitePaidAt: { type: Date },
+    onSitePaidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     status: {
       type: String,
       enum: REGISTRATION_STATUSES,
@@ -220,6 +234,38 @@ export function normalizeTicketNumber(value) {
   const number = `EVT-${code}`;
   return TICKET_NUMBER_PATTERN.test(number) ? number : null;
 }
+
+// ─── Inscription : montants (lecture avec repli) ──────────────────────────
+
+/**
+ * Montant payé (ou à payer) en ligne. Inscriptions d'avant l'acompte :
+ * le total si un paiement en ligne a été lancé, sinon 0.
+ */
+export function amountOnlineOf(registration) {
+  if (Number.isFinite(registration?.amountOnline)) {
+    return registration.amountOnline;
+  }
+  return registration?.payment?.provider ? registration.amount || 0 : 0;
+}
+
+/** Reste à régler sur place (le dû, réglé ou non ; 0 avant l'acompte). */
+export const amountDueOnSiteOf = (registration) =>
+  Number.isFinite(registration?.amountDueOnSite)
+    ? registration.amountDueOnSite
+    : 0;
+
+/** Mode de paiement d'une inscription (ONLINE avant l'acompte si payante). */
+export const registrationPaymentModeOf = (registration) =>
+  registration?.paymentMode || (registration?.amount > 0 ? "ONLINE" : null);
+
+/**
+ * Montant attendu chez le prestataire pour une inscription : l'acompte ou
+ * le total (inscriptions d'avant l'acompte : le total).
+ */
+export const expectedOnlineAmount = (registration) =>
+  Number.isFinite(registration?.amountOnline)
+    ? registration.amountOnline
+    : registration.amount || 0;
 
 export default mongoose.models.EventRegistration ||
   mongoose.model("EventRegistration", eventRegistrationSchema);
