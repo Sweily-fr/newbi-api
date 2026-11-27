@@ -8,7 +8,6 @@ import {
   cancelBooking,
   createBooking,
   findBookingByToken,
-  guestBookingPayload,
   loadBookingParties,
   loadManageContext,
   loadPublicPage,
@@ -36,6 +35,7 @@ import {
   EventRegistrationError,
   abandonPayment,
   cancelRegistration,
+  declareRegistrationBankTransfer,
   findRegistrationByManageToken,
   findTicketByToken,
   guestCanCancel,
@@ -54,6 +54,24 @@ import {
   registrationManageUrlFor,
 } from "../services/appointments/eventEmails.js";
 import { ONLINE_PAYMENT_PROVIDERS } from "../services/payments/directPayments.js";
+import {
+  abandonBookingPayment,
+  bookingPaymentFields,
+  bookingPayload,
+  createPaidBooking,
+  declareBookingBankTransfer,
+  expireOverdueBookings,
+  handleBookingPaymentReturn,
+} from "../services/appointments/bookingPaymentService.js";
+import {
+  slotDepositAmountOf,
+  slotPaymentModeOf,
+} from "../utils/appointmentValidation.js";
+import { appointmentPaymentMethods } from "../services/appointments/eventRegistrationService.js";
+import { bankTransferOpenFor } from "../services/appointments/appointmentPayments.js";
+
+// Moyens acceptés à la réservation et à l'inscription (virement compris)
+const PAYMENT_PROVIDERS = [...ONLINE_PAYMENT_PROVIDERS, "bank_transfer"];
 
 /**
  * Prise de rendez-vous, routes publiques (sans compte) montées sous
@@ -67,6 +85,9 @@ import { ONLINE_PAYMENT_PROVIDERS } from "../services/payments/directPayments.js
  *   POST /manage/:token/cancel          annulation par l'invité
  *   POST /manage/:token/reschedule      déplacement par l'invité
  *   GET  /manage/:token/ics             fichier .ics
+ *   POST /manage/:token/bank-transfer   « J'ai fait le virement » (créneau payant)
+ *   POST /bookings/return               retour du payeur d'un créneau payant
+ *   POST /bookings/return/cancel        abandon : paiement fermé, créneau libéré
  *
  * Billetterie (types `kind: EVENT`, voir eventRegistrationService.js) :
  *   POST /:slug/:typeSlug/register      inscription (gratuite ou payante)
@@ -74,6 +95,7 @@ import { ONLINE_PAYMENT_PROVIDERS } from "../services/payments/directPayments.js
  *   POST /registrations/return/cancel   abandon : paiement fermé, places rendues
  *   GET  /registrations/:token          inscription du participant
  *   POST /registrations/:token/cancel   annulation (gratuite seulement)
+ *   POST /registrations/:token/bank-transfer  « J'ai fait le virement »
  *   GET  /registrations/:token/ics      fichier .ics
  *   GET  /tickets/:token                billet (page du QR code)
  *   GET  /tickets/:token/qr.png         QR code du billet (e-mails)
@@ -102,7 +124,29 @@ export const RATE_LIMITS = {
   // Compté par jeton (un payeur) et, plus largement, par adresse
   paymentReturnToken: [{ window: 60, max: 30 }],
   paymentReturnIp: [{ window: 60, max: 120 }],
+  // Virement : place ou créneau gardé jusqu'à 3 jours, donc compté à part
+  bankTransfer: [{ window: 86400, max: 5 }],
 };
+
+/**
+ * Réservations ou inscriptions par virement depuis cette adresse IP :
+ * au-delà de la limite du jour, refus `429 BANK_TRANSFER_LIMIT`.
+ * @returns {Promise<boolean>} true si la limite est dépassée
+ */
+async function overBankTransferLimit(req) {
+  try {
+    for (const { window, max } of RATE_LIMITS.bankTransfer) {
+      const count = await recordAttempt(
+        `booking:bankTransfer:${window}:${clientIp(req)}`,
+        window,
+      );
+      if (count > max) return true;
+    }
+  } catch (error) {
+    logger.warn(`[rendez-vous] limitation indisponible : ${error.message}`);
+  }
+  return false;
+}
 // Plage de créneaux demandée en une fois (jours, bornes comprises)
 export const MAX_RANGE_DAYS = 42;
 
@@ -218,12 +262,59 @@ export function validateBookingBody(body, type) {
   const timezone = text(body?.timezone);
   if (timezone && !isValidTimezone(timezone))
     fields.timezone = "Fuseau horaire invalide.";
+  // Créneau payé à la réservation (tout ou acompte) : moyen obligatoire
+  const provider = text(body?.provider) || null;
+  if (slotPaysOnline(type)) {
+    if (!provider) fields.provider = "Choisissez un moyen de paiement.";
+    else if (!PAYMENT_PROVIDERS.includes(provider))
+      fields.provider = "Moyen de paiement inconnu.";
+  }
 
   return {
     fields: Object.keys(fields).length ? fields : null,
     start,
     guest,
     timezone: timezone || null,
+    provider: slotPaysOnline(type) ? provider : null,
+  };
+}
+
+/** Créneau payé à la réservation (tout ou acompte). */
+const slotPaysOnline = (type) => {
+  const mode = slotPaymentModeOf(type);
+  return mode === "ONLINE" || mode === "DEPOSIT";
+};
+
+/**
+ * Paiement d'un créneau payant pour la page publique (absent si gratuit).
+ * `methods` : moyens proposés (détail du type seulement).
+ */
+function slotPaymentPayload(type, methods) {
+  const mode = slotPaymentModeOf(type);
+  if (!mode) return {};
+  const amount = type.priceAmount;
+  const amountOnline =
+    mode === "ONLINE"
+      ? amount
+      : mode === "DEPOSIT"
+        ? slotDepositAmountOf(type) || amount
+        : 0;
+  return {
+    payment: {
+      price: { amount, currency: type.currency || "EUR" },
+      paymentMode: mode,
+      depositAmount: slotDepositAmountOf(type),
+      amountOnline,
+      amountDueOnSite: amount - amountOnline,
+      ...(methods
+        ? {
+            paymentMethods: methods,
+            // Virement : seulement pour un créneau qui commence dans 48 h
+            // au moins (voir slots[].bankTransferAvailable)
+            bankTransferMinLeadHours: 48,
+          }
+        : {}),
+    },
   };
 }
 
@@ -236,6 +327,7 @@ const publicType = (type) => ({
   requirePhone: phoneRequired(type),
   kind: isEvent(type) ? "EVENT" : "SLOT",
   event: isEvent(type) ? publicEventSummary(type) : null,
+  ...(isEvent(type) ? {} : slotPaymentPayload(type)),
 });
 
 /** Événement terminé : plus affiché. */
@@ -303,7 +395,7 @@ export function validateRegistrationBody(body, type) {
   if (timezone && !isValidTimezone(timezone))
     fields.timezone = "Fuseau horaire invalide.";
   const provider = text(body?.provider) || null;
-  if (provider && !ONLINE_PAYMENT_PROVIDERS.includes(provider)) {
+  if (provider && !PAYMENT_PROVIDERS.includes(provider)) {
     fields.provider = "Moyen de paiement inconnu.";
   } else if (paysOnline(type) && !provider) {
     fields.provider = "Choisissez un moyen de paiement.";
@@ -324,11 +416,36 @@ router.get("/manage/:token", rateLimit("manage"), async (req, res) => {
     const booking = await findBookingByToken(req.params.token);
     if (!booking) return notFound(res);
     const context = await loadManageContext(booking);
-    return res.json(managePayload(booking, context));
+    return res.json({
+      ...managePayload(booking, context),
+      ...(await bookingPaymentFields(booking)),
+    });
   } catch (error) {
     return serverError(res, error, "lecture d'un rendez-vous");
   }
 });
+
+router.post(
+  "/manage/:token/bank-transfer",
+  rateLimit("manage"),
+  async (req, res) => {
+    try {
+      const booking = await findBookingByToken(req.params.token);
+      if (!booking) return notFound(res);
+      const result = await declareBookingBankTransfer(booking, {
+        cancel: req.body?.cancel === true,
+      });
+      if (!result) return res.status(409).json({ error: "NOT_ALLOWED" });
+      return res.json({
+        declaredAt: result.declaredAt
+          ? new Date(result.declaredAt).toISOString()
+          : null,
+      });
+    } catch (error) {
+      return serverError(res, error, "annonce d'un virement de rendez-vous");
+    }
+  },
+);
 
 router.post("/manage/:token/cancel", rateLimit("manage"), async (req, res) => {
   try {
@@ -376,7 +493,10 @@ router.post(
         start,
       });
       const context = await loadManageContext(updated);
-      return res.json(managePayload(updated, context));
+      return res.json({
+        ...managePayload(updated, context),
+        ...(await bookingPaymentFields(updated)),
+      });
     } catch (error) {
       return (
         bookingErrorResponse(res, error) ||
@@ -389,7 +509,9 @@ router.post(
 router.get("/manage/:token/ics", rateLimit("manage"), async (req, res) => {
   try {
     const booking = await findBookingByToken(req.params.token);
-    if (!booking) return notFound(res);
+    // Rendez-vous pas (ou jamais) confirmé : pas de fichier
+    if (!booking || ["PENDING_PAYMENT", "EXPIRED"].includes(booking.status))
+      return notFound(res);
     const { host, organizationName } = await loadBookingParties(booking);
     const ics = bookingIcs(booking, {
       method: "PUBLISH",
@@ -469,6 +591,63 @@ router.post(
   },
 );
 
+// ─── Rendez-vous payants : retour de paiement ────────────────────────────
+
+/** Réponse commune du retour et de l'abandon de paiement d'un créneau. */
+async function bookingReturnResponse(res, { booking, paymentStatus }) {
+  const host = (await loadBookingParties(booking)).host;
+  const payload = await bookingPayload(booking, { host });
+  const token =
+    booking.status === "CONFIRMED"
+      ? decryptManageToken(booking.manageTokenEncrypted)
+      : null;
+  return res.json({
+    paymentStatus,
+    refundStatus: payload.refundStatus || "NONE",
+    booking: payload,
+    manageUrl: token ? manageUrlFor(token) : null,
+    icsUrl: token ? `/api/public/booking/manage/${token}/ics` : null,
+  });
+}
+
+router.post(
+  "/bookings/return/cancel",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const result = await abandonBookingPayment({
+        returnToken: req.body?.returnToken,
+      });
+      if (!result) return notFound(res);
+      return bookingReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "abandon d'un paiement de rendez-vous");
+    }
+  },
+);
+
+router.post(
+  "/bookings/return",
+  rateLimit("paymentReturnIp"),
+  rateLimit("paymentReturnToken", returnTokenKey),
+  async (req, res) => {
+    try {
+      const result = await handleBookingPaymentReturn({
+        returnToken: req.body?.returnToken,
+        sessionId:
+          typeof req.body?.sessionId === "string" ? req.body.sessionId : null,
+        orderId:
+          typeof req.body?.orderId === "string" ? req.body.orderId : null,
+      });
+      if (!result) return notFound(res);
+      return bookingReturnResponse(res, result);
+    } catch (error) {
+      return serverError(res, error, "retour de paiement d'un rendez-vous");
+    }
+  },
+);
+
 router.get("/registrations/:token", rateLimit("manage"), async (req, res) => {
   try {
     const registration = await findRegistrationByManageToken(req.params.token);
@@ -507,6 +686,30 @@ router.post(
       return res.json({ status: updated?.status || "CANCELLED" });
     } catch (error) {
       return serverError(res, error, "annulation d'une inscription");
+    }
+  },
+);
+
+router.post(
+  "/registrations/:token/bank-transfer",
+  rateLimit("manage"),
+  async (req, res) => {
+    try {
+      const registration = await findRegistrationByManageToken(
+        req.params.token,
+      );
+      if (!registration) return notFound(res);
+      const result = await declareRegistrationBankTransfer(registration, {
+        cancel: req.body?.cancel === true,
+      });
+      if (!result) return res.status(409).json({ error: "NOT_ALLOWED" });
+      return res.json({
+        declaredAt: result.declaredAt
+          ? new Date(result.declaredAt).toISOString()
+          : null,
+      });
+    } catch (error) {
+      return serverError(res, error, "annonce d'un virement d'inscription");
     }
   },
 );
@@ -605,6 +808,12 @@ router.get("/:slug/:typeSlug", rateLimit("read"), async (req, res) => {
             : locationLabel(type.location),
         maxDaysAhead: type.maxDaysAhead,
         event: isEvent(type) ? await publicEventDetail(type) : null,
+        ...(!isEvent(type) && slotPaymentModeOf(type)
+          ? slotPaymentPayload(
+              type,
+              await appointmentPaymentMethods(type.workspaceId),
+            )
+          : {}),
       },
     });
   } catch (error) {
@@ -661,11 +870,21 @@ router.get("/:slug/:typeSlug/slots", rateLimit("read"), async (req, res) => {
       to,
       excludeBooking,
     });
+    // Créneau payable par virement : indiqué créneau par créneau
+    const bankOffered =
+      slotPaysOnline(type) &&
+      (await appointmentPaymentMethods(type.workspaceId)).includes(
+        "bank_transfer",
+      );
+    const now = new Date();
     return res.json({
       timezone: zone,
       slots: slots.map((slot) => ({
         start: slot.start.toISOString(),
         end: slot.end.toISOString(),
+        ...(bankOffered
+          ? { bankTransferAvailable: bankTransferOpenFor(slot.start, now) }
+          : {}),
       })),
     });
   } catch (error) {
@@ -701,7 +920,7 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
     const type = await loadPublicType(context.page, req.params.typeSlug);
     if (!type || isEvent(type)) return notFound(res);
 
-    const { fields, start, guest, timezone } = validateBookingBody(
+    const { fields, start, guest, timezone, provider } = validateBookingBody(
       req.body,
       type,
     );
@@ -714,6 +933,43 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
       });
     }
 
+    // Créneau payé à la réservation : tenu jusqu'au paiement
+    if (slotPaysOnline(type)) {
+      if (provider === "bank_transfer" && (await overBankTransferLimit(req))) {
+        res.set("Retry-After", "86400");
+        return res.status(429).json({ error: "BANK_TRANSFER_LIMIT" });
+      }
+      const result = await createPaidBooking({
+        context,
+        type,
+        start,
+        guest,
+        timezone,
+        provider,
+        returnOrigin: req.get("origin") || null,
+      });
+      if (result.paymentUrl) {
+        return res.status(201).json({
+          status: "PENDING_PAYMENT",
+          paymentUrl: result.paymentUrl,
+          expiresAt: new Date(result.booking.expiresAt).toISOString(),
+        });
+      }
+      return res.status(201).json({
+        status: "PENDING_PAYMENT",
+        booking: await bookingPayload(result.booking, { host: context.host }),
+        manageUrl: manageUrlFor(result.token),
+        icsUrl: null,
+        expiresAt: new Date(result.booking.expiresAt).toISOString(),
+      });
+    }
+
+    // Réservations payantes échues de l'organisateur : créneaux libérés
+    // (en base seulement, la relecture des paiements reste au balayage)
+    await expireOverdueBookings({
+      hostUserId: context.page.userId,
+      recheck: false,
+    });
     const { booking, token } = await createBooking({
       context,
       type,
@@ -722,7 +978,8 @@ router.post("/:slug/:typeSlug/book", rateLimit("book"), async (req, res) => {
       timezone,
     });
     return res.status(201).json({
-      booking: guestBookingPayload(booking, { host: context.host }),
+      status: booking.status,
+      booking: await bookingPayload(booking, { host: context.host }),
       manageUrl: manageUrlFor(token),
       icsUrl: `/api/public/booking/manage/${token}/ics`,
     });
@@ -782,6 +1039,14 @@ router.post(
         });
       }
 
+      if (
+        paysOnline(type) &&
+        provider === "bank_transfer" &&
+        (await overBankTransferLimit(req))
+      ) {
+        res.set("Retry-After", "86400");
+        return res.status(429).json({ error: "BANK_TRANSFER_LIMIT" });
+      }
       const result = await registerForEvent({
         context,
         type,
@@ -799,6 +1064,17 @@ router.post(
           expiresAt: result.registration.expiresAt
             ? new Date(result.registration.expiresAt).toISOString()
             : null,
+        });
+      }
+      // Virement : coordonnées bancaires et lien de l'inscription
+      if (result.bankTransfer) {
+        return res.status(201).json({
+          status: "PENDING_PAYMENT",
+          registration: await registrationPayload(result.registration, {
+            manageToken: result.manageToken,
+          }),
+          manageUrl: registrationManageUrlFor(result.manageToken),
+          expiresAt: new Date(result.registration.expiresAt).toISOString(),
         });
       }
       return res.status(201).json({

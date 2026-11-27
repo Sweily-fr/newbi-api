@@ -116,7 +116,7 @@ const eventRegistrationSchema = new mongoose.Schema(
     payment: {
       provider: {
         type: String,
-        enum: ["stripe", "paypal", "sumup", null],
+        enum: ["stripe", "paypal", "sumup", "bank_transfer", null],
         default: null,
       },
       // Session Stripe, commande PayPal ou paiement SumUp
@@ -145,6 +145,12 @@ const eventRegistrationSchema = new mongoose.Schema(
       // Paiement arrivé sans place disponible : remboursé
       refundedAt: { type: Date, default: null },
       refundError: { type: String, default: null },
+      // Virement (sans valeur par défaut : les inscriptions d'avant n'en
+      // gagnent aucun) : référence NB-XXXXXX, annonce « J'ai fait le
+      // virement », marquage « payé » par l'organisateur
+      bankReference: { type: String },
+      declaredAt: { type: Date },
+      markedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
     manageTokenHash: { type: String, required: true },
     manageTokenEncrypted: { type: String, default: null },
@@ -188,6 +194,11 @@ eventRegistrationSchema.index(
   { sparse: true },
 );
 eventRegistrationSchema.index({ "payment.reference": 1 }, { sparse: true });
+// Repérage des virements (synchronisation bancaire)
+eventRegistrationSchema.index(
+  { workspaceId: 1, "payment.bankReference": 1 },
+  { partialFilterExpression: { "payment.bankReference": { $exists: true } } },
+);
 // Tableau de bord : inscrits d'un événement
 eventRegistrationSchema.index({
   workspaceId: 1,

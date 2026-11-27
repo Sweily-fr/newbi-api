@@ -92,6 +92,23 @@ import {
 } from "../sumupService.js";
 import PaypalMerchantAccount from "../../models/PaypalMerchantAccount.js";
 import { paymentReturnBase } from "../transferPaymentService.js";
+import { isBankTransferAvailable } from "../payments/bankTransfer.js";
+import {
+  BANK_TRANSFER,
+  PENDING_PAYMENT_CAP_MS,
+  bankTransferDueAt,
+  bankTransferOpenFor,
+  bankTransferPayload,
+  buildLatePaymentEmail,
+  latePaymentReason,
+  buildBankTransferPendingEmail,
+  buildPaymentExpiredEmail,
+  declareBankTransfer,
+  newBankReference,
+  notifyHostBankDeclared,
+  notifyHostRefundNeeded,
+} from "./appointmentPayments.js";
+import { formatWhen, publicPageUrl } from "./bookingEmails.js";
 import { publishCalendarEventsChanged } from "../calendar/CalendarWebhookService.js";
 import {
   eventDepositAmountOf,
@@ -189,13 +206,14 @@ export function onlineUnitAmountOf(type) {
 }
 
 /**
- * Moyens de paiement en ligne prêts pour vendre des billets
- * (sous-ensemble de stripe, paypal, sumup, dans cet ordre).
+ * Moyens de paiement prêts pour encaisser un billet ou un rendez-vous
+ * (sous-ensemble de stripe, paypal, sumup, bank_transfer, dans cet ordre ;
+ * virement : IBAN de l'entreprise renseigné).
  */
 export async function eventPaymentMethods(workspaceId) {
   const orgId = workspaceId ? String(workspaceId) : null;
   if (!orgId) return [];
-  const [stripe, paypal, sumup] = await Promise.all([
+  const [stripe, paypal, sumup, bank] = await Promise.all([
     readyStripeAccount(orgId),
     isPaypalConfigured()
       ? PaypalMerchantAccount.findOne({ organizationId: orgId })
@@ -203,6 +221,7 @@ export async function eventPaymentMethods(workspaceId) {
           .lean()
       : null,
     isSumupConfigured() ? findSumupAccount(orgId) : null,
+    isBankTransferAvailable(orgId),
   ]);
   const methods = [];
   if (stripe) methods.push("stripe");
@@ -213,8 +232,12 @@ export async function eventPaymentMethods(workspaceId) {
   ) {
     methods.push("sumup");
   }
+  if (bank) methods.push("bank_transfer");
   return methods;
 }
+
+/** Alias : mêmes moyens pour les créneaux payants. */
+export const appointmentPaymentMethods = eventPaymentMethods;
 
 const iso = (date) => (date ? new Date(date).toISOString() : null);
 
@@ -240,6 +263,7 @@ export function publicEventSummary(type, now = new Date()) {
 export async function publicEventDetail(type, now = new Date()) {
   const left = seatsLeftOf(type);
   const price = priceOf(type);
+  const methods = price ? await eventPaymentMethods(type.workspaceId) : [];
   return {
     ...publicEventSummary(type, now),
     details: type.details || null,
@@ -253,7 +277,10 @@ export async function publicEventDetail(type, now = new Date()) {
         : Math.min(type.maxPerOrder || 5, Math.max(left, 1)),
     ),
     registrationClosesAt: iso(registrationClosesAtOf(type)),
-    paymentMethods: price ? await eventPaymentMethods(type.workspaceId) : [],
+    paymentMethods: methods,
+    // Virement proposé (moyen connecté et début à 48 h au moins)
+    bankTransferAvailable:
+      methods.includes(BANK_TRANSFER) && bankTransferOpenFor(type.startAt, now),
   };
 }
 
@@ -481,6 +508,15 @@ export async function registrationPayload(
     canCancel: guestCanCancel(registration),
     cancelledAt: iso(registration.cancelledAt),
     refundStatus: refundStatusOf(registration),
+    paymentProvider: registration.payment?.provider || null,
+    expiresAt:
+      registration.status === "PENDING_PAYMENT"
+        ? iso(registration.expiresAt)
+        : null,
+    bankTransfer: await bankTransferPayload(registration, {
+      amountCents: expectedOnlineAmount(registration),
+      currency: registration.currency,
+    }),
   };
 }
 
@@ -645,6 +681,24 @@ export async function registerForEvent({
       throw new EventRegistrationError("PAYMENT_METHOD_UNAVAILABLE", 409);
     }
   }
+  if (online && provider === BANK_TRANSFER) {
+    // Virement : début à 48 h au moins (le virement doit pouvoir arriver)
+    if (!bankTransferOpenFor(type.startAt, now)) {
+      throw new EventRegistrationError("BANK_TRANSFER_TOO_LATE", 409);
+    }
+    // Une seule inscription par virement en attente par adresse et par
+    // événement (places gardées 3 jours)
+    if (
+      await EventRegistration.exists({
+        appointmentTypeId: type._id,
+        "buyer.email": buyer.email,
+        status: "PENDING_PAYMENT",
+        "payment.provider": BANK_TRANSFER,
+      })
+    ) {
+      throw new EventRegistrationError("TOO_MANY_PENDING_TRANSFERS", 409);
+    }
+  }
 
   // 1. Participant bloqué dans le CRM
   const existingClient = await findClientByEmail(page.workspaceId, buyer.email);
@@ -668,12 +722,15 @@ export async function registerForEvent({
     });
   }
 
-  // 3. Inscription
+  // 3. Inscription (virement : référence propre, places gardées 3 jours)
   const manageToken = generateManageToken();
   const amount = price ? price.amount * quantity : 0;
   const amountOnline = online ? onlineUnitAmountOf(type) * quantity : 0;
+  const bank = online && provider === BANK_TRANSFER;
+  let bankReference = null;
   let registration;
   try {
+    if (bank) bankReference = await newBankReference(page.workspaceId);
     registration = await EventRegistration.create({
       workspaceId: page.workspaceId,
       bookingPageId: page._id,
@@ -710,8 +767,20 @@ export async function registerForEvent({
         : {}),
       status: "PENDING_PAYMENT",
       seatsHeld: true,
-      // Gratuit aussi : une confirmation interrompue expire et rend ses places
-      expiresAt: new Date(now.getTime() + PENDING_TTL_MS),
+      // Gratuit aussi : une confirmation interrompue expire et rend ses
+      // places. Virement : 3 jours
+      expiresAt: bank
+        ? bankTransferDueAt(type.startAt, now)
+        : new Date(now.getTime() + PENDING_TTL_MS),
+      ...(bank
+        ? {
+            payment: {
+              provider: BANK_TRANSFER,
+              status: "open",
+              bankReference,
+            },
+          }
+        : {}),
       manageTokenHash: hashManageToken(manageToken),
       manageTokenEncrypted: encryptManageToken(manageToken),
     });
@@ -751,7 +820,16 @@ export async function registerForEvent({
     };
   }
 
-  // 4b. Payant : paiement sur le compte du vendeur
+  // 4b. Virement : coordonnées à l'écran et par e-mail, rien de confirmé
+  if (bank) {
+    logger.info(
+      `${LOG} inscription ${registration._id} en attente du virement ${bankReference}`,
+    );
+    const emails = sendBankTransferPendingEmail(registration, manageToken);
+    return { registration, manageToken, bankTransfer: true, emails };
+  }
+
+  // 4c. Payant : paiement sur le compte du vendeur
   const returnToken = crypto.randomBytes(32).toString("base64url");
   const back = `${paymentReturnBase(returnOrigin)}/rdv/${page.slug}/${type.slug}/retour?rt=${returnToken}&provider=${provider}`;
   const seats = `${quantity} place${quantity > 1 ? "s" : ""}`;
@@ -842,6 +920,7 @@ async function refundLatePayment(registration, payment) {
       logger.warn(
         `${LOG} paiement ${payment.paymentId} de l'inscription ${registration._id} arrivé sans place : remboursé`,
       );
+      await sendLatePaymentEmail(registration, payment, true);
       return true;
     }
     throw new Error("remboursement automatique non pris en charge");
@@ -853,7 +932,50 @@ async function refundLatePayment(registration, payment) {
     logger.error(
       `${LOG} ANOMALIE : paiement ${payment.provider} ${payment.paymentId} de l'inscription ${registration._id} arrivé sans place, NON remboursé (${error.message}) : à rembourser à la main`,
     );
+    // Jamais perdu en silence : l'organisateur et le payeur sont prévenus
+    await notifyHostRefundNeeded({
+      hostUserId: registration.hostUserId,
+      workspaceId: registration.workspaceId,
+      payerName: attendeeNameOf(registration.buyer),
+      payerEmail: registration.buyer?.email,
+      amountCents: payment.amountCents ?? expectedOnlineAmount(registration),
+      currency: registration.currency,
+      provider: payment.provider,
+      reference: registration.payment?.bankReference || null,
+      label: `l'événement « ${registration.event?.name} »`,
+      reason: latePaymentReason(registration, registration.event?.startAt),
+    }).catch((notifyError) =>
+      logger.error(
+        `${LOG} avis de remboursement de l'inscription ${registration._id} : ${notifyError.message}`,
+      ),
+    );
+    await sendLatePaymentEmail(registration, payment, false);
     return false;
+  }
+}
+
+/** Au payeur : paiement arrivé sans place (remboursé ou à rembourser). */
+async function sendLatePaymentEmail(registration, payment, refunded) {
+  try {
+    const { host, organizationName } = await loadBookingParties(registration);
+    await deliverBookingEmail({
+      to: registration.buyer.email,
+      replyTo: host.email || undefined,
+      organizationName,
+      ...buildLatePaymentEmail({
+        firstName: registration.buyer.firstName,
+        title: registration.event.name,
+        amountCents: payment.amountCents ?? expectedOnlineAmount(registration),
+        currency: registration.currency,
+        refunded,
+        reason: latePaymentReason(registration, registration.event?.startAt),
+        organizationName,
+      }),
+    });
+  } catch (error) {
+    logger.error(
+      `${LOG} e-mail de paiement tardif de l'inscription ${registration._id} : ${error.message}`,
+    );
   }
 }
 
@@ -872,10 +994,41 @@ export async function markRegistrationPaid(registration, payment) {
     "payment.paidAt": new Date(),
     "payment.paidAmount": payment.amountCents,
     "payment.payerEmail": payment.payerEmail || null,
+    ...(payment.markedBy ? { "payment.markedBy": payment.markedBy } : {}),
   };
   const current = await EventRegistration.findById(registration._id);
   if (!current) return { status: "paid" };
   if (current.status === "CONFIRMED") return { status: "paid" };
+  // Événement commencé : jamais de billets, paiement rendu
+  const started = new Date(current.event.startAt) <= new Date();
+
+  if (current.status === "PENDING_PAYMENT" && started) {
+    const closed = await EventRegistration.findOneAndUpdate(
+      { _id: current._id, status: "PENDING_PAYMENT", "payment.paidAt": null },
+      {
+        $set: {
+          ...paidSet,
+          status: "EXPIRED",
+          expiredAt: new Date(),
+          expiresAt: null,
+          "payment.provider": payment.provider,
+          "payment.accountId":
+            payment.accountId || current.payment?.accountId || null,
+        },
+      },
+      { new: true },
+    );
+    if (!closed) return markRegistrationPaid(registration, payment);
+    await releaseSeats(closed);
+    await refundLatePayment(closed, {
+      provider: payment.provider,
+      paymentId: payment.paymentId,
+      accountId: closed.payment?.accountId,
+      refundReference: payment.refundReference,
+      amountCents: payment.amountCents,
+    });
+    return { status: "paid" };
+  }
 
   if (current.status === "PENDING_PAYMENT") {
     const confirmed = await confirmWithTickets(
@@ -909,7 +1062,7 @@ export async function markRegistrationPaid(registration, payment) {
   );
   if (!claimed) return { status: "paid" };
 
-  if (claimed.status === "EXPIRED") {
+  if (claimed.status === "EXPIRED" && !started) {
     // Places encore tenues (arrêt pendant l'expiration) : rendues d'abord
     if (claimed.seatsHeld) await releaseSeats(claimed);
     const reserved = await reserveSeats(
@@ -940,6 +1093,7 @@ export async function markRegistrationPaid(registration, payment) {
     paymentId: payment.paymentId,
     accountId: claimed.payment?.accountId,
     refundReference: payment.refundReference,
+    amountCents: payment.amountCents,
   });
   return { status: "paid" };
 }
@@ -1456,13 +1610,18 @@ export async function abandonPayment({ returnToken, now = new Date() }) {
  * un encaissement PayPal en cours ni un paiement en confirmation. Le
  * paiement reste relu 24 h (payment.status « expired »).
  */
-async function expireRegistration(registration, { now = new Date() } = {}) {
+async function expireRegistration(
+  registration,
+  { now = new Date(), pendingCapped = false } = {},
+) {
   const expired = await EventRegistration.findOneAndUpdate(
     {
       _id: registration._id,
       status: "PENDING_PAYMENT",
       "payment.paidAt": null,
-      "payment.status": { $ne: "pending" },
+      // Paiement en confirmation : seulement au-delà du plafond (7 jours ou
+      // début de l'événement)
+      ...(pendingCapped ? {} : { "payment.status": { $ne: "pending" } }),
       $or: [
         { "payment.status": { $ne: "capturing" } },
         {
@@ -1477,7 +1636,10 @@ async function expireRegistration(registration, { now = new Date() } = {}) {
         status: "EXPIRED",
         expiredAt: now,
         ...(registration.payment?.reference
-          ? { "payment.status": "expired" }
+          ? {
+              // Paiement encore en confirmation : relu 7 jours (filet)
+              "payment.status": pendingCapped ? "expired_pending" : "expired",
+            }
           : {}),
       },
     },
@@ -1486,6 +1648,14 @@ async function expireRegistration(registration, { now = new Date() } = {}) {
   if (!expired) return false;
   await releaseSeats(expired);
   await closeDirectCheckout(expired.payment, expired.workspaceId, LOG);
+  // Virement non reçu en 3 jours : le participant est prévenu
+  if (expired.payment?.provider === BANK_TRANSFER) {
+    await sendExpiredEmail(expired).catch((error) =>
+      logger.error(
+        `${LOG} e-mail d'expiration de l'inscription ${expired._id} : ${error.message}`,
+      ),
+    );
+  }
   return true;
 }
 
@@ -1500,10 +1670,23 @@ export async function expireOverdueRegistrations({
 } = {}) {
   // Paiements en confirmation et encaissements en cours exclus : ils ne
   // bloquent pas la tête de liste (relus par le balayage)
+  const capped = {
+    "payment.status": "pending",
+    $or: [
+      { createdAt: { $lte: new Date(now.getTime() - PENDING_PAYMENT_CAP_MS) } },
+      { "event.startAt": { $lte: now } },
+    ],
+  };
   const filter = {
     status: "PENDING_PAYMENT",
-    expiresAt: { $lte: now },
-    "payment.status": { $nin: ["pending", "capturing"] },
+    $or: [
+      {
+        expiresAt: { $lte: now },
+        "payment.status": { $nin: ["pending", "capturing"] },
+      },
+      // Paiement en confirmation : plafonné à min(7 jours, début)
+      capped,
+    ],
   };
   if (typeId) filter.appointmentTypeId = typeId;
   const overdue = await EventRegistration.find(filter)
@@ -1512,11 +1695,18 @@ export async function expireOverdueRegistrations({
   let count = 0;
   for (const registration of overdue) {
     try {
+      const pendingCapped =
+        registration.payment?.status === "pending" &&
+        (new Date(registration.createdAt).getTime() <=
+          now.getTime() - PENDING_PAYMENT_CAP_MS ||
+          new Date(registration.event.startAt) <= now);
       const result = await refreshRegistrationPayment(registration, {
         force: true,
       });
-      if (result.status === "paid" || result.status === "pending") continue;
-      if (await expireRegistration(registration, { now })) count += 1;
+      if (result.status === "paid") continue;
+      if (result.status === "pending" && !pendingCapped) continue;
+      if (await expireRegistration(registration, { now, pendingCapped }))
+        count += 1;
     } catch (error) {
       logger.error(
         `${LOG} expiration de l'inscription ${registration._id} : ${error.message}`,
@@ -1557,6 +1747,12 @@ export async function sweepEventRegistrations({ now = new Date() } = {}) {
         status: "EXPIRED",
         "payment.status": "expired",
         expiredAt: { $gte: new Date(now.getTime() - EXPIRED_RECHECK_MS) },
+      },
+      // Expirées avec un paiement encore en confirmation : relues 7 jours
+      {
+        status: "EXPIRED",
+        "payment.status": "expired_pending",
+        expiredAt: { $gte: new Date(now.getTime() - PENDING_PAYMENT_CAP_MS) },
       },
     ],
   })
@@ -1899,6 +2095,183 @@ export async function markRegistrationPaidOnSite({
   }
   logger.info(
     `${LOG} inscription ${updated._id} : reste sur place ${paid ? "réglé" : "de nouveau dû"}`,
+  );
+  return { registration: updated };
+}
+
+// ─── Virement ────────────────────────────────────────────────────────────
+
+const whenTextOf = (registration) => {
+  const when = formatWhen(
+    registration.event.startAt,
+    registration.event.endAt,
+    registration.buyer?.timezone || registration.event?.timezone,
+  );
+  return `${when.date} à ${when.start}`;
+};
+
+/** E-mail « virement en attente » au participant (jamais d'erreur). */
+async function sendBankTransferPendingEmail(registration, manageToken) {
+  try {
+    const bank = await bankTransferPayload(registration, {
+      amountCents: expectedOnlineAmount(registration),
+      currency: registration.currency,
+    });
+    if (!bank) return false;
+    const { host, organizationName } = await loadBookingParties(registration);
+    return await deliverBookingEmail({
+      to: registration.buyer.email,
+      replyTo: host.email || undefined,
+      organizationName,
+      ...buildBankTransferPendingEmail({
+        kind: "event",
+        firstName: registration.buyer.firstName,
+        title: registration.event.name,
+        whenText: whenTextOf(registration),
+        bank,
+        organizationName,
+        manageUrl: manageToken ? registrationManageUrlFor(manageToken) : null,
+      }),
+    });
+  } catch (error) {
+    logger.error(
+      `${LOG} e-mail de virement en attente de l'inscription ${registration._id} : ${error.message}`,
+    );
+    return false;
+  }
+}
+
+/** E-mail « réservation expirée » au participant. */
+async function sendExpiredEmail(registration) {
+  const { page, type, host, organizationName } =
+    await registrationContext(registration);
+  return deliverBookingEmail({
+    to: registration.buyer.email,
+    replyTo: host.email || undefined,
+    organizationName,
+    ...buildPaymentExpiredEmail({
+      kind: "event",
+      firstName: registration.buyer.firstName,
+      title: registration.event.name,
+      bankTransfer: registration.payment?.provider === BANK_TRANSFER,
+      organizationName,
+      rebookUrl:
+        page && type?.isActive ? publicPageUrl(page.slug, type.slug) : null,
+    }),
+  });
+}
+
+/**
+ * « J'ai fait le virement » (ou son retrait) par le participant, avec son
+ * jeton de gestion. L'organisateur est prévenu à la première annonce ;
+ * l'inscription reste en attente (jamais confirmée ici).
+ * @returns {Promise<{declaredAt: Date|null}|null>} null si le virement n'est plus attendu
+ */
+export async function declareRegistrationBankTransfer(
+  registration,
+  { cancel = false } = {},
+) {
+  const result = await declareBankTransfer(EventRegistration, registration, {
+    cancel,
+  });
+  if (!result) return null;
+  const { doc, firstDeclaration } = result;
+  if (firstDeclaration) {
+    logger.info(`${LOG} virement annoncé pour l'inscription ${doc._id}`);
+    await notifyHostBankDeclared({
+      hostUserId: doc.hostUserId,
+      workspaceId: doc.workspaceId,
+      payerName: attendeeNameOf(doc.buyer),
+      payerEmail: doc.buyer.email,
+      amountCents: expectedOnlineAmount(doc),
+      currency: doc.currency,
+      reference: doc.payment.bankReference,
+      label: `l'événement « ${doc.event.name} »`,
+    }).catch((error) =>
+      logger.error(
+        `${LOG} annonce du virement de l'inscription ${doc._id} : ${error.message}`,
+      ),
+    );
+  }
+  return { declaredAt: doc.payment?.declaredAt || null };
+}
+
+/**
+ * « Marquer comme payé » par l'organisateur : virement reçu hors repérage
+ * automatique. Inscription en attente, ou expirée s'il reste des places.
+ * `scope` : { workspaceId, hostUserId }.
+ * @returns {Promise<{registration}|{error: "NOT_FOUND"|"NOT_PENDING"|"NO_SEATS"}>}
+ */
+export async function markRegistrationPaidByHost({
+  scope,
+  registrationId,
+  userId,
+}) {
+  if (!isObjectId(String(registrationId))) return { error: "NOT_FOUND" };
+  const filter = {
+    _id: toObjectId(registrationId),
+    workspaceId: scope.workspaceId,
+    hostUserId: scope.hostUserId,
+  };
+  const registration = await EventRegistration.findOne(filter);
+  if (!registration) return { error: "NOT_FOUND" };
+  if (registration.payment?.provider !== BANK_TRANSFER) {
+    return { error: "NOT_PENDING" };
+  }
+  // Déjà confirmée par ce virement (double clic, repérage entre-temps)
+  if (registration.status === "CONFIRMED") return { registration };
+  if (
+    !["PENDING_PAYMENT", "EXPIRED"].includes(registration.status) ||
+    registration.payment?.paidAt
+  ) {
+    return { error: "NOT_PENDING" };
+  }
+  // Événement commencé : plus confirmable (l'organisateur rembourse)
+  if (new Date(registration.event.startAt) <= new Date()) {
+    return { error: "STARTED" };
+  }
+  const payment = {
+    provider: BANK_TRANSFER,
+    paymentId: `manual:${userId}`,
+    amountCents: expectedOnlineAmount(registration),
+    markedBy: userId ? toObjectId(userId) : undefined,
+  };
+  if (registration.status === "PENDING_PAYMENT") {
+    await markRegistrationPaid(registration, payment);
+  } else {
+    // Expirée : places reprises d'abord, sinon rien n'est marqué
+    if (registration.seatsHeld) await releaseSeats(registration);
+    const reserved = await reserveSeats(
+      registration.appointmentTypeId,
+      registration.quantity,
+    );
+    if (!reserved) return { error: "NO_SEATS" };
+    const confirmed = await confirmWithTickets(
+      registration,
+      ["EXPIRED"],
+      {
+        seatsHeld: true,
+        "payment.status": "paid",
+        "payment.paymentId": payment.paymentId,
+        "payment.paidAt": new Date(),
+        "payment.paidAmount": payment.amountCents,
+        ...(payment.markedBy ? { "payment.markedBy": payment.markedBy } : {}),
+      },
+      { seatsHeld: false, "payment.paidAt": null },
+    );
+    if (!confirmed) {
+      await giveBackSeats(
+        registration.appointmentTypeId,
+        registration.quantity,
+      );
+      return { error: "NOT_PENDING" };
+    }
+    await afterConfirmation(confirmed.registration, confirmed.tickets);
+  }
+  const updated = await EventRegistration.findOne(filter);
+  if (updated?.status !== "CONFIRMED") return { error: "NOT_PENDING" };
+  logger.info(
+    `${LOG} inscription ${updated._id} marquée payée par l'organisateur`,
   );
   return { registration: updated };
 }

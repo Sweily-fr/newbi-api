@@ -1222,6 +1222,18 @@ export class BridgeProvider extends BankingProvider {
           `[transfer-payment] Repérage des virements de l'espace ${workspaceStringId} : ${error.message}`,
         );
       }
+
+      // Rendez-vous et inscriptions payants par virement : même règle
+      // (référence NB-… dans le libellé, montant au moins égal, même devise)
+      try {
+        const { detectAppointmentBankPayments } =
+          await import("../../appointments/appointmentBankDetection.js");
+        await detectAppointmentBankPayments(workspaceStringId, transactions);
+      } catch (error) {
+        logger.warn(
+          `[rendez-vous] Repérage des virements de l'espace ${workspaceStringId} : ${error.message}`,
+        );
+      }
     } catch (error) {
       console.error("❌ Erreur sauvegarde transactions:", error.message);
       throw error;
