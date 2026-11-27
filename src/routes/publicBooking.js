@@ -67,8 +67,8 @@ import {
   slotDepositAmountOf,
   slotPaymentModeOf,
 } from "../utils/appointmentValidation.js";
-import { appointmentPaymentMethods } from "../services/appointments/eventRegistrationService.js";
-import { bankTransferOpenFor } from "../services/appointments/appointmentPayments.js";
+import { typePaymentMethods } from "../services/appointments/eventRegistrationService.js";
+import { instantTransferAdvised } from "../services/appointments/appointmentPayments.js";
 
 // Moyens acceptés à la réservation et à l'inscription (virement compris)
 const PAYMENT_PROVIDERS = [...ONLINE_PAYMENT_PROVIDERS, "bank_transfer"];
@@ -308,10 +308,10 @@ function slotPaymentPayload(type, methods) {
       amountDueOnSite: amount - amountOnline,
       ...(methods
         ? {
+            // Moyens choisis par l'organisateur ∩ moyens utilisables ;
+            // virement sans délai minimum, créneau gardé jusqu'à
+            // min(réservation + 3 jours, début)
             paymentMethods: methods,
-            // Virement : seulement pour un créneau qui commence dans 48 h
-            // au moins (voir slots[].bankTransferAvailable)
-            bankTransferMinLeadHours: 48,
           }
         : {}),
     },
@@ -809,10 +809,7 @@ router.get("/:slug/:typeSlug", rateLimit("read"), async (req, res) => {
         maxDaysAhead: type.maxDaysAhead,
         event: isEvent(type) ? await publicEventDetail(type) : null,
         ...(!isEvent(type) && slotPaymentModeOf(type)
-          ? slotPaymentPayload(
-              type,
-              await appointmentPaymentMethods(type.workspaceId),
-            )
+          ? slotPaymentPayload(type, await typePaymentMethods(type))
           : {}),
       },
     });
@@ -870,12 +867,11 @@ router.get("/:slug/:typeSlug/slots", rateLimit("read"), async (req, res) => {
       to,
       excludeBooking,
     });
-    // Créneau payable par virement : indiqué créneau par créneau
+    // Créneau payable par virement : virement instantané conseillé
+    // créneau par créneau (début à moins de 3 jours)
     const bankOffered =
       slotPaysOnline(type) &&
-      (await appointmentPaymentMethods(type.workspaceId)).includes(
-        "bank_transfer",
-      );
+      (await typePaymentMethods(type)).includes("bank_transfer");
     const now = new Date();
     return res.json({
       timezone: zone,
@@ -883,7 +879,10 @@ router.get("/:slug/:typeSlug/slots", rateLimit("read"), async (req, res) => {
         start: slot.start.toISOString(),
         end: slot.end.toISOString(),
         ...(bankOffered
-          ? { bankTransferAvailable: bankTransferOpenFor(slot.start, now) }
+          ? {
+              bankTransferAvailable: true,
+              instantTransferAdvised: instantTransferAdvised(slot.start, now),
+            }
           : {}),
       })),
     });
