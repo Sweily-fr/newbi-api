@@ -44,6 +44,12 @@ import { CAMPAIGN_VARIABLES, EXAMPLE_VARIABLES } from "./personalize.js";
 import { getCampaignQuota } from "./quota.js";
 import { renderCampaignEmail, socialIconSpecs } from "./render.js";
 import {
+  SIGNATURE_SEND_WAIT_MS,
+  frozenSignatures,
+  loadCampaignSignatures,
+  missingSignatureCount,
+} from "./signatures.js";
+import {
   BATCH_INTERVAL_MS,
   BATCH_SIZE,
   buildEmailPayload,
@@ -176,11 +182,13 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
     resolveAudience(workspaceId, campaign.audience),
     getCampaignQuota(workspaceId),
   ]);
-  const sender = await inspectCampaignSender(workspaceId, {
-    identity: resolvedIdentity,
-  });
+  const [sender, signatures] = await Promise.all([
+    inspectCampaignSender(workspaceId, { identity: resolvedIdentity }),
+    loadCampaignSignatures(workspaceId, campaign.design),
+  ]);
   const sample = renderCampaignEmail({
     design: campaign.design,
+    signatures,
     subject: campaign.subject,
     preheader: campaign.preheader,
     vars: EXAMPLE_VARIABLES,
@@ -203,6 +211,7 @@ export async function evaluateDeliverability(campaign, { identity } = {}) {
     audienceCount: audience.counts,
     quota,
     htmlBytes: Buffer.byteLength(sample.html, "utf8"),
+    missingSignatures: missingSignatureCount(campaign.design, signatures),
   });
 }
 
@@ -267,9 +276,16 @@ export async function startSending(campaign, { from, now = new Date() }) {
     const sender = await resolveCampaignSender(locked.workspaceId, {
       identity,
     });
+    // Signatures figées : même rendu pour tous les destinataires
+    const signatures = frozenSignatures(
+      await loadCampaignSignatures(locked.workspaceId, locked.design, {
+        waitMs: SIGNATURE_SEND_WAIT_MS,
+      }),
+    );
     const { links } = renderCampaignEmail({
       design: locked.design,
       identity,
+      signatures,
     });
     await EmailCampaign.updateOne(
       { _id: locked._id, status: "SENDING" },
@@ -283,6 +299,7 @@ export async function startSending(campaign, { from, now = new Date() }) {
             replyTo: singleLine(locked.replyTo) || identity.defaultReplyTo,
             companyName: identity.companyName,
             companyAddress: identity.companyAddress,
+            signatures,
           },
         },
       },
@@ -618,6 +635,7 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
   const clicks = trackLinks && tracked;
   const rendered = renderCampaignEmail({
     design: campaign.design,
+    signatures: snapshot.signatures || {},
     subject: campaign.subject,
     preheader: campaign.preheader,
     vars: recipient.vars || {},
@@ -658,7 +676,10 @@ function recipientPayload(campaign, recipient, { trackLinks }) {
  */
 function canTrackLinks(campaign) {
   if (!tracksClicks(campaign)) return false;
-  const { links } = renderCampaignEmail({ design: campaign.design });
+  const { links } = renderCampaignEmail({
+    design: campaign.design,
+    signatures: campaign.snapshot?.signatures || {},
+  });
   const frozen = campaign.links || [];
   const same =
     links.length === frozen.length &&
@@ -1000,8 +1021,14 @@ export async function sendCampaignTest(campaign, emails, { vars, identity }) {
     identity: resolvedIdentity,
   });
   const unsubscribeUrl = testUnsubscribeUrlFor(campaign._id);
+  const signatures = await loadCampaignSignatures(
+    campaign.workspaceId,
+    campaign.design,
+    { waitMs: SIGNATURE_SEND_WAIT_MS },
+  );
   const rendered = renderCampaignEmail({
     design: campaign.design,
+    signatures,
     subject: campaign.subject,
     preheader: campaign.preheader,
     vars: vars || EXAMPLE_VARIABLES,

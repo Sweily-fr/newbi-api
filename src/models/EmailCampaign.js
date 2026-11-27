@@ -86,6 +86,9 @@ const snapshotSchema = new mongoose.Schema(
     replyTo: { type: String, default: "" },
     companyName: { type: String, default: "" },
     companyAddress: { type: String, default: null },
+    // Rendu des signatures des blocs Signature au lancement : { id: { html,
+    // text } } (services/emailCampaigns/signatures.js)
+    signatures: { type: mongoose.Schema.Types.Mixed, default: undefined },
   },
   { _id: false },
 );

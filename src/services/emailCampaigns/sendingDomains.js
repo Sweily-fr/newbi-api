@@ -194,7 +194,7 @@ export function assertConnectableDomain(domain, env = process.env) {
   }
   if (isFreeEmailDomain(domain)) {
     throw new AppError(
-      "Les adresses Gmail, Orange, Yahoo… ne peuvent pas être connectées : seul leur fournisseur peut les authentifier. Utilisez une adresse de votre propre domaine.",
+      "Pas besoin de connecter une adresse Gmail, Orange, Outlook ou Yahoo : vos campagnes partent déjà de l'adresse Newbi de votre espace, avec le nom de votre entreprise, et les réponses arrivent sur votre adresse. Connecter un domaine sert seulement à envoyer depuis une adresse à votre nom de domaine (ex. contact@votre-entreprise.fr).",
       E.FREE_EMAIL_PROVIDER,
     );
   }
