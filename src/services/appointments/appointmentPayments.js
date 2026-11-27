@@ -42,24 +42,33 @@ const appUrl = () => String(APP_URL).replace(/\/+$/, "");
 export const newBankReference = (workspaceId) =>
   uniquePaymentReference(workspaceId);
 
-/** Virement proposé seulement si le début est à 48 h au moins. */
-export const BANK_TRANSFER_MIN_LEAD_MS = 48 * 60 * MINUTE;
-/** La garde d'un virement finit au plus tard 24 h avant le début. */
-export const BANK_TRANSFER_START_MARGIN_MS = 24 * 60 * MINUTE;
-
-/** Virement encore possible pour un début donné. */
-export const bankTransferOpenFor = (startAt, now = new Date()) =>
-  Boolean(startAt) &&
-  new Date(startAt).getTime() - now.getTime() >= BANK_TRANSFER_MIN_LEAD_MS;
-
-/** Fin de la garde d'un virement : min(création + 3 jours, début - 24 h). */
+/**
+ * Fin de la garde d'un virement : min(création + 3 jours, début). Aucun
+ * délai minimum avant le début : le virement instantané arrive en quelques
+ * secondes, l'organisateur reste libre de valider plus tard.
+ */
 export const bankTransferDueAt = (startAt, now = new Date()) =>
   new Date(
     Math.min(
       now.getTime() + BANK_TRANSFER_HOLD_MS,
-      new Date(startAt).getTime() - BANK_TRANSFER_START_MARGIN_MS,
+      startAt ? new Date(startAt).getTime() : Infinity,
     ),
   );
+
+/** Début proche (moins de 3 jours) : virement instantané conseillé. */
+export const instantTransferAdvised = (startAt, now = new Date()) =>
+  Boolean(startAt) &&
+  new Date(startAt).getTime() - now.getTime() < BANK_TRANSFER_HOLD_MS;
+
+/**
+ * Virement repéré trop tard pour une confirmation automatique : garde
+ * échue (expirée, ou échéance passée avant le balayage) ou début passé.
+ * L'organisateur décide alors (« Marquer comme payé » ou remboursement).
+ */
+export const bankTransferArrivedLate = (doc, startAt, now = new Date()) =>
+  doc?.status !== "PENDING_PAYMENT" ||
+  (doc.expiresAt && new Date(doc.expiresAt) <= now) ||
+  (startAt && new Date(startAt) <= now);
 
 /** Paiement en confirmation chez le prestataire : gardé 7 jours au plus. */
 export const PENDING_PAYMENT_CAP_MS = 7 * DAY;
@@ -72,8 +81,13 @@ export const PENDING_PAYMENT_CAP_MS = 7 * DAY;
  * @param {object} params
  * @param {number} params.amountCents - montant exact à virer
  * @param {string} params.currency
+ * @param {Date|string|null} [params.startAt] - début (virement instantané
+ *   conseillé à moins de 3 jours)
  */
-export async function bankTransferPayload(doc, { amountCents, currency }) {
+export async function bankTransferPayload(
+  doc,
+  { amountCents, currency, startAt = null },
+) {
   const payment = doc?.payment || {};
   if (
     payment.provider !== BANK_TRANSFER ||
@@ -99,6 +113,7 @@ export async function bankTransferPayload(doc, { amountCents, currency }) {
     dueAt: iso(doc.expiresAt),
     declaredAt: iso(payment.declaredAt),
     autoDetect,
+    instantAdvised: instantTransferAdvised(startAt),
   };
 }
 
@@ -196,7 +211,12 @@ export function buildBankTransferPendingEmail({
           ${bank.holder ? row("Titulaire", escapeHtml(bank.holder)) : ""}
           ${row("IBAN", escapeHtml(bank.iban))}
           ${bank.bic ? row("BIC", escapeHtml(bank.bic)) : ""}
-          <p ${P}>${kept} jusqu'au ${escapeHtml(dueLabel(bank.dueAt))}. La confirmation vous sera envoyée par e-mail dès que le virement sera arrivé.</p>`,
+          <p ${P}>${kept} jusqu'au ${escapeHtml(dueLabel(bank.dueAt))}. La confirmation vous sera envoyée par e-mail dès que le virement sera arrivé.</p>${
+            bank.instantAdvised
+              ? `
+          <p ${P}>${kind === "slot" ? "Le rendez-vous" : "L'événement"} approche : faites de préférence un virement instantané pour qu'il arrive à temps.</p>`
+              : ""
+          }`,
     ctaLabel: manageUrl ? "Voir ma réservation" : undefined,
     ctaUrl: manageUrl || undefined,
     footerNoteHtml: `Vous recevez cet e-mail car vous avez réservé auprès de ${escapeHtml(organizationName)} via Newbi`,
@@ -219,7 +239,7 @@ export function buildPaymentExpiredEmail({
 }) {
   const what = kind === "slot" ? "votre rendez-vous" : "votre inscription";
   const reason = bankTransfer
-    ? "le virement n'est pas arrivé dans les 3 jours"
+    ? "le virement n'est pas arrivé à temps"
     : "le paiement n'a pas été finalisé";
   const freed =
     kind === "slot"
@@ -237,7 +257,7 @@ export function buildPaymentExpiredEmail({
           <p ${P}>${escapeHtml(what.charAt(0).toUpperCase() + what.slice(1))} <strong ${STRONG}>«\u00a0${escapeHtml(title)}\u00a0»</strong> n'a pas été confirmé${kind === "slot" ? "" : "e"} : ${escapeHtml(reason)}. ${escapeHtml(freed)}</p>
           <p ${P}>${
             bankTransfer
-              ? `Si vous avez déjà fait le virement, contactez ${escapeHtml(organizationName)} : il sera confirmé s'il reste de la place, sinon remboursé.`
+              ? `Si vous avez déjà fait le virement, contactez ${escapeHtml(organizationName)} : votre réservation pourra être confirmée, sinon le virement vous sera remboursé.`
               : "Vous pouvez réserver de nouveau."
           }</p>`,
     ctaLabel: rebookUrl ? "Réserver de nouveau" : undefined,
@@ -433,6 +453,66 @@ export async function notifyHostRefundNeeded({
       rows: [
         ["Montant", amount],
         reference ? ["Référence", reference] : null,
+        payerEmail ? ["Payeur", payerEmail] : null,
+      ],
+      ctaLabel: "Voir mes rendez-vous",
+    }),
+  });
+}
+
+/**
+ * Virement repéré sur le compte bancaire après la fin de la garde ou après
+ * le début : rien n'est confirmé tout seul, l'organisateur décide
+ * (« Marquer comme payé » ou remboursement). E-mail envoyé quelle que soit
+ * la préférence « paiement reçu » : c'est une action à faire.
+ *
+ * @param {object} params
+ * @param {boolean} params.started - début déjà passé
+ * @param {string} params.label - « le rendez-vous « Démo » du … »
+ */
+export async function notifyHostBankReceivedLate({
+  hostUserId,
+  workspaceId,
+  payerName,
+  payerEmail,
+  amountCents,
+  currency,
+  reference,
+  label,
+  started,
+}) {
+  const amount = formatCents(amountCents, currency);
+  const who = payerName || payerEmail || "Un client";
+  const why = started
+    ? "il est arrivé après le début"
+    : "il est arrivé après la fin de la garde de la réservation";
+  const next =
+    "Rien n'a été confirmé automatiquement : confirmez la réservation avec « Marquer comme payé », ou remboursez le virement depuis votre banque.";
+  await notifyHostInApp({
+    hostUserId,
+    workspaceId,
+    type: "APPOINTMENT_BANK_RECEIVED",
+    title: "Virement reçu, à valider",
+    message: `Le virement de ${amount} de ${who} pour ${label} (réf. ${reference}) est arrivé, mais ${why}. ${next}`,
+    amountCents,
+  });
+  const host = await User.findById(hostUserId).select("email").lean();
+  if (!host?.email) return false;
+  return deliverBookingEmail({
+    to: host.email,
+    replyTo: payerEmail || undefined,
+    organizationName: "Newbi",
+    subject: `Virement reçu, à valider : ${amount}`,
+    html: hostEmail({
+      badge: "VIREMENT À VALIDER",
+      title: "Un virement est arrivé, à vous de valider",
+      paragraphs: [
+        `Le virement de ${amount} de ${who} pour ${label} est arrivé, mais ${why}.`,
+        next,
+      ],
+      rows: [
+        ["Montant", amount],
+        ["Référence du virement", reference],
         payerEmail ? ["Payeur", payerEmail] : null,
       ],
       ctaLabel: "Voir mes rendez-vous",

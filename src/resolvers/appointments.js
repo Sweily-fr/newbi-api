@@ -37,7 +37,9 @@ import {
   normalizeLocation,
   normalizeSlug,
   optionalText,
+  PAYMENT_METHOD_CHOICE_MESSAGE,
   PAYMENT_METHOD_REQUIRED_MESSAGE,
+  appointmentPaymentModeOf,
   slotDepositAmountOf,
   slotPaymentModeOf,
   slugify,
@@ -49,7 +51,9 @@ import {
 } from "../services/appointments/bookingPaymentService.js";
 import EventRegistration from "../models/EventRegistration.js";
 import {
+  APPOINTMENT_PAYMENT_METHODS,
   appointmentPaymentMethods,
+  chosenPaymentMethodsOf,
   eventPaymentMethods,
   notifyEventChanged,
   refreshRegistrationSnapshots,
@@ -477,6 +481,75 @@ async function slotPaymentChanges(input, ctx, existing = null) {
   };
 }
 
+/**
+ * Moyens proposés d'un type payant (comme les transferts), écrits seulement
+ * s'ils changent vraiment : un type existant sans choix garde « tous les
+ * moyens disponibles ». Type payant en ligne ou en acompte : au moins un
+ * moyen choisi ET prêt, contrôlé à la création, quand le paiement change ou
+ * quand le choix change. `changes` : changements déjà calculés du type.
+ */
+async function paymentMethodsChanges(input, ctx, existing, changes) {
+  const plain = existing
+    ? typeof existing.toObject === "function"
+      ? existing.toObject()
+      : existing
+    : {};
+  const final = { ...plain, ...changes };
+  const mode = appointmentPaymentModeOf({
+    ...final,
+    kind: final.kind || plain.kind,
+  });
+  const out = {};
+  if (has(input, "paymentMethods") && mode) {
+    const raw = input.paymentMethods;
+    if (
+      raw !== null &&
+      (!Array.isArray(raw) ||
+        raw.some((method) => !APPOINTMENT_PAYMENT_METHODS.includes(method)))
+    ) {
+      throw new AppointmentInputError(
+        "Moyen de paiement inconnu.",
+        "paymentMethods",
+      );
+    }
+    const next =
+      raw === null
+        ? null
+        : APPOINTMENT_PAYMENT_METHODS.filter((method) => raw.includes(method));
+    const current = chosenPaymentMethodsOf(plain);
+    const same =
+      next === current ||
+      (next &&
+        current &&
+        next.length === current.length &&
+        next.every((method, i) => method === current[i]));
+    // Retiré : champ effacé (jamais un null écrit)
+    if (!same) out.paymentMethods = next === null ? undefined : next;
+  }
+  if (!mode || mode === "ON_SITE") return out;
+  const paymentChanged =
+    !existing ||
+    has(out, "paymentMethods") ||
+    ["priceAmount", "paymentMode", "depositAmount"].some(
+      (key) => has(changes, key) && changes[key] !== plain[key],
+    );
+  if (!paymentChanged) return out;
+  const usable = await eventPaymentMethods(ctx.workspaceId);
+  if (usable.length === 0) {
+    throw new AppointmentInputError(PAYMENT_METHOD_REQUIRED_MESSAGE, "price");
+  }
+  const chosen = has(out, "paymentMethods")
+    ? (out.paymentMethods ?? null)
+    : chosenPaymentMethodsOf(plain);
+  if (chosen && !usable.some((method) => chosen.includes(method))) {
+    throw new AppointmentInputError(
+      PAYMENT_METHOD_CHOICE_MESSAGE,
+      "paymentMethods",
+    );
+  }
+  return out;
+}
+
 /** Adresse de type libre dans la page (« demo », « demo-2 »…). */
 async function uniqueTypeSlug(bookingPageId, base) {
   const taken = new Set(
@@ -612,6 +685,14 @@ const appointmentsResolvers = {
       kindOf(type) === "EVENT"
         ? eventDepositAmountOf(type)
         : slotDepositAmountOf(type),
+    paymentMethods: (type) =>
+      (
+        kindOf(type) === "EVENT"
+          ? eventPaymentModeOf(type)
+          : slotPaymentModeOf(type)
+      )
+        ? chosenPaymentMethodsOf(type)
+        : null,
     registrationsCount: async (type) => (await eventStats(type)).registrations,
     ticketsCount: async (type) => (await eventStats(type)).tickets,
     checkedInCount: async (type) => (await eventStats(type)).checkedIn,
@@ -648,6 +729,12 @@ const appointmentsResolvers = {
       booking.status === "PENDING_PAYMENT" ? booking.expiresAt || null : null,
     paymentReference: (booking) => booking.payment?.bankReference || null,
     bankTransferDeclaredAt: (booking) => booking.payment?.declaredAt || null,
+    bankTransferReceivedAt: (booking) =>
+      !booking.payment?.paidAt ? booking.payment?.receivedAt || null : null,
+    bankTransferReceivedAmount: (booking) =>
+      !booking.payment?.paidAt
+        ? (booking.payment?.receivedAmount ?? null)
+        : null,
     refundedAt: (booking) => booking.payment?.refundedAt || null,
     refundFailed: (booking) =>
       Boolean(
@@ -702,7 +789,18 @@ const appointmentsResolvers = {
           ERROR_CODES.VALIDATION_ERROR,
         );
       }
-      if (status) {
+      if (status === "PENDING_PAYMENT") {
+        // En attente : aussi les expirées dont le virement est arrivé après
+        // la garde, à valider par l'organisateur
+        filter.$or = [
+          { status: "PENDING_PAYMENT" },
+          {
+            status: "EXPIRED",
+            "payment.receivedAt": { $ne: null },
+            "payment.paidAt": null,
+          },
+        ];
+      } else if (status) {
         filter.status = status;
       } else {
         // Expirées sans paiement masquées (celles payées trop tard restent :
@@ -710,6 +808,8 @@ const appointmentsResolvers = {
         filter.$or = [
           { status: { $ne: "EXPIRED" } },
           { "payment.paidAt": { $ne: null } },
+          // Virement reçu après la garde : à valider par l'organisateur
+          { "payment.receivedAt": { $ne: null } },
         ];
       }
       const take = Math.min(
@@ -852,6 +952,10 @@ const appointmentsResolvers = {
             ...(await typeChanges(input || {}, userIdOf(ctx))),
             ...(await slotPaymentChanges(input || {}, ctx)),
           };
+          Object.assign(
+            changes,
+            await paymentMethodsChanges(input || {}, ctx, null, changes),
+          );
         } else {
           if (!input.name || !String(input.name).trim()) {
             throw new AppointmentInputError(
@@ -871,6 +975,10 @@ const appointmentsResolvers = {
             ...(await eventTypeChanges(input, ctx)),
             kind: "EVENT",
           };
+          Object.assign(
+            changes,
+            await paymentMethodsChanges(input, ctx, null, changes),
+          );
         }
         if (!changes.name) {
           throw new AppointmentInputError(
@@ -949,6 +1057,10 @@ const appointmentsResolvers = {
               ...(await typeChanges(input || {}, userIdOf(ctx))),
               ...(await slotPaymentChanges(input || {}, ctx, type)),
             };
+        Object.assign(
+          changes,
+          await paymentMethodsChanges(input || {}, ctx, type, changes),
+        );
       } catch (error) {
         throw inputError(error);
       }
@@ -1101,12 +1213,6 @@ const appointmentsResolvers = {
       });
       if (result.error === "NOT_FOUND")
         throw createNotFoundError("Rendez-vous");
-      if (result.error === "STARTED") {
-        throw new AppError(
-          "Ce rendez-vous a déjà commencé : il ne peut plus être confirmé. Remboursez l'invité si son virement est arrivé.",
-          ERROR_CODES.VALIDATION_ERROR,
-        );
-      }
       if (result.error === "BUSY") {
         throw new AppError(
           "Une autre réservation est en cours sur votre agenda. Réessayez dans un instant.",
@@ -1115,7 +1221,7 @@ const appointmentsResolvers = {
       }
       if (result.error === "SLOT_TAKEN") {
         throw new AppError(
-          "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé.",
+          "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé. Remboursez l'invité si son virement est arrivé.",
           ERROR_CODES.VALIDATION_ERROR,
         );
       }

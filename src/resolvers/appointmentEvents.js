@@ -87,6 +87,8 @@ function registrationFilter(ctx, type, { search, status }) {
         $or: [
           { status: { $ne: "EXPIRED" } },
           { "payment.paidAt": { $ne: null } },
+          // Virement reçu après la garde : à valider par l'organisateur
+          { "payment.receivedAt": { $ne: null } },
         ],
       },
     ];
@@ -228,6 +230,10 @@ const appointmentEventsResolvers = {
     refundedAt: (r) => r.payment?.refundedAt || null,
     paymentReference: (r) => r.payment?.bankReference || null,
     bankTransferDeclaredAt: (r) => r.payment?.declaredAt || null,
+    bankTransferReceivedAt: (r) =>
+      !r.payment?.paidAt ? r.payment?.receivedAt || null : null,
+    bankTransferReceivedAmount: (r) =>
+      !r.payment?.paidAt ? (r.payment?.receivedAmount ?? null) : null,
     refundFailed: (r) =>
       Boolean(
         r.payment?.paidAt &&
@@ -456,15 +462,9 @@ const appointmentEventsResolvers = {
       });
       if (result.error === "NOT_FOUND")
         throw createNotFoundError("Inscription");
-      if (result.error === "STARTED") {
-        throw new AppError(
-          "L'événement a déjà commencé : cette inscription ne peut plus être confirmée. Remboursez le participant si son virement est arrivé.",
-          ERROR_CODES.VALIDATION_ERROR,
-        );
-      }
       if (result.error === "NO_SEATS") {
         throw new AppError(
-          "Il ne reste plus assez de places pour confirmer cette inscription.",
+          "Il ne reste plus assez de places pour confirmer cette inscription. Remboursez le participant si son virement est arrivé.",
           ERROR_CODES.VALIDATION_ERROR,
         );
       }

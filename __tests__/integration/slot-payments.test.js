@@ -901,7 +901,7 @@ describe("PayPal", () => {
 
 describe("virement", () => {
   async function pendingBank(type, i = 0) {
-    // Virement : début à 48 h au moins (ici une semaine)
+    // Début dans une semaine : garde de 3 jours pleine
     const [slot] = await freeSlots(type, 7);
     const res = await book(type, slot.start, { provider: "bank_transfer", i });
     expect(res.status).toBe(201);
@@ -1028,7 +1028,7 @@ describe("virement", () => {
     expect(google.pushEventDetailed).toHaveBeenCalledTimes(1);
   });
 
-  it("expirée après 3 jours ; virement tardif sans créneau : à rembourser à la main", async () => {
+  it("expirée après 3 jours ; virement tardif : noté et signalé « à valider », jamais confirmé tout seul", async () => {
     await setIban();
     const type = await createSlot({ price: { amount: 4000 } });
     const { slot, booking } = await pendingBank(type);
@@ -1042,7 +1042,7 @@ describe("virement", () => {
     });
     expect((await Booking.findById(booking._id)).status).toBe("EXPIRED");
     expect(textOf(mailTo("elise0@exemple.fr")[0].html)).toContain(
-      "le virement n'est pas arrivé",
+      "le virement n'est pas arrivé à temps",
     );
     // Masquée de la liste par défaut (non payée)
     const list = await call(Query.bookings, owner, { scope: "all" });
@@ -1052,7 +1052,7 @@ describe("virement", () => {
 
     // Créneau repris
     await book(type, slot.start, { i: 1, provider: "bank_transfer" });
-    // L'organisateur ne peut plus le marquer payé
+    // L'organisateur ne peut pas le confirmer : créneau pris
     expect(
       await errorOf(
         call(Mutation.markBookingPaid, owner, { id: String(booking._id) }),
@@ -1060,9 +1060,11 @@ describe("virement", () => {
     ).toMatchObject({
       code: "VALIDATION_ERROR",
       message:
-        "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé.",
+        "Ce créneau a été repris entre-temps : le rendez-vous ne peut plus être confirmé. Remboursez l'invité si son virement est arrivé.",
     });
-    // Le virement arrive quand même
+    // Le virement arrive quand même : noté, organisateur prévenu, rien
+    // confirmé ni remboursé automatiquement
+    mail.sent = [];
     await detectAppointmentBankPayments(String(workspaceId), [
       {
         externalId: "tx-2",
@@ -1073,17 +1075,65 @@ describe("virement", () => {
     ]);
     const late = await Booking.findById(booking._id);
     expect(late.status).toBe("EXPIRED");
-    expect(B.refundFailed(late)).toBe(true);
+    expect(late.payment.paidAt).toBeUndefined();
+    expect(late.payment.receivedAt).toBeInstanceOf(Date);
+    expect(B.bankTransferReceivedAt(late)).toBeInstanceOf(Date);
+    expect(B.bankTransferReceivedAmount(late)).toBe(4000);
+    expect(B.refundFailed(late)).toBe(false);
     expect(
       await Notification.countDocuments({
         userId: owner,
-        type: "APPOINTMENT_REFUND_NEEDED",
+        type: "APPOINTMENT_BANK_RECEIVED",
       }),
     ).toBe(1);
-    // Visible de nouveau dans la liste (paiement à rendre)
+    expect(
+      await Notification.countDocuments({ type: "APPOINTMENT_REFUND_NEEDED" }),
+    ).toBe(0);
+    expect(mailTo("jean@cabinet.fr")).toHaveLength(1);
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+    // Visible de nouveau dans la liste (à valider)
     const after = await call(Query.bookings, owner, { scope: "all" });
     expect(after.items.map((b) => String(b._id))).toContain(
       String(booking._id),
+    );
+    // Et dans l'onglet « En attente de paiement »
+    const pendingTab = await call(Query.bookings, owner, {
+      scope: "all",
+      status: "PENDING_PAYMENT",
+    });
+    expect(pendingTab.items.map((b) => String(b._id))).toContain(
+      String(booking._id),
+    );
+  });
+
+  it("virement tardif, créneau encore libre : « Marquer comme payé » après l'expiration confirme (agenda, e-mails)", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const { booking } = await pendingBank(type);
+    await expireOverdueBookings({
+      now: new Date(Date.now() + 3 * DAY + MINUTE),
+    });
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-3",
+        amount: 40,
+        currency: "EUR",
+        description: `VIR ${booking.payment.bankReference}`,
+      },
+    ]);
+    const noted = await Booking.findById(booking._id);
+    expect(noted.status).toBe("EXPIRED");
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
+    mail.sent = [];
+    const done = await call(Mutation.markBookingPaid, owner, {
+      id: String(booking._id),
+    });
+    expect(done.status).toBe("CONFIRMED");
+    expect(done.payment.paymentId).toBe(noted.payment.receivedPaymentId);
+    expect(done.payment.paidAmount).toBe(4000);
+    expect(google.pushEventDetailed).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(mailTo("elise0@exemple.fr").length).toBeGreaterThan(0),
     );
   });
 });
@@ -1141,10 +1191,9 @@ describe("réservations existantes", () => {
 // ─── Corrections de relecture ────────────────────────────────────────────
 
 describe("relecture : délais du virement et début passé", () => {
-  it("virement refusé à moins de 48 h, disponibilité par créneau, garde bornée au début - 24 h", async () => {
+  it("virement proposé à moins de 48 h, garde jusqu'au début, virement instantané conseillé", async () => {
     await setIban();
-    // Page ouverte 7 jours sur 7 : avec les horaires par défaut (lundi au
-    // vendredi), un vendredi ou un samedi n'a aucun créneau à moins de 48 h
+    // Page ouverte 7 jours sur 7 : des créneaux proches tous les jours
     await call(Mutation.upsertBookingPage, owner, {
       input: {
         availability: [1, 2, 3, 4, 5, 6, 7].map((dayOfWeek) => ({
@@ -1156,28 +1205,66 @@ describe("relecture : délais du virement et début passé", () => {
     const type = await createSlot({ price: { amount: 4000 } });
     const soon = await freeSlots(type, 1);
     const now = Date.now();
-    const tooSoon = soon.find((s) => Date.parse(s.start) - now < 48 * 3600000);
-    const later = soon.find(
-      (s) =>
-        Date.parse(s.start) - now >= 49 * 3600000 &&
-        Date.parse(s.start) - now < 4 * DAY,
+    const close = soon.find((s) => Date.parse(s.start) - now < 48 * 3600000);
+    const far = (await freeSlots(type, 5)).find(
+      (s) => Date.parse(s.start) - now > 3 * DAY + 3600000,
     );
-    expect(tooSoon.bankTransferAvailable).toBe(false);
-    expect(later.bankTransferAvailable).toBe(true);
-    const detail = await (await api(`/jean-dupont/${type.slug}`)).json();
-    expect(detail.type.payment.bankTransferMinLeadHours).toBe(48);
-
-    const refused = await book(type, tooSoon.start, {
-      provider: "bank_transfer",
+    expect(close).toMatchObject({
+      bankTransferAvailable: true,
+      instantTransferAdvised: true,
     });
-    expect(refused.status).toBe(409);
-    expect(await refused.json()).toEqual({ error: "BANK_TRANSFER_TOO_LATE" });
+    expect(far).toMatchObject({
+      bankTransferAvailable: true,
+      instantTransferAdvised: false,
+    });
+    const detail = await (await api(`/jean-dupont/${type.slug}`)).json();
+    expect(detail.type.payment).not.toHaveProperty("bankTransferMinLeadHours");
+    expect(detail.type.payment.paymentMethods).toEqual(["bank_transfer"]);
 
-    const res = await book(type, later.start, { provider: "bank_transfer" });
+    const res = await book(type, close.start, { provider: "bank_transfer" });
     expect(res.status).toBe(201);
-    const { expiresAt } = await res.json();
-    // Garde : début - 24 h (plus tôt que création + 3 jours)
-    expect(Date.parse(expiresAt)).toBe(Date.parse(later.start) - DAY);
+    const body = await res.json();
+    // Garde : début (plus tôt que création + 3 jours)
+    expect(Date.parse(body.expiresAt)).toBe(Date.parse(close.start));
+    expect(body.booking.bankTransfer.instantAdvised).toBe(true);
+    await vi.waitFor(() => expect(mailTo("elise0@exemple.fr")).toHaveLength(1));
+    const text = textOf(mailTo("elise0@exemple.fr")[0].html);
+    expect(text).toContain("virement instantané");
+    expect(text).toContain("Le créneau est gardé jusqu'au");
+  });
+
+  it("virement repéré après le début : noté, organisateur prévenu, jamais confirmé tout seul", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const [slot] = await freeSlots(type, 7);
+    await book(type, slot.start, { provider: "bank_transfer" });
+    const booking = await Booking.findOne({});
+    await Booking.updateOne(
+      { _id: booking._id },
+      {
+        $set: {
+          startAt: new Date(Date.now() - MINUTE),
+          expiresAt: new Date(Date.now() - MINUTE),
+        },
+      },
+    );
+    await detectAppointmentBankPayments(String(workspaceId), [
+      {
+        externalId: "tx-start",
+        amount: 40,
+        currency: "EUR",
+        description: `VIR ${booking.payment.bankReference}`,
+      },
+    ]);
+    const after = await Booking.findById(booking._id);
+    expect(after.status).toBe("PENDING_PAYMENT");
+    expect(after.payment.paidAt).toBeUndefined();
+    expect(after.payment.receivedAt).toBeInstanceOf(Date);
+    const notice = await Notification.findOne({
+      type: "APPOINTMENT_BANK_RECEIVED",
+    });
+    expect(notice.message).toContain("après le début");
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
   });
 
   it("paiement arrivé après le début : jamais confirmé, remboursé, payeur prévenu", async () => {
@@ -1204,24 +1291,218 @@ describe("relecture : délais du virement et début passé", () => {
     expect(textOf(email.html)).toContain("la date de début était déjà passée");
   });
 
-  it("« Marquer comme payé » après le début : refusé", async () => {
+  it("« Marquer comme payé » après le début : confirmé sans agenda ni e-mail, client CRM rattaché", async () => {
     await setIban();
+    await connectGoogle();
     const type = await createSlot({ price: { amount: 4000 } });
     const [slot] = await freeSlots(type, 7);
     await book(type, slot.start, { provider: "bank_transfer" });
     const booking = await Booking.findOne({});
+    await vi.waitFor(() => expect(mailTo("elise0@exemple.fr")).toHaveLength(1));
     await Booking.updateOne(
       { _id: booking._id },
       { $set: { startAt: new Date(Date.now() - MINUTE) } },
     );
+    mail.sent = [];
+    const done = await call(Mutation.markBookingPaid, owner, {
+      id: String(booking._id),
+    });
+    expect(done.status).toBe("CONFIRMED");
+    expect(B.paidAt(done)).toBeInstanceOf(Date);
+    expect(done.payment.paymentId).toBe(`manual:${owner}`);
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
+    expect(await Event.countDocuments()).toBe(0);
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+    expect((await rawBooking(booking._id)).clientId).toBeTruthy();
+    // Idempotent
+    const again = await call(Mutation.markBookingPaid, owner, {
+      id: String(booking._id),
+    });
+    expect(again.status).toBe("CONFIRMED");
+  });
+
+  it("« Marquer comme payé » après le début d'une réservation expirée : confirmé, sauf si un autre rendez-vous confirmé a le même début", async () => {
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const [slot, second] = await freeSlots(type, 7);
+    await book(type, slot.start, { provider: "bank_transfer" });
+    await book(type, second.start, { provider: "bank_transfer", i: 1 });
+    const first = await Booking.findOne({ "guest.email": "elise0@exemple.fr" });
+    const other = await Booking.findOne({ "guest.email": "elise1@exemple.fr" });
+    const past = new Date(Date.now() - DAY);
+    await Booking.updateOne(
+      { _id: first._id },
+      { $set: { status: "EXPIRED", startAt: past, expiresAt: past } },
+    );
+    const done = await call(Mutation.markBookingPaid, owner, {
+      id: String(first._id),
+    });
+    expect(done.status).toBe("CONFIRMED");
+    // Même début qu'un rendez-vous confirmé : refusé (index unique)
+    await Booking.updateOne(
+      { _id: other._id },
+      { $set: { status: "EXPIRED", startAt: past, expiresAt: past } },
+    );
     expect(
       await errorOf(
-        call(Mutation.markBookingPaid, owner, { id: String(booking._id) }),
+        call(Mutation.markBookingPaid, owner, { id: String(other._id) }),
       ),
     ).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect((await Booking.findById(other._id)).status).toBe("EXPIRED");
+    expect(google.pushEventDetailed).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Moyens choisis par l'organisateur ───────────────────────────────────
+
+describe("moyens choisis (comme les transferts)", () => {
+  it("absent = tous les moyens disponibles ; choix restreint le public ; réservation hors choix refusée", async () => {
+    await connectStripe();
+    await setIban();
+    const type = await createSlot({ price: { amount: 4000 } });
+    const raw = await mongoose.connection.db
+      .collection("appointment_types")
+      .findOne({ _id: type._id });
+    expect(raw).not.toHaveProperty("paymentMethods");
+    expect(T.paymentMethods(type)).toBeNull();
+    let detail = await (await api(`/jean-dupont/${type.slug}`)).json();
+    expect(detail.type.payment.paymentMethods).toEqual([
+      "stripe",
+      "bank_transfer",
+    ]);
+
+    const updated = await updateSlot(type, { paymentMethods: ["stripe"] });
+    expect(T.paymentMethods(updated)).toEqual(["stripe"]);
+    detail = await (await api(`/jean-dupont/${type.slug}`)).json();
+    expect(detail.type.payment.paymentMethods).toEqual(["stripe"]);
+    const slots = await freeSlots(type, 7);
+    expect(slots[0]).not.toHaveProperty("bankTransferAvailable");
+    const refused = await book(type, slots[0].start, {
+      provider: "bank_transfer",
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "PAYMENT_METHOD_UNAVAILABLE",
+    });
+
+    // Même choix renvoyé : rien d'écrit ; null : retour à « tous »
+    const before = await mongoose.connection.db
+      .collection("appointment_types")
+      .findOne({ _id: type._id });
+    await updateSlot(type, { paymentMethods: ["stripe"] });
     expect(
-      (await Booking.findById(booking._id)).payment.paidAt,
-    ).toBeUndefined();
+      (
+        await mongoose.connection.db
+          .collection("appointment_types")
+          .findOne({ _id: type._id })
+      ).updatedAt,
+    ).toEqual(before.updatedAt);
+    await updateSlot(type, { paymentMethods: null });
+    expect(
+      await mongoose.connection.db
+        .collection("appointment_types")
+        .findOne({ _id: type._id }),
+    ).not.toHaveProperty("paymentMethods");
+  });
+
+  it("au moins un moyen choisi et prêt en ligne ou en acompte ; libre sur place ; inconnu refusé", async () => {
+    await setIban();
+    expect(
+      await errorOf(
+        createSlot({ price: { amount: 4000 }, paymentMethods: ["stripe"] }),
+      ),
+    ).toMatchObject({ code: "VALIDATION_ERROR", field: "paymentMethods" });
+    expect(
+      await errorOf(
+        createSlot({ price: { amount: 4000 }, paymentMethods: [] }),
+      ),
+    ).toMatchObject({ code: "VALIDATION_ERROR", field: "paymentMethods" });
+    expect(
+      await errorOf(
+        createSlot({ price: { amount: 4000 }, paymentMethods: ["cheque"] }),
+      ),
+    ).toMatchObject({ code: "VALIDATION_ERROR", field: "paymentMethods" });
+    const deposit = await createSlot({
+      name: "Acompte",
+      price: { amount: 4000 },
+      paymentMode: "DEPOSIT",
+      depositAmount: 1000,
+      paymentMethods: ["bank_transfer", "stripe"],
+    });
+    // Ordre d'affichage, moyens connus seulement
+    expect(T.paymentMethods(deposit)).toEqual(["stripe", "bank_transfer"]);
+    expect(
+      await errorOf(updateSlot(deposit, { paymentMethods: ["paypal"] })),
+    ).toMatchObject({ code: "VALIDATION_ERROR", field: "paymentMethods" });
+    const onSite = await createSlot({
+      name: "Sur place",
+      price: { amount: 4000 },
+      paymentMode: "ON_SITE",
+      paymentMethods: [],
+    });
+    expect(T.paymentMode(onSite)).toBe("ON_SITE");
+    // Gratuit : le choix est ignoré (rien d'écrit)
+    const free = await createSlot({
+      name: "Gratuit",
+      paymentMethods: ["stripe"],
+    });
+    expect(
+      await mongoose.connection.db
+        .collection("appointment_types")
+        .findOne({ _id: free._id }),
+    ).not.toHaveProperty("paymentMethods");
+  });
+
+  it("événement : moyens choisis appliqués à l'inscription", async () => {
+    await connectStripe();
+    await setIban();
+    const start = new Date(Date.now() + 10 * DAY);
+    const event = await call(Mutation.createAppointmentType, owner, {
+      input: {
+        kind: "EVENT",
+        name: "Atelier",
+        startAt: start.toISOString(),
+        endAt: new Date(start.getTime() + 3600000).toISOString(),
+        location: { kind: "IN_PERSON", value: "Lyon" },
+        price: { amount: 2000 },
+        paymentMethods: ["bank_transfer"],
+      },
+    });
+    expect(T.paymentMethods(event)).toEqual(["bank_transfer"]);
+    const detail = await (await api(`/jean-dupont/${event.slug}`)).json();
+    expect(detail.type.event.paymentMethods).toEqual(["bank_transfer"]);
+    const refused = await api(`/jean-dupont/${event.slug}/register`, {
+      method: "POST",
+      body: {
+        buyer: { firstName: "A", lastName: "B", email: "a@exemple.fr" },
+        quantity: 1,
+        provider: "stripe",
+      },
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "PAYMENT_METHOD_UNAVAILABLE",
+    });
+    // Événement d'avant (sans choix en base) : tous les moyens, intact
+    await mongoose.connection.db
+      .collection("appointment_types")
+      .updateOne({ _id: event._id }, { $unset: { paymentMethods: "" } });
+    const before = await mongoose.connection.db
+      .collection("appointment_types")
+      .findOne({ _id: event._id });
+    expect(
+      (await (await api(`/jean-dupont/${event.slug}`)).json()).type.event
+        .paymentMethods,
+    ).toEqual(["stripe", "bank_transfer"]);
+    await call(Mutation.updateAppointmentType, owner, {
+      id: String(event._id),
+      input: { description: "Nouvelle description" },
+    });
+    const after = await mongoose.connection.db
+      .collection("appointment_types")
+      .findOne({ _id: event._id });
+    expect(after).not.toHaveProperty("paymentMethods");
+    expect(after.paymentMode).toBe(before.paymentMode);
   });
 });
 

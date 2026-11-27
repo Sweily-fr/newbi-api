@@ -90,6 +90,9 @@ export const appointmentDepositAmountOf = (type) =>
 export const PAYMENT_METHOD_REQUIRED_MESSAGE =
   "Connectez Stripe, PayPal ou SumUp (Paramètres > Applications), ou renseignez l'IBAN de votre entreprise (Paramètres > Entreprise), pour encaisser en ligne.";
 
+export const PAYMENT_METHOD_CHOICE_MESSAGE =
+  "Choisissez au moins un moyen de paiement prêt pour encaisser en ligne.";
+
 export const SLOT_INTERVALS = [5, 10, 15, 20, 30, 60];
 export const DEFAULT_SLOT_INTERVAL = 30;
 export const MAX_BUFFER_MINUTES = 240;

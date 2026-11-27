@@ -17,6 +17,13 @@ import {
  * adresse postale ; PHONE signifie « l'organisateur appelle » (téléphone de
  * l'invité obligatoire).
  */
+const APPOINTMENT_TYPE_PAYMENT_METHODS = [
+  "stripe",
+  "paypal",
+  "sumup",
+  "bank_transfer",
+];
+
 const appointmentTypeSchema = new mongoose.Schema(
   {
     workspaceId: {
@@ -105,6 +112,13 @@ const appointmentTypeSchema = new mongoose.Schema(
     // ON_SITE : tout sur place, aucun prestataire
     paymentMode: { type: String, enum: EVENT_PAYMENT_MODES },
     depositAmount: { type: Number, min: 1 },
+    // Moyens proposés au public, choisis par l'organisateur (comme les
+    // transferts). AUCUNE valeur par défaut : absent = tous les moyens
+    // disponibles (types créés avant ce choix, jamais réécrits)
+    paymentMethods: {
+      type: [{ type: String, enum: APPOINTMENT_TYPE_PAYMENT_METHODS }],
+      default: undefined,
+    },
     // Entrée du Calendrier de l'organisateur
     calendarEventId: { type: mongoose.Schema.Types.ObjectId, ref: "Event" },
   },
