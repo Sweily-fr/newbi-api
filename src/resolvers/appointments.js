@@ -789,7 +789,18 @@ const appointmentsResolvers = {
           ERROR_CODES.VALIDATION_ERROR,
         );
       }
-      if (status) {
+      if (status === "PENDING_PAYMENT") {
+        // En attente : aussi les expirées dont le virement est arrivé après
+        // la garde, à valider par l'organisateur
+        filter.$or = [
+          { status: "PENDING_PAYMENT" },
+          {
+            status: "EXPIRED",
+            "payment.receivedAt": { $ne: null },
+            "payment.paidAt": null,
+          },
+        ];
+      } else if (status) {
         filter.status = status;
       } else {
         // Expirées sans paiement masquées (celles payées trop tard restent :
