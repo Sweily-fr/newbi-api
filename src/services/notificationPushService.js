@@ -94,7 +94,8 @@ export function pushPreferenceKey(notification, extra = {}) {
     notification?.type === "TRANSFER_PAID" ||
     notification?.type === "TRANSFER_BANK_DECLARED" ||
     notification?.type === "APPOINTMENT_BANK_DECLARED" ||
-    notification?.type === "APPOINTMENT_REFUND_NEEDED"
+    notification?.type === "APPOINTMENT_REFUND_NEEDED" ||
+    notification?.type === "APPOINTMENT_BANK_RECEIVED"
   ) {
     return "payment_received";
   }

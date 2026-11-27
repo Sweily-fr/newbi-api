@@ -154,6 +154,11 @@ type AppointmentType {
   paymentMode: EventPaymentMode
   "Acompte (par place pour un événement) en centimes, DEPOSIT seulement, sinon null"
   depositAmount: Int
+  """
+  Moyens choisis par l'organisateur (stripe, paypal, sumup, bank_transfer),
+  null = tous les moyens disponibles (type payant seulement)
+  """
+  paymentMethods: [String!]
   "Inscriptions confirmées"
   registrationsCount: Int!
   "Billets des inscriptions confirmées"
@@ -216,6 +221,10 @@ type EventRegistration {
   paymentReference: String
   "« J'ai fait le virement » cliqué par le participant"
   bankTransferDeclaredAt: DateTime
+  "Virement repéré après la garde ou le début, pas encore validé : à confirmer (Marquer comme payé) ou rembourser"
+  bankTransferReceivedAt: DateTime
+  "Montant de ce virement, en centimes"
+  bankTransferReceivedAmount: Int
   clientId: ID
   tickets: [EventTicket!]!
   checkedInCount: Int!
@@ -284,6 +293,10 @@ type Booking {
   paymentReference: String
   "« J'ai fait le virement » cliqué par l'invité"
   bankTransferDeclaredAt: DateTime
+  "Virement repéré après la garde ou le début, pas encore validé : à confirmer (Marquer comme payé) ou rembourser"
+  bankTransferReceivedAt: DateTime
+  "Montant de ce virement, en centimes"
+  bankTransferReceivedAmount: Int
   "Paiement arrivé sans créneau libre : remboursé automatiquement"
   refundedAt: DateTime
   "Paiement arrivé sans créneau libre, remboursement automatique impossible : à rembourser à la main"
@@ -365,6 +378,12 @@ input AppointmentTypeInput {
   paymentMode: EventPaymentMode
   "Centimes par place, DEPOSIT seulement (au moins 50, inférieur au prix) ; null pour retirer"
   depositAmount: Int
+  """
+  Type payant : moyens proposés (stripe, paypal, sumup, bank_transfer) ;
+  null = tous les moyens disponibles. Au moins un moyen choisi et prêt en
+  ligne ou en acompte
+  """
+  paymentMethods: [String!]
 }
 
 input MoneyInput {

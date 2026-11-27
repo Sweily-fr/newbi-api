@@ -8,8 +8,8 @@
  *   2. réservations échues de l'organisateur expirées (créneaux libérés) ;
  *   3. sous le verrou de l'organisateur : créneau recalculé en direct, puis
  *      réservation `PENDING_PAYMENT` qui TIENT le créneau (comptée occupée
- *      par busyService et appointmentSlots) 30 minutes, ou 3 jours pour un
- *      virement ;
+ *      par busyService et appointmentSlots) 30 minutes, ou pour un virement
+ *      jusqu'à min(réservation + 3 jours, début) ;
  *   4. paiement créé sur le compte du vendeur, ou coordonnées de virement.
  * Rien n'est écrit dans l'agenda connecté ni dans le Calendrier, aucun
  * client créé, aucun e-mail de confirmation avant le paiement.
@@ -38,6 +38,7 @@ import { hashToken } from "../../models/EventRegistration.js";
 import {
   BookingError,
   acquireHostLock,
+  attachClient,
   assertSlotAvailable,
   bookingAmountsFor,
   finalizeBooking,
@@ -61,7 +62,6 @@ import {
   ONLINE_HOLD_MS,
   PENDING_PAYMENT_CAP_MS,
   bankTransferDueAt,
-  bankTransferOpenFor,
   bankTransferPayload,
   buildLatePaymentEmail,
   latePaymentReason,
@@ -72,7 +72,10 @@ import {
   notifyHostBankDeclared,
   notifyHostRefundNeeded,
 } from "./appointmentPayments.js";
-import { eventPaymentMethods } from "./eventRegistrationService.js";
+import {
+  eventPaymentMethods,
+  typePaymentMethods,
+} from "./eventRegistrationService.js";
 import {
   DirectPaymentUnavailableError,
   ONLINE_PAYMENT_PROVIDERS,
@@ -165,6 +168,7 @@ export async function bookingPaymentFields(booking) {
     bankTransfer: await bankTransferPayload(booking, {
       amountCents: expectedBookingAmount(booking),
       currency: booking.currency,
+      startAt: booking.startAt,
     }),
     refundStatus: bookingRefundStatus(booking),
   };
@@ -236,7 +240,10 @@ export async function createPaidBooking({
   if (mode !== "ONLINE" && mode !== "DEPOSIT") {
     throw new Error("rendez-vous sans paiement à la réservation");
   }
-  const methods = await eventPaymentMethods(page.workspaceId);
+  const methods = await typePaymentMethods(
+    type,
+    await eventPaymentMethods(page.workspaceId),
+  );
   if (!provider || !methods.includes(provider)) {
     throw new BookingError("PAYMENT_METHOD_UNAVAILABLE", 409);
   }
@@ -253,10 +260,8 @@ export async function createPaidBooking({
 
   const bank = provider === BANK_TRANSFER;
   const startAt = new Date(start);
-  // Virement : début à 48 h au moins
-  if (bank && !bankTransferOpenFor(startAt, now)) {
-    throw new BookingError("BANK_TRANSFER_TOO_LATE", 409);
-  }
+  // Virement : aucun délai minimum (virement instantané), créneau gardé
+  // jusqu'à min(réservation + 3 jours, début)
   const bankReference = bank ? await newBankReference(page.workspaceId) : null;
   const endAt = new Date(startAt.getTime() + type.durationMinutes * MINUTE);
   const token = generateManageToken();
@@ -1198,7 +1203,9 @@ async function expireBooking(
     await closeDirectCheckout(expired.payment, expired.workspaceId, LOG);
   }
   logger.info(`${LOG} réservation ${expired._id} expirée : créneau libéré`);
-  if (notify) {
+  // Virement reçu après la garde : pas d'avis d'expiration, l'organisateur
+  // décide
+  if (notify && !expired.payment?.receivedAt) {
     await sendBookingExpiredEmail(expired).catch((error) =>
       logger.error(
         `${LOG} e-mail d'expiration de la réservation ${expired._id} : ${error.message}`,
@@ -1337,6 +1344,7 @@ async function sendBankTransferPendingEmail(booking, token) {
     const bank = await bankTransferPayload(booking, {
       amountCents: expectedBookingAmount(booking),
       currency: booking.currency,
+      startAt: booking.startAt,
     });
     if (!bank) return false;
     const { host, organizationName } = await bookingContext(booking);
@@ -1417,11 +1425,57 @@ export async function declareBookingBankTransfer(
 // ─── Organisateur ────────────────────────────────────────────────────────
 
 /**
- * « Marquer comme payé » (virement reçu) par l'organisateur. `scope` :
- * { workspaceId, hostUserId }.
- * @returns {Promise<{booking}|{error: "NOT_FOUND"|"NOT_PENDING"|"SLOT_TAKEN"}>}
+ * Rendez-vous déjà commencé, confirmé par l'organisateur : il est libre de
+ * valider un virement à tout moment. Ni contrôle ni écriture d'agenda
+ * (rendez-vous passé ou en cours), aucun e-mail « confirmé » au
+ * participant ; seul le client CRM est rattaché. Refusé seulement si un
+ * autre rendez-vous confirmé occupe déjà le même début (index unique).
+ * @returns {Promise<object|"TAKEN"|null>}
  */
-export async function markBookingPaidByHost({ scope, bookingId, userId }) {
+async function confirmStartedBooking(booking, set) {
+  const confirmed = await confirmFrom(booking, booking.status, set, {
+    "payment.paidAt": null,
+  });
+  if (!confirmed || confirmed === "TAKEN") return confirmed;
+  try {
+    const context = await bookingContext(booking);
+    if (context.page && !confirmed.clientId) {
+      const clientId = await attachClient({
+        booking: confirmed,
+        page: context.page,
+        host: context.host,
+      });
+      if (clientId) {
+        await Booking.updateOne({ _id: confirmed._id }, { $set: { clientId } });
+      }
+    }
+  } catch (error) {
+    logger.error(
+      `${LOG} client CRM non rattaché à la réservation ${booking._id} : ${error.message}`,
+    );
+  }
+  return confirmed;
+}
+
+/**
+ * « Marquer comme payé » (virement reçu) par l'organisateur, libre à tout
+ * moment, comme pour les transferts. `scope` : { workspaceId, hostUserId }.
+ * - en attente, avant le début : confirmé (agenda, e-mails), même après
+ *   l'échéance de la garde si le balayage ne l'a pas encore expirée ;
+ * - expirée, avant le début : confirmée si le créneau passe encore le
+ *   calcul complet (sinon SLOT_TAKEN) ;
+ * - début passé (en attente ou expirée) : confirmée sans agenda ni e-mail
+ *   (voir confirmStartedBooking).
+ * Virement repéré après la garde (payment.receivedAt) : ses montant et
+ * identifiant bancaires sont repris.
+ * @returns {Promise<{booking}|{error: "NOT_FOUND"|"NOT_PENDING"|"SLOT_TAKEN"|"BUSY"}>}
+ */
+export async function markBookingPaidByHost({
+  scope,
+  bookingId,
+  userId,
+  now = new Date(),
+}) {
   if (!isObjectId(String(bookingId))) return { error: "NOT_FOUND" };
   const filter = {
     _id: toObjectId(bookingId),
@@ -1440,15 +1494,26 @@ export async function markBookingPaidByHost({ scope, bookingId, userId }) {
   ) {
     return { error: "NOT_PENDING" };
   }
-  // Rendez-vous commencé : plus confirmable (l'organisateur rembourse)
-  if (new Date(booking.startAt) <= new Date()) return { error: "STARTED" };
+  const received = booking.payment?.receivedAt ? booking.payment : null;
   const payment = {
     provider: BANK_TRANSFER,
-    paymentId: `manual:${userId}`,
-    amountCents: expectedBookingAmount(booking),
+    paymentId: received?.receivedPaymentId || `manual:${userId}`,
+    amountCents: received?.receivedAmount ?? expectedBookingAmount(booking),
     markedBy: userId ? toObjectId(userId) : undefined,
   };
-  if (booking.status === "PENDING_PAYMENT") {
+  const started = new Date(booking.startAt) <= now;
+  if (started) {
+    const confirmed = await confirmStartedBooking(
+      booking,
+      paidSetOf(payment, booking),
+    );
+    if (confirmed === "TAKEN") return { error: "SLOT_TAKEN" };
+    if (confirmed) {
+      logger.info(
+        `${LOG} réservation ${booking._id} commencée, marquée payée par l'organisateur (sans agenda ni e-mail)`,
+      );
+    }
+  } else if (booking.status === "PENDING_PAYMENT") {
     await markBookingPaid(booking, payment);
   } else {
     // Expirée : confirmée seulement si le créneau passe encore le calcul

@@ -150,6 +150,12 @@ const eventRegistrationSchema = new mongoose.Schema(
       // virement », marquage « payé » par l'organisateur
       bankReference: { type: String },
       declaredAt: { type: Date },
+      // Virement repéré après la garde ou le début : NON confirmé, gardé
+      // pour l'organisateur qui décide (« Marquer comme payé » ou
+      // remboursement)
+      receivedAt: { type: Date },
+      receivedAmount: { type: Number },
+      receivedPaymentId: { type: String },
       markedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     },
     manageTokenHash: { type: String, required: true },
