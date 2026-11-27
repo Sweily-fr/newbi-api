@@ -1143,6 +1143,16 @@ describe("réservations existantes", () => {
 describe("relecture : délais du virement et début passé", () => {
   it("virement refusé à moins de 48 h, disponibilité par créneau, garde bornée au début - 24 h", async () => {
     await setIban();
+    // Page ouverte 7 jours sur 7 : avec les horaires par défaut (lundi au
+    // vendredi), un vendredi ou un samedi n'a aucun créneau à moins de 48 h
+    await call(Mutation.upsertBookingPage, owner, {
+      input: {
+        availability: [1, 2, 3, 4, 5, 6, 7].map((dayOfWeek) => ({
+          dayOfWeek,
+          intervals: [{ start: "09:00", end: "18:00" }],
+        })),
+      },
+    });
     const type = await createSlot({ price: { amount: 4000 } });
     const soon = await freeSlots(type, 1);
     const now = Date.now();
