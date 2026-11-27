@@ -41,6 +41,7 @@ const notificationSchema = new mongoose.Schema(
         "TRANSFER_BANK_DECLARED", // Virement annoncé par le destinataire d'un transfert payant
         "APPOINTMENT_BANK_DECLARED", // Virement annoncé pour un rendez-vous ou une inscription payants
         "APPOINTMENT_REFUND_NEEDED", // Paiement d'un rendez-vous ou d'une inscription arrivé trop tard : à rembourser
+        "APPOINTMENT_BANK_RECEIVED", // Virement repéré après la garde ou le début : à valider par l'organisateur
       ],
       index: true,
     },

@@ -5,9 +5,12 @@
  * (places tenues, référence NB-…, coordonnées et e-mail), « J'ai fait le
  * virement » qui prévient l'organisateur sans jamais confirmer, repérage
  * bancaire Bridge (libellé, montant, devise), « Marquer comme payé »
- * (droits, cloisonnement), expiration après 3 jours (e-mail, places
- * rendues), virement tardif (confirmé s'il reste des places, sinon « à
- * rembourser à la main »), et inscriptions existantes laissées intactes.
+ * (droits, cloisonnement, libre après la garde et après le début),
+ * expiration (e-mail, places rendues), virement sans délai minimum (garde
+ * jusqu'à min(3 jours, début), virement instantané conseillé), virement
+ * repéré après la garde ou le début (noté, organisateur prévenu « à
+ * valider », jamais confirmé tout seul), et inscriptions existantes
+ * laissées intactes.
  */
 import {
   describe,
@@ -673,21 +676,69 @@ describe("expiration après 3 jours", () => {
     expect(emails[0].html).toContain("virement");
   });
 
-  it("virement tardif, places libres : confirmée", async () => {
+  it("virement repéré après expiration : rien confirmé, noté, organisateur prévenu « à valider »", async () => {
     await setIban();
     const type = await createEvent();
     const { registration } = await pendingRegistration(type);
     await expireOverdueRegistrations({ now: new Date(Date.now() + 4 * DAY) });
+    mail.sent = [];
+    const tx = credit({
+      description: `VIR ${registration.payment.bankReference}`,
+    });
+    const done = await detectAppointmentBankPayments(String(workspaceId), [tx]);
+    expect(done.registrations).toEqual([String(registration._id)]);
+    const late = await EventRegistration.findById(registration._id);
+    expect(late.status).toBe("EXPIRED");
+    expect(late.tickets).toHaveLength(0);
+    expect(late.payment.paidAt).toBeNull();
+    expect(late.payment.receivedAt).toBeInstanceOf(Date);
+    expect(late.payment.receivedAmount).toBe(4000);
+    expect(R.bankTransferReceivedAt(late)).toBeInstanceOf(Date);
+    expect(R.bankTransferReceivedAmount(late)).toBe(4000);
+    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(0);
+    const notifications = await Notification.find({
+      userId: owner,
+      type: "APPOINTMENT_BANK_RECEIVED",
+    });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].title).toBe("Virement reçu, à valider");
+    const hostMails = mailTo("jean@cabinet.fr");
+    expect(hostMails).toHaveLength(1);
+    expect(hostMails[0].subject).toContain("Virement reçu, à valider");
+    expect(hostMails[0].html).not.toContain("—");
+    // Rien au payeur (ni confirmation, ni remboursement)
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+    // Visible dans la liste par défaut
+    const list = await call(Events.Query.eventRegistrations, owner, {
+      typeId: String(type._id),
+    });
+    expect(list.items.map((r) => String(r._id))).toContain(
+      String(registration._id),
+    );
+    // Même crédit ou crédit suivant : rien de plus
     await detectAppointmentBankPayments(String(workspaceId), [
+      tx,
       credit({ description: `VIR ${registration.payment.bankReference}` }),
     ]);
-    const fresh = await EventRegistration.findById(registration._id);
-    expect(fresh.status).toBe("CONFIRMED");
-    expect(fresh.tickets).toHaveLength(2);
+    expect(
+      await Notification.countDocuments({ type: "APPOINTMENT_BANK_RECEIVED" }),
+    ).toBe(1);
+
+    // L'organisateur décide : confirmée avec les références du virement
+    const confirmed = await call(
+      Events.Mutation.markEventRegistrationPaid,
+      owner,
+      { id: String(registration._id) },
+    );
+    expect(confirmed.status).toBe("CONFIRMED");
+    expect(confirmed.tickets).toHaveLength(2);
+    expect(confirmed.payment.paidAmount).toBe(4000);
+    expect(confirmed.payment.paymentId).toBe(late.payment.receivedPaymentId);
     expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(2);
+    expect(R.bankTransferReceivedAt(confirmed)).toBeNull();
   });
 
-  it("virement tardif, plus de places : à rembourser à la main, organisateur prévenu", async () => {
+  it("virement tardif, plus de places : noté, « Marquer comme payé » refusé (à rembourser)", async () => {
     await setIban();
     const type = await createEvent({ capacity: 2, maxPerOrder: 2 });
     const { registration } = await pendingRegistration(type);
@@ -697,30 +748,25 @@ describe("expiration après 3 jours", () => {
     await call(Events.Mutation.markEventRegistrationPaid, owner, {
       id: String(other.registration._id),
     });
-    mail.sent = [];
-
     await detectAppointmentBankPayments(String(workspaceId), [
       credit({ description: `VIR ${registration.payment.bankReference}` }),
     ]);
     const late = await EventRegistration.findById(registration._id);
     expect(late.status).toBe("EXPIRED");
-    expect(late.payment.paidAt).toBeInstanceOf(Date);
-    expect(R.refundFailed(late)).toBe(true);
+    expect(late.payment.paidAt).toBeNull();
+    expect(late.payment.receivedAt).toBeInstanceOf(Date);
+    expect(
+      await errorOf(
+        call(Events.Mutation.markEventRegistrationPaid, owner, {
+          id: String(registration._id),
+        }),
+      ),
+    ).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message:
+        "Il ne reste plus assez de places pour confirmer cette inscription. Remboursez le participant si son virement est arrivé.",
+    });
     expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(2);
-    const notifications = await Notification.find({
-      userId: owner,
-      type: "APPOINTMENT_REFUND_NEEDED",
-    });
-    expect(notifications).toHaveLength(1);
-    expect(mailTo("jean@cabinet.fr")).toHaveLength(1);
-    // Visible dans la liste par défaut (paiement à rendre)
-    const list = await call(Events.Query.eventRegistrations, owner, {
-      typeId: String(type._id),
-    });
-    expect(list.items.map((r) => String(r._id))).toContain(
-      String(registration._id),
-    );
-
     // Complet : aucune nouvelle inscription
     const full = await register(type, { i: 2 });
     expect(full.status).toBe(409);
@@ -741,7 +787,7 @@ describe("expiration après 3 jours", () => {
     ).toMatchObject({
       code: "VALIDATION_ERROR",
       message:
-        "Il ne reste plus assez de places pour confirmer cette inscription.",
+        "Il ne reste plus assez de places pour confirmer cette inscription. Remboursez le participant si son virement est arrivé.",
     });
     expect(
       (await EventRegistration.findById(registration._id)).payment.paidAt,
@@ -815,33 +861,41 @@ describe("inscriptions existantes", () => {
 // ─── Corrections de relecture ────────────────────────────────────────────
 
 describe("relecture : délais, limites, paiement après le début", () => {
-  it("événement à moins de 48 h : virement indisponible et refusé ; garde bornée au début - 24 h", async () => {
+  it("virement sans délai minimum : proposé à quelques heures du début, garde jusqu'au début, virement instantané conseillé", async () => {
     await setIban();
-    const soonStart = new Date(Date.now() + 36 * 3600000);
+    const soonStart = new Date(Date.now() + 5 * 3600000);
     const soon = await createEvent({
       name: "Bientôt",
       startAt: soonStart.toISOString(),
       endAt: new Date(soonStart.getTime() + 3600000).toISOString(),
     });
     const detail = await (await api(`/jean-dupont/${soon.slug}`)).json();
-    expect(detail.type.event.bankTransferAvailable).toBe(false);
-    const refused = await register(soon);
-    expect(refused.status).toBe(409);
-    expect(await refused.json()).toEqual({ error: "BANK_TRANSFER_TOO_LATE" });
-    expect((await AppointmentType.findById(soon._id)).seatsTaken).toBe(0);
+    expect(detail.type.event.bankTransferAvailable).toBe(true);
+    expect(detail.type.event.instantTransferAdvised).toBe(true);
+    expect(Date.parse(detail.type.event.bankTransferDueAt)).toBe(
+      soonStart.getTime(),
+    );
+    const { body } = await pendingRegistration(soon);
+    // Garde : min(inscription + 3 jours, début) = début
+    expect(Date.parse(body.expiresAt)).toBe(soonStart.getTime());
+    expect(body.registration.bankTransfer.instantAdvised).toBe(true);
+    const email = mailTo("elise0@exemple.fr")[0];
+    expect(email.html).toContain("virement instantané");
+    expect(email.html).not.toMatch(/48\s?h/);
 
-    const start = new Date(Date.now() + 60 * 3600000);
-    const later = await createEvent({
-      name: "Plus tard",
-      startAt: start.toISOString(),
-      endAt: new Date(start.getTime() + 3600000).toISOString(),
-    });
-    expect(
-      (await (await api(`/jean-dupont/${later.slug}`)).json()).type.event
-        .bankTransferAvailable,
-    ).toBe(true);
-    const { body } = await pendingRegistration(later);
-    expect(Date.parse(body.expiresAt)).toBe(start.getTime() - DAY);
+    // Début lointain : garde de 3 jours, pas de conseil
+    const far = await createEvent({ name: "Plus tard" });
+    const farDetail = await (await api(`/jean-dupont/${far.slug}`)).json();
+    expect(farDetail.type.event.bankTransferAvailable).toBe(true);
+    expect(farDetail.type.event.instantTransferAdvised).toBe(false);
+    const before = Date.now();
+    const farPending = await pendingRegistration(far, { i: 1 });
+    const due = Date.parse(farPending.body.expiresAt);
+    expect(due).toBeGreaterThanOrEqual(before + 3 * DAY - 1000);
+    expect(due).toBeLessThanOrEqual(Date.now() + 3 * DAY);
+    expect(farPending.body.registration.bankTransfer.instantAdvised).toBe(
+      false,
+    );
   });
 
   it("une seule inscription par virement en attente par adresse et par événement", async () => {
@@ -864,40 +918,75 @@ describe("relecture : délais, limites, paiement après le début", () => {
     expect(await sixth.json()).toEqual({ error: "BANK_TRANSFER_LIMIT" });
   });
 
-  it("virement repéré après le début : jamais de billets, organisateur et payeur prévenus", async () => {
+  it("virement repéré après le début : rien confirmé tout seul, organisateur prévenu ; « Marquer comme payé » libre après le début", async () => {
     await setIban();
     const type = await createEvent();
     const { registration } = await pendingRegistration(type);
+    // Commencé : la garde (bornée au début) est échue elle aussi
     await EventRegistration.updateOne(
       { _id: registration._id },
-      { $set: { "event.startAt": new Date(Date.now() - 60000) } },
+      {
+        $set: {
+          "event.startAt": new Date(Date.now() - 60000),
+          expiresAt: new Date(Date.now() - 60000),
+        },
+      },
     );
     mail.sent = [];
     await detectAppointmentBankPayments(String(workspaceId), [
       credit({ description: `VIR ${registration.payment.bankReference}` }),
     ]);
     const after = await EventRegistration.findById(registration._id);
-    expect(after.status).toBe("EXPIRED");
+    expect(after.status).toBe("PENDING_PAYMENT");
     expect(after.tickets).toHaveLength(0);
-    expect(R.refundFailed(after)).toBe(true);
-    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(0);
+    expect(after.payment.paidAt).toBeNull();
+    expect(after.payment.receivedAt).toBeInstanceOf(Date);
+    expect(R.refundFailed(after)).toBe(false);
     expect(mailTo("jean@cabinet.fr")).toHaveLength(1);
-    const payer = mailTo("elise0@exemple.fr");
-    expect(payer).toHaveLength(1);
-    expect(payer[0].subject).toContain("Réservation non confirmée");
-    // « Marquer comme payé » d'une autre inscription après le début : refusé
+    const notice = await Notification.findOne({
+      type: "APPOINTMENT_BANK_RECEIVED",
+    });
+    expect(notice.message).toContain("après le début");
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+    // Balayage : expirée sans avis d'expiration trompeur au payeur
+    await sweepEventRegistrations({ now: new Date() });
+    expect((await EventRegistration.findById(registration._id)).status).toBe(
+      "EXPIRED",
+    );
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+
+    // L'organisateur valide après le début : billets, aucun e-mail
+    const confirmed = await call(
+      Events.Mutation.markEventRegistrationPaid,
+      owner,
+      { id: String(registration._id) },
+    );
+    expect(confirmed.status).toBe("CONFIRMED");
+    expect(confirmed.tickets).toHaveLength(2);
+    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(2);
+    expect(mailTo("elise0@exemple.fr")).toHaveLength(0);
+    // Client CRM rattaché
+    await vi.waitFor(async () =>
+      expect((await rawRegistration(registration._id)).clientId).toBeTruthy(),
+    );
+
+    // Autre inscription en attente, événement commencé : marquée payée
+    // sans contrôle de capacité ni e-mail
     const other = await pendingRegistration(type, { i: 1 });
     await EventRegistration.updateOne(
       { _id: other.registration._id },
       { $set: { "event.startAt": new Date(Date.now() - 60000) } },
     );
-    expect(
-      await errorOf(
-        call(Events.Mutation.markEventRegistrationPaid, owner, {
-          id: String(other.registration._id),
-        }),
-      ),
-    ).toMatchObject({ code: "VALIDATION_ERROR" });
+    mail.sent = [];
+    const second = await call(
+      Events.Mutation.markEventRegistrationPaid,
+      owner,
+      { id: String(other.registration._id) },
+    );
+    expect(second.status).toBe("CONFIRMED");
+    expect(second.payment.paymentId).toBe(`manual:${owner}`);
+    expect((await AppointmentType.findById(type._id)).seatsTaken).toBe(4);
+    expect(mailTo("elise1@exemple.fr")).toHaveLength(0);
   });
 
   it("paiement carte « pending » au-delà de 7 jours : inscription expirée, places rendues", async () => {
