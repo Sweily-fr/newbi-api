@@ -1096,6 +1096,14 @@ describe("virement", () => {
     expect(after.items.map((b) => String(b._id))).toContain(
       String(booking._id),
     );
+    // Et dans l'onglet « En attente de paiement »
+    const pendingTab = await call(Query.bookings, owner, {
+      scope: "all",
+      status: "PENDING_PAYMENT",
+    });
+    expect(pendingTab.items.map((b) => String(b._id))).toContain(
+      String(booking._id),
+    );
   });
 
   it("virement tardif, créneau encore libre : « Marquer comme payé » après l'expiration confirme (agenda, e-mails)", async () => {
