@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   user: null,
   object: null,
   uploads: [],
+  superPdpPdf: null,
+  superPdpCalls: 0,
 }));
 
 vi.mock("../../src/middlewares/better-auth-jwt.js", async (importOriginal) => {
@@ -42,6 +44,15 @@ vi.mock("../../src/services/cloudflareService.js", async (importOriginal) => {
   service.uploadImage = async (buffer, name, userId, type, orgId) => {
     state.uploads.push({ name, type });
     return { key: `${orgId}/${name}`, url: `https://r2.test/${orgId}/${name}` };
+  };
+  return original;
+});
+vi.mock("../../src/services/superPdpService.js", async (importOriginal) => {
+  const original = await importOriginal();
+  original.default.getArchivedPdf = async () => {
+    state.superPdpCalls += 1;
+    if (state.superPdpPdf instanceof Error) throw state.superPdpPdf;
+    return state.superPdpPdf;
   };
   return original;
 });
@@ -121,6 +132,8 @@ beforeEach(async () => {
   state.user = null;
   state.object = null;
   state.uploads = [];
+  state.superPdpPdf = null;
+  state.superPdpCalls = 0;
   await seedOrgMembership({ userId, organizationId: orgA, role: "owner" });
 });
 
@@ -312,6 +325,104 @@ describe("GET /documents/imported/:docType/:id/file", () => {
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("content-disposition")).toMatch(/^inline;/);
     expect(res.headers.get("content-security-policy")).toMatch(/^sandbox;/);
+  });
+
+  it("sert en pièce jointe avec ?download=1, nom d'origine conservé", async () => {
+    const id = await insertPurchaseInvoice({
+      url: "https://r2.test/a/scan.pdf",
+      originalFilename: "facture-edf.pdf",
+      mimetype: "application/pdf",
+    });
+    state.user = userId;
+    state.object = { buffer: PDF, contentType: "application/pdf" };
+    const res = await fetch(
+      `${baseUrl}/documents/imported/purchaseInvoice/${id}/file?download=1`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    expect(res.headers.get("content-disposition")).toMatch(
+      /^attachment;.*facture-edf\.pdf/,
+    );
+  });
+
+  describe("facture reçue via la plateforme agréée sans justificatif", () => {
+    async function insertReceived(extra = {}) {
+      const { insertedId } = await PurchaseInvoice.collection.insertOne({
+        workspaceId: orgA,
+        createdBy: userId,
+        supplierName: "Fournisseur PA",
+        invoiceNumber: "F 2026/042",
+        amountTTC: 10,
+        status: "TO_PAY",
+        source: "SUPERPDP",
+        superPdpInvoiceId: "12345",
+        files: [],
+        ...extra,
+      });
+      return insertedId.toString();
+    }
+
+    it("sert le PDF lu chez SuperPDP sans rien enregistrer", async () => {
+      const id = await insertReceived();
+      state.user = userId;
+      state.superPdpPdf = PDF;
+      const res = await fetch(
+        `${baseUrl}/documents/imported/purchaseInvoice/${id}/file?download=1`,
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("application/pdf");
+      expect(res.headers.get("content-disposition")).toMatch(
+        /^attachment;.*facture-F-2026-042\.pdf/,
+      );
+      expect(Buffer.from(await res.arrayBuffer()).equals(PDF)).toBe(true);
+      const saved = await PurchaseInvoice.collection.findOne({
+        _id: new mongoose.Types.ObjectId(id),
+      });
+      expect(saved.files).toEqual([]);
+      expect(state.uploads).toEqual([]);
+    });
+
+    it("404 si SuperPDP renvoie autre chose qu'un PDF (XML d'origine)", async () => {
+      const id = await insertReceived();
+      state.user = userId;
+      state.superPdpPdf = Buffer.from("<?xml version='1.0'?><Invoice/>");
+      const res = await fetch(
+        `${baseUrl}/documents/imported/purchaseInvoice/${id}/file`,
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("404 si SuperPDP est indisponible", async () => {
+      const id = await insertReceived();
+      state.user = userId;
+      state.superPdpPdf = new Error("timeout");
+      const res = await fetch(
+        `${baseUrl}/documents/imported/purchaseInvoice/${id}/file`,
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("n'interroge pas SuperPDP pour une facture saisie à la main", async () => {
+      const id = await insertReceived({ source: "MANUAL" });
+      state.user = userId;
+      state.superPdpPdf = PDF;
+      const res = await fetch(
+        `${baseUrl}/documents/imported/purchaseInvoice/${id}/file`,
+      );
+      expect(res.status).toBe(404);
+      expect(state.superPdpCalls).toBe(0);
+    });
+
+    it("refuse un membre d'une autre organisation avant d'interroger SuperPDP", async () => {
+      const id = await insertReceived({ workspaceId: buildOrganizationId() });
+      state.user = userId;
+      state.superPdpPdf = PDF;
+      const res = await fetch(
+        `${baseUrl}/documents/imported/purchaseInvoice/${id}/file`,
+      );
+      expect(res.status).toBe(403);
+      expect(state.superPdpCalls).toBe(0);
+    });
   });
 });
 
